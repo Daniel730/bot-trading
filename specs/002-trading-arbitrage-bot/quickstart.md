@@ -13,7 +13,7 @@
 ## Setup
 1. **Clone & Install**:
    ```bash
-   pip install fastmcp requests yfinance pytz python-dotenv statsmodels pandas
+   pip install fastmcp requests yfinance pytz python-dotenv statsmodels pandas tenacity
    ```
 2. **Configure `.env`**:
    ```ini

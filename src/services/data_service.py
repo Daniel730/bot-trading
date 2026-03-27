@@ -83,24 +83,37 @@ class DataService:
     def is_market_open(self) -> bool:
         """
         Checks if the market is open based on NYSE operating hours (14:30 - 21:00 WET).
-        Enforces Principle I.
+        Enforces Principle I and includes basic holiday checks for 2026.
         """
         now_wet = datetime.now(self.wet_tz)
-        start_time = dtime(14, 30)
-        end_time = dtime(21, 0)
         
-        # Check if it's a weekday
+        # Check if it's a weekday (0=Mon, 4=Fri)
         if now_wet.weekday() >= 5:
             return False
             
-        # Check time window
-        current_time = now_wet.time()
-        if not (start_time <= current_time <= end_time):
+        # NYSE 2026 Holidays (Partial List)
+        holidays_2026 = [
+            "2026-01-01", # New Year's Day
+            "2026-01-19", # Martin Luther King Jr. Day
+            "2026-02-16", # Presidents' Day
+            "2026-04-03", # Good Friday
+            "2026-05-25", # Memorial Day
+            "2026-06-19", # Juneteenth
+            "2026-07-03", # Independence Day (Observed)
+            "2026-09-07", # Labor Day
+            "2026-11-26", # Thanksgiving Day
+            "2026-12-25", # Christmas Day
+        ]
+        
+        if now_wet.strftime("%Y-%m-%d") in holidays_2026:
             return False
-            
-        # NYSE Holiday check (Simple version, could be expanded)
-        # For now, we assume simple weekday/time check as per WET window
-        return True
+
+        # Check time window (14:30 - 21:00 WET)
+        start_time = dtime(14, 30)
+        end_time = dtime(21, 0)
+        current_time = now_wet.time()
+        
+        return start_time <= current_time <= end_time
 
     def get_ny_time(self) -> datetime:
         return datetime.now(self.ny_tz)

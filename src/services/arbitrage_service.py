@@ -21,24 +21,46 @@ class ArbitrageService:
             return 0.0
         return (current_spread - mean_spread) / std_spread
 
-    def update_pair_parameters(self, historical_data: pd.DataFrame) -> Dict[str, float]:
+    def calculate_rebalance_orders(
+        self,
+        current_positions: Dict[str, float],
+        current_prices: Dict[str, float],
+        target_weights: Dict[str, float],
+        free_cash: float,
+        max_allocation_pct: float
+    ) -> Dict[str, float]:
         """
-        Calculates hedge ratio, mean spread, and std spread from historical data.
-        Uses OLS regression (Price A = Hedge Ratio * Price B + Intercept).
+        Calculates the quantity to buy/sell for each asset to reach target weights,
+        applying a risk cap (max_allocation_pct of free_cash) to any BUY order.
+        Returns a dict of {ticker: quantity_change}.
         """
-        y = historical_data['asset_a']
-        x = historical_data['asset_b']
-        x = sm.add_constant(x)
+        # Calculate Total Portfolio Value
+        invested_value = sum(
+            current_positions.get(ticker, 0.0) * current_prices.get(ticker, 0.0)
+            for ticker in target_weights
+        )
+        total_value = invested_value + free_cash
         
-        model = sm.OLS(y, x).fit()
-        hedge_ratio = model.params['asset_b']
+        orders = {}
+        max_trade_value = free_cash * (max_allocation_pct / 100.0)
         
-        # Calculate spread: Price A - (Hedge Ratio * Price B)
-        # Note: We ignore the intercept for the spread calculation itself as we calculate the mean spread
-        spreads = historical_data['asset_a'] - (hedge_ratio * historical_data['asset_b'])
-        
-        return {
-            'hedge_ratio': hedge_ratio,
-            'mean_spread': spreads.mean(),
-            'std_spread': spreads.std()
-        }
+        for ticker, target_weight in target_weights.items():
+            price = current_prices.get(ticker)
+            if not price or price <= 0:
+                continue
+                
+            current_qty = current_positions.get(ticker, 0.0)
+            target_value = total_value * target_weight
+            current_value = current_qty * price
+            
+            value_diff = target_value - current_value
+            
+            # Apply risk cap only to BUY orders (value_diff > 0)
+            if value_diff > max_trade_value:
+                value_diff = max_trade_value
+            
+            # Quantity to order (can be negative for SELL)
+            order_qty = value_diff / price
+            orders[ticker] = round(order_qty, 6)
+            
+        return orders

@@ -3,6 +3,7 @@ import time
 import logging
 from src.config import T212_API_KEY, T212_API_SECRET
 from typing import List, Dict, Any
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,8 @@ class BrokerageService:
         if elapsed < self.rate_limit_seconds:
             time.sleep(self.rate_limit_seconds - elapsed)
 
-    def create_market_order(self, ticker: str, quantity: float) -> Dict[str, Any]:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def execute_market_order(self, ticker: str, quantity: float) -> Dict[str, Any]:
         """
         Creates a market order on Trading 212.
         Quantity is positive for BUY, negative for SELL.
@@ -42,7 +44,8 @@ class BrokerageService:
             logger.error(f"Failed to create market order for {ticker}: {response.text}")
             response.raise_for_status()
 
-    def fetch_portfolio(self) -> List[Dict[str, Any]]:
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
+    def get_positions(self) -> List[Dict[str, Any]]:
         """
         Fetches current positions from Trading 212.
         Used for startup quantity re-syncing.
@@ -56,6 +59,7 @@ class BrokerageService:
             logger.error(f"Failed to fetch portfolio: {response.text}")
             response.raise_for_status()
 
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def get_cash_balance(self) -> float:
         """
         Fetches the free cash balance.

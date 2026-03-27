@@ -77,6 +77,7 @@ def init_db():
         ai_rationale TEXT,
         action_taken TEXT,
         order_id TEXT,
+        ai_validation_duration REAL,
         FOREIGN KEY (signal_id) REFERENCES signals (id)
     )
     ''')

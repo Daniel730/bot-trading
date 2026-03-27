@@ -23,6 +23,7 @@ class TradingBot:
         self.arbitrage = ArbitrageService()
         self.db_path = DB_PATH
         self.refresh_interval = 15 # Seconds
+        self.market_was_open = None
 
     def startup_sync(self):
         """
@@ -75,9 +76,18 @@ class TradingBot:
         """
         Single monitoring pass.
         """
-        if not self.data.is_market_open():
-            logger.info("Market is closed. Sleeping...")
-            return
+        is_open = self.data.is_market_open()
+        
+        # T024: Market Open/Closed notifications
+        if self.market_was_open is not None and is_open != self.market_was_open:
+            status = "OPEN 🟢" if is_open else "CLOSED 🔴"
+            self.notifier.send_message(f"🏛️ *Market Status:* {status}")
+            logger.info(f"Market status changed to {status}")
+            
+        self.market_was_open = is_open
+
+        if not is_open:
+            return False
 
         try:
             conn = sqlite3.connect(self.db_path)
@@ -125,6 +135,8 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error during monitoring pass: {e}")
             if 'conn' in locals(): conn.close()
+            
+        return True
 
     def trigger_signal(self, pair_id: str, z_score: float, conn: sqlite3.Connection) -> Optional[str]:
         """
@@ -172,8 +184,14 @@ class TradingBot:
         self.startup_sync()
         
         while True:
-            self.monitor_once()
-            time.sleep(self.refresh_interval)
+            market_active = self.monitor_once()
+            
+            if not market_active:
+                # Sleep for 5 minutes if market is closed to save resources
+                logger.info("Market is closed. Sleeping for 5 minutes...")
+                time.sleep(300)
+            else:
+                time.sleep(self.refresh_interval)
 
 if __name__ == "__main__":
     bot = TradingBot(demo=True)

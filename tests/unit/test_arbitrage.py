@@ -34,23 +34,40 @@ class TestArbitrageMath(unittest.TestCase):
         
         self.assertEqual(calculated_spread, expected_spread)
 
-    def test_cointegration_parameters(self):
+    def test_rebalance_logic_capped(self):
         """
-        Verify that we can calculate hedge ratio, mean, and std from historical data.
+        Verify rebalance logic with risk capping.
         """
-        # Create dummy cointegrated-like data
-        np.random.seed(42)
-        price_b = np.linspace(100, 110, 100) + np.random.normal(0, 1, 100)
-        price_a = 1.5 * price_b + 5.0 + np.random.normal(0, 1, 100)
+        current_positions = {'AAPL': 0.0, 'MSFT': 0.0}
+        current_prices = {'AAPL': 150.0, 'MSFT': 250.0}
+        target_weights = {'AAPL': 0.5, 'MSFT': 0.5}
+        free_cash = 1000.0
+        max_allocation_pct = 10.0 # 10% of 1000 = 100
         
-        df = pd.DataFrame({'asset_a': price_a, 'asset_b': price_b})
+        # Target value for AAPL is 500, but capped at 100.
+        # Order for AAPL should be 100 / 150 = 0.666667 shares
+        orders = self.arbitrage.calculate_rebalance_orders(
+            current_positions, current_prices, target_weights, free_cash, max_allocation_pct
+        )
         
-        params = self.arbitrage.update_pair_parameters(df)
-        
-        self.assertIn('hedge_ratio', params)
-        self.assertIn('mean_spread', params)
-        self.assertIn('std_spread', params)
-        self.assertGreater(params['hedge_ratio'], 1.0) # Roughly 1.5
+        self.assertEqual(orders['AAPL'], round(100.0 / 150.0, 6))
+        self.assertEqual(orders['MSFT'], round(100.0 / 250.0, 6))
 
-if __name__ == '__main__':
-    unittest.main()
+    def test_rebalance_logic_uncapped(self):
+        """
+        Verify rebalance logic without risk capping.
+        """
+        current_positions = {'AAPL': 0.0}
+        current_prices = {'AAPL': 100.0}
+        target_weights = {'AAPL': 0.1}
+        free_cash = 1000.0
+        max_allocation_pct = 20.0 # 20% of 1000 = 200
+        
+        # Target value for AAPL is 1000 * 0.1 = 100.
+        # Max trade is 200. No capping.
+        # Order should be 100 / 100 = 1.0 share.
+        orders = self.arbitrage.calculate_rebalance_orders(
+            current_positions, current_prices, target_weights, free_cash, max_allocation_pct
+        )
+        
+        self.assertEqual(orders['AAPL'], 1.0)

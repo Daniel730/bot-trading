@@ -63,20 +63,25 @@ def execute_arbitrage_trade(signal_id: str, ai_action: str, rationale: str) -> s
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Check if signal exists
-        cursor.execute("SELECT pair_id, z_score FROM signals WHERE id = ?", (signal_id,))
+        # Check if signal exists and get its creation timestamp for duration calculation
+        cursor.execute("SELECT pair_id, z_score, timestamp FROM signals WHERE id = ?", (signal_id,))
         row = cursor.fetchone()
         if not row:
             conn.close()
             return f"Error: Signal {signal_id} not found."
         
-        pair_id, z_score = row
+        pair_id, z_score, signal_timestamp_str = row
+        
+        # Calculate validation duration (SC-002)
+        signal_timestamp = datetime.fromisoformat(signal_timestamp_str)
+        duration = (datetime.now() - signal_timestamp).total_seconds()
+        logger.info(f"AI Validation Duration for {signal_id}: {duration:.2f}s")
         
         # Log the AI recommendation in audit_logs
         cursor.execute("""
-            INSERT INTO audit_logs (timestamp, signal_id, ai_recommendation, ai_rationale, action_taken)
-            VALUES (?, ?, ?, ?, ?)
-        """, (datetime.now().isoformat(), signal_id, ai_action, rationale, "WAIT" if ai_action == "GO" else "CANCELLED"))
+            INSERT INTO audit_logs (timestamp, signal_id, ai_recommendation, ai_rationale, action_taken, ai_validation_duration)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (datetime.now().isoformat(), signal_id, ai_action, rationale, "WAIT" if ai_action == "GO" else "CANCELLED", duration))
         
         if ai_action == "GO":
             # Update signal status

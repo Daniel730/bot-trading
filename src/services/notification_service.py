@@ -30,6 +30,25 @@ class NotificationService:
             logger.error(f"Failed to send Telegram message: {response.text}")
             return False
 
+    def send_trade_notification(self, ticker: str, quantity: float, success: bool, error: str = None) -> bool:
+        """
+        Sends a notification about a trade execution outcome.
+        """
+        action = "BUY" if quantity > 0 else "SELL"
+        status = "✅ SUCCESS" if success else "❌ FAILED"
+        
+        text = (
+            f"💼 *Trade Execution: {status}*\n"
+            f"Ticker: `{ticker}`\n"
+            f"Action: `{action}`\n"
+            f"Quantity: `{abs(quantity):.6f}`\n"
+        )
+        
+        if error:
+            text += f"\n⚠️ *Error:* `{error}`"
+            
+        return self.send_message(text)
+
     def send_confirmation_request(self, signal_id: str, pair: str, z_score: float, rationale: str) -> bool:
         """
         Sends a message with inline buttons for manual confirmation.

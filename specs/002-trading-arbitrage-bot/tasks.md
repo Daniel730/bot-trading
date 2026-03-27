@@ -73,12 +73,12 @@
 **Independent Test**: Simulate confirmed rebalance and check SQLite quantity updates and risk capping
 
 ### Tests for User Story 3
-- [ ] T018 [P] [US3] Integration test for market order execution and balance fetching in `tests/integration/test_brokerage.py` (Mock API)
+- [X] T018 [P] [US3] Integration test for market order execution and balance fetching in `tests/integration/test_brokerage.py` (Mock API)
 
 ### Implementation for User Story 3
-- [ ] T019 [US3] Implement `execute_market_order`, `get_positions`, and `get_cash_balance` in `src/services/brokerage_service.py`
-- [ ] T020 [US3] Implement risk-capped rebalance logic (Principle II) in `src/services/arbitrage_service.py`
-- [ ] T021 [US3] [Notify] Integrate Telegram success/failure alerts for final trade outcomes in `src/services/notification_service.py`
+- [X] T019 [US3] Implement `execute_market_order`, `get_positions`, and `get_cash_balance` in `src/services/brokerage_service.py`
+- [X] T020 [US3] Implement risk-capped rebalance logic (Principle II) in `src/services/arbitrage_service.py`
+- [X] T021 [US3] [Notify] Integrate Telegram success/failure alerts for final trade outcomes in `src/services/notification_service.py`
 
 **Checkpoint**: Bot can now rebalance positions based on validated and manually confirmed signals
 
@@ -91,9 +91,9 @@
 **Independent Test**: Verify bot sleep/wake logic based on WET vs NY time
 
 ### Implementation for User Story 4
-- [ ] T022 [US4] Implement `pytz` timezone conversion and NYSE holiday check in `src/services/data_service.py`
-- [ ] T023 [US4] Update `src/monitor.py` loop to sleep outside 14:30 - 21:00 WET window
-- [ ] T024 [US4] Add "Market Open/Closed" status notifications to Telegram
+- [X] T022 [US4] Implement `pytz` timezone conversion and NYSE holiday check in `src/services/data_service.py`
+- [X] T023 [US4] Update `src/monitor.py` loop to sleep outside 14:30 - 21:00 WET window
+- [X] T024 [US4] Add "Market Open/Closed" status notifications to Telegram
 
 **Checkpoint**: Bot is now constitutionally compliant regarding operating hours
 
@@ -101,9 +101,9 @@
 
 ## Phase N: Polish & Cross-Cutting Concerns
 
-- [ ] T025 [P] Update `specs/002-trading-arbitrage-bot/quickstart.md` with final installation steps
-- [ ] T026 Implement error retry logic for brokerage API timeouts and connection drops
-- [ ] T027 Add performance logging to measure SC-002 (AI validation < 15s)
+- [X] T025 [P] Update `specs/002-trading-arbitrage-bot/quickstart.md` with final installation steps
+- [X] T026 Implement error retry logic for brokerage API timeouts and connection drops
+- [X] T027 Add performance logging to measure SC-002 (AI validation < 15s)
 
 ---
 
