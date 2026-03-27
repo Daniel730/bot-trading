@@ -1,0 +1,8 @@
+fastmcp
+requests
+yfinance
+pytz
+python-dotenv
+statsmodels
+pandas
+pytest

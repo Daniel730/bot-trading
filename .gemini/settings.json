@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "mcp_server": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "fastmcp",
+        "fastmcp",
+        "run",
+        "/mnt/c/Users/Danie/Desktop/bot/bot-trading/src/mcp_server.py"
+      ]
+    }
+  }
+}
