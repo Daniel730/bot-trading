@@ -64,7 +64,7 @@ As an investor, I want the bot to manage my portfolio weights locally and execut
 
 As an investor, I want the bot to strictly follow market hours so that I don't face execution issues or excessive slippage during low-liquidity periods.
 
-**Why this priority**: Mandatory principle in the project constitution (Principle I).
+**Why this priority**: Mandatory principle in the project constitution (Principle II).
 
 **Independent Test**: Can be tested by attempting to trigger a signal at 21:15 WET and verifying that the order is rejected/not sent.
 

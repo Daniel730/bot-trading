@@ -13,17 +13,17 @@ Build an autonomous statistical arbitrage system that monitors competitor pairs 
 - **Target Platform**: Linux (capable of running Gemini CLI)
 - **Project Type**: AI Agent Orchestrator / Automated Trading
 - **Performance Goals**: AI validation < 15s; Allocation drift < 1%
-- **Constraints**: Operating window 14:30 - 21:00 WET; Max allocation 10% (Principle II)
-- **Scale/Scope**: Support for 1-5 concurrent cointegrated pairs.
+**Constraints**: Operating window 14:30 - 21:00 WET (Principle II); Atomic swaps (Principle III)
+**Scale/Scope**: Support for 1-5 concurrent cointegrated pairs.
 
 ## Constitution Check
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- **I. Horário de Operação Estrito**: ✅ Logic enforces 14:30 - 21:00 WET window.
-- **II. Gestão de Risco e Capital**: ✅ Rebalance logic caps orders at 10% of free balance.
-- **III. Neutralidade de Mercado**: ✅ Pairs trading strategy focuses on spreads, ignoring market direction.
-- **IV. Segurança da API**: ✅ Credentials stored exclusively in `.env`.
-- **V. Validação Estratégica via IA**: ✅ Mandatory Gemini news analysis loop for all signals.
+- **I. Library-First**: ✅ Cálculo estatístico e wrappers de API isolados em `src/services/`.
+- **II. Safety-Critical**: ✅ Janela de operação restrita às 14:30 - 21:00 WET.
+- **III. Atomicidade**: ✅ Operações de swap (venda A/compra B) tratadas como transação lógica única.
+- **IV. State Management**: ✅ Persistência local de "Pies Virtuais" com reconciliação por ciclo.
+- **V. Human-in-the-loop**: ✅ Aprovação via Telegram obrigatória para transações.
 
 ## Project Structure
 
