@@ -2,197 +2,232 @@ import sqlite3
 import logging
 import time
 import uuid
-import subprocess
+import pandas as pd
 from datetime import datetime
 from src.config import DB_PATH
 from src.services.brokerage_service import BrokerageService
 from src.services.data_service import DataService
 from src.services.notification_service import NotificationService
 from src.services.arbitrage_service import ArbitrageService
-from src.prompts import FINANCIAL_RISK_ANALYST_PROMPT
+from src.models.arbitrage_models import ArbitragePair, ArbitrageStatus, TriggerType, SignalRecord
 from typing import List, Dict, Any, Optional
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+# Detailed logging for IA audit
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("arbitrage_audit.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("ArbitrageOrchestrator")
 
-class TradingBot:
+class StrategicArbitrageBot:
     def __init__(self, demo: bool = True):
         self.brokerage = BrokerageService(demo=demo)
         self.data = DataService()
         self.notifier = NotificationService()
         self.arbitrage = ArbitrageService()
         self.db_path = DB_PATH
-        self.refresh_interval = 15 # Seconds
+        self.refresh_interval = 12  # Seconds (Strict 5 req/min compliance)
+        self.windows = [30, 60, 90]
         self.market_was_open = None
 
-    def startup_sync(self):
+    def startup_re_sync(self):
         """
-        Re-sync current quantities and update pair parameters from historical data.
+        T021: Implement Virtual Pie state reconciliation and startup re-sync.
         """
-        logger.info("Starting startup sequence...")
+        logger.info("Initializing Strategic Arbitrage Engine...")
         
-        # 1. Sync Portfolio
         try:
-            portfolio = self.brokerage.fetch_portfolio()
+            # 1. Sync Quantities from Brokerage
+            positions = self.brokerage.fetch_positions()
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            cursor.execute("UPDATE virtual_pie SET current_quantity = 0.0")
-            for position in portfolio:
-                cursor.execute("UPDATE virtual_pie SET current_quantity = ? WHERE ticker = ?",
-                             (position.get("quantity"), position.get("ticker")))
-            conn.commit()
-            logger.info("Portfolio re-synced.")
-        except Exception as e:
-            logger.error(f"Portfolio sync failed: {e}")
-
-        # 2. Update Cointegration Parameters
-        try:
-            cursor.execute("SELECT id, asset_a, asset_b FROM trading_pairs")
+            
+            # Reset all current quantities to handle closed positions
+            cursor.execute("UPDATE virtual_pie_assets SET current_quantity = 0.0")
+            
+            for pos in positions:
+                ticker = pos.get("ticker", "").split("_")[0] # Strip suffix if present
+                qty = float(pos.get("quantity", 0.0))
+                cursor.execute(
+                    "UPDATE virtual_pie_assets SET current_quantity = ? WHERE ticker = ?",
+                    (qty, ticker)
+                )
+            
+            # 2. Update Beta/Hedge Ratio for Monitoring Pairs
+            cursor.execute("SELECT id, ticker_a, ticker_b FROM arbitrage_pairs")
             pairs = cursor.fetchall()
-            for pair_id, asset_a, asset_b in pairs:
-                logger.info(f"Updating parameters for {pair_id}...")
-                df_a = self.data.get_historical_data(asset_a, period="90d")
-                df_b = self.data.get_historical_data(asset_b, period="90d")
+            
+            for p_id, t_a, t_b in pairs:
+                logger.info(f"Recalculating hedge ratio for {t_a}/{t_b}...")
+                df_a = self.data.get_historical_data(t_a, period="180d") # Get enough for 90d rolling
+                df_b = self.data.get_historical_data(t_b, period="180d")
                 
                 # Align data
-                combined = pd.DataFrame({'asset_a': df_a['Close'], 'asset_b': df_b['Close']}).dropna()
-                params = self.arbitrage.update_pair_parameters(combined)
-                
-                cursor.execute("""
-                    UPDATE trading_pairs 
-                    SET hedge_ratio = ?, mean_spread = ?, std_spread = ? 
-                    WHERE id = ?
-                """, (params['hedge_ratio'], params['mean_spread'], params['std_spread'], pair_id))
+                combined = pd.DataFrame({'a': df_a['Close'], 'b': df_b['Close']}).dropna()
+                if not combined.empty:
+                    beta = self.arbitrage.calculate_hedge_ratio(combined['a'], combined['b'])
+                    cursor.execute(
+                        "UPDATE arbitrage_pairs SET beta = ? WHERE id = ?",
+                        (beta, p_id)
+                    )
+                    logger.info(f"New Beta for {t_a}/{t_b}: {beta:.4f}")
+                else:
+                    logger.warning(f"Could not fetch historical data for {t_a} or {t_b}")
+
             conn.commit()
             conn.close()
-            logger.info("Pair parameters updated.")
+            logger.info("Startup re-sync complete.")
         except Exception as e:
-            logger.error(f"Parameter update failed: {e}")
-            if 'conn' in locals(): conn.close()
+            logger.error(f"Startup re-sync failed: {e}", exc_info=True)
 
-        self.notifier.send_message("🚀 Bot initialized and ready.")
-
-    def monitor_once(self):
+    def monitor_loop(self):
         """
-        Single monitoring pass.
+        T012 & T013: Core monitoring and signal generation.
         """
-        is_open = self.data.is_market_open()
-        
-        # T024: Market Open/Closed notifications
-        if self.market_was_open is not None and is_open != self.market_was_open:
-            status = "OPEN 🟢" if is_open else "CLOSED 🔴"
-            self.notifier.send_message(f"🏛️ *Market Status:* {status}")
-            logger.info(f"Market status changed to {status}")
-            
-        self.market_was_open = is_open
-
-        if not is_open:
-            return False
-
-        try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT id, asset_a, asset_b, hedge_ratio, mean_spread, std_spread FROM trading_pairs")
-            pairs = cursor.fetchall()
-            
-            # Fetch all unique tickers
-            tickers = set()
-            for p in pairs:
-                tickers.add(p[1])
-                tickers.add(p[2])
-            
-            prices = self.data.get_current_prices(list(tickers))
-            
-            triggered_signals = []
-            
-            for pair_id, asset_a, asset_b, hedge, mean, std in pairs:
-                price_a = prices.get(asset_a)
-                price_b = prices.get(asset_b)
+        while True:
+            try:
+                is_open = self.data.is_market_open()
                 
-                if price_a and price_b:
-                    spread = self.arbitrage.calculate_spread(price_a, price_b, hedge)
-                    z_score = self.arbitrage.calculate_z_score(spread, mean, std)
-                    
-                    logger.info(f"Pair: {pair_id} | Z-Score: {z_score:.2f}")
-                    
-                    # Update last Z-score in DB
-                    cursor.execute("UPDATE trading_pairs SET last_z_score = ? WHERE id = ?", (z_score, pair_id))
-                    
-                    # Signal Trigger (|Z| > 2.0)
-                    if abs(z_score) > 2.0:
-                        signal_id = self.trigger_signal(pair_id, z_score, conn)
-                        if signal_id:
-                            triggered_signals.append((signal_id, pair_id, z_score))
-            
-            conn.commit()
-            conn.close()
-            
-            # Trigger AI validation outside the DB transaction
-            for signal_id, pair_id, z_score in triggered_signals:
-                self.trigger_ai_validation(signal_id, pair_id, z_score)
-            
-        except Exception as e:
-            logger.error(f"Error during monitoring pass: {e}")
-            if 'conn' in locals(): conn.close()
-            
-        return True
+                # Market Status Notifications
+                if self.market_was_open is not None and is_open != self.market_was_open:
+                    import asyncio
+                    status_text = "🏛️ NYSE Market is now OPEN 🟢" if is_open else "🏛️ NYSE Market is now CLOSED 🔴"
+                    asyncio.run(self.notifier.send_message(status_text))
+                
+                self.market_was_open = is_open
 
-    def trigger_signal(self, pair_id: str, z_score: float, conn: sqlite3.Connection) -> Optional[str]:
-        """
-        Creates a new signal in the DB. Returns signal_id if created, else None.
-        """
-        signal_id = str(uuid.uuid4())
-        timestamp = datetime.now().isoformat()
-        
+                if not is_open:
+                    logger.info("Market is closed. Sleeping...")
+                    time.sleep(60)
+                    continue
+
+                self.process_pairs()
+                
+                time.sleep(self.refresh_interval)
+                
+            except Exception as e:
+                logger.error(f"Error in monitor loop: {e}", exc_info=True)
+                time.sleep(self.refresh_interval)
+
+    def process_pairs(self):
+        conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        # Check if we already have a pending signal for this pair to avoid spam
-        cursor.execute("SELECT id FROM signals WHERE pair_id = ? AND status IN ('PENDING_AI', 'PENDING_USER_CONFIRM')", (pair_id,))
+        
+        cursor.execute("SELECT id, ticker_a, ticker_b, beta, status FROM arbitrage_pairs WHERE status != 'PAUSED'")
+        pairs = cursor.fetchall()
+        
+        tickers = set()
+        for p in pairs:
+            tickers.add(p[1])
+            tickers.add(p[2])
+        
+        current_prices = self.data.get_current_prices(list(tickers))
+        
+        for p_id, t_a, t_b, beta, status in pairs:
+            # For real-time Z-score, we need historical spread + current spread
+            # To avoid fetching 180d every 12s, we should ideally cache historical spreads.
+            # For now, let's fetch daily data and append current price.
+            
+            df_a = self.data.get_historical_data(t_a, period="120d")
+            df_b = self.data.get_historical_data(t_b, period="120d")
+            
+            price_a = current_prices.get(t_a)
+            price_b = current_prices.get(t_b)
+            
+            if price_a and price_b:
+                # Calculate multi-window Z-scores
+                # Append current price to history for rolling calculation
+                series_a = pd.concat([df_a['Close'], pd.Series([price_a])])
+                series_b = pd.concat([df_b['Close'], pd.Series([price_b])])
+                
+                z_scores = self.arbitrage.get_multi_window_z_scores(series_a, series_b, beta, self.windows)
+                
+                # Log current state
+                z_30 = z_scores.get(30, 0)
+                z_60 = z_scores.get(60, 0)
+                z_90 = z_scores.get(90, 0)
+                
+                logger.info(f"AUDIT | Pair: {t_a}/{t_b} | Z30: {z_30:.2f} | Z60: {z_60:.2f} | Z90: {z_90:.2f}")
+                
+                # Persist history
+                for win, val in z_scores.items():
+                    cursor.execute(
+                        "INSERT INTO zscore_history (pair_id, timestamp, window, value) VALUES (?, ?, ?, ?)",
+                        (p_id, datetime.utcnow().isoformat(), win, val)
+                    )
+                
+                # Check for signals
+                # Using 60d window as primary trigger for now
+                primary_z = z_60
+                cursor.execute("UPDATE arbitrage_pairs SET last_z_score = ? WHERE id = ?", (primary_z, p_id))
+                
+                if status == ArbitrageStatus.MONITORING and abs(primary_z) > 2.5:
+                    sig_id = self.create_signal(p_id, primary_z, TriggerType.ENTRY, cursor)
+                    if sig_id:
+                        self.trigger_ai_validation(sig_id, t_a, t_b, primary_z)
+                elif status == ArbitrageStatus.ACTIVE_TRADE and abs(primary_z) < 0.5:
+                    sig_id = self.create_signal(p_id, primary_z, TriggerType.EXIT, cursor)
+                    if sig_id:
+                        self.trigger_ai_validation(sig_id, t_a, t_b, primary_z)
+
+        conn.commit()
+        conn.close()
+
+    def create_signal(self, pair_id: str, z_score: float, trigger: TriggerType, cursor: sqlite3.Cursor) -> Optional[str]:
+        # Check if pending signal exists
+        cursor.execute(
+            "SELECT id FROM signal_records WHERE pair_id = ? AND ai_validation_status = 'PENDING'",
+            (pair_id,)
+        )
         if cursor.fetchone():
             return None
 
-        cursor.execute("""
-            INSERT INTO signals (id, timestamp, pair_id, z_score, status)
-            VALUES (?, ?, ?, ?, ?)
-        """, (signal_id, timestamp, pair_id, z_score, 'PENDING_AI'))
-        
-        logger.info(f"⚠️ SIGNAL TRIGGERED: {pair_id} | Z={z_score:.2f}")
-        return signal_id
+        sig_id = str(uuid.uuid4())
+        cursor.execute(
+            """INSERT INTO signal_records 
+               (id, pair_id, timestamp, z_score, trigger_type) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (sig_id, pair_id, datetime.utcnow().isoformat(), z_score, trigger)
+        )
+        logger.info(f"SIGNAL | {trigger} | Pair: {pair_id} | Z: {z_score:.2f} | ID: {sig_id}")
+        return sig_id
 
-    def trigger_ai_validation(self, signal_id: str, pair_id: str, z_score: float):
+    def trigger_ai_validation(self, signal_id: str, ticker_a: str, ticker_b: str, z_score: float):
         """
-        Calls Gemini CLI to validate the signal using the Financial Risk Analyst prompt.
+        T016: Integrate Gemini CLI validation loop.
         """
-        instruction = f"{FINANCIAL_RISK_ANALYST_PROMPT}\n\nSignal ID: {signal_id}\nPair: {pair_id}\nZ-Score: {z_score:.2f}"
+        import subprocess
         
-        logger.info(f"Triggering AI validation for signal {signal_id}...")
+        # Fetch context
+        news = self.data.get_news_context([ticker_a, ticker_b], limit=5)
+        headlines = [n.get('title', '') for n in news]
+        
+        prompt = (
+            f"As a Financial Risk Analyst, validate this arbitrage signal.\n"
+            f"Signal ID: {signal_id}\n"
+            f"Pair: {ticker_a}/{ticker_b}\n"
+            f"Z-Score: {z_score:.2f}\n"
+            f"News Headlines: {headlines}\n\n"
+            f"Use the record_ai_decision tool to provide your GO/NO_GO decision and rationale."
+        )
+        
+        logger.info(f"AUDIT | Triggering AI Validation for {signal_id}...")
         
         try:
-            # Call Gemini CLI in the background
-            # The 'gemini' command will receive the prompt and use MCP tools
-            subprocess.Popen(["gemini", instruction], start_new_session=True)
-            logger.info(f"Gemini CLI process started for signal {signal_id}")
+            # Calling Gemini CLI asynchronously
+            subprocess.Popen(["gemini", prompt], start_new_session=True)
+            logger.info(f"AUDIT | Gemini CLI process spawned for {signal_id}")
         except Exception as e:
-            logger.error(f"Failed to trigger Gemini CLI: {e}")
+            logger.error(f"AUDIT | Failed to trigger Gemini CLI: {e}")
 
     def run(self):
-        """
-        Continuous monitoring loop.
-        """
-        # We need pandas here for the startup_sync
-        import pandas as pd
-        self.startup_sync()
-        
-        while True:
-            market_active = self.monitor_once()
-            
-            if not market_active:
-                # Sleep for 5 minutes if market is closed to save resources
-                logger.info("Market is closed. Sleeping for 5 minutes...")
-                time.sleep(300)
-            else:
-                time.sleep(self.refresh_interval)
+        self.startup_re_sync()
+        self.monitor_loop()
 
 if __name__ == "__main__":
-    bot = TradingBot(demo=True)
+    bot = StrategicArbitrageBot(demo=True)
     bot.run()

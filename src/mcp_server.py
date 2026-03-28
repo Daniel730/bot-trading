@@ -1,134 +1,89 @@
+import sqlite3
+import asyncio
+import logging
 from fastmcp import FastMCP
+from src.config import DB_PATH
 from src.services.data_service import DataService
 from src.services.notification_service import NotificationService
-from src.config import DB_PATH
-import sqlite3
-import logging
-from datetime import datetime
-import os
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from src.models.arbitrage_models import AIValidationStatus
 
 # Initialize MCP server
-mcp = FastMCP("Trading Arbitrage Bot")
+mcp = FastMCP("Strategic Arbitrage Engine")
 
 # Services
-# We initialize them lazily or here if they don't depend on complex state
 data_service = DataService()
 notification_service = NotificationService()
 
-@mcp.tool()
-def get_market_prices(tickers: list[str]) -> str:
-    """
-    Fetches current market prices for a list of tickers.
-    """
-    logger.info(f"Fetching prices for: {tickers}")
-    try:
-        prices = data_service.get_current_prices(tickers)
-        return str(prices)
-    except Exception as e:
-        logger.error(f"Error fetching prices: {e}")
-        return f"Error: {str(e)}"
+logger = logging.getLogger("MCPServer")
 
 @mcp.tool()
-def get_news_context(tickers: list[str]) -> str:
+async def analyze_news(tickers: list[str], headlines: list[str]) -> dict:
     """
-    Retrieves recent news headlines for the specified tickers to validate arbitrage signals.
+    Analyzes news headlines for structural changes or technical noise.
+    Used by Gemini to validate if a Z-score deviation is a tradeable opportunity.
     """
-    logger.info(f"Fetching news for: {tickers}")
-    try:
-        news = data_service.get_news_context(tickers)
-        headlines = []
-        for item in news:
-            title = item.get('title')
-            published = item.get('published_utc')
-            headlines.append(f"- {title} ({published})")
-        return "\n".join(headlines) if headlines else "No recent news found."
-    except Exception as e:
-        logger.error(f"Error fetching news: {e}")
-        return f"Error: {str(e)}"
+    # This tool is a placeholder for Gemini to provide its own analysis.
+    # We return the context so Gemini can process it.
+    return {
+        "tickers": tickers,
+        "headlines": headlines,
+        "instruction": "Determine if these news indicate a structural change (GO/NO-GO)."
+    }
 
 @mcp.tool()
-def execute_arbitrage_trade(signal_id: str, ai_action: str, rationale: str) -> str:
+async def assess_risk(pair: str, z_score: float) -> dict:
     """
-    Analyzes an arbitrage signal based on AI validation.
-    ai_action MUST be 'GO' (to proceed to user confirmation) or 'NO-GO' (to reject).
-    rationale should provide the reason for the decision based on news context.
+    Calculates estimated risk rating and max drawdown for a pair.
     """
-    logger.info(f"AI Action for signal {signal_id}: {ai_action}")
-    
+    # Logic based on Z-score magnitude
+    risk_rating = "LOW"
+    if abs(z_score) > 3.5:
+        risk_rating = "HIGH"
+    elif abs(z_score) > 3.0:
+        risk_rating = "MEDIUM"
+        
+    return {
+        "pair": pair,
+        "z_score": z_score,
+        "risk_rating": risk_rating,
+        "max_drawdown_est": abs(z_score) * 0.02 # Rough estimation
+    }
+
+@mcp.tool()
+async def record_ai_decision(signal_id: str, status: str, rationale: str) -> str:
+    """
+    Records Gemini's decision (GO/NO_GO) and rationale in the database.
+    Status must be 'GO' or 'NO_GO'.
+    """
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         
-        # Check if signal exists and get its creation timestamp for duration calculation
-        cursor.execute("SELECT pair_id, z_score, timestamp FROM signals WHERE id = ?", (signal_id,))
-        row = cursor.fetchone()
-        if not row:
-            conn.close()
-            return f"Error: Signal {signal_id} not found."
+        db_status = AIValidationStatus.GO if status.upper() == "GO" else AIValidationStatus.NO_GO
         
-        pair_id, z_score, signal_timestamp_str = row
+        cursor.execute(
+            "UPDATE signal_records SET ai_validation_status = ?, ai_rationale = ? WHERE id = ?",
+            (db_status.value, rationale, signal_id)
+        )
+        conn.commit()
         
-        # Calculate validation duration (SC-002)
-        signal_timestamp = datetime.fromisoformat(signal_timestamp_str)
-        duration = (datetime.now() - signal_timestamp).total_seconds()
-        logger.info(f"AI Validation Duration for {signal_id}: {duration:.2f}s")
+        # If GO, trigger user confirmation via Telegram
+        if db_status == AIValidationStatus.GO:
+            # Fetch pair details for the notification
+            cursor.execute(
+                "SELECT ticker_a, ticker_b, z_score FROM signal_records sr JOIN arbitrage_pairs p ON sr.pair_id = p.id WHERE sr.id = ?",
+                (signal_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                t_a, t_b, z = row
+                await notification_service.send_confirmation_request(signal_id, f"{t_a}/{t_b}", z, rationale)
         
-        # Log the AI recommendation in audit_logs
-        cursor.execute("""
-            INSERT INTO audit_logs (timestamp, signal_id, ai_recommendation, ai_rationale, action_taken, ai_validation_duration)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (datetime.now().isoformat(), signal_id, ai_action, rationale, "WAIT" if ai_action == "GO" else "CANCELLED", duration))
-        
-        if ai_action == "GO":
-            # Update signal status
-            cursor.execute("UPDATE signals SET status = ? WHERE id = ?", ("PENDING_USER_CONFIRM", signal_id))
-            conn.commit()
-            conn.close()
-            
-            # Send Telegram confirmation request to the user
-            success = notification_service.send_confirmation_request(signal_id, pair_id, z_score, rationale)
-            if success:
-                return f"SUCCESS: Signal {signal_id} validated by AI. Telegram confirmation request sent to user. Rationale: {rationale}"
-            else:
-                return f"WARNING: Signal {signal_id} validated by AI, but failed to send Telegram notification. Rationale: {rationale}"
-        else:
-            # Update signal status to REJECTED
-            cursor.execute("UPDATE signals SET status = ? WHERE id = ?", ("REJECTED", signal_id))
-            conn.commit()
-            conn.close()
-            return f"SIGNAL REJECTED: Signal {signal_id} was marked NO-GO by AI. Reason: {rationale}"
-            
-    except Exception as e:
-        logger.error(f"Error in execute_arbitrage_trade: {e}")
-        return f"Error executing trade validation: {str(e)}"
-
-@mcp.tool()
-def get_virtual_pie_status() -> str:
-    """
-    Returns the current status of the Virtual Pie (target weights and current quantities).
-    """
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT ticker, target_weight, current_quantity, last_price FROM virtual_pie")
-        rows = cursor.fetchall()
         conn.close()
-        
-        if not rows:
-            return "Virtual Pie is empty or not initialized."
-            
-        status = ["Ticker | Target % | Quantity | Last Price"]
-        for row in rows:
-            ticker, weight, qty, price = row
-            status.append(f"{ticker} | {weight:.1%} | {qty:.4f} | ${price:.2f}")
-        
-        return "\n".join(status)
+        return f"Decision {db_status} recorded for signal {signal_id}."
     except Exception as e:
-        return f"Error fetching pie status: {str(e)}"
+        logger.error(f"Failed to record AI decision: {e}")
+        return f"Error: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run()

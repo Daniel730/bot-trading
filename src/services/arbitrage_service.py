@@ -1,66 +1,81 @@
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
-from typing import Dict, Any
+import logging
+from typing import Tuple, Dict, Any, List
+from src.models.arbitrage_models import ArbitragePair, OrderType
+
+logger = logging.getLogger(__name__)
 
 class ArbitrageService:
     def __init__(self):
         pass
 
-    def calculate_spread(self, price_a: float, price_b: float, hedge_ratio: float) -> float:
+    def calculate_hedge_ratio(self, data_a: pd.Series, data_b: pd.Series) -> float:
         """
-        Spread = Price A - (Hedge Ratio * Price B)
+        Calculates the hedge ratio using OLS (Ordinary Least Squares).
+        y = beta * x + alpha
+        Returns beta.
         """
-        return price_a - (hedge_ratio * price_b)
+        X = sm.add_constant(data_b)
+        model = sm.OLS(data_a, X).fit()
+        beta = model.params.iloc[1]
+        return float(beta)
 
-    def calculate_z_score(self, current_spread: float, mean_spread: float, std_spread: float) -> float:
+    def calculate_spread(self, data_a: pd.Series, data_b: pd.Series, beta: float) -> pd.Series:
         """
-        Z = (Current Spread - Mean Spread) / Std Dev Spread
+        Calculates the spread: spread = price_a - beta * price_b
         """
-        if std_spread == 0:
-            return 0.0
-        return (current_spread - mean_spread) / std_spread
+        return data_a - beta * data_b
 
-    def calculate_rebalance_orders(
-        self,
-        current_positions: Dict[str, float],
-        current_prices: Dict[str, float],
-        target_weights: Dict[str, float],
-        free_cash: float,
-        max_allocation_pct: float
-    ) -> Dict[str, float]:
+    def calculate_z_score(self, spread: pd.Series, window: int) -> pd.Series:
         """
-        Calculates the quantity to buy/sell for each asset to reach target weights,
-        applying a risk cap (max_allocation_pct of free_cash) to any BUY order.
-        Returns a dict of {ticker: quantity_change}.
+        Calculates the normalized Z-Score for a given window.
+        Z = (spread - rolling_mean) / rolling_std
         """
-        # Calculate Total Portfolio Value
-        invested_value = sum(
-            current_positions.get(ticker, 0.0) * current_prices.get(ticker, 0.0)
-            for ticker in target_weights
-        )
-        total_value = invested_value + free_cash
+        rolling_mean = spread.rolling(window=window).mean()
+        rolling_std = spread.rolling(window=window).std()
+        z_score = (spread - rolling_mean) / rolling_std
+        return z_score
+
+    def get_latest_z_score(self, data_a: pd.Series, data_b: pd.Series, beta: float, window: int) -> float:
+        """
+        Calculates the latest Z-Score for a pair.
+        """
+        spread = self.calculate_spread(data_a, data_b, beta)
+        z_scores = self.calculate_z_score(spread, window)
+        return float(z_scores.iloc[-1])
+
+    def get_multi_window_z_scores(self, data_a: pd.Series, data_b: pd.Series, beta: float, windows: List[int]) -> Dict[int, float]:
+        """
+        Calculates the latest Z-Score for a pair across multiple windows.
+        """
+        spread = self.calculate_spread(data_a, data_b, beta)
+        results = {}
+        for window in windows:
+            z_scores = self.calculate_z_score(spread, window)
+            results[window] = float(z_scores.iloc[-1])
+        return results
+
+    def calculate_rebalance_orders(self, ticker_a: str, ticker_b: str, beta: float, 
+                                   current_price_a: float, current_price_b: float, 
+                                   target_value: float, z_score: float) -> List[Dict[str, Any]]:
+        """
+        Calculates the necessary buy/sell orders for an atomic swap.
+        Ensures SELL orders are listed before BUY orders to free up cash/margin.
+        Returns a list of order dictionaries.
+        """
+        orders = []
         
-        orders = {}
-        max_trade_value = free_cash * (max_allocation_pct / 100.0)
-        
-        for ticker, target_weight in target_weights.items():
-            price = current_prices.get(ticker)
-            if not price or price <= 0:
-                continue
-                
-            current_qty = current_positions.get(ticker, 0.0)
-            target_value = total_value * target_weight
-            current_value = current_qty * price
+        if z_score > 2.5:
+            # Sell A, Buy B
+            orders.append({"ticker": ticker_a, "quantity": -1.0, "type": OrderType.SELL})
+            orders.append({"ticker": ticker_b, "quantity": beta, "type": OrderType.BUY})
             
-            value_diff = target_value - current_value
-            
-            # Apply risk cap only to BUY orders (value_diff > 0)
-            if value_diff > max_trade_value:
-                value_diff = max_trade_value
-            
-            # Quantity to order (can be negative for SELL)
-            order_qty = value_diff / price
-            orders[ticker] = round(order_qty, 6)
+        elif z_score < -2.5:
+            # Buy A, Sell B
+            # Order: Sell B first, then Buy A
+            orders.append({"ticker": ticker_b, "quantity": -beta, "type": OrderType.SELL})
+            orders.append({"ticker": ticker_a, "quantity": 1.0, "type": OrderType.BUY})
             
         return orders

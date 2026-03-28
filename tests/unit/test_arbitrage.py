@@ -7,67 +7,91 @@ class TestArbitrageMath(unittest.TestCase):
     def setUp(self):
         self.arbitrage = ArbitrageService()
 
-    def test_z_score_calculation(self):
+    def test_calculate_hedge_ratio(self):
         """
-        Test that Z-score is calculated correctly.
-        Z = (Current Spread - Mean Spread) / Std Dev Spread
+        Test that hedge ratio is calculated correctly using OLS.
         """
-        current_spread = 10.0
-        mean_spread = 5.0
-        std_spread = 2.0
+        # Create a perfectly cointegrated pair
+        data_b = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0])
+        # data_a = 1.5 * data_b + 5
+        data_a = pd.Series([20.0, 21.5, 23.0, 24.5, 26.0])
         
-        expected_z = (10.0 - 5.0) / 2.0  # 2.5
-        calculated_z = self.arbitrage.calculate_z_score(current_spread, mean_spread, std_spread)
+        expected_beta = 1.5
+        calculated_beta = self.arbitrage.calculate_hedge_ratio(data_a, data_b)
         
-        self.assertEqual(calculated_z, expected_z)
+        self.assertAlmostEqual(calculated_beta, expected_beta, places=5)
 
-    def test_spread_calculation(self):
+    def test_calculate_spread(self):
         """
-        Spread = Price A - (Hedge Ratio * Price B)
+        Spread = Price A - (Beta * Price B)
         """
-        price_a = 150.0
-        price_b = 100.0
-        hedge_ratio = 1.2
+        data_a = pd.Series([150.0, 155.0])
+        data_b = pd.Series([100.0, 102.0])
+        beta = 1.2
         
-        expected_spread = 150.0 - (1.2 * 100.0)  # 30.0
-        calculated_spread = self.arbitrage.calculate_spread(price_a, price_b, hedge_ratio)
+        expected_spread = pd.Series([150.0 - (1.2 * 100.0), 155.0 - (1.2 * 102.0)])
+        calculated_spread = self.arbitrage.calculate_spread(data_a, data_b, beta)
         
-        self.assertEqual(calculated_spread, expected_spread)
+        pd.testing.assert_series_equal(calculated_spread, expected_spread)
 
-    def test_rebalance_logic_capped(self):
+    def test_calculate_z_score(self):
         """
-        Verify rebalance logic with risk capping.
+        Test Z-score calculation on a spread series.
         """
-        current_positions = {'AAPL': 0.0, 'MSFT': 0.0}
-        current_prices = {'AAPL': 150.0, 'MSFT': 250.0}
-        target_weights = {'AAPL': 0.5, 'MSFT': 0.5}
-        free_cash = 1000.0
-        max_allocation_pct = 10.0 # 10% of 1000 = 100
+        spread = pd.Series([10.0, 11.0, 12.0, 13.0, 14.0])
+        window = 3
         
-        # Target value for AAPL is 500, but capped at 100.
-        # Order for AAPL should be 100 / 150 = 0.666667 shares
+        # For window=3, first two values will be NaN
+        # 3rd value: mean=[10,11,12]=11, std=1.0. Z=(12-11)/1=1.0
+        # 4th value: mean=[11,12,13]=12, std=1.0. Z=(13-12)/1=1.0
+        # 5th value: mean=[12,13,14]=13, std=1.0. Z=(14-13)/1=1.0
+        
+        calculated_z = self.arbitrage.calculate_z_score(spread, window)
+        
+        self.assertTrue(np.isnan(calculated_z.iloc[0]))
+        self.assertTrue(np.isnan(calculated_z.iloc[1]))
+        self.assertAlmostEqual(calculated_z.iloc[2], 1.0)
+        self.assertAlmostEqual(calculated_z.iloc[3], 1.0)
+        self.assertAlmostEqual(calculated_z.iloc[4], 1.0)
+
+    def test_calculate_rebalance_orders(self):
+        """
+        Verify rebalance order generation.
+        """
+        ticker_a = "KO"
+        ticker_b = "PEP"
+        beta = 1.1
+        current_price_a = 60.0
+        current_price_b = 170.0
+        target_value = 1000.0
+        
+        # Case 1: Z > 2.5 -> Sell A, Buy B
+        z_score = 3.0
         orders = self.arbitrage.calculate_rebalance_orders(
-            current_positions, current_prices, target_weights, free_cash, max_allocation_pct
+            ticker_a, ticker_b, beta, current_price_a, current_price_b, target_value, z_score
         )
         
-        self.assertEqual(orders['AAPL'], round(100.0 / 150.0, 6))
-        self.assertEqual(orders['MSFT'], round(100.0 / 250.0, 6))
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0]['ticker'], "KO")
+        self.assertEqual(orders[0]['quantity'], -1.0)
+        self.assertEqual(orders[1]['ticker'], "PEP")
+        self.assertEqual(orders[1]['quantity'], 1.1)
 
-    def test_rebalance_logic_uncapped(self):
-        """
-        Verify rebalance logic without risk capping.
-        """
-        current_positions = {'AAPL': 0.0}
-        current_prices = {'AAPL': 100.0}
-        target_weights = {'AAPL': 0.1}
-        free_cash = 1000.0
-        max_allocation_pct = 20.0 # 20% of 1000 = 200
-        
-        # Target value for AAPL is 1000 * 0.1 = 100.
-        # Max trade is 200. No capping.
-        # Order should be 100 / 100 = 1.0 share.
+        # Case 2: Z < -2.5 -> Buy A, Sell B
+        z_score = -3.0
         orders = self.arbitrage.calculate_rebalance_orders(
-            current_positions, current_prices, target_weights, free_cash, max_allocation_pct
+            ticker_a, ticker_b, beta, current_price_a, current_price_b, target_value, z_score
         )
         
-        self.assertEqual(orders['AAPL'], 1.0)
+        self.assertEqual(len(orders), 2)
+        self.assertEqual(orders[0]['ticker'], "KO")
+        self.assertEqual(orders[0]['quantity'], 1.0)
+        self.assertEqual(orders[1]['ticker'], "PEP")
+        self.assertEqual(orders[1]['quantity'], -1.1)
+
+        # Case 3: Neutral Z -> No orders
+        z_score = 0.0
+        orders = self.arbitrage.calculate_rebalance_orders(
+            ticker_a, ticker_b, beta, current_price_a, current_price_b, target_value, z_score
+        )
+        self.assertEqual(len(orders), 0)
