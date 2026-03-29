@@ -1,0 +1,15 @@
+[Unit]
+Description=Strategic Arbitrage Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=daniel
+WorkingDirectory=/mnt/c/Users/Danie/Desktop/bot/bot-trading
+EnvironmentFile=/mnt/c/Users/Danie/Desktop/bot/bot-trading/.env
+ExecStart=/mnt/c/Users/Danie/Desktop/bot/bot-trading/.venv/bin/python src/monitor.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -17,8 +17,11 @@ class Settings(BaseSettings):
 
     # Risk Management
     max_allocation_percentage: float = 10.0
+    slippage_tolerance: float = 0.005
 
     # Operational
+    paper_trading: bool = True
+    account_base_currency: str = "EUR"
     operating_timezone: str = "WET"
     log_level: str = "INFO"
 
@@ -40,3 +43,6 @@ T212_API_SECRET = settings.t212_api_secret
 POLYGON_API_KEY = settings.polygon_api_key
 TELEGRAM_BOT_TOKEN = settings.telegram_bot_token
 TELEGRAM_CHAT_ID = settings.telegram_chat_id
+PAPER_TRADING = settings.paper_trading
+ACCOUNT_BASE_CURRENCY = settings.account_base_currency
+SLIPPAGE_TOLERANCE = settings.slippage_tolerance

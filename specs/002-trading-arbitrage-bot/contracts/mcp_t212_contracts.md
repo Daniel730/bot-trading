@@ -12,7 +12,7 @@
 {
   "ticker": "string",     // e.g. "AAPL_US_EQ"
   "quantity": number,     // positive for BUY, negative for SELL
-  "extendedHours": false  // Enforced by Principle I
+  "extendedHours": false  // Enforced by Principle II
 }
 ```
 - **Response**: `201 Created` with order ID and initial status.

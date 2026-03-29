@@ -4,6 +4,8 @@ import pandas as pd
 from datetime import datetime, time as dtime
 import pytz
 import logging
+import holidays
+from polygon import RESTClient
 from src.config import POLYGON_API_KEY
 from typing import List, Dict, Any, Optional
 
@@ -11,10 +13,10 @@ logger = logging.getLogger(__name__)
 
 class DataService:
     def __init__(self):
-        self.polygon_base_url = "https://api.polygon.io"
-        self.api_key = POLYGON_API_KEY
+        self.client = RESTClient(api_key=POLYGON_API_KEY)
         self.ny_tz = pytz.timezone("America/New_York")
         self.wet_tz = pytz.timezone("WET")
+        self.us_holidays = holidays.US()
 
     def get_historical_data(self, ticker: str, period: str = "90d") -> pd.DataFrame:
         """
@@ -26,89 +28,66 @@ class DataService:
 
     def get_current_prices(self, tickers: List[str]) -> Dict[str, float]:
         """
-        Fetches near real-time snapshot prices from Polygon.io.
+        Fetches current snapshot prices from Polygon.io.
         """
-        # Note: Polygon snapshot returns for ALL tickers.
-        # Filtering for the tickers we care about.
-        endpoint = f"{self.polygon_base_url}/v2/snapshot/locale/us/markets/stocks/tickers"
-        params = {
-            "tickers": ",".join(tickers),
-            "apiKey": self.api_key
-        }
-        
-        response = requests.get(endpoint, params=params)
-        
-        if response.status_code == 200:
-            data = response.json()
+        try:
+            # Using RESTClient snapshot for multiple tickers
+            # This is more efficient than individual calls for a small number of tickers.
+            snapshot = self.client.get_snapshot_all(
+                market_type="stocks",
+                tickers=",".join(tickers)
+            )
+            
             prices = {}
-            for ticker_info in data.get("tickers", []):
-                ticker = ticker_info.get("ticker")
-                price = ticker_info.get("lastTrade", {}).get("p")
+            for ticker_info in snapshot:
+                ticker = ticker_info.ticker
+                price = ticker_info.last_trade.price if ticker_info.last_trade else ticker_info.day.close
                 if price:
-                    prices[ticker] = price
+                    prices[ticker] = float(price)
             return prices
-        else:
+        except Exception as e:
+            logger.warning(f"Polygon Snapshot failed: {e}. Falling back to yfinance.")
             # Fallback to yfinance if Polygon fails
             prices = {}
             for ticker in tickers:
                 t = yf.Ticker(ticker)
-                # fast_info is deprecated, use t.info['currentPrice'] or history
                 try:
-                    prices[ticker] = t.info['currentPrice']
-                except:
+                    # Using history(1d) as currentPrice might be delayed or unavailable
                     df = t.history(period="1d")
                     if not df.empty:
-                        prices[ticker] = df['Close'].iloc[-1]
+                        prices[ticker] = float(df['Close'].iloc[-1])
+                except Exception as ex:
+                    logger.error(f"yfinance fallback failed for {ticker}: {ex}")
             return prices
 
     def get_news_context(self, tickers: List[str], limit: int = 5) -> List[Dict[str, Any]]:
         """
         Fetches recent news headlines from Polygon.io.
         """
-        endpoint = f"{self.polygon_base_url}/v2/reference/news"
-        params = {
-            "ticker.any_of": ",".join(tickers),
-            "limit": limit,
-            "apiKey": self.api_key
-        }
-        
-        response = requests.get(endpoint, params=params)
-        
-        if response.status_code == 200:
-            return response.json().get("results", [])
-        else:
-            logger.error(f"Failed to fetch news from Polygon: {response.text}")
+        try:
+            news = self.client.list_ticker_news(ticker=",".join(tickers), limit=limit)
+            return [vars(n) for n in news]
+        except Exception as e:
+            logger.error(f"Failed to fetch news from Polygon: {e}")
             return []
 
     def is_market_open(self) -> bool:
         """
         Checks if the market is open based on NYSE operating hours (14:30 - 21:00 WET).
-        Enforces Principle I and includes basic holiday checks for 2026.
+        Uses 'holidays' library for NYSE holiday support.
         """
         now_wet = datetime.now(self.wet_tz)
         
-        # Check if it's a weekday (0=Mon, 4=Fri)
+        # Weekday check (0=Mon, 4=Fri)
         if now_wet.weekday() >= 5:
             return False
             
-        # NYSE 2026 Holidays (Partial List)
-        holidays_2026 = [
-            "2026-01-01", # New Year's Day
-            "2026-01-19", # Martin Luther King Jr. Day
-            "2026-02-16", # Presidents' Day
-            "2026-04-03", # Good Friday
-            "2026-05-25", # Memorial Day
-            "2026-06-19", # Juneteenth
-            "2026-07-03", # Independence Day (Observed)
-            "2026-09-07", # Labor Day
-            "2026-11-26", # Thanksgiving Day
-            "2026-12-25", # Christmas Day
-        ]
-        
-        if now_wet.strftime("%Y-%m-%d") in holidays_2026:
+        # NYSE Holiday Check (NY Time)
+        now_ny = datetime.now(self.ny_tz)
+        if now_ny.date() in self.us_holidays:
             return False
 
-        # Check time window (14:30 - 21:00 WET)
+        # Time window check (14:30 - 21:00 WET)
         start_time = dtime(14, 30)
         end_time = dtime(21, 0)
         current_time = now_wet.time()

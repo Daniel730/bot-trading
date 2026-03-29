@@ -7,3 +7,10 @@ statsmodels
 pandas
 pytest
 tenacity
+holidays
+python-telegram-bot
+polygon-api-client
+pydantic
+pydantic-settings
+numpy
+quantstats
