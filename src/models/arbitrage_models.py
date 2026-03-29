@@ -1,10 +1,10 @@
-from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum
 from typing import Optional
-from uuid import UUID, uuid4
+from pydantic import BaseModel, Field
+import uuid
 
-class ArbitrageStatus(str, Enum):
+class PairStatus(str, Enum):
     MONITORING = "MONITORING"
     ACTIVE_TRADE = "ACTIVE_TRADE"
     PAUSED = "PAUSED"
@@ -32,25 +32,21 @@ class TradeStatus(str, Enum):
     FAILED = "FAILED"
 
 class ArbitragePair(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     ticker_a: str
     ticker_b: str
-    beta: float = 0.0
-    status: ArbitrageStatus = ArbitrageStatus.MONITORING
-    last_z_score: float = 0.0
+    beta: Optional[float] = None
+    status: PairStatus = PairStatus.MONITORING
+    last_z_score: Optional[float] = None
     is_cointegrated: bool = False
 
-class ZScoreHistory(BaseModel):
-    pair_id: UUID
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
-    window: int  # 30, 60, or 90
-    value: float
-
 class SignalRecord(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
-    pair_id: UUID
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    pair_id: str
+    timestamp: datetime = Field(default_factory=datetime.now)
     z_score: float
+    price_a: float
+    price_b: float
     trigger_type: TriggerType
     ai_validation_status: AIValidationStatus = AIValidationStatus.PENDING
     ai_rationale: Optional[str] = None
@@ -59,12 +55,12 @@ class SignalRecord(BaseModel):
 class VirtualPieAsset(BaseModel):
     ticker: str
     target_weight: float
-    current_quantity: float = 0.0
-    currency: str = "EUR"
+    current_quantity: float
+    currency: str = "USD"
 
 class TradeLedger(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: datetime = Field(default_factory=datetime.now)
     ticker: str
     quantity: float
     price: float
@@ -73,22 +69,21 @@ class TradeLedger(BaseModel):
     status: TradeStatus = TradeStatus.COMPLETED
 
 class ArbitrageError(Exception):
-    """Base class for arbitrage exceptions."""
+    """Custom exception hierarchy for arbitrage-related errors."""
     pass
 
-class DataError(ArbitrageError):
-    """Raised when market data is unavailable or invalid."""
+class BrokerageError(ArbitrageError):
+    """Errors related to brokerage API interactions."""
     pass
 
-class ExecutionError(ArbitrageError):
-    """Raised when a trade execution fails."""
+class DataServiceError(ArbitrageError):
+    """Errors related to market data polling."""
     pass
 
-class SlippageError(ExecutionError):
-    """Raised when price drift exceeds tolerance."""
+class OperatingHoursError(ArbitrageError):
+    """Raised when an operation is attempted outside of market hours."""
     pass
 
-class CointegrationError(ArbitrageError):
-    """Raised when a pair loses cointegration."""
+class SlippageError(ArbitrageError):
+    """Raised when current prices exceed slippage tolerance."""
     pass
-

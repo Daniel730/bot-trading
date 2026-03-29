@@ -1,99 +1,66 @@
 import asyncio
-import logging
-import pandas as pd
-import quantstats as qs
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-from typing import Optional, List, Dict
-
-logger = logging.getLogger(__name__)
+from typing import Optional
 
 class NotificationService:
     def __init__(self):
-        self.bot_token = TELEGRAM_BOT_TOKEN
+        self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
         self.chat_id = TELEGRAM_CHAT_ID
-        self.bot = Bot(token=self.bot_token)
 
-    async def send_message(self, text: str, parse_mode: str = "Markdown") -> bool:
-        """
-        Sends a standard Telegram message asynchronously.
-        """
-        try:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode=parse_mode
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send Telegram message: {e}")
-            return False
+    async def send_message(self, text: str, parse_mode: str = 'HTML'):
+        """Send a basic text notification."""
+        await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode=parse_mode)
 
-    async def send_trade_notification(self, ticker: str, quantity: float, success: bool, error: str = None) -> bool:
-        """
-        Sends a notification about a trade execution outcome.
-        """
-        action = "BUY" if quantity > 0 else "SELL"
-        status = "✅ SUCCESS" if success else "❌ FAILED"
-        
-        text = (
-            f"💼 *Trade Execution: {status}*\n"
-            f"Ticker: `{ticker}`\n"
-            f"Action: `{action}`\n"
-            f"Quantity: `{abs(quantity):.6f}`\n"
-        )
-        
-        if error:
-            text += f"\n⚠️ *Error:* `{error}`"
-            
-        return await self.send_message(text)
-
-    async def send_confirmation_request(self, signal_id: str, pair: str, z_score: float, rationale: str) -> bool:
-        """
-        Sends a message with inline buttons for manual confirmation.
-        """
-        text = (
-            f"🎯 *Signal Detected: {pair}*\n"
-            f"Z-Score: `{z_score:.2f}`\n\n"
-            f"💡 *AI Analysis:*\n{rationale}\n\n"
-            f"Do you want to proceed with the rebalance?"
-        )
-        
+    async def send_approval_request(self, signal_id: str, ticker_a: str, ticker_b: str, z_score: float, ai_rationale: str):
+        """Send an interactive approval request for a trade signal."""
         keyboard = [
             [
-                InlineKeyboardButton("✅ Approve", callback_data=f"approve_{signal_id}"),
-                InlineKeyboardButton("❌ Reject", callback_data=f"reject_{signal_id}")
+                InlineKeyboardButton("Approve ✅", callback_data=f"approve_{signal_id}"),
+                InlineKeyboardButton("Reject ❌", callback_data=f"reject_{signal_id}")
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        try:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                parse_mode="Markdown",
-                reply_markup=reply_markup
-            )
-            logger.info(f"Confirmation request sent for signal {signal_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to send confirmation request: {e}")
-            return False
+        message = (
+            f"<b>🚨 Arbitrage Signal Detected</b>\n\n"
+            f"Pair: {ticker_a} / {ticker_b}\n"
+            f"Z-Score: {z_score:.2f}\n"
+            f"AI Rationale: {ai_rationale}\n\n"
+            f"Do you want to execute the rebalance?"
+        )
+        
+        await self.bot.send_message(chat_id=self.chat_id, text=message, reply_markup=reply_markup, parse_mode='HTML')
+
+    def start_bot(self):
+        """Initializes the bot application and registers callback handlers."""
+        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        
+        async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            query = update.callback_query
+            await query.answer()
             
-    async def send_performance_report(self, returns: pd.Series) -> bool:
-        """
-        T025: Calculates and sends a performance report using quantstats.
-        """
-        try:
-            sharpe_ratio = qs.stats.sharpe(returns)
-            drawdown = qs.stats.max_drawdown(returns)
+            data = query.data
+            signal_id = data.split("_")[1]
             
-            text = (
-                f"📊 *Performance Report*\n"
-                f"Sharpe Ratio: `{sharpe_ratio:.2f}`\n"
-                f"Max Drawdown: `{drawdown*100:.2f}%`"
-            )
-            return await self.send_message(text)
-        except Exception as e:
-            logger.error(f"Failed to generate performance report: {e}")
-            return False
+            if data.startswith("approve"):
+                # Persist approval in SQLite
+                self._update_approval_status(signal_id, "APPROVED")
+                await query.edit_message_text(text=f"{query.message.text}\n\n<b>Status: APPROVED ✅</b>", parse_mode='HTML')
+            elif data.startswith("reject"):
+                self._update_approval_status(signal_id, "REJECTED")
+                await query.edit_message_text(text=f"{query.message.text}\n\n<b>Status: REJECTED ❌</b>", parse_mode='HTML')
+
+        application.add_handler(CallbackQueryHandler(button_callback))
+        # This would normally run in the background (e.g. application.run_polling())
+        return application
+
+    def _update_approval_status(self, signal_id: str, status: str):
+        """Update signal approval status in SQLite."""
+        import sqlite3
+        conn = sqlite3.connect("trading_bot.sqlite")
+        cursor = conn.cursor()
+        cursor.execute("UPDATE SignalRecord SET user_approval_status = ? WHERE id = ?", (status, signal_id))
+        conn.commit()
+        conn.close()

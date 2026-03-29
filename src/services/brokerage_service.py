@@ -1,88 +1,45 @@
 import requests
-import time
-import logging
-import base64
-from src.config import T212_API_KEY, T212_API_SECRET
 from typing import List, Dict, Any
-from tenacity import retry, stop_after_attempt, wait_exponential
-
-logger = logging.getLogger(__name__)
+from src.config import T212_API_KEY, T212_API_SECRET, T212_DEMO
+from src.models.arbitrage_models import BrokerageError
 
 class BrokerageService:
-    def __init__(self, demo: bool = True):
-        # Using the official Beta API endpoints if they differ, otherwise keeping these
-        self.base_url = "https://demo.trading212.com" if demo else "https://live.trading212.com"
-        
-        # Basic Auth header construction
-        auth_str = f"{T212_API_KEY}:{T212_API_SECRET}"
-        encoded_auth = base64.b64encode(auth_str.encode()).decode()
+    def __init__(self):
+        self.base_url = "https://demo.trading212.com/api/v0" if T212_DEMO else "https://live.trading212.com/api/v0"
         self.headers = {
-            "Authorization": f"Basic {encoded_auth}",
-            "Content-Type": "application/json"
+            "Authorization": f"Basic {T212_API_KEY}:{T212_API_SECRET}"
         }
-        
-        self.last_order_time = 0
-        self.rate_limit_seconds = 12  # Strict 5 req/min (60/5 = 12s) for free tier compliance
 
-    def _wait_for_rate_limit(self):
-        elapsed = time.time() - self.last_order_time
-        if elapsed < self.rate_limit_seconds:
-            sleep_time = self.rate_limit_seconds - elapsed
-            logger.debug(f"Rate limiting: sleeping for {sleep_time:.2f}s")
-            time.sleep(sleep_time)
+    def get_portfolio(self) -> List[Dict[str, Any]]:
+        """Fetch current holdings from Trading 212."""
+        try:
+            response = requests.get(f"{self.base_url}/equity/portfolio", headers=self.headers)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            raise BrokerageError(f"Failed to fetch portfolio: {e}")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def place_market_order(self, ticker: str, quantity: float) -> Dict[str, Any]:
-        """
-        Creates a market order on Trading 212 Beta API.
-        Quantity is positive for BUY, negative for SELL.
-        """
-        self._wait_for_rate_limit()
-        
-        endpoint = f"{self.base_url}/api/v0/equity/orders/market"
-        # The API might expect absolute quantity and a separate action, 
-        # but the contract in contracts.md says quantity can be negative.
-        # We'll stick to the contract.
+    def place_market_order(self, ticker: str, quantity: float, order_type: str) -> Dict[str, Any]:
+        """Place a market order on Trading 212."""
+        # Note: In T212 Beta API, Sell is often a negative quantity or separate endpoint
+        # For this implementation, we follow the contract in brokerage_api.md
         payload = {
             "ticker": ticker,
-            "quantity": quantity,
+            "quantity": quantity if order_type == "BUY" else -quantity,
             "extendedHours": False
         }
-        
-        response = requests.post(endpoint, json=payload, headers=self.headers)
-        self.last_order_time = time.time()
-        
-        if response.status_code in [200, 201]:
-            logger.info(f"Market order successful for {ticker}: {quantity}")
-            return response.json()
-        else:
-            logger.error(f"Failed to create market order for {ticker}: {response.text}")
+        try:
+            response = requests.post(f"{self.base_url}/equity/orders/market", headers=self.headers, json=payload)
             response.raise_for_status()
-
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def fetch_positions(self) -> List[Dict[str, Any]]:
-        """
-        Fetches current positions (Portfolio).
-        """
-        endpoint = f"{self.base_url}/api/v0/equity/portfolio"
-        response = requests.get(endpoint, headers=self.headers)
-        
-        if response.status_code == 200:
             return response.json()
-        else:
-            logger.error(f"Failed to fetch portfolio: {response.text}")
-            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise BrokerageError(f"Failed to place {order_type} order for {ticker}: {e}")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def get_cash_balance(self) -> float:
-        """
-        Fetches the free cash balance.
-        """
-        endpoint = f"{self.base_url}/api/v0/equity/account/cash"
-        response = requests.get(endpoint, headers=self.headers)
-        
-        if response.status_code == 200:
+    def get_account_cash(self) -> float:
+        """Fetch available cash in the account."""
+        try:
+            response = requests.get(f"{self.base_url}/equity/account/cash", headers=self.headers)
+            response.raise_for_status()
             return response.json().get("free", 0.0)
-        else:
-            logger.error(f"Failed to fetch cash balance: {response.text}")
-            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise BrokerageError(f"Failed to fetch account cash: {e}")
