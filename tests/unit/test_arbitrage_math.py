@@ -1,42 +1,30 @@
 import pytest
 import pandas as pd
 import numpy as np
-from src.services.arbitrage_service import ArbitrageService
+from src.services.arbitrage_service import arbitrage_service
+from src.services.risk_service import risk_service
 
-@pytest.fixture
-def arbitrage_service():
-    return ArbitrageService()
-
-def test_calculate_beta(arbitrage_service):
-    # Generate some cointegrated-like data
-    np.random.seed(42)
-    x = pd.Series(np.linspace(100, 150, 100) + np.random.normal(0, 1, 100))
-    y = 0.5 * x + 10 + np.random.normal(0, 1, 100)
+def test_calculate_zscore():
+    # Mean spread 0, std 1
+    z = arbitrage_service.calculate_zscore(10, 5, 2, 0, 1) # (10 - 2*5 - 0) / 1 = 0
+    assert z == 0
     
-    beta = arbitrage_service.calculate_beta(y, x)
-    assert pytest.approx(beta, rel=0.1) == 0.5
+    z = arbitrage_service.calculate_zscore(12, 5, 2, 0, 1) # (12 - 2*5 - 0) / 1 = 2
+    assert z == 2
 
-def test_calculate_z_score(arbitrage_service):
-    # Historical spreads: 1, 1, 1, 1, 1 (mean=1, std=0 -> handle std=0)
-    spreads = pd.Series([1.0] * 100)
-    z = arbitrage_service.calculate_z_score(10, 5, 1.5, spreads, 30)
-    # spread = 10 - 1.5*5 = 2.5
-    # Since std=0, should return 0 or handle it
-    assert z == 0.0 or z != 0.0 # Just checking it runs without error
-    
-    # Spread sequence with variance
+def test_kelly_sizing():
+    # Confidence 0.6, win/loss 1.0 -> kelly_f = 0.6 - 0.4 = 0.2
+    # Fractional (0.25) -> 0.2 * 0.25 = 0.05
+    # Limit by MAX_RISK_PER_TRADE (0.02)
+    size = risk_service.calculate_kelly_size(0.6, 1.0)
+    assert size == 0.02
+
+def test_cointegration_logic():
+    # Create two cointegrated series
     np.random.seed(42)
-    spreads = pd.Series(np.random.normal(1.0, 0.5, 100)) # mean=1, std=0.5
-    # Current spread = 2.0
-    # Z-Score = (2.0 - 1.0) / 0.5 = 2.0
-    # We mock inputs to get spread=2.0
-    z = arbitrage_service.calculate_z_score(2.0, 0.0, 1.0, spreads, 50)
-    assert z > 0
-
-def test_multi_window_z_scores(arbitrage_service):
-    spreads = pd.Series(np.random.normal(1.0, 0.5, 200))
-    z_scores = arbitrage_service.get_multi_window_z_scores(2.0, 0.0, 1.0, spreads, [30, 60, 90])
-    assert len(z_scores) == 3
-    assert 30 in z_scores
-    assert 60 in z_scores
-    assert 90 in z_scores
+    x = np.random.normal(0, 1, 100).cumsum()
+    y = x + np.random.normal(0, 0.1, 100) # Highly cointegrated
+    
+    is_coint, p_val, hedge = arbitrage_service.check_cointegration(pd.Series(y), pd.Series(x))
+    assert is_coint == True
+    assert p_val < 0.05

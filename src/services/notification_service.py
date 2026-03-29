@@ -1,66 +1,83 @@
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, Bot
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes
+from src.config import settings
 import asyncio
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
-from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-from typing import Optional
+import uuid
 
 class NotificationService:
     def __init__(self):
-        self.bot = Bot(token=TELEGRAM_BOT_TOKEN)
-        self.chat_id = TELEGRAM_CHAT_ID
+        self.token = settings.TELEGRAM_BOT_TOKEN
+        self.chat_id = settings.TELEGRAM_CHAT_ID
+        self.pending_approvals = {} # correlation_id -> asyncio.Future
+        self.app = ApplicationBuilder().token(self.token).build()
+        
+        # Register callback handler
+        self.app.add_handler(CallbackQueryHandler(self._handle_callback))
 
-    async def send_message(self, text: str, parse_mode: str = 'HTML'):
-        """Send a basic text notification."""
-        await self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode=parse_mode)
+    async def _handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        
+        # Always answer to stop the loading spinner, even if query is old
+        try:
+            await query.answer()
+        except Exception:
+            pass
+        
+        if not query.data or ":" not in query.data:
+            return
 
-    async def send_approval_request(self, signal_id: str, ticker_a: str, ticker_b: str, z_score: float, ai_rationale: str):
-        """Send an interactive approval request for a trade signal."""
+        data = query.data.split(":")
+        action = data[0]
+        correlation_id = data[1]
+        
+        if correlation_id in self.pending_approvals:
+            future = self.pending_approvals.pop(correlation_id)
+            if not future.done():
+                future.set_result(action == "approve")
+                try:
+                    await query.edit_message_text(text=f"{query.message.text}\n\n✅ Resultado: {'APROVADO' if action == 'approve' else 'REJEITADO'}")
+                except Exception as e:
+                    print(f"TELEGRAM: Could not edit message: {e}")
+
+    async def start_listening(self):
+        """Starts the Telegram bot listener in the background."""
+        await self.app.initialize()
+        await self.app.start()
+        # drop_pending_updates=True is CRITICAL to avoid processing old clicks after restart
+        await self.app.updater.start_polling(drop_pending_updates=True)
+        print("TELEGRAM: Listener active (cleared pending updates).")
+
+    async def request_approval(self, trade_summary: str) -> bool:
+        """
+        Sends message and WAITS for the user to click a button.
+        """
+        correlation_id = str(uuid.uuid4())[:8]
         keyboard = [
             [
-                InlineKeyboardButton("Approve ✅", callback_data=f"approve_{signal_id}"),
-                InlineKeyboardButton("Reject ❌", callback_data=f"reject_{signal_id}")
+                InlineKeyboardButton("Approve", callback_data=f"approve:{correlation_id}"),
+                InlineKeyboardButton("Reject", callback_data=f"reject:{correlation_id}"),
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        message = (
-            f"<b>🚨 Arbitrage Signal Detected</b>\n\n"
-            f"Pair: {ticker_a} / {ticker_b}\n"
-            f"Z-Score: {z_score:.2f}\n"
-            f"AI Rationale: {ai_rationale}\n\n"
-            f"Do you want to execute the rebalance?"
-        )
+        future = asyncio.get_event_loop().create_future()
+        self.pending_approvals[correlation_id] = future
         
-        await self.bot.send_message(chat_id=self.chat_id, text=message, reply_markup=reply_markup, parse_mode='HTML')
-
-    def start_bot(self):
-        """Initializes the bot application and registers callback handlers."""
-        application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-        
-        async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-            query = update.callback_query
-            await query.answer()
+        try:
+            await self.app.bot.send_message(
+                chat_id=self.chat_id, 
+                text=f"🚨 APPROVAL REQUIRED\n{trade_summary}", 
+                reply_markup=reply_markup
+            )
             
-            data = query.data
-            signal_id = data.split("_")[1]
-            
-            if data.startswith("approve"):
-                # Persist approval in SQLite
-                self._update_approval_status(signal_id, "APPROVED")
-                await query.edit_message_text(text=f"{query.message.text}\n\n<b>Status: APPROVED ✅</b>", parse_mode='HTML')
-            elif data.startswith("reject"):
-                self._update_approval_status(signal_id, "REJECTED")
-                await query.edit_message_text(text=f"{query.message.text}\n\n<b>Status: REJECTED ❌</b>", parse_mode='HTML')
+            # Wait for user response (max 5 minutes)
+            return await asyncio.wait_for(future, timeout=300)
+        except asyncio.TimeoutError:
+            self.pending_approvals.pop(correlation_id, None)
+            print(f"TELEGRAM: Timeout waiting for approval {correlation_id}")
+            return False
+        except Exception as e:
+            print(f"TELEGRAM ERROR: {e}")
+            return False
 
-        application.add_handler(CallbackQueryHandler(button_callback))
-        # This would normally run in the background (e.g. application.run_polling())
-        return application
-
-    def _update_approval_status(self, signal_id: str, status: str):
-        """Update signal approval status in SQLite."""
-        import sqlite3
-        conn = sqlite3.connect("trading_bot.sqlite")
-        cursor = conn.cursor()
-        cursor.execute("UPDATE SignalRecord SET user_approval_status = ? WHERE id = ?", (status, signal_id))
-        conn.commit()
-        conn.close()
+notification_service = NotificationService()

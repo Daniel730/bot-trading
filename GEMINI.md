@@ -30,4 +30,9 @@ tests/
 
 
 <!-- MANUAL ADDITIONS START -->
+## Development Mode (24/7 Testing)
+To test the bot during weekends or outside NYSE/NASDAQ hours:
+1. Set `DEV_MODE=true` in your `.env` file.
+2. The bot will automatically use crypto pairs (BTC-USD, ETH-USD) and bypass hour restrictions.
+3. Check logs for the `!!! DEVELOPMENT MODE ACTIVE !!!` warning.
 <!-- MANUAL ADDITIONS END -->
