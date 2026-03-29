@@ -77,7 +77,7 @@
 
 ### Implementation for User Story 3
 - [X] T019 [US3] Implement `execute_market_order`, `get_positions`, and `get_cash_balance` in `src/services/brokerage_service.py`
-- [X] T020 [US3] Implement risk-capped rebalance logic (Principle II) in `src/services/arbitrage_service.py`
+- [X] T020 [US3] Implement risk-capped rebalance logic (Principle V) in `src/services/arbitrage_service.py`
 - [X] T021 [US3] [Notify] Integrate Telegram success/failure alerts for final trade outcomes in `src/services/notification_service.py`
 
 **Checkpoint**: Bot can now rebalance positions based on validated and manually confirmed signals
@@ -86,7 +86,7 @@
 
 ## Phase 6: User Story 4 - Market Hour Discipline (Priority: P1)
 
-**Goal**: Enforce NYSE operating hours per Principle I
+**Goal**: Enforce NYSE operating hours per Principle II
 
 **Independent Test**: Verify bot sleep/wake logic based on WET vs NY time
 

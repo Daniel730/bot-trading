@@ -1,6 +1,6 @@
 # bot-trading Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-03-27
+Auto-generated from all feature plans. Last updated: 2026-03-28
 
 ## Active Technologies
 
@@ -22,6 +22,8 @@ tests/
 : Follow standard conventions
 
 ## Recent Changes
+- 003-strategic-arbitrage-engine: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+- 003-strategic-arbitrage-engine: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 
 - 002-trading-arbitrage-bot: Added
 

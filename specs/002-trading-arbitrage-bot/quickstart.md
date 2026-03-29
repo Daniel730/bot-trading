@@ -22,7 +22,7 @@
    POLYGON_API_KEY=your_key
    TELEGRAM_BOT_TOKEN=your_token
    TELEGRAM_CHAT_ID=your_id
-   MAX_ALLOCATION_PERCENTAGE=10.0  # Principle II
+   MAX_ALLOCATION_PERCENTAGE=10.0  # Principle V (Risk Control)
    OPERATING_TIMEZONE=WET
    ```
 3. **Initialize Database**:
@@ -45,6 +45,7 @@
    When a signal is validated by AI, you will receive a Telegram message with `[Approve]` and `[Reject]` buttons. The trade will only execute after you click `[Approve]`.
 
 ## Constitutional Safety Checks
-- **Hours**: Orders blocked outside 14:30 - 21:00 WET.
-- **Risk**: Single-trade allocation capped at 10% (or `.env` value).
-- **Control**: Mandatory manual confirmation for all rebalances.
+- **Hours (Principle II)**: Orders blocked outside 14:30 - 21:00 WET.
+- **Atomicidade (Principle III)**: Swap trades treated as single logical transactions.
+- **State (Principle IV)**: Startup re-sync and local DB persistence.
+- **Control (Principle V)**: Mandatory manual confirmation and risk capping.
