@@ -92,6 +92,8 @@
 - [X] T019 [US3] Implement Atomic rebalance logic (Sell-then-Buy) in `src/services/arbitrage_service.py`
 - [X] T020 [US3] Implement `place_market_order` and `fetch_positions` in `src/services/brokerage_service.py` per contracts.md
 - [X] T021 [US3] Implement Virtual Pie state reconciliation and startup re-sync in `src/monitor.py`
+- [X] T030 [US3] Implement configurable slippage tolerance (FR-011) check before order execution in `src/monitor.py`
+- [X] T031 [US3] Implement "Circuit Breaker" (FR-012): update pair status to 'PAUSED' and alert on partial swap failure in `src/monitor.py`
 
 **Checkpoint**: US3 is functional - bot rebalances real or virtual positions upon confirmation
 
@@ -105,8 +107,8 @@
 
 ### Implementation for User Story 4
 
-- [ ] T022 [US4] Implement simulated ledger tracking and virtual balance logic in `src/services/arbitrage_service.py`
-- [ ] T023 [US4] Implement conditional execution logic (Live vs Paper) in `src/monitor.py` based on `.env`
+- [X] T022 [US4] Implement simulated ledger tracking and virtual balance logic in `src/services/arbitrage_service.py`
+- [X] T023 [US4] Implement conditional execution logic (Live vs Paper) in `src/monitor.py` based on `.env`
 
 **Checkpoint**: US4 is functional - strategy can be validated in a risk-free environment
 
@@ -117,9 +119,12 @@
 **Purpose**: Operating hours, performance reports, and final hardening
 
 - [X] T024 [P] Implement NYSE operating hours and holiday check (using `holidays` lib) in `src/services/data_service.py`
-- [ ] T025 [P] Implement Sharpe Ratio and Drawdown calculation reports using `quantstats` in `src/services/notification_service.py`
-- [ ] T026 Implement headless deployment orchestrator and exception handling for `EquityNotOwned` in `src/monitor.py`
-- [ ] T027 Run final validation of `quickstart.md` steps
+- [X] T025 [P] Implement Sharpe Ratio and Drawdown calculation reports using `quantstats` in `src/services/notification_service.py`
+- [X] T026 Implement systemd unit file for headless deployment and define `ArbitrageError` base classes in `src/models/arbitrage_models.py`
+- [X] T028 [P] Create `Dockerfile` and `.dockerignore` for containerized deployment
+- [X] T029 [P] Create `docker-compose.yml` for multi-service orchestration (Bot + MCP Server)
+- [X] T032 [SC] Verify SC-002 (AI Latency < 30s) and SC-004 (Portfolio Drift < 0.5%) using performance logs and simulation results
+- [X] T027 Run final validation of `quickstart.md` steps
 
 ---
 

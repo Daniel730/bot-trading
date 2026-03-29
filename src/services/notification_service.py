@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import pandas as pd
+import quantstats as qs
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from src.config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from typing import Optional, List, Dict
@@ -78,13 +80,20 @@ class NotificationService:
             logger.error(f"Failed to send confirmation request: {e}")
             return False
             
-    async def send_performance_report(self, sharpe_ratio: float, drawdown: float) -> bool:
+    async def send_performance_report(self, returns: pd.Series) -> bool:
         """
-        Sends a performance report (Sharpe Ratio, Drawdown).
+        T025: Calculates and sends a performance report using quantstats.
         """
-        text = (
-            f"📊 *Performance Report*\n"
-            f"Sharpe Ratio: `{sharpe_ratio:.2f}`\n"
-            f"Max Drawdown: `{drawdown*100:.2f}%`"
-        )
-        return await self.send_message(text)
+        try:
+            sharpe_ratio = qs.stats.sharpe(returns)
+            drawdown = qs.stats.max_drawdown(returns)
+            
+            text = (
+                f"📊 *Performance Report*\n"
+                f"Sharpe Ratio: `{sharpe_ratio:.2f}`\n"
+                f"Max Drawdown: `{drawdown*100:.2f}%`"
+            )
+            return await self.send_message(text)
+        except Exception as e:
+            logger.error(f"Failed to generate performance report: {e}")
+            return False

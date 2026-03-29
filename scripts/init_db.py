@@ -42,6 +42,8 @@ def init_db():
         pair_id TEXT NOT NULL,
         timestamp TEXT NOT NULL,
         z_score REAL NOT NULL,
+        price_a REAL,
+        price_b REAL,
         trigger_type TEXT NOT NULL,
         ai_validation_status TEXT DEFAULT 'PENDING',
         ai_rationale TEXT,

@@ -1,42 +1,33 @@
 # Quickstart: Strategic Arbitrage Engine
 
 ## Prerequisites
-- Python 3.11+
+- Docker & Docker Compose
 - Trading 212 API Key (Beta)
-- Polygon.io API Key (Free tier, WebSockets)
-- Telegram Bot Token
-- Gemini CLI installed
+- Polygon.io API Key (Free tier)
+- Telegram Bot Token & Chat ID
+- Gemini API Key
 
-## Setup
-1. **Clone & Install**:
+## Configuration
+1. **Prepare `.env`**:
+   Copy `.env.template` to `.env` and fill in your keys.
    ```bash
-   pip install fastmcp yfinance polygon-api-client python-telegram-bot statsmodels pandas tenacity quantstats
+   cp .env.template .env
    ```
-2. **Configure `.env`**:
-   ```ini
-   T212_API_KEY=your_key
-   T212_API_SECRET=your_secret
-   POLYGON_API_KEY=your_key
-   TELEGRAM_BOT_TOKEN=your_token
-   TELEGRAM_CHAT_ID=your_id
-   PAPER_TRADING=true
-   ACCOUNT_BASE_CURRENCY=EUR
-   ```
-3. **Initialize DB**:
+2. **Set PAPER_TRADING**:
+   Ensure `PAPER_TRADING=true` in `.env` for your first run.
+
+## Deployment
+1. **Launch Containers**:
    ```bash
-   python scripts/init_db.py
+   docker-compose up --build -d
    ```
-4. **Register MCP Tools**:
+2. **Monitor Logs**:
    ```bash
-   fastmcp install gemini-cli src/mcp_server.py
+   docker-compose logs -f bot
    ```
 
-## Running the Engine
-1. **Start the Orchestrator**:
-   ```bash
-   python src/monitor.py
-   ```
-2. **Paper Trading Mode**:
-   Check the logs to see virtual trades being recorded in `TradeLedger`.
-3. **Live Trading**:
-   Switch `PAPER_TRADING=false` in `.env`.
+## User Workflow
+1. **Signal Generation**: The bot monitors pairs and sends an alert to Telegram when Z-Score > 2.5.
+2. **AI Validation**: Gemini CLI automatically analyzes news and provides a rationale.
+3. **Manual Approval**: Click "Approve" on the Telegram message to execute the trade.
+4. **Execution**: The bot sends market orders to Trading 212 and logs the trade.

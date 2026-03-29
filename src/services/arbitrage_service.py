@@ -2,8 +2,11 @@ import pandas as pd
 import numpy as np
 import statsmodels.api as sm
 import logging
+import uuid
+from datetime import datetime
+from uuid import uuid4
 from typing import Tuple, Dict, Any, List
-from src.models.arbitrage_models import ArbitragePair, OrderType
+from src.models.arbitrage_models import ArbitragePair, OrderType, TradeStatus
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +72,40 @@ class ArbitrageService:
         
         if z_score > 2.5:
             # Sell A, Buy B
-            orders.append({"ticker": ticker_a, "quantity": -1.0, "type": OrderType.SELL})
-            orders.append({"ticker": ticker_b, "quantity": beta, "type": OrderType.BUY})
+            orders.append({"ticker": ticker_a, "quantity": -1.0, "type": OrderType.SELL, "price": current_price_a})
+            orders.append({"ticker": ticker_b, "quantity": beta, "type": OrderType.BUY, "price": current_price_b})
             
         elif z_score < -2.5:
             # Buy A, Sell B
             # Order: Sell B first, then Buy A
-            orders.append({"ticker": ticker_b, "quantity": -beta, "type": OrderType.SELL})
-            orders.append({"ticker": ticker_a, "quantity": 1.0, "type": OrderType.BUY})
+            orders.append({"ticker": ticker_b, "quantity": -beta, "type": OrderType.SELL, "price": current_price_b})
+            orders.append({"ticker": ticker_a, "quantity": 1.0, "type": OrderType.BUY, "price": current_price_a})
             
         return orders
+
+    def calculate_paper_trade(self, ticker: str, quantity: float, price: float, 
+                              order_type: OrderType, current_balance: float) -> Tuple[Dict[str, Any], float]:
+        """
+        T022: Calculates the impact of a paper trade on the virtual ledger and balance.
+        Returns a ledger record dictionary and the updated virtual balance.
+        """
+        trade_value = abs(quantity) * price
+        new_balance = current_balance
+        
+        if order_type == OrderType.BUY:
+            new_balance -= trade_value
+        else:
+            new_balance += trade_value
+            
+        ledger_record = {
+            "id": str(uuid4()),
+            "timestamp": datetime.utcnow().isoformat(),
+            "ticker": ticker,
+            "quantity": quantity,
+            "price": price,
+            "order_type": order_type,
+            "is_paper": True,
+            "status": TradeStatus.COMPLETED
+        }
+        
+        return ledger_record, new_balance

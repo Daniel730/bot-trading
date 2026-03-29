@@ -5,6 +5,14 @@
 **Status**: Draft  
 **Input**: User description: "Criar a especificação para o motor de arbitragem estratégica. O sistema deve: 1. Monitorizar pares de ativos cointegrados (ex: KO/PEP) utilizando janelas móveis de Z-Score (30, 60, 90 dias).[2, 3] 2. Implementar gatilhos dinâmicos: Entrada quando $|Z| > 2.5$ e saída quando $|Z| < 0.5$. 3. Integração Quant-Fundamental: Ao atingir o gatilho estatístico, o Gemini CLI deve pesquisar notícias recentes (SEC filings, Earnings) para validar se a divergência é um ruído técnico ou uma mudança estrutural.[4, 5] 4. Gestão de \"Pie Virtual\": Simular o comportamento de rebalanceamento automático da Trading 212 via ordens de mercado individuais de \"Quantity\", respeitando a moeda base da conta.[6, 7] 5. Modo \"Paper Trading\": Permitir execução simulada para validação de estratégia antes do Live."
 
+## Clarifications
+
+### Session 2026-03-28
+- Q: How should the system persist the "Virtual Pie" state, "Arbitrage Pair" configurations, and the "Simulated Ledger" for auditability? → A: Local SQLite database (Relational, ACID compliant).
+- Q: What is the preferred mechanism for the "Human-in-the-loop" approval of trades before they are executed? → A: Telegram bot with interactive approval buttons.
+- Q: How should the system handle price execution drift if the market price moves significantly between the AI validation/User approval and the actual order execution? → A: Configurable slippage tolerance % (Abort if exceeded).
+- Q: How should the system behave if one asset in a pair has temporarily halted trading or has zero liquidity (FR-006)? → A: Abort entire rebalance (Leg-dependency safety).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Statistical Monitoring and Signal Generation (Priority: P1)
@@ -54,7 +62,7 @@ As a user of Trading 212, I want my arbitrage trades to be executed as individua
 
 ### User Story 4 - Paper Trading and Strategy Validation (Priority: P1)
 
-As a developer/trader, I want to run the entire strategy in a simulated environment using live market data without committing real capital, so that I can verify the logic and performance before going live.
+As a developer/trader, I want run the entire strategy in a simulated environment using live market data without committing real capital, so that I can verify the logic and performance before going live.
 
 **Why this priority**: Critical for safety and verification in a financial system. Allows for full system testing without financial risk.
 
@@ -67,8 +75,8 @@ As a developer/trader, I want to run the entire strategy in a simulated environm
 ### Edge Cases
 
 - **Connectivity Issues**: What happens when the news/filings source or brokerage API is unreachable during signal validation?
-- **Extreme Volatility**: How does the system handle rapid price movements that occur between signal generation and AI validation?
-- **Zero Liquidity**: How are orders handled if one of the assets in a pair has temporarily halted trading?
+- **Extreme Volatility**: Rapid price movements between signal generation and approval are handled by the slippage tolerance check (FR-011), aborting trades if the threshold is exceeded.
+- **Zero Liquidity**: If one asset in a pair is halted or illiquid, the entire rebalance operation MUST be aborted to maintain leg-dependency and avoid unhedged exposure.
 
 ## Requirements *(mandatory)*
 
@@ -82,14 +90,18 @@ As a developer/trader, I want to run the entire strategy in a simulated environm
 - **FR-006**: System MUST execute rebalancing via individual market "Quantity" orders via the brokerage API.
 - **FR-007**: System MUST support a "Paper Trading" toggle that prevents live order execution while maintaining all other logic.
 - **FR-008**: System MUST perform all currency calculations based on the account's primary base currency.
+- **FR-009**: System MUST persist all configurations, signals, and ledger entries in a local SQLite database.
+- **FR-010**: System MUST send an asynchronous notification via Telegram for every validated signal and wait for manual approval/rejection via interactive buttons before executing any trade (Live or Paper).
+- **FR-011**: System MUST verify that the current market price is within a configurable slippage tolerance percentage from the signal price before executing any market order.
+- **FR-012**: If one leg of a two-part arbitrage swap fails to execute after the other leg has completed, the system MUST immediately halt further automated operations for that pair and send a high-priority alert via Telegram for manual intervention.
 
 ### Key Entities
 
-- **Arbitrage Pair**: The two assets being monitored (e.g., KO and PEP) and their cointegration parameters.
-- **Z-Score Window**: A specific timeframe (30, 60, or 90 days) used for statistical calculation.
-- **Validation Report**: The output from Gemini CLI containing analyzed news and the final recommendation.
-- **Virtual Pie Asset**: A local record of a ticker's quantity and weight within the simulated pie.
-- **Simulated Ledger**: A record of all paper trades and virtual balance changes.
+- **Arbitrage Pair**: Cointegrated assets and their statistical parameters (mapped to SQLite table).
+- **Z-Score Window**: Timeframes (30, 60, 90 days) for calculations (stored in historical records).
+- **Validation Report**: Gemini CLI output recommendation (persisted in Signal history).
+- **Virtual Pie Asset**: Record of ticker quantity and target weight (mapped to state table).
+- **Simulated Ledger**: Immutable audit log of virtual trades and balance changes.
 
 ## Success Criteria *(mandatory)*
 

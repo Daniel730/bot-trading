@@ -71,3 +71,24 @@ class TradeLedger(BaseModel):
     order_type: OrderType
     is_paper: bool = True
     status: TradeStatus = TradeStatus.COMPLETED
+
+class ArbitrageError(Exception):
+    """Base class for arbitrage exceptions."""
+    pass
+
+class DataError(ArbitrageError):
+    """Raised when market data is unavailable or invalid."""
+    pass
+
+class ExecutionError(ArbitrageError):
+    """Raised when a trade execution fails."""
+    pass
+
+class SlippageError(ExecutionError):
+    """Raised when price drift exceeds tolerance."""
+    pass
+
+class CointegrationError(ArbitrageError):
+    """Raised when a pair loses cointegration."""
+    pass
+

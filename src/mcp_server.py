@@ -86,4 +86,6 @@ async def record_ai_decision(signal_id: str, status: str, rationale: str) -> str
         return f"Error: {str(e)}"
 
 if __name__ == "__main__":
-    mcp.run()
+    # Use SSE transport for network-based tool access between containers
+    # Bind to 0.0.0.0 to allow connections from other containers
+    mcp.run("sse", host="0.0.0.0", port=8000)

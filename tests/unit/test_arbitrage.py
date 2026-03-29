@@ -2,6 +2,7 @@ import unittest
 import numpy as np
 import pandas as pd
 from src.services.arbitrage_service import ArbitrageService
+from src.models.arbitrage_models import OrderType
 
 class TestArbitrageMath(unittest.TestCase):
     def setUp(self):
@@ -84,10 +85,11 @@ class TestArbitrageMath(unittest.TestCase):
         )
         
         self.assertEqual(len(orders), 2)
-        self.assertEqual(orders[0]['ticker'], "KO")
-        self.assertEqual(orders[0]['quantity'], 1.0)
-        self.assertEqual(orders[1]['ticker'], "PEP")
-        self.assertEqual(orders[1]['quantity'], -1.1)
+        # Sell PEP first, then Buy KO
+        self.assertEqual(orders[0]['ticker'], "PEP")
+        self.assertEqual(orders[0]['quantity'], -1.1)
+        self.assertEqual(orders[1]['ticker'], "KO")
+        self.assertEqual(orders[1]['quantity'], 1.0)
 
         # Case 3: Neutral Z -> No orders
         z_score = 0.0
@@ -95,3 +97,30 @@ class TestArbitrageMath(unittest.TestCase):
             ticker_a, ticker_b, beta, current_price_a, current_price_b, target_value, z_score
         )
         self.assertEqual(len(orders), 0)
+
+    def test_calculate_paper_trade(self):
+        """
+        Verify paper trade ledger and balance calculations.
+        """
+        ticker = "KO"
+        quantity = 10.0
+        price = 60.0
+        order_type = OrderType.BUY
+        current_balance = 1000.0
+        
+        ledger, new_balance = self.arbitrage.calculate_paper_trade(
+            ticker, quantity, price, order_type, current_balance
+        )
+        
+        self.assertEqual(ledger['ticker'], "KO")
+        self.assertEqual(ledger['quantity'], 10.0)
+        self.assertEqual(new_balance, 400.0) # 1000 - (10 * 60)
+        
+        # Test Sell
+        ledger, new_balance = self.arbitrage.calculate_paper_trade(
+            ticker, -5.0, 65.0, OrderType.SELL, 400.0
+        )
+        self.assertEqual(new_balance, 725.0) # 400 + (5 * 65)
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,31 @@
+services:
+  bot:
+    build: .
+    container_name: trading-bot
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - .env:/app/.env
+      - ./trading_bot.sqlite:/app/trading_bot.sqlite
+    restart: always
+    depends_on:
+      mcp-server:
+        condition: service_healthy
+
+  mcp-server:
+    build: .
+    container_name: mcp-server
+    command: python src/mcp_server.py
+    ports:
+      - "8000:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - .env:/app/.env
+      - ./trading_bot.sqlite:/app/trading_bot.sqlite
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-s", "http://localhost:8000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

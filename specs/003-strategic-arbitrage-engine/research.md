@@ -1,29 +1,29 @@
 # Research: Strategic Arbitrage Engine
 
-## Decision: Data Sourcing (yfinance + Polygon.io)
-- **Rationale**: yfinance provides a reliable, free source for historical daily data needed for the 30/60/90 day Z-Score windows. Polygon.io WebSockets offer low-latency real-time updates for active monitoring.
-- **Alternatives considered**: 
-  - Polygon.io only: Free tier has limited REST requests (5/min), making initial historical load slow. WebSockets are limited on the free tier, so strict rate limiting or intermittent polling is required.
-  - Alpha Vantage: API limits are more restrictive for real-time usage.
+## Technical Decisions
 
-## Decision: Statistical Engine (Z-Score & Cointegration)
-- **Rationale**: Use `statsmodels` for initial cointegration (ADF test) and `pandas` for rolling mean/std calculations. Multi-window Z-Score (30, 60, 90) provides a "confidence" layer—if multiple windows align, the signal is stronger.
-- **Implementation**: `rolling(window=N).mean()` and `rolling(window=N).std()`.
+### Cointegration and Z-Score Calculation
+- **Decision**: Use `statsmodels` for OLS (Ordinary Least Squares) to determine hedge ratios and `pandas` for rolling Z-Score calculations.
+- **Rationale**: `statsmodels` provides robust statistical tools for time-series analysis. Multi-window Z-Scores (30, 60, 90 days) are necessary to filter out short-term noise while capturing medium-term trends.
+- **Alternatives Considered**: `scipy.stats` (rejected for less comprehensive time-series support).
 
-## Decision: AI Validation (FastMCP + Gemini)
-- **Rationale**: Exposing `sentiment_analysis` and `risk_assessment` as MCP tools allows Gemini to ingest news data and return a structured "GO/NO-GO" decision. This keeps the validation logic external and leverage's Gemini's reasoning.
-- **Tools**:
-  - `analyze_news(tickers, headlines)`: Returns sentiment score and identifies structural events.
-  - `assess_risk(pair, z_score, market_context)`: Returns risk rating.
+### Fundamental AI Validation
+- **Decision**: Integrate Gemini CLI with `FastMCP` to analyze SEC filings and earnings news.
+- **Rationale**: Gemini CLI allows for complex reasoning over financial documents. Using `FastMCP` enables the AI to use custom tools like `analyze_news` and `assess_risk`.
+- **Alternatives Considered**: OpenAI API (rejected to leverage existing Gemini CLI infrastructure).
 
-## Decision: Broker Integration (Trading 212 Beta)
-- **Rationale**: The Beta API supports market orders by quantity. Basic Auth (Base64) is standard for this endpoint.
-- **Rate Limiting**: Implement a `Tenacity` retry decorator with exponential backoff to handle the 5 req/min limit on the free tier (if applicable) or brokerage-specific headers.
+### Brokerage Integration (Trading 212)
+- **Decision**: Use the official Trading 212 Beta API with individual market orders by quantity.
+- **Rationale**: Native "Pie" APIs are often restricted. Individual orders provide full control over rebalancing and allow for "Virtual Pie" management.
+- **Alternatives Considered**: Selenium-based automation (rejected for fragility and security risks).
 
-## Decision: Notifications (Async Telegram)
-- **Rationale**: `python-telegram-bot` (async) allows non-blocking status updates. Sharpe Ratio and Drawdown will be calculated using `quantstats` or manual pandas logic on the local trade ledger.
-- **Human-in-the-loop**: Use Telegram inline buttons for manual trade approval (Principle V).
+### Containerization and Orchestration
+- **Decision**: Use Docker with a two-service setup (Bot + MCP Server) and SSE transport for communication.
+- **Rationale**: SSE (Server-Sent Events) transport is persistent and suitable for network-based communication between containers in a non-interactive environment.
+- **Alternatives Considered**: `stdio` transport (rejected as it exits immediately in background Docker processes).
 
-## Decision: Deployment & Error Handling
-- **Rationale**: Headless execution on a server (e.g., VPS). Custom exception `EquityNotOwned` to handle cases where a sell signal is triggered but the brokerage or local state is out of sync.
-- **State**: SQLite for the "Virtual Pie" (Principle IV).
+## Constraints & Best Practices
+- **NYSE Operating Hours**: Must strictly adhere to 14:30 - 21:00 WET.
+- **Rate Limiting**: Polygon.io Free Tier limits to 5 requests per minute.
+- **Human-in-the-Loop**: All trades require Telegram approval to act as a manual circuit breaker.
+- **Atomicidade**: "Sell-then-Buy" sequence to ensure capital availability and minimize exposure.

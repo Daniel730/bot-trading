@@ -8,13 +8,12 @@ Building a statistical arbitrage engine that monitors cointegrated pairs using r
 ## Technical Context
 
 **Language/Version**: Python 3.11+
-**Primary Dependencies**: `FastMCP`, `yfinance`, `polygon-api-client`, `statsmodels`, `pandas`, `python-telegram-bot`, `tenacity`, `quantstats`
+**Primary Dependencies**: `FastMCP`, `yfinance`, `polygon-api-client`, `statsmodels`, `pandas`, `python-telegram-bot`, `tenacity`, `quantstats`, `holidays`
 **Storage**: SQLite (ArbitragePair, SignalRecord, VirtualPieAsset, TradeLedger)
 **Testing**: `pytest` (Z-Score math, rebalance logic, Mock API)
-**Target Platform**: Headless Linux VPS
-**Project Type**: Trading Bot / AI Agent
+**Target Platform**: Dockerized (Bot + MCP Server)
 **Performance Goals**: Z-Score accuracy 99.9%, AI validation < 30s
-**Constraints**: 14:30 - 21:00 WET (NYSE hours), 5 req/min (Polygon Free Tier), 10% max allocation (Principle V)
+**Constraints**: 14:30 - 21:00 WET (NYSE hours), 5 req/min (Polygon Free Tier), 10% max allocation
 **Scale/Scope**: Support for 1-10 concurrent cointegrated pairs
 
 ## Constitution Check
