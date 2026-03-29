@@ -1,45 +1,56 @@
 import requests
+import logging
 from typing import List, Dict, Any
-from src.config import T212_API_KEY, T212_API_SECRET, T212_DEMO
-from src.models.arbitrage_models import BrokerageError
+from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 class BrokerageService:
     def __init__(self):
-        self.base_url = "https://demo.trading212.com/api/v0" if T212_DEMO else "https://live.trading212.com/api/v0"
+        self.base_url = "https://demo.trading212.com/api/v1" if settings.is_t212_demo else "https://live.trading212.com/api/v1"
         self.headers = {
-            "Authorization": f"Basic {T212_API_KEY}:{T212_API_SECRET}"
+            "Authorization": settings.effective_t212_key
         }
+
+    def test_connection(self) -> bool:
+        """Tests connectivity using account info endpoints."""
+        endpoints = ["/equity/account/info", "/account/info"]
+        for ep in endpoints:
+            try:
+                response = requests.get(f"{self.base_url}{ep}", headers=self.headers)
+                if response.status_code == 200:
+                    logger.info(f"T212: Connection successful via {ep}")
+                    return True
+            except:
+                continue
+        return False
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
-        """Fetch current holdings from Trading 212."""
-        try:
-            response = requests.get(f"{self.base_url}/equity/portfolio", headers=self.headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise BrokerageError(f"Failed to fetch portfolio: {e}")
+        """Fetch current holdings."""
+        endpoints = ["/equity/portfolio", "/portfolio", "/cfd/portfolio"]
+        for ep in endpoints:
+            try:
+                response = requests.get(f"{self.base_url}{ep}", headers=self.headers)
+                if response.status_code == 200:
+                    return response.json()
+            except:
+                continue
+        return []
 
-    def place_market_order(self, ticker: str, quantity: float, order_type: str) -> Dict[str, Any]:
-        """Place a market order on Trading 212."""
-        # Note: In T212 Beta API, Sell is often a negative quantity or separate endpoint
-        # For this implementation, we follow the contract in brokerage_api.md
-        payload = {
-            "ticker": ticker,
-            "quantity": quantity if order_type == "BUY" else -quantity,
-            "extendedHours": False
-        }
-        try:
-            response = requests.post(f"{self.base_url}/equity/orders/market", headers=self.headers, json=payload)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise BrokerageError(f"Failed to place {order_type} order for {ticker}: {e}")
-
-    def get_account_cash(self) -> float:
-        """Fetch available cash in the account."""
-        try:
-            response = requests.get(f"{self.base_url}/equity/account/cash", headers=self.headers)
-            response.raise_for_status()
-            return response.json().get("free", 0.0)
-        except requests.exceptions.RequestException as e:
-            raise BrokerageError(f"Failed to fetch account cash: {e}")
+    def place_market_order(self, ticker: str, quantity: float, side: str) -> Dict[str, Any]:
+        """Place a market order with CFD fallback."""
+        # For CFD, some tickers don't use suffixes or use different ones
+        endpoints = ["/equity/orders/market", "/orders/market", "/cfd/orders/market"]
+        payload = {"symbol": ticker, "quantity": quantity, "side": side}
+        
+        for ep in endpoints:
+            url = f"{self.base_url}{ep}"
+            try:
+                response = requests.post(url, headers=self.headers, json=payload)
+                if response.status_code == 200:
+                    return response.json()
+                logger.warning(f"T212: {ep} failed ({response.status_code}): {response.text}")
+            except Exception as e:
+                continue
+        
+        return {"status": "error", "message": "All order endpoints failed"}
