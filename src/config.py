@@ -30,8 +30,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPERATING_TIMEZONE = os.getenv("OPERATING_TIMEZONE", "WET")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
-# SQLite Database
-DATABASE_URL = f"sqlite:///{BASE_DIR}/trading-bot.sqlite"
+# Database Configuration
+# Default to SQLite for local development, use PostgreSQL for production (Supabase)
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/trading-bot.sqlite")
 
 # NYSE Operating Hours (WET)
 NYSE_OPEN = "14:30"

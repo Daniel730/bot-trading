@@ -14,3 +14,4 @@ pydantic
 pydantic-settings
 numpy
 quantstats
+prefect
