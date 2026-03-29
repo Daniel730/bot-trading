@@ -1,111 +1,83 @@
 import pandas as pd
 import numpy as np
 import statsmodels.api as sm
-import logging
-import uuid
-from datetime import datetime
-from uuid import uuid4
-from typing import Tuple, Dict, Any, List
-from src.models.arbitrage_models import ArbitragePair, OrderType, TradeStatus
-
-logger = logging.getLogger(__name__)
+from typing import Tuple, Dict, Optional
+from src.models.arbitrage_models import ArbitrageError
 
 class ArbitrageService:
     def __init__(self):
         pass
 
-    def calculate_hedge_ratio(self, data_a: pd.Series, data_b: pd.Series) -> float:
-        """
-        Calculates the hedge ratio using OLS (Ordinary Least Squares).
-        y = beta * x + alpha
-        Returns beta.
-        """
-        X = sm.add_constant(data_b)
-        model = sm.OLS(data_a, X).fit()
-        beta = model.params.iloc[1]
-        return float(beta)
+    def calculate_beta(self, data_a: pd.Series, data_b: pd.Series) -> float:
+        """Calculate the hedge ratio (beta) using Ordinary Least Squares (OLS)."""
+        if data_a.empty or data_b.empty:
+            raise ArbitrageError("Empty data provided for beta calculation.")
+        
+        # Align series by index (dates)
+        combined_df = pd.concat([data_a, data_b], axis=1).dropna()
+        y = combined_df.iloc[:, 0]  # ticker_a
+        x = combined_df.iloc[:, 1]  # ticker_b
+        
+        # OLS regression: y = beta * x + alpha
+        x_with_const = sm.add_constant(x)
+        model = sm.OLS(y, x_with_const).fit()
+        
+        # Return the coefficient for ticker_b (hedge ratio)
+        return float(model.params.iloc[1])
 
-    def calculate_spread(self, data_a: pd.Series, data_b: pd.Series, beta: float) -> pd.Series:
-        """
-        Calculates the spread: spread = price_a - beta * price_b
-        """
-        return data_a - beta * data_b
+    def calculate_z_score(self, price_a: float, price_b: float, beta: float, 
+                          historical_spreads: pd.Series, window: int) -> float:
+        """Calculate the Z-Score of the current spread relative to its historical window."""
+        current_spread = price_a - beta * price_b
+        
+        if len(historical_spreads) < window:
+            raise ArbitrageError(f"Insufficient historical data for {window}-day window.")
+        
+        # Calculate moving average and standard deviation of spreads
+        rolling_mean = historical_spreads.tail(window).mean()
+        rolling_std = historical_spreads.tail(window).std()
+        
+        if rolling_std == 0:
+            return 0.0
+            
+        return float((current_spread - rolling_mean) / rolling_std)
 
-    def calculate_z_score(self, spread: pd.Series, window: int) -> pd.Series:
-        """
-        Calculates the normalized Z-Score for a given window.
-        Z = (spread - rolling_mean) / rolling_std
-        """
-        rolling_mean = spread.rolling(window=window).mean()
-        rolling_std = spread.rolling(window=window).std()
-        z_score = (spread - rolling_mean) / rolling_std
-        return z_score
+    def calculate_spreads(self, data_a: pd.Series, data_b: pd.Series, beta: float) -> pd.Series:
+        """Calculate historical spreads: spread = ticker_a - beta * ticker_b."""
+        combined_df = pd.concat([data_a, data_b], axis=1).dropna()
+        return combined_df.iloc[:, 0] - beta * combined_df.iloc[:, 1]
 
-    def get_latest_z_score(self, data_a: pd.Series, data_b: pd.Series, beta: float, window: int) -> float:
-        """
-        Calculates the latest Z-Score for a pair.
-        """
-        spread = self.calculate_spread(data_a, data_b, beta)
-        z_scores = self.calculate_z_score(spread, window)
-        return float(z_scores.iloc[-1])
-
-    def get_multi_window_z_scores(self, data_a: pd.Series, data_b: pd.Series, beta: float, windows: List[int]) -> Dict[int, float]:
-        """
-        Calculates the latest Z-Score for a pair across multiple windows.
-        """
-        spread = self.calculate_spread(data_a, data_b, beta)
+    def get_multi_window_z_scores(self, price_a: float, price_b: float, beta: float, 
+                                 historical_spreads: pd.Series, windows: list[int] = [30, 60, 90]) -> Dict[int, float]:
+        """Calculate Z-Scores for multiple windows to filter technical noise."""
         results = {}
         for window in windows:
-            z_scores = self.calculate_z_score(spread, window)
-            results[window] = float(z_scores.iloc[-1])
+            try:
+                results[window] = self.calculate_z_score(price_a, price_b, beta, historical_spreads, window)
+            except ArbitrageError:
+                results[window] = 0.0
         return results
 
-    def calculate_rebalance_orders(self, ticker_a: str, ticker_b: str, beta: float, 
-                                   current_price_a: float, current_price_b: float, 
-                                   target_value: float, z_score: float) -> List[Dict[str, Any]]:
+    def calculate_rebalance_quantities(self, price_a: float, price_b: float, beta: float, 
+                                      total_allocation: float, current_qty_a: float, current_qty_b: float) -> Dict[str, float]:
         """
-        Calculates the necessary buy/sell orders for an atomic swap.
-        Ensures SELL orders are listed before BUY orders to free up cash/margin.
-        Returns a list of order dictionaries.
+        Calculate required quantities to reach the target hedge ratio.
+        Target: Value_A = Total_Allocation / 2, Value_B = Value_A (adjusted by beta)
+        Simplified for MVP: We aim for dollar-neutral if beta=1, or beta-adjusted neutral.
         """
-        orders = []
+        # Target values in base currency
+        target_value_a = total_allocation / 2.0
+        target_value_b = target_value_a # In a simple pair trade, we often balance values
         
-        if z_score > 2.5:
-            # Sell A, Buy B
-            orders.append({"ticker": ticker_a, "quantity": -1.0, "type": OrderType.SELL, "price": current_price_a})
-            orders.append({"ticker": ticker_b, "quantity": beta, "type": OrderType.BUY, "price": current_price_b})
-            
-        elif z_score < -2.5:
-            # Buy A, Sell B
-            # Order: Sell B first, then Buy A
-            orders.append({"ticker": ticker_b, "quantity": -beta, "type": OrderType.SELL, "price": current_price_b})
-            orders.append({"ticker": ticker_a, "quantity": 1.0, "type": OrderType.BUY, "price": current_price_a})
-            
-        return orders
-
-    def calculate_paper_trade(self, ticker: str, quantity: float, price: float, 
-                              order_type: OrderType, current_balance: float) -> Tuple[Dict[str, Any], float]:
-        """
-        T022: Calculates the impact of a paper trade on the virtual ledger and balance.
-        Returns a ledger record dictionary and the updated virtual balance.
-        """
-        trade_value = abs(quantity) * price
-        new_balance = current_balance
+        # In statistical arbitrage (y = beta * x), the hedge ratio is beta.
+        # If we buy 1 share of A, we sell 'beta' shares of B.
+        # So Value_A / Price_A = (Value_B / Price_B) / beta  => Value_B = Value_A * (Price_B * beta / Price_A)
+        # However, a simpler target is to allocate half to A and let B be determined by the hedge ratio.
         
-        if order_type == OrderType.BUY:
-            new_balance -= trade_value
-        else:
-            new_balance += trade_value
-            
-        ledger_record = {
-            "id": str(uuid4()),
-            "timestamp": datetime.utcnow().isoformat(),
-            "ticker": ticker,
-            "quantity": quantity,
-            "price": price,
-            "order_type": order_type,
-            "is_paper": True,
-            "status": TradeStatus.COMPLETED
+        target_qty_a = target_value_a / price_a
+        target_qty_b = (target_qty_a * beta) # Based on the OLS relationship y = beta * x
+        
+        return {
+            "ticker_a": target_qty_a - current_qty_a,
+            "ticker_b": target_qty_b - current_qty_b
         }
-        
-        return ledger_record, new_balance
