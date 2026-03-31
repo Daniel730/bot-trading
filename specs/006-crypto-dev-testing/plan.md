@@ -1,48 +1,65 @@
 # Implementation Plan: 24/7 Crypto Development Mode
 
-**Branch**: `006-crypto-dev-testing` | **Date**: 2026-03-29 | **Spec**: [specs/006-crypto-dev-testing/spec.md]
-**Input**: Plan to support 24/7 testing using Crypto market.
+**Branch**: `006-crypto-dev-testing` | **Date**: 2026-03-31 | **Spec**: `/specs/006-crypto-dev-testing/spec.md`
+**Input**: Feature specification for development purposes, focusing on a 24/7 market (Crypto) to validate connectivity and logic.
 
 ## Summary
 
-This feature adds a `DEVELOPMENT_MODE` toggle to allow the bot to operate 24/7, bypassing NYSE/NASDAQ hour restrictions. It introduces crypto pairs (BTC, ETH, LTC) into the configuration to enable weekend testing of the entire arbitrage engine, including data fetching, Z-score calculation, and multi-agent debate.
+Implement a `DEV_MODE` that bypasses NYSE/NASDAQ hour restrictions by switching to Crypto pairs (BTC-USD, ETH-USD) via `yfinance`. This allows for end-to-end testing of the `DataService`, `ArbitrageMonitor`, and Agent Orchestration during weekends or off-hours.
 
 ## Technical Context
 
-**Language/Version**: Python 3.12+
-**Primary Dependencies**: yfinance, pandas
-**Storage**: SQLite (to record dev trades)
-**Target Platform**: Local / Docker
-**Constraints**: Bypasses Principle IV (Strict Operation) only when `DEV_MODE=True`.
+**Language/Version**: Python 3.11  
+**Primary Dependencies**: `FastMCP`, `yfinance`, `pandas`, `statsmodels`, `tenacity`  
+**Storage**: SQLite  
+**Testing**: `pytest`  
+**Target Platform**: Linux  
+**Project Type**: CLI / Trading Bot  
+**Performance Goals**: Orchestrator response < 10s; 100% connectivity success in DEV_MODE.  
+**Constraints**: Must not interfere with production operation; must explicitly warn when active.  
+**Scale/Scope**: Instrumented testing mode for real-time data flow validation.
 
 ## Constitution Check
 
-- **IV. Strict Operation**: VIOLATION (Justified). Bypassing market hours is strictly for development and testing of the system's infrastructure. It MUST NOT be enabled in production for stock arbitrage.
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+
+| Principle | Status | Justification / Action |
+|-----------|--------|------------------------|
+| I. Preservação de Capital | ✅ PASS | DEV_MODE will use crypto for data but simulate execution or use low-risk tickers. Risk layers remain active. |
+| II. Racionalidade Mecânica | ✅ PASS | Data flow remains structured; only the source/market hours are modified. |
+| III. Auditabilidade Total | ✅ PASS | All DEV_MODE cycles will be logged, including the explicit 5-minute warning. |
+| IV. Operação Estrita | ⚠️ VIOLATION | **Justified**: Necessary for weekend development/testing. Mitigation: Prominent "DEV_MODE ACTIVE" warnings. |
+| V. Virtual-Pie First | ✅ PASS | State management and reconciliation will be tested via this mode. |
 
 ## Project Structure
 
-### Documentation
+### Documentation (this feature)
 
 ```text
 specs/006-crypto-dev-testing/
-├── plan.md
-├── research.md
-└── tasks.md
+├── plan.md              # This file
+├── research.md          # Phase 0 output
+├── data-model.md        # Phase 1 output
+├── quickstart.md        # Phase 1 output
+├── contracts/           # Phase 1 output (N/A for this internal feature)
+└── tasks.md             # Phase 2 output
 ```
 
-### Proposed Changes
+### Source Code (repository root)
 
-1. **`src/config.py`**:
-   - Add `DEV_MODE: bool = False`.
-   - Add `CRYPTO_TEST_PAIRS: list` with BTC-USD/ETH-USD.
-2. **`src/monitor.py`**:
-   - Modify `run` loop to skip hour checks if `settings.DEV_MODE` is true.
-   - Use `CRYPTO_TEST_PAIRS` if in dev mode.
-3. **`src/services/data_service.py`**:
-   - Ensure ticker format handling for crypto.
+```text
+src/
+├── config.py            # DEV_MODE flag and Crypto ticker config
+├── monitor.py           # Hour bypass logic and warning logs
+├── services/
+│   ├── data_service.py  # Crypto data fetching (yfinance)
+│   └── audit_service.py # Connectivity tracking instrumentation
+```
+
+**Structure Decision**: Standard single project structure. Modifications primarily in `src/config.py`, `src/monitor.py`, and `src/services/`.
 
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| Bypassing hours | 24/7 validation | Waiting for Monday morning prevents rapid iteration on weekends. |
+| IV. Operação Estrita | To enable development during weekends and off-hours. | Hardcoding hours would require manual revert and risks accidental production bypass. `DEV_MODE` flag is safer and auditable. |
