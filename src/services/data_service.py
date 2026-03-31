@@ -33,6 +33,34 @@ class DataService:
             print(f"DEBUG: yfinance error for {tickers}: {e}")
             raise
 
+    def get_latest_price(self, tickers: List[str]) -> dict:
+        """
+        Fetches the latest prices for given tickers using yfinance.
+        """
+        try:
+            # period="1d", interval="1m" to get the very latest
+            df = yf.download(tickers, period="1d", interval="1m", progress=False)
+            if df.empty:
+                return {}
+            
+            latest = {}
+            # Handle multi-index (multiple tickers) or flat (single ticker)
+            if len(tickers) > 1:
+                # df['Close'] is a DataFrame
+                for ticker in tickers:
+                    val = df['Close'][ticker].iloc[-1]
+                    if not pd.isna(val):
+                        latest[ticker] = float(val)
+            else:
+                ticker = tickers[0]
+                val = df['Close'].iloc[-1]
+                if not pd.isna(val):
+                    latest[ticker] = float(val)
+            return latest
+        except Exception as e:
+            print(f"DEBUG: yfinance error for latest price {tickers}: {e}")
+            return {}
+
     async def stream_realtime_data(self, tickers: List[str], callback):
         """
         Connects to Polygon WebSocket to stream real-time prices.
