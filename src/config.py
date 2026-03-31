@@ -44,6 +44,31 @@ class Settings(BaseSettings):
     KALMAN_DELTA: float = 1e-5 # Adaptation rate
     KALMAN_R: float = 0.001     # Measurement noise
     
+    # Cluster Guard Parameters (Feature 008)
+    MAX_SECTOR_EXPOSURE: float = 0.30 # Max 30% per sector
+    PAIR_SECTORS: dict = {
+        'KO_PEP': 'Consumer Staples',
+        'MA_V': 'Financials',
+        'XOM_CVX': 'Energy',
+        'JPM_BAC': 'Financials',
+        'WMT_TGT': 'Consumer Staples',
+        'GOOGL_GOOG': 'Technology',
+        'MSFT_AAPL': 'Technology',
+        'DAL_UAL': 'Industrials',
+        'UPS_FDX': 'Industrials',
+        'HD_LOW': 'Consumer Discretionary',
+        'GM_F': 'Consumer Discretionary',
+        'INTC_AMD': 'Technology',
+        'PYPL_AFRM': 'Financials',
+        'NKE_ADDYY': 'Consumer Discretionary',
+        'PG_CL': 'Consumer Staples',
+        'BA_AIR.PA': 'Industrials',
+        'T_VZ': 'Telecommunications',
+        'VLO_MPC': 'Energy',
+        'COF_SYF': 'Financials',
+        'GS_MS': 'Financials'
+    }
+    
     # Arbitrage Pairs
     ARBITRAGE_PAIRS: list = [
         {'ticker_a': 'KO', 'ticker_b': 'PEP'},

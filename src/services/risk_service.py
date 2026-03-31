@@ -32,4 +32,44 @@ class RiskService:
         var = np.percentile(sim_returns, (1 - confidence_level) * 100)
         return abs(var)
 
+    @staticmethod
+    def check_cluster_exposure(sector: str, active_portfolio: List[Dict]) -> Dict:
+        """
+        Calculates current exposure for a sector and returns a status dict.
+        :param sector: The sector to check.
+        :param active_portfolio: List of active trades with their 'size' and 'sector'.
+        """
+        total_portfolio_value = sum(trade.get('size', 0) for trade in active_portfolio)
+        if total_portfolio_value == 0:
+            return {"exposure_pct": 0.0, "allowed": True}
+            
+        sector_value = sum(trade.get('size', 0) for trade in active_portfolio if trade.get('sector') == sector)
+        exposure_pct = sector_value / total_portfolio_value
+        
+        allowed = exposure_pct < settings.MAX_SECTOR_EXPOSURE
+        
+        return {
+            "exposure_pct": exposure_pct,
+            "allowed": allowed,
+            "current_sector_value": sector_value,
+            "total_portfolio_value": total_portfolio_value
+        }
+
+    @staticmethod
+    def get_all_sector_exposures(active_portfolio: List[Dict]) -> Dict[str, float]:
+        """
+        Returns a map of sector name -> exposure percentage.
+        """
+        total_value = sum(trade.get('size', 0) for trade in active_portfolio)
+        if total_value == 0:
+            return {}
+            
+        exposures = {}
+        sectors = set(trade.get('sector', 'Unknown') for trade in active_portfolio)
+        for sector in sectors:
+            sector_value = sum(trade.get('size', 0) for trade in active_portfolio if trade.get('sector') == sector)
+            exposures[sector] = sector_value / total_value
+            
+        return exposures
+
 risk_service = RiskService()
