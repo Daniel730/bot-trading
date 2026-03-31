@@ -1,5 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, Bot
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 from src.config import settings
 import asyncio
 import uuid
@@ -11,8 +11,29 @@ class NotificationService:
         self.pending_approvals = {} # correlation_id -> asyncio.Future
         self.app = ApplicationBuilder().token(self.token).build()
         
-        # Register callback handler
+        # Register handlers
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
+        self.app.add_handler(CommandHandler("exposure", self._handle_exposure))
+
+    async def _handle_exposure(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Displays current sector exposure."""
+        from src.services.shadow_service import shadow_service
+        from src.services.risk_service import risk_service
+        
+        portfolio = shadow_service.get_active_portfolio_with_sectors()
+        exposures = risk_service.get_all_sector_exposures(portfolio)
+        
+        if not exposures:
+            await update.message.reply_text("Portfolio is currently empty.")
+            return
+            
+        message = "📊 *Current Sector Exposure*\n\n"
+        for sector, pct in sorted(exposures.items(), key=lambda x: x[1], reverse=True):
+            status = "⚠️" if pct >= settings.MAX_SECTOR_EXPOSURE else "✅"
+            message += f"{status} *{sector}*: {pct:.1%}\n"
+            
+        message += f"\n_Limit: {settings.MAX_SECTOR_EXPOSURE:.0%}_"
+        await update.message.reply_text(text=message, parse_mode="Markdown")
 
     async def _handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query

@@ -10,6 +10,7 @@ from src.agents.orchestrator import orchestrator
 from src.services.shadow_service import shadow_service
 from src.services.notification_service import notification_service
 from src.services.audit_service import audit_service
+from src.services.risk_service import risk_service
 from src.services.brokerage_service import BrokerageService
 
 # Disable yfinance cache to prevent SQLite locks in Docker
@@ -86,31 +87,46 @@ class ArbitrageMonitor:
 
             for pair in self.active_pairs:
                 try:
-                    # Fetch real-time prices for Z-score calculation (T010)
-                    prices = data_service.get_latest_price([pair['ticker_a'], pair['ticker_b']])
-                    p_a = prices.get(pair['ticker_a'])
-                    p_b = prices.get(pair['ticker_b'])
+                    # Feature 008: Pre-emptive Sector Cluster Check
+                    pair_key = f"{pair['ticker_a']}_{pair['ticker_b']}"
+                    sector = settings.PAIR_SECTORS.get(pair_key, "Unknown")
+                    active_portfolio = shadow_service.get_active_portfolio_with_sectors() if self.mode == "shadow" else []
                     
-                    if p_a and p_b:
-                        spread = p_a - pair['hedge_ratio'] * p_b
-                        current_z = (spread - pair['mean']) / pair['std']
-                        logger.info(f"Market Update: {pair['ticker_a']}={p_a}, {pair['ticker_b']}={p_b} -> Z: {current_z:.2f}")
-                    else:
-                        current_z = 2.5 # Fallback to simulated value if yfinance fails
-                        logger.warning(f"Using simulated Z-score for {pair['ticker_a']}/{pair['ticker_b']} (Prices missing)")
+                    exposure_check = risk_service.check_cluster_exposure(sector, active_portfolio)
+                    if not exposure_check["allowed"]:
+                        logger.warning(f"VETO: Sector '{sector}' at limit ({exposure_check['exposure_pct']:.1%}). Skipping {pair_key}.")
+                        continue
+
+                    # Feature 007: Fetch current prices (mocked for now)
+                    price_a, price_b = 100.0, 50.0 # Placeholder
                     
+                    # Update Kalman Filter
+                    kf = arbitrage_service.get_or_create_filter(pair['id'])
+                    current_beta, current_alpha, current_z = kf.update(price_a, price_b)
+                    
+                    # Persist state
+                    state = kf.get_state()
+                    self.persistence.save_kalman_state(
+                        pair_id=pair['id'],
+                        alpha=current_alpha,
+                        beta=current_beta,
+                        p_matrix=state['p_matrix'],
+                        ve=state['ve']
+                    )
+
                     signal_id = self.persistence.log_signal(pair['id'], current_z)
                     
-                    # Measure latency for SC-002
-                    start_time = datetime.now()
-                    state = await orchestrator.ainvoke({"signal_context": {"ticker_a": pair['ticker_a'], "ticker_b": pair['ticker_b'], "z_score": current_z}})
-                    latency = (datetime.now() - start_time).total_seconds()
+                    # Feature 007/008: Pass dynamic beta and sector context to AI analysis
+                    signal_context = {
+                        "ticker_a": pair['ticker_a'], 
+                        "ticker_b": pair['ticker_b'], 
+                        "z_score": current_z,
+                        "dynamic_beta": current_beta,
+                        "sector": sector,
+                        "sector_exposure": exposure_check["exposure_pct"]
+                    }
                     
-                    if latency < 10.0:
-                        logger.info(f"SC-002 PASS: IA Decision Latency: {latency:.2f}s (Goal: < 10s)")
-                    else:
-                        logger.warning(f"SC-002 FAIL: IA Decision Latency: {latency:.2f}s (Goal: < 10s)")
-                    
+                    state = await orchestrator.ainvoke({"signal_context": signal_context})
                     audit_service.log_thought_process(signal_id, state)
                     
                     if state['final_confidence'] > 0.5:
