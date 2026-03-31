@@ -7,6 +7,20 @@ import quantstats as qs
 class AuditService:
     def __init__(self):
         self.persistence = PersistenceManager(settings.DB_PATH)
+        self.total_cycles = 0
+        self.successful_cycles = 0
+
+    def log_cycle(self, success: bool = True):
+        """Tracks monitoring loop iterations."""
+        self.total_cycles += 1
+        if success:
+            self.successful_cycles += 1
+
+    def get_connectivity_rate(self) -> float:
+        """Calculates success rate."""
+        if self.total_cycles == 0:
+            return 100.0
+        return (self.successful_cycles / self.total_cycles) * 100.0
 
     def log_thought_process(self, signal_id: str, agent_state: dict):
         """
