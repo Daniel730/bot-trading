@@ -1,64 +1,55 @@
 from fastmcp import FastMCP
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-import sqlite3
-import logging
-from typing import List, Dict, Any
-from src.config import LOG_LEVEL
+from typing import List, Dict, Optional
+import json
+from src.config import settings
 
-# Configure logging
-logging.basicConfig(level=LOG_LEVEL)
-logger = logging.getLogger(__name__)
-
-# Define CORS middleware
-middleware = [
-    Middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["Mcp-Session-Id"],
-    )
-]
-
-# Initialize FastMCP server with middleware
-mcp = FastMCP("Strategic Arbitrage Server", middleware=middleware)
+mcp = FastMCP("Arbitrage-Elite-Engine")
 
 @mcp.tool()
-def analyze_news(tickers: List[str], headlines: List[str]) -> Dict[str, Any]:
+async def get_market_data(tickers: List[str], source: str = "yfinance", lookback: str = "30d") -> str:
     """
-    Called by the bot to validate signals via Gemini CLI.
-    Simulates AI analysis of news for fundamental validation.
+    Fetches market data for specified tickers.
+    :param tickers: List of ticker symbols.
+    :param source: Data source ('yfinance' or 'Polygon-WS').
+    :param lookback: Time window for historical baseline.
     """
-    logger.info(f"AI Analyzing news for {tickers}")
-    return {
-        "recommendation": "GO",
-        "sentiment_score": 0.85,
-        "rationale": "Strong positive sentiment and no structural breaks detected in recent filings."
-    }
+    # Implementation placeholder for T006
+    return json.dumps({
+        "status": "success",
+        "data": f"Data for {tickers} from {source} with {lookback} lookback"
+    })
 
 @mcp.tool()
-def record_ai_decision(signal_id: str, status: str, rationale: str) -> str:
+async def execute_trade(ticker: str, side: str, quantity: float, mode: str = "SHADOW") -> str:
     """
-    Called by Gemini CLI to persist its logic back to the bot.
+    Executes a trade on Trading 212.
+    :param ticker: Symbol to trade.
+    :param side: 'BUY' or 'SELL'.
+    :param quantity: Number of shares.
+    :param mode: 'LIVE' or 'SHADOW'.
     """
-    try:
-        conn = sqlite3.connect("trading_bot.sqlite")
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE SignalRecord 
-            SET ai_validation_status = ?, ai_rationale = ?
-            WHERE id = ?
-        ''', (status, rationale, signal_id))
-        conn.commit()
-        conn.close()
-        logger.info(f"AI decision recorded for signal {signal_id}: {status}")
-        return f"Successfully recorded AI decision for {signal_id}"
-    except Exception as e:
-        logger.error(f"Failed to record AI decision: {e}")
-        return f"Error: {e}"
+    # Implementation placeholder for Phase 2/3
+    return json.dumps({
+        "status": "success",
+        "trade": {
+            "ticker": ticker,
+            "side": side,
+            "quantity": quantity,
+            "mode": mode,
+            "timestamp": "2026-03-29T12:00:00"
+        }
+    })
+
+@mcp.tool()
+async def calculate_risk_metrics(confidence_score: float, portfolio: List[Dict] = None) -> str:
+    """
+    Computes position sizing and VaR.
+    """
+    # Implementation placeholder for T009
+    return json.dumps({
+        "suggested_size": 10.0,
+        "var_95": 0.015
+    })
 
 if __name__ == "__main__":
-    # Start FastMCP server with SSE transport on 0.0.0.0:8000
     mcp.run(transport="sse", host="0.0.0.0", port=8000)

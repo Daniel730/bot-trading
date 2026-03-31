@@ -1,54 +1,53 @@
 <!--
   SYNC IMPACT REPORT
-  - Version change: 1.0.0 → 1.1.0
+  - Version change: 1.1.0 → 2.0.0
   - List of modified principles:
-    - I. Horário de Operação Estrito → II. Safety-Critical (Horário NYSE)
-    - II. Gestão de Risco e Capital → V. Human-in-the-loop (Aprovação Telegram)
-    - III. Neutralidade de Mercado → I. Library-First (Bibliotecas Independentes)
-    - IV. Segurança da API → III. Atomicidade (Transação Única)
-    - V. Validação Estratégica via IA → IV. State Management (Persistência Local)
-  - Added sections: None
+    - I. Library-First → II. Racionalidade Mecânica (Redefinido: Foco em dados estruturados e MCP)
+    - II. Safety-Critical → IV. Operação Estrita (Mantido e Reforçado: Horário NYSE/NASDAQ)
+    - III. Atomicidade → V. Virtual-Pie First (Evoluído: Gestão programática acima da API)
+    - IV. State Management → V. Virtual-Pie First (Consolidado: Persistência e Reconciliação)
+    - V. Human-in-the-loop → I. Prioridade à Preservação de Capital (Elevado: Veto de Risco e Kelly Criterion)
+  - Added sections: III. Auditabilidade Total (Thought Journal + SHAP/LIME)
   - Removed sections: None
   - Templates requiring updates:
-    - .specify/templates/plan-template.md (✅ verified)
-    - .specify/templates/spec-template.md (✅ verified)
-    - .specify/templates/tasks-template.md (✅ verified)
-  - Follow-up TODOs:
-    - TODO(TELEGRAM_THRESHOLD): Definir o valor limite para aprovação via Telegram.
+    - .specify/templates/plan-template.md (✅ updated)
+    - .specify/templates/spec-template.md (✅ updated)
+    - .specify/templates/tasks-template.md (✅ updated)
+  - Follow-up TODOs: None
 -->
 
-# Project Arbitrage-AI Constitution
+# Project Arbitrage-Elite-Python Constitution
 
 ## Core Principles
 
-### I. Library-First
-A lógica de cálculo estatístico e os wrappers da API devem ser bibliotecas independentes. Isto garante que a inteligência do bot e a comunicação com a corretora possam ser testadas, versionadas e reutilizadas sem depender da infraestrutura de orquestração ou do servidor MCP.
+### I. Prioridade à Preservação de Capital
+A preservação de capital é o mandato supremo. O sistema possui uma camada de "Percepção de Risco" que precede qualquer lógica de negociação e detém poder de veto absoluto sobre sinais de execução. O dimensionamento de posição deve seguir rigorosamente o Critério de Kelly Fracionário (máximo 0.25x), com limites rígidos de 2% de risco por transação e 10% de drawdown total do portfólio.
 
-### II. Safety-Critical
-O bot nunca deve operar fora do horário regular da NYSE (14:30-21:00 WET). Operações fora deste intervalo (pre-market ou after-hours) são estritamente proibidas para evitar spreads alargados e volatilidade extrema que invalidam modelos estatísticos de reversão à média.
+### II. Racionalidade Mecânica
+Toda decisão operacional deve ser fundamentada em dados estruturados (ex: Z-score de cointegração) e validada por lógica semântica via LLM para filtrar ruídos macroeconômicos. A conectividade com fontes de dados e corretoras deve ser padronizada via Model Context Protocol (MCP), utilizando ferramentas determinísticas para cálculos financeiros críticos em vez de confiar na aritmética interna de modelos de linguagem.
 
-### III. Atomicidade
-Operações de swap (venda de ativo A e compra simultânea de ativo B) devem ser tratadas como uma transação lógica única. O sistema deve garantir que ambas as pernas da arbitragem sejam executadas ou que o estado seja revertido/compensado para evitar exposição direcional não planejada.
+### III. Auditabilidade Total
+O sistema opera sob o regime de "Caixa Branca". Toda transação, tentativa ou veto deve gerar um log de raciocínio persistente (Thought Journal). As decisões do motor de IA devem ser acompanhadas de justificativas técnicas auditáveis (ex: SHAP ou LIME values) que identifiquem os fatores de influência, permitindo a reconstituição completa do processo decisório.
 
-### IV. State Management
-O estado das "Pies Virtuais" (alocações e pesos) deve ser persistido localmente e reconciliado com a corretora a cada ciclo de execução. A persistência local é a fonte da verdade para a estratégia, enquanto a reconciliação garante que a realidade da corretora reflete o estado pretendido.
+### IV. Operação Estrita
+O bot está autorizado a operar exclusivamente durante o horário regular de pregão da NYSE/NASDAQ (tipicamente 14:30 às 21:00 WET), respeitando feriados oficiais dos mercados americanos. A operação fora deste intervalo é estritamente proibida para mitigar riscos de baixa liquidez, spreads anormais e volatilidade de fechamento/abertura que invalidam modelos de reversão à média.
 
-### V. Human-in-the-loop
-Transações que excedam um valor limite pré-definido (threshold) exigem aprovação explícita via Telegram antes de serem enviadas para a corretora. Este mecanismo serve como um "circuit breaker" físico contra anomalias algorítmicas ou condições de mercado imprevistas.
+### V. Virtual-Pie First
+A gestão de ativos deve priorizar uma abordagem de "Virtual-Pie", tratando as alocações como estruturas programáticas independentes das limitações nativas da API da Trading 212. O bot é responsável pelo reequilíbrio dinâmico, cálculo de pesos e reconciliação de estado, garantindo granularidade e controle total sobre a execução da estratégia de arbitragem.
 
 ## Padrões Técnicos e Integração
 
-O sistema utiliza o framework FastMCP para expor ferramentas de dados e corretagem. A integração com a Trading 212 é feita via API Pública oficial. A lógica de "Pies Virtuais" é implementada no nível da aplicação para permitir granularidade total sobre os ativos sem as limitações das ferramentas nativas da corretora.
+O sistema utiliza o framework FastMCP para orquestração de ferramentas e dados. A arquitetura deve garantir a separação estrita entre a aquisição de dados, a lógica de estratégia estatística e o motor de execução. A persistência de dados (sinais, logs e estado) deve ser feita em banco de dados robusto (ex: SQLite ou PostgreSQL) para garantir a integridade histórica.
 
 ## Workflow de Desenvolvimento e Conformidade
 
-O desenvolvimento segue o ciclo Spec -> Plan -> Task -> Implement. Toda mudança técnica deve ser validada contra estes princípios (Constitution Check). Violações, especialmente nos princípios de Segurança (Safety-Critical) e Atomicidade, impedem a promoção do código para produção.
+Todo desenvolvimento segue o ciclo SDD (Specification-Driven Development). Nenhuma funcionalidade é implementada sem que sua especificação e plano de tarefas estejam alinhados com esta constituição. Violações dos princípios de Risco (Princípio I) e Operação (Princípio IV) são consideradas falhas críticas e impedem qualquer execução em ambiente real.
 
 ## Governance
 
-Esta constituição é o documento supremo do "Project Arbitrage-AI". Alterações seguem o versionamento semântico:
-- MAJOR: Remoção ou alteração profunda de princípios.
+Esta constituição é o documento governante do "Project Arbitrage-Elite-Python". Alterações seguem o versionamento semântico:
+- MAJOR: Mudanças estruturais ou remoção de princípios fundamentais.
 - MINOR: Adição de novos princípios ou clarificações materiais.
-- PATCH: Correções de texto e ajustes não semânticos.
+- PATCH: Ajustes gramaticais ou de formatação sem alteração de sentido.
 
-**Version**: 1.1.0 | **Ratified**: 2026-03-27 | **Last Amended**: 2026-03-27
+**Version**: 2.0.0 | **Ratified**: 2026-03-27 | **Last Amended**: 2026-03-29

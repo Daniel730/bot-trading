@@ -1,45 +1,66 @@
 import requests
+import logging
 from typing import List, Dict, Any
-from src.config import T212_API_KEY, T212_API_SECRET, T212_DEMO
-from src.models.arbitrage_models import BrokerageError
+from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 class BrokerageService:
     def __init__(self):
-        self.base_url = "https://demo.trading212.com/api/v0" if T212_DEMO else "https://live.trading212.com/api/v0"
+        self.api_key = settings.effective_t212_key.strip()
+        # V1 is confirmed by the user's permission list
+        self.base_url = "https://demo.trading212.com/api/v1" if settings.is_t212_demo else "https://live.trading212.com/api/v1"
+        
+        # In T212 Public API v1, the header is often just the key
         self.headers = {
-            "Authorization": f"Basic {T212_API_KEY}:{T212_API_SECRET}"
+            "Authorization": self.api_key,
+            "Content-Type": "application/json"
         }
+
+    def test_connection(self) -> bool:
+        """Tests v1 endpoints with direct authorization."""
+        endpoints = ["/equity/account/info", "/equity/portfolio", "/portfolio"]
+        
+        for ep in endpoints:
+            url = f"{self.base_url}{ep}"
+            try:
+                logger.info(f"T212: Probing v1 {url}...")
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    logger.info(f"T212: SUCCESS! Connected via {url}")
+                    return True
+                logger.warning(f"T212: {url} rejected with {response.status_code} | Body: {response.text}")
+            except Exception as e:
+                logger.error(f"T212: Error connecting to {url}: {e}")
+        return False
+
+    def place_market_order(self, ticker: str, quantity: float, side: str) -> Dict[str, Any]:
+        t212_ticker = f"{ticker}_US_EQ" if "_" not in ticker else ticker
+        payload = {
+            "symbol": t212_ticker,
+            "quantity": float(quantity),
+            "side": side
+        }
+        
+        # v1 market order endpoint
+        url = f"{self.base_url}/equity/orders/market"
+        logger.info(f"T212: Executing {side} for {t212_ticker}")
+        
+        try:
+            response = requests.post(url, headers=self.headers, json=payload)
+            if response.status_code == 200:
+                logger.info(f"T212: Order SUCCESS")
+                return response.json()
+            
+            logger.warning(f"T212: Order failed ({response.status_code}): {response.text}")
+            return {"status": "error", "message": response.text}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
-        """Fetch current holdings from Trading 212."""
+        url = f"{self.base_url}/equity/portfolio"
         try:
-            response = requests.get(f"{self.base_url}/equity/portfolio", headers=self.headers)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise BrokerageError(f"Failed to fetch portfolio: {e}")
-
-    def place_market_order(self, ticker: str, quantity: float, order_type: str) -> Dict[str, Any]:
-        """Place a market order on Trading 212."""
-        # Note: In T212 Beta API, Sell is often a negative quantity or separate endpoint
-        # For this implementation, we follow the contract in brokerage_api.md
-        payload = {
-            "ticker": ticker,
-            "quantity": quantity if order_type == "BUY" else -quantity,
-            "extendedHours": False
-        }
-        try:
-            response = requests.post(f"{self.base_url}/equity/orders/market", headers=self.headers, json=payload)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            raise BrokerageError(f"Failed to place {order_type} order for {ticker}: {e}")
-
-    def get_account_cash(self) -> float:
-        """Fetch available cash in the account."""
-        try:
-            response = requests.get(f"{self.base_url}/equity/account/cash", headers=self.headers)
-            response.raise_for_status()
-            return response.json().get("free", 0.0)
-        except requests.exceptions.RequestException as e:
-            raise BrokerageError(f"Failed to fetch account cash: {e}")
+            response = requests.get(url, headers=self.headers)
+            if response.status_code == 200: return response.json()
+        except: pass
+        return []
