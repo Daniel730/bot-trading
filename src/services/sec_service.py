@@ -1,5 +1,6 @@
 import requests
 import logging
+import asyncio
 from typing import Optional, List, Dict
 from src.models.persistence import PersistenceManager
 from src.config import settings
@@ -20,7 +21,7 @@ class SECService:
             "Accept-Encoding": "gzip, deflate"
         }
 
-    def get_cik_by_ticker(self, ticker: str) -> Optional[str]:
+    async def get_cik_by_ticker(self, ticker: str) -> Optional[str]:
         """
         Retrieves the 10-digit CIK for a market ticker.
         """
@@ -32,7 +33,8 @@ class SECService:
         # 2. Fetch from SEC if not cached
         try:
             logger.info(f"Fetching CIK mapping from SEC for {ticker}...")
-            response = requests.get(self.TICKER_CIK_URL, headers=self.headers)
+            # Use to_thread for blocking requests
+            response = await asyncio.to_thread(requests.get, self.TICKER_CIK_URL, headers=self.headers)
             if response.status_code == 200:
                 data = response.json()
                 for entry in data.values():
@@ -47,17 +49,17 @@ class SECService:
         
         return None
 
-    def get_latest_filings_metadata(self, ticker: str) -> List[Dict]:
+    async def get_latest_filings_metadata(self, ticker: str) -> List[Dict]:
         """
         Retrieves the metadata for the most recent 10-K and 10-Q filings.
         """
-        cik = self.get_cik_by_ticker(ticker)
+        cik = await self.get_cik_by_ticker(ticker)
         if not cik:
             return []
 
         url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         try:
-            response = requests.get(url, headers=self.headers)
+            response = await asyncio.to_thread(requests.get, url, headers=self.headers)
             if response.status_code == 200:
                 data = response.json()
                 recent_filings = data.get('filings', {}).get('recent', {})
@@ -81,12 +83,12 @@ class SECService:
             
         return []
 
-    def fetch_filing_html(self, url: str) -> Optional[str]:
+    async def fetch_filing_html(self, url: str) -> Optional[str]:
         """
         Retrieves the raw HTML content of a specific SEC filing.
         """
         try:
-            response = requests.get(url, headers=self.headers)
+            response = await asyncio.to_thread(requests.get, url, headers=self.headers)
             if response.status_code == 200:
                 return response.text
             logger.error(f"SEC Filing fetch returned {response.status_code}")
@@ -97,13 +99,12 @@ class SECService:
     def extract_sections(self, html_content: str) -> Dict[str, str]:
         """
         Extracts Item 1A (Risk Factors) and Item 7 (MD&A) from SEC filing HTML.
-        Uses a heuristic regex approach to find section boundaries.
         """
         import re
         from bs4 import BeautifulSoup
 
         # Pre-process HTML to remove heavy tags
-        soup = BeautifulSoup(html_content, 'lxml')
+        soup = BeautifulSoup(html_content, 'html.parser')
         for tag in soup(['script', 'style', 'table']):
             tag.decompose()
         
@@ -122,15 +123,29 @@ class SECService:
             "Item 3": r"Item\s+3\.\s+Legal\s+Proceedings"
         }
 
-        # Simple heuristic: extract ~15,000 characters following the header
-        # In a full production RAG, we would find the NEXT item header to bound the text.
         for item, pattern in patterns.items():
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 start_idx = match.start()
-                # Grab a significant chunk for analysis
                 sections[item] = text[start_idx : start_idx + 20000]
         
         return sections
+
+    async def get_analyzed_sections(self, ticker: str) -> Dict:
+        """
+        Coordinates the fetching, parsing, and caching of SEC filing sections.
+        """
+        metadata_list = await self.get_latest_filings_metadata(ticker)
+        if not metadata_list:
+            return {"sections": {}, "metadata": None}
+        
+        latest = metadata_list[0]
+        html = await self.fetch_filing_html(latest['url'])
+        if not html:
+            return {"sections": {}, "metadata": None}
+            
+        # extract_sections is CPU-bound, use to_thread
+        sections = await asyncio.to_thread(self.extract_sections, html)
+        return {"sections": sections, "metadata": latest}
 
 sec_service = SECService()

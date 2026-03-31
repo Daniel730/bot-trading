@@ -20,13 +20,27 @@ async def bear_node(state: AgentState):
     verdict = await bear_agent.evaluate(state['signal_context'])
     return {"bear_verdict": verdict}
 
+from src.agents.news_analyst import news_analyst
+
 async def fundamental_node(state: AgentState):
-    """Feature 009: Analyzes SEC filings for both tickers in the pair."""
-    # Note: For efficiency in this MVP, we analyze Ticker A (the primary signal mover)
+    """Feature 009: Analyzes SEC filings with fallback to News Analysis."""
     ticker = state['signal_context']['ticker_a']
     sec_sections = state['signal_context'].get('sec_sections', {})
+    sec_metadata = state['signal_context'].get('sec_metadata', None)
     
-    verdict = await fundamental_analyst.analyze_structural_integrity(ticker, sec_sections)
+    if sec_sections:
+        verdict = await fundamental_analyst.analyze_structural_integrity(ticker, sec_sections, sec_metadata)
+    else:
+        # T018: Fallback to News Analysis
+        print(f"SEC Fallback: Using News Analysis for {ticker}")
+        news_verdict = await news_analyst.analyze_sentiment([ticker])
+        verdict = {
+            "integrity_score": news_verdict.get('sentiment_score', 0.5) * 100, # Map 0..1 to 0..100
+            "recommendation": "GO" if news_verdict.get('sentiment_score', 0.5) > 0.4 else "NO-GO",
+            "risk_factors": ["SEC Unavailable", "Fallback to News"],
+            "rationale": news_verdict.get('reasoning', "News analysis fallback")
+        }
+    
     return {"fundamental_verdict": verdict}
 
 async def aggregator_node(state: AgentState):

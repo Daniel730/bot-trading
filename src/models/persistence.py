@@ -142,6 +142,36 @@ class PersistenceManager:
             row = conn.execute("SELECT cik FROM ticker_cik_map WHERE ticker = ?", (ticker,)).fetchone()
             return row["cik"] if row else None
 
+    def save_sec_filing(self, accession_number: str, ticker: str, filing_type: str, filing_date: str, risk_summary: str, score: int):
+        """Persists the result of an SEC filing analysis."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO sec_filing_cache (accession_number, ticker, filing_type, filing_date, risk_summary, structural_integrity_score)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (accession_number, ticker, filing_type, filing_date, risk_summary, score)
+            )
+            conn.commit()
+
+    def get_sec_filing(self, ticker: str, filing_type: str) -> Optional[Dict]:
+        """Loads the most recent cached SEC filing analysis for a given ticker and type."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                """SELECT accession_number, filing_date, risk_summary, structural_integrity_score 
+                   FROM sec_filing_cache 
+                   WHERE ticker = ? AND filing_type = ? 
+                   ORDER BY filing_date DESC LIMIT 1""",
+                (ticker, filing_type)
+            ).fetchone()
+            
+            if row:
+                return {
+                    "accession_number": row["accession_number"],
+                    "date": row["filing_date"],
+                    "risk_summary": row["risk_summary"],
+                    "integrity_score": row["structural_integrity_score"]
+                }
+        return None
+
     def save_kalman_state(self, pair_id: str, alpha: float, beta: float, p_matrix: List[List[float]], ve: float):
 
         """Persists the recursive state of a Kalman filter."""

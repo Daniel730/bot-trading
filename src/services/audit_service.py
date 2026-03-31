@@ -30,13 +30,17 @@ class AuditService:
         sector = signal_ctx.get('sector', 'Unknown')
         exposure = signal_ctx.get('sector_exposure', 0.0)
         
+        # Feature 009: Replacing news with SEC Fundamental Analysis
+        f_verdict = agent_state.get('fundamental_verdict', {})
+        f_rationale = f_verdict.get('rationale', 'No Fundamental analysis available')
+        
         self.persistence.log_thought(
             signal_id=signal_id,
             bull=agent_state['bull_verdict']['argument'],
             bear=agent_state['bear_verdict']['argument'],
-            news=agent_state['news_verdict']['reasoning'],
+            news=f_rationale, # Re-purposing 'news' field for SEC fundamental analysis
             verdict=f"[{sector} Exp: {exposure:.1%}] " + agent_state['reasoning'],
-            shap={"baseline_impact": 0.45, "news_impact": 0.55, "sector_impact": exposure} 
+            shap={"baseline_impact": 0.45, "fundamental_impact": 0.55, "sector_impact": exposure} 
         )
         print(f"AUDIT: Thought Journal persisted for signal {signal_id} (Sector: {sector})")
 
