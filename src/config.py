@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     
     # Support both T212_API_KEY and TRADING_212_API_KEY
     T212_API_KEY: str = Field(default="", validation_alias="T212_API_KEY")
+    T212_API_SECRET: str = Field(default="", validation_alias="T212_API_SECRET")
     TRADING_212_API_KEY: str = Field(default="", validation_alias="TRADING_212_API_KEY")
     
     TRADING_212_MODE: str = "demo"
@@ -67,11 +68,19 @@ class Settings(BaseSettings):
         {'ticker_a': 'GS', 'ticker_b': 'MS'}
     ]
 
-    # 24/7 Test Pairs
+    # 24/7 Test Pairs (Crypto as proxies)
     CRYPTO_TEST_PAIRS: list = [
-        {'ticker_a': 'KO', 'ticker_b': 'PEP'},
-        {'ticker_a': 'MA', 'ticker_b': 'V'}
+        {'ticker_a': 'BTC-USD', 'ticker_b': 'ETH-USD'},
+        {'ticker_a': 'BNB-USD', 'ticker_b': 'SOL-USD'}
     ]
+
+    # Execution Tickers for DEV_MODE (highly liquid stocks)
+    DEV_EXECUTION_TICKERS: dict = {
+        'BTC-USD': 'MSFT',
+        'ETH-USD': 'AAPL',
+        'BNB-USD': 'GOOGL',
+        'SOL-USD': 'TSLA'
+    }
 
     @property
     def effective_t212_key(self) -> str:

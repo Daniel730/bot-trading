@@ -1,6 +1,6 @@
 # bot-trading Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-03-29
+Auto-generated from all feature plans. Last updated: 2026-03-31
 
 ## Active Technologies
 - Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity` (004-strategic-arbitrage-engine)
