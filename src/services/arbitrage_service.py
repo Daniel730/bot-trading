@@ -2,9 +2,19 @@ import pandas as pd
 import numpy as np
 from statsmodels.tsa.stattools import coint, adfuller
 import statsmodels.api as sm
-from typing import Tuple, Dict
+from typing import Tuple, Dict, Optional
+from src.services.kalman_service import KalmanFilter
 
 class ArbitrageService:
+    def __init__(self):
+        self.filters: Dict[str, KalmanFilter] = {}
+
+    def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, R: float = 0.01) -> KalmanFilter:
+        """Retrieves or initializes a Kalman filter for a specific pair."""
+        if pair_id not in self.filters:
+            self.filters[pair_id] = KalmanFilter(delta=delta, R=R)
+        return self.filters[pair_id]
+
     @staticmethod
     def check_cointegration(ticker_a_series: pd.Series, ticker_b_series: pd.Series) -> Tuple[bool, float, float]:
         """

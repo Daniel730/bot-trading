@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     MAX_DRAWDOWN: float = 0.10
     APPROVAL_THRESHOLD: float = 100.0
     
+    # Kalman Filter Parameters (Feature 007)
+    KALMAN_DELTA: float = 1e-5 # Adaptation rate
+    KALMAN_R: float = 0.001     # Measurement noise
+    
     # Arbitrage Pairs
     ARBITRAGE_PAIRS: list = [
         {'ticker_a': 'KO', 'ticker_b': 'PEP'},

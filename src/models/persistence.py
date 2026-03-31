@@ -90,7 +90,48 @@ class PersistenceManager:
                     last_reconciliation DATETIME
                 )
             """)
+
+            # KalmanState - NEW for Feature 007
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS kalman_state (
+                    pair_id TEXT PRIMARY KEY,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    alpha REAL NOT NULL,
+                    beta REAL NOT NULL,
+                    p_matrix TEXT NOT NULL,
+                    ve REAL,
+                    FOREIGN KEY (pair_id) REFERENCES arbitrage_pairs (id)
+                )
+            """)
             conn.commit()
+
+    def save_kalman_state(self, pair_id: str, alpha: float, beta: float, p_matrix: List[List[float]], ve: float):
+        """Persists the recursive state of a Kalman filter."""
+        p_matrix_json = json.dumps(p_matrix)
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO kalman_state (pair_id, timestamp, alpha, beta, p_matrix, ve)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (pair_id, datetime.now(), alpha, beta, p_matrix_json, ve)
+            )
+            conn.commit()
+
+    def load_kalman_state(self, pair_id: str) -> Optional[Dict]:
+        """Loads the persisted state for a Kalman filter."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT alpha, beta, p_matrix, ve FROM kalman_state WHERE pair_id = ?",
+                (pair_id,)
+            ).fetchone()
+            
+            if row:
+                return {
+                    "alpha": row["alpha"],
+                    "beta": row["beta"],
+                    "p_matrix": json.loads(row["p_matrix"]),
+                    "ve": row["ve"]
+                }
+        return None
 
     def save_pair(self, ticker_a: str, ticker_b: str, hedge_ratio: float = None) -> str:
         pair_id = str(uuid.uuid4())
