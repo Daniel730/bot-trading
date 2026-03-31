@@ -26,15 +26,19 @@ class AuditService:
         """
         Persists the reasoning behind a decision.
         """
+        signal_ctx = agent_state.get('signal_context', {})
+        sector = signal_ctx.get('sector', 'Unknown')
+        exposure = signal_ctx.get('sector_exposure', 0.0)
+        
         self.persistence.log_thought(
             signal_id=signal_id,
             bull=agent_state['bull_verdict']['argument'],
             bear=agent_state['bear_verdict']['argument'],
             news=agent_state['news_verdict']['reasoning'],
-            verdict=agent_state['reasoning'],
-            shap={"baseline_impact": 0.45, "news_impact": 0.55} # Mock SHAP
+            verdict=f"[{sector} Exp: {exposure:.1%}] " + agent_state['reasoning'],
+            shap={"baseline_impact": 0.45, "news_impact": 0.55, "sector_impact": exposure} 
         )
-        print(f"AUDIT: Thought Journal persisted for signal {signal_id}")
+        print(f"AUDIT: Thought Journal persisted for signal {signal_id} (Sector: {sector})")
 
     def generate_daily_report(self):
         """
