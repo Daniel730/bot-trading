@@ -12,6 +12,7 @@ from src.services.notification_service import notification_service
 from src.services.audit_service import audit_service
 from src.services.risk_service import risk_service
 from src.services.brokerage_service import BrokerageService
+from src.services.sec_service import sec_service
 
 # Disable yfinance cache to prevent SQLite locks in Docker
 yf.set_tz_cache_location("/tmp/yf_cache")
@@ -116,14 +117,24 @@ class ArbitrageMonitor:
 
                     signal_id = self.persistence.log_signal(pair['id'], current_z)
                     
-                    # Feature 007/008: Pass dynamic beta and sector context to AI analysis
+                    # Feature 009: Fetch SEC filings for fundamental analysis
+                    logger.info(f"Fetching SEC filings for {pair['ticker_a']}...")
+                    sec_metadata = sec_service.get_latest_filings_metadata(pair['ticker_a'])
+                    sec_sections = {}
+                    if sec_metadata:
+                        html = sec_service.fetch_filing_html(sec_metadata[0]['url'])
+                        if html:
+                            sec_sections = sec_service.extract_sections(html)
+
+                    # Feature 007/008/009: Dynamic beta, sector, and SEC context
                     signal_context = {
                         "ticker_a": pair['ticker_a'], 
                         "ticker_b": pair['ticker_b'], 
                         "z_score": current_z,
                         "dynamic_beta": current_beta,
                         "sector": sector,
-                        "sector_exposure": exposure_check["exposure_pct"]
+                        "sector_exposure": exposure_check["exposure_pct"],
+                        "sec_sections": sec_sections
                     }
                     
                     state = await orchestrator.ainvoke({"signal_context": signal_context})
