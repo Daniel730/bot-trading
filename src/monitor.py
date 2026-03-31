@@ -70,9 +70,35 @@ class ArbitrageMonitor:
 
             for pair in self.active_pairs:
                 try:
-                    current_z = 2.5 
+                    # Feature 007: Fetch current prices (mocked for now, needs real data integration)
+                    # In a real scenario, these come from data_service.get_latest_price()
+                    price_a, price_b = 100.0, 50.0 # Placeholder
+                    
+                    # Update Kalman Filter
+                    kf = arbitrage_service.get_or_create_filter(pair['id'])
+                    current_beta, current_alpha, current_z = kf.update(price_a, price_b)
+                    
+                    # Persist state to avoid re-learning on restart
+                    state = kf.get_state()
+                    self.persistence.save_kalman_state(
+                        pair_id=pair['id'],
+                        alpha=current_alpha,
+                        beta=current_beta,
+                        p_matrix=state['p_matrix'],
+                        ve=state['ve']
+                    )
+
                     signal_id = self.persistence.log_signal(pair['id'], current_z)
-                    state = await orchestrator.ainvoke({"signal_context": {"ticker_a": pair['ticker_a'], "ticker_b": pair['ticker_b'], "z_score": current_z}})
+                    
+                    # Feature 007: Pass dynamic beta to signal context for AI analysis
+                    signal_context = {
+                        "ticker_a": pair['ticker_a'], 
+                        "ticker_b": pair['ticker_b'], 
+                        "z_score": current_z,
+                        "dynamic_beta": current_beta
+                    }
+                    
+                    state = await orchestrator.ainvoke({"signal_context": signal_context})
                     audit_service.log_thought_process(signal_id, state)
                     
                     if state['final_confidence'] > 0.5:
