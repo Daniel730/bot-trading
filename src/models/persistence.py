@@ -91,7 +91,7 @@ class PersistenceManager:
                 )
             """)
 
-            # KalmanState - NEW for Feature 007
+            # KalmanState
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS kalman_state (
                     pair_id TEXT PRIMARY KEY,
@@ -103,9 +103,47 @@ class PersistenceManager:
                     FOREIGN KEY (pair_id) REFERENCES arbitrage_pairs (id)
                 )
             """)
+
+            # TickerCIKMap - NEW for Feature 009
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS ticker_cik_map (
+                    ticker TEXT PRIMARY KEY,
+                    cik TEXT NOT NULL,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # SecFilingCache - NEW for Feature 009
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS sec_filing_cache (
+                    accession_number TEXT PRIMARY KEY,
+                    ticker TEXT NOT NULL,
+                    filing_type TEXT NOT NULL,
+                    filing_date DATE NOT NULL,
+                    risk_summary TEXT,
+                    structural_integrity_score INTEGER,
+                    FOREIGN KEY (ticker) REFERENCES ticker_cik_map (ticker)
+                )
+            """)
             conn.commit()
 
+    def save_cik_mapping(self, ticker: str, cik: str):
+        """Persists a ticker to CIK mapping."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO ticker_cik_map (ticker, cik, last_updated) VALUES (?, ?, ?)",
+                (ticker, cik, datetime.now())
+            )
+            conn.commit()
+
+    def load_cik_mapping(self, ticker: str) -> Optional[str]:
+        """Loads a CIK for a given ticker."""
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT cik FROM ticker_cik_map WHERE ticker = ?", (ticker,)).fetchone()
+            return row["cik"] if row else None
+
     def save_kalman_state(self, pair_id: str, alpha: float, beta: float, p_matrix: List[List[float]], ve: float):
+
         """Persists the recursive state of a Kalman filter."""
         p_matrix_json = json.dumps(p_matrix)
         with self._get_connection() as conn:
