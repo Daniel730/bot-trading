@@ -119,14 +119,11 @@ class ArbitrageMonitor:
                     
                     # Feature 009: Fetch SEC filings for fundamental analysis
                     logger.info(f"Fetching SEC filings for {pair['ticker_a']}...")
-                    sec_metadata = sec_service.get_latest_filings_metadata(pair['ticker_a'])
-                    sec_sections = {}
-                    if sec_metadata:
-                        html = sec_service.fetch_filing_html(sec_metadata[0]['url'])
-                        if html:
-                            sec_sections = sec_service.extract_sections(html)
+                    sec_result = await sec_service.get_analyzed_sections(pair['ticker_a'])
+                    sec_sections = sec_result.get("sections", {})
+                    sec_metadata = sec_result.get("metadata", None)
 
-                    # Feature 007/008/009: Dynamic beta, sector, and SEC context
+                    # Feature 009: Dynamic beta, sector, and SEC context
                     signal_context = {
                         "ticker_a": pair['ticker_a'], 
                         "ticker_b": pair['ticker_b'], 
@@ -134,8 +131,10 @@ class ArbitrageMonitor:
                         "dynamic_beta": current_beta,
                         "sector": sector,
                         "sector_exposure": exposure_check["exposure_pct"],
-                        "sec_sections": sec_sections
+                        "sec_sections": sec_sections,
+                        "sec_metadata": sec_metadata
                     }
+
                     
                     state = await orchestrator.ainvoke({"signal_context": signal_context})
                     audit_service.log_thought_process(signal_id, state)

@@ -1,8 +1,10 @@
 import os
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 from src.config import settings
 import google.generativeai as genai
+
+from src.models.persistence import PersistenceManager
 
 class FundamentalAnalyst:
     """
@@ -13,11 +15,24 @@ class FundamentalAnalyst:
         self.api_key = settings.GEMINI_API_KEY
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.persistence = PersistenceManager(settings.DB_PATH)
 
-    async def analyze_structural_integrity(self, ticker: str, sec_sections: Dict[str, str]) -> Dict:
+    async def analyze_structural_integrity(self, ticker: str, sec_sections: Dict[str, str], metadata: Optional[Dict] = None) -> Dict:
         """
-        Uses Gemini to analyze SEC sections and produce a risk score.
+        Uses Gemini to analyze SEC sections and produce a risk score, with caching.
         """
+        # Feature 009: Caching
+        if metadata:
+            cached = self.persistence.get_sec_filing(ticker, metadata['type'])
+            # If the cached filing is the same one we are looking at (same date/accession)
+            if cached and cached['accession_number'] == metadata['accession_number']:
+                return {
+                    "integrity_score": cached['integrity_score'],
+                    "recommendation": "GO" if cached['integrity_score'] > 60 else "NO-GO",
+                    "risk_factors": ["Cached Analysis"],
+                    "rationale": cached['risk_summary']
+                }
+
         prompt = f"""
         You are a Senior Credit Analyst validating a statistical arbitrage trade for {ticker}.
         Your goal is to determine if a recent price divergence is a "Technical Noise" (safe to trade) 
@@ -51,7 +66,20 @@ class FundamentalAnalyst:
             response = self.model.generate_content(prompt)
             # Simple cleanup to handle potential markdown in response
             json_text = response.text.replace('```json', '').replace('```', '').strip()
-            return json.loads(json_text)
+            result = json.loads(json_text)
+            
+            # Save to cache if we have metadata
+            if metadata:
+                self.persistence.save_sec_filing(
+                    accession_number=metadata['accession_number'],
+                    ticker=ticker,
+                    filing_type=metadata['type'],
+                    filing_date=metadata['date'],
+                    risk_summary=result['rationale'],
+                    score=result['integrity_score']
+                )
+            
+            return result
         except Exception as e:
             print(f"FUNDAMENTAL ANALYST ERROR: {e}")
             return {
