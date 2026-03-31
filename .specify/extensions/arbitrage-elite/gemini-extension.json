@@ -1,0 +1,33 @@
+{
+  "name": "arbitrage-elite",
+  "version": "1.0.0",
+  "description": "Project-specific extension for statistical arbitrage research and risk management.",
+  "author": "Daniel",
+  "commands": [
+    {
+      "name": "speckit.research",
+      "description": "Generates a pair research file for statistical arbitrage.",
+      "path": ".gemini/commands/speckit.research.toml"
+    }
+  ],
+  "templates": [
+    {
+      "name": "research-pair",
+      "path": ".specify/extensions/arbitrage-elite/templates/research-pair.md"
+    },
+    {
+      "name": "mcp-contract",
+      "path": ".specify/extensions/arbitrage-elite/templates/mcp-contract.md"
+    },
+    {
+      "name": "safety-checklist",
+      "path": ".specify/extensions/arbitrage-elite/templates/safety-checklist.md"
+    }
+  ],
+  "scripts": [
+    {
+      "name": "verify-env",
+      "path": ".specify/extensions/arbitrage-elite/scripts/bash/verify-env.sh"
+    }
+  ]
+}

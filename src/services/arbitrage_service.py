@@ -1,83 +1,58 @@
 import pandas as pd
 import numpy as np
+from statsmodels.tsa.stattools import coint, adfuller
 import statsmodels.api as sm
-from typing import Tuple, Dict, Optional
-from src.models.arbitrage_models import ArbitrageError
+from typing import Tuple, Dict
 
 class ArbitrageService:
-    def __init__(self):
-        pass
-
-    def calculate_beta(self, data_a: pd.Series, data_b: pd.Series) -> float:
-        """Calculate the hedge ratio (beta) using Ordinary Least Squares (OLS)."""
-        if data_a.empty or data_b.empty:
-            raise ArbitrageError("Empty data provided for beta calculation.")
-        
-        # Align series by index (dates)
-        combined_df = pd.concat([data_a, data_b], axis=1).dropna()
-        y = combined_df.iloc[:, 0]  # ticker_a
-        x = combined_df.iloc[:, 1]  # ticker_b
-        
-        # OLS regression: y = beta * x + alpha
-        x_with_const = sm.add_constant(x)
-        model = sm.OLS(y, x_with_const).fit()
-        
-        # Return the coefficient for ticker_b (hedge ratio)
-        return float(model.params.iloc[1])
-
-    def calculate_z_score(self, price_a: float, price_b: float, beta: float, 
-                          historical_spreads: pd.Series, window: int) -> float:
-        """Calculate the Z-Score of the current spread relative to its historical window."""
-        current_spread = price_a - beta * price_b
-        
-        if len(historical_spreads) < window:
-            raise ArbitrageError(f"Insufficient historical data for {window}-day window.")
-        
-        # Calculate moving average and standard deviation of spreads
-        rolling_mean = historical_spreads.tail(window).mean()
-        rolling_std = historical_spreads.tail(window).std()
-        
-        if rolling_std == 0:
-            return 0.0
+    @staticmethod
+    def check_cointegration(ticker_a_series: pd.Series, ticker_b_series: pd.Series) -> Tuple[bool, float, float]:
+        """
+        Performs ADF test on the spread of two series.
+        Returns: (is_cointegrated, p_value, hedge_ratio)
+        """
+        # Align data and drop NaNs
+        df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
+        if df.empty or len(df) < 20:
+            return False, 1.0, 0.0
             
-        return float((current_spread - rolling_mean) / rolling_std)
+        s1 = df.iloc[:, 0]
+        s2 = df.iloc[:, 1]
 
-    def calculate_spreads(self, data_a: pd.Series, data_b: pd.Series, beta: float) -> pd.Series:
-        """Calculate historical spreads: spread = ticker_a - beta * ticker_b."""
-        combined_df = pd.concat([data_a, data_b], axis=1).dropna()
-        return combined_df.iloc[:, 0] - beta * combined_df.iloc[:, 1]
+        # Linear regression to find hedge ratio
+        model = sm.OLS(s1, s2)
+        results = model.fit()
+        hedge_ratio = results.params.iloc[0]
+        
+        spread = s1 - hedge_ratio * s2
+        adf_result = adfuller(spread)
+        p_value = adf_result[1]
+        
+        return p_value < 0.05, p_value, hedge_ratio
 
-    def get_multi_window_z_scores(self, price_a: float, price_b: float, beta: float, 
-                                 historical_spreads: pd.Series, windows: list[int] = [30, 60, 90]) -> Dict[int, float]:
-        """Calculate Z-Scores for multiple windows to filter technical noise."""
-        results = {}
-        for window in windows:
-            try:
-                results[window] = self.calculate_z_score(price_a, price_b, beta, historical_spreads, window)
-            except ArbitrageError:
-                results[window] = 0.0
-        return results
-
-    def calculate_rebalance_quantities(self, price_a: float, price_b: float, beta: float, 
-                                      total_allocation: float, current_qty_a: float, current_qty_b: float) -> Dict[str, float]:
+    @staticmethod
+    def calculate_zscore(ticker_a_price: float, ticker_b_price: float, hedge_ratio: float, 
+                         mean_spread: float, std_spread: float) -> float:
         """
-        Calculate required quantities to reach the target hedge ratio.
-        Target: Value_A = Total_Allocation / 2, Value_B = Value_A (adjusted by beta)
-        Simplified for MVP: We aim for dollar-neutral if beta=1, or beta-adjusted neutral.
+        Calculates the current Z-score of the spread.
         """
-        # Target values in base currency
-        target_value_a = total_allocation / 2.0
-        target_value_b = target_value_a # In a simple pair trade, we often balance values
-        
-        # In statistical arbitrage (y = beta * x), the hedge ratio is beta.
-        # If we buy 1 share of A, we sell 'beta' shares of B.
-        # So Value_A / Price_A = (Value_B / Price_B) / beta  => Value_B = Value_A * (Price_B * beta / Price_A)
-        # However, a simpler target is to allocate half to A and let B be determined by the hedge ratio.
-        
-        target_qty_a = target_value_a / price_a
-        target_qty_b = (target_qty_a * beta) # Based on the OLS relationship y = beta * x
-        
+        current_spread = ticker_a_price - hedge_ratio * ticker_b_price
+        if std_spread == 0: return 0.0
+        z_score = (current_spread - mean_spread) / std_spread
+        return z_score
+
+    @staticmethod
+    def get_spread_metrics(ticker_a_series: pd.Series, ticker_b_series: pd.Series, hedge_ratio: float) -> Dict:
+        """
+        Calculates rolling mean and std of the spread.
+        """
+        df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
+        s1 = df.iloc[:, 0]
+        s2 = df.iloc[:, 1]
+        spread = s1 - hedge_ratio * s2
         return {
-            "ticker_a": target_qty_a - current_qty_a,
-            "ticker_b": target_qty_b - current_qty_b
+            "mean": spread.mean(),
+            "std": spread.std()
         }
+
+arbitrage_service = ArbitrageService()
