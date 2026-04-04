@@ -125,6 +125,18 @@ class PersistenceManager:
                 )
             """)
 
+            # Logs - NEW for Auditability (Principle III)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS logs (
+                    id TEXT PRIMARY KEY,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    level TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    metadata TEXT
+                )
+            """)
+
             # SecFilingCache - NEW for Feature 009
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS sec_filing_cache (
@@ -137,6 +149,17 @@ class PersistenceManager:
                     FOREIGN KEY (ticker) REFERENCES ticker_cik_map (ticker)
                 )
             """)
+            conn.commit()
+
+    def log_event(self, level: str, source: str, message: str, metadata: dict = None):
+        """Persists a system or terminal event for auditability."""
+        log_id = str(uuid.uuid4())
+        metadata_json = json.dumps(metadata) if metadata else None
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO logs (id, timestamp, level, source, message, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                (log_id, datetime.now(), level, source, message, metadata_json)
+            )
             conn.commit()
 
     def save_cik_mapping(self, ticker: str, cik: str):
