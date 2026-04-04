@@ -27,6 +27,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy the rest of the application code
 COPY src/ /app/src/
 COPY scripts/ /app/scripts/
+COPY dashboard/ /app/dashboard/
 COPY .env.template /app/.env.template
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
