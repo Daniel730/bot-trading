@@ -24,7 +24,8 @@ class FundamentalAnalyst:
         self.notification = NotificationService()
         
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        # Using flash for faster adversarial debate (P95 Target < 30s)
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
 
     async def analyze_ticker(self, signal_id: str, ticker: str) -> FundamentalSignal:
         """

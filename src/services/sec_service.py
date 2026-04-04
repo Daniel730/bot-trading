@@ -101,9 +101,11 @@ class SECService:
             }
             
             item_id = item_map.get(section, section)
-            content = doc.get_item(item_id)
+            content = doc[item_id]
             
-            return content
+            if content is None:
+                return None
+            return content.text if hasattr(content, 'text') else str(content)
         except Exception as e:
             print(f"Error extracting section {section} from {ticker} {form_type}: {e}")
             return None
@@ -128,8 +130,11 @@ class SECService:
                     "MD&A": "Item 7" if form == "10-K" else "Part I Item 2"
                 }
                 
-                rf_content = doc.get_item(item_map["Risk Factors"])
-                mda_content = doc.get_item(item_map["MD&A"])
+                rf_section = doc[item_map["Risk Factors"]]
+                mda_section = doc[item_map["MD&A"]]
+                
+                rf_content = rf_section.text if hasattr(rf_section, 'text') else str(rf_section) if rf_section else None
+                mda_content = mda_section.text if hasattr(mda_section, 'text') else str(mda_section) if mda_section else None
                 
                 if rf_content or mda_content:
                     result["sections"] = {
