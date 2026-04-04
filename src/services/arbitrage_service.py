@@ -4,18 +4,27 @@ from statsmodels.tsa.stattools import coint, adfuller
 import statsmodels.api as sm
 from typing import Tuple, Dict, Optional
 from src.services.kalman_service import KalmanFilter
+from src.services.agent_log_service import agent_trace
 
 class ArbitrageService:
     def __init__(self):
         self.filters: Dict[str, KalmanFilter] = {}
 
-    def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, R: float = 0.01) -> KalmanFilter:
+    @agent_trace("ArbitrageService.get_or_create_filter")
+    def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01, 
+                             initial_state: list = None, initial_covariance: list = None) -> KalmanFilter:
         """Retrieves or initializes a Kalman filter for a specific pair."""
         if pair_id not in self.filters:
-            self.filters[pair_id] = KalmanFilter(delta=delta, R=R)
+            self.filters[pair_id] = KalmanFilter(
+                delta=delta, 
+                r=r, 
+                initial_state=initial_state, 
+                initial_covariance=initial_covariance
+            )
         return self.filters[pair_id]
 
     @staticmethod
+    @agent_trace("ArbitrageService.check_cointegration")
     def check_cointegration(ticker_a_series: pd.Series, ticker_b_series: pd.Series) -> Tuple[bool, float, float]:
         """
         Performs ADF test on the spread of two series.
@@ -32,11 +41,11 @@ class ArbitrageService:
         # Linear regression to find hedge ratio
         model = sm.OLS(s1, s2)
         results = model.fit()
-        hedge_ratio = results.params.iloc[0]
+        hedge_ratio = float(results.params.iloc[0])
         
         spread = s1 - hedge_ratio * s2
         adf_result = adfuller(spread)
-        p_value = adf_result[1]
+        p_value = float(adf_result[1])
         
         return p_value < 0.05, p_value, hedge_ratio
 
@@ -44,12 +53,12 @@ class ArbitrageService:
     def calculate_zscore(ticker_a_price: float, ticker_b_price: float, hedge_ratio: float, 
                          mean_spread: float, std_spread: float) -> float:
         """
-        Calculates the current Z-score of the spread.
+        Calculates the current Z-score of the spread using static metrics.
         """
         current_spread = ticker_a_price - hedge_ratio * ticker_b_price
         if std_spread == 0: return 0.0
         z_score = (current_spread - mean_spread) / std_spread
-        return z_score
+        return float(z_score)
 
     @staticmethod
     def get_spread_metrics(ticker_a_series: pd.Series, ticker_b_series: pd.Series, hedge_ratio: float) -> Dict:
@@ -61,8 +70,8 @@ class ArbitrageService:
         s2 = df.iloc[:, 1]
         spread = s1 - hedge_ratio * s2
         return {
-            "mean": spread.mean(),
-            "std": spread.std()
+            "mean": float(spread.mean()),
+            "std": float(spread.std())
         }
 
 arbitrage_service = ArbitrageService()
