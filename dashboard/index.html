@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARBI ELITE | Quantitative Command Center</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;500;700&family=Syncopate:wght@400;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+    
+    <div class="bg-container">
+        <div class="city-layer layer-far"></div>
+        <div class="city-layer layer-mid"></div>
+    </div>
+
+    <header>
+        <div class="logo">
+            <i data-lucide="activity"></i>
+            QUANTUM_ARBI_v6.0
+        </div>
+        <div class="system-meta">
+            <button id="open-terminal" class="neon-btn"><i data-lucide="terminal" size="14"></i> OPEN_TERMINAL</button>
+            <div class="meta-item">UPTIME: <span id="uptime">00:00:00</span></div>
+            <div class="meta-item">LATENCY: <span id="latency">12ms</span></div>
+            <div class="meta-item">MODE: <span id="val-mode" style="color:var(--neon-magenta)">SHADOW_STRATEGY</span></div>
+        </div>
+    </header>
+
+    <main class="main-layout">
+        <!-- LEFT PANEL: PERFORMANCE HUD -->
+        <aside class="side-panel left-panel">
+            <div class="panel-header"><i data-lucide="shield-check" size="14"></i> RISK_&_ALLOCATION</div>
+            
+            <div class="metric-group">
+                <div class="metric-card">
+                    <div class="metric-label">Daily Budget</div>
+                    <div class="metric-value" id="val-budget">$0.00</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Remaining</div>
+                    <div class="metric-value" id="val-remaining">$0.00</div>
+                </div>
+            </div>
+
+            <div class="utilization-box">
+                <div class="stat-label" style="display:flex; justify-content: space-between;">
+                    <span>DAILY_LIMIT_USAGE</span>
+                    <span id="val-usage-text">0%</span>
+                </div>
+                <div class="stat-bar"><div id="val-usage-bar" class="stat-fill" style="width: 0%"></div></div>
+            </div>
+
+            <div class="metric-group" style="margin-top: 10px;">
+                <div class="metric-card">
+                    <div class="metric-label">Capital Deployed</div>
+                    <div class="metric-value" id="val-investment">$0.00</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-label">Daily Return</div>
+                    <div class="metric-value" id="val-daily-profit" style="color: var(--neon-lime)">$0.00</div>
+                </div>
+            </div>
+
+            <div class="metric-group">
+                <div class="metric-card secondary">
+                    <div class="metric-label">Daily ROA</div>
+                    <div class="metric-value" id="val-roa">--%</div>
+                </div>
+                <div class="metric-card secondary">
+                    <div class="metric-label">Proj. EOD</div>
+                    <div class="metric-value" id="val-projection">$0.00</div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <canvas id="revenue-chart"></canvas>
+            </div>
+        </aside>
+
+        <!-- CENTER: THE ROBOT -->
+        <section class="center-stage">
+            <div id="arbi-container">
+                <div class="arbi-aura"></div>
+                <div class="arbi-thought" id="arbi-bubble">Neural Link Initialized...</div>
+                <div class="arbi-model" id="arbi-mesh">
+                    <div class="arbi-head">
+                        <div class="arbi-visor">
+                            <div class="arbi-eyes">
+                                <div class="arbi-eye"></div>
+                                <div class="arbi-eye"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="arbi-torso">
+                        <div class="torso-detail"></div>
+                        <div class="torso-detail" style="width: 70%"></div>
+                        <div class="torso-detail" style="width: 90%; background: var(--neon-magenta)"></div>
+                    </div>
+                    <div class="arbi-arms">
+                        <div class="arbi-arm left"></div>
+                        <div class="arbi-arm right"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="stage-status">
+                <div id="val-state">MONITORING</div>
+                <div class="status-indicator active"></div>
+            </div>
+        </section>
+
+        <!-- RIGHT PANEL: LIVE SIGNALS -->
+        <aside class="side-panel right-panel">
+            <div class="panel-header"><i data-lucide="zap" size="14"></i> LIVE_SIGNALS_FEED</div>
+            <div id="signals-feed">
+                <div class="empty-state">
+                    <i data-lucide="radar" size="32"></i>
+                    <p>SCANNING_MARKET...</p>
+                </div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- BOTTOM BAR: THOUGHTS & LOGS -->
+    <footer class="bottom-hud">
+        <div class="journal-wrapper">
+            <div class="bottom-label">THOUGHT_JOURNAL_STREAM</div>
+            <div id="journal-log"></div>
+        </div>
+        <div class="system-stats">
+            <div class="stat-box">
+                <div class="stat-label">STRATEGY_HEALTH</div>
+                <div class="stat-bar"><div class="stat-fill" style="width: 94%"></div></div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">API_CONNECTIVITY</div>
+                <div class="stat-bar"><div class="stat-fill" style="width: 100%"></div></div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">SEC_RAG_STATUS</div>
+                <div class="stat-bar"><div class="stat-fill" style="width: 80%"></div></div>
+            </div>
+        </div>
+    </footer>
+
+    <!-- TERMINAL MODAL -->
+    <div id="terminal-modal" class="modal-overlay">
+        <div class="terminal-content">
+            <div class="terminal-header">
+                <div class="terminal-title"><i data-lucide="terminal" size="14"></i> ARBI_ELITE_TERMINAL_v1.0</div>
+                <button id="close-terminal" class="close-btn">&times;</button>
+            </div>
+            <div id="terminal-messages" class="terminal-body">
+                <div class="terminal-msg bot">
+                    <span class="sender">[BOT]</span> Neural link established. System ready for commands.
+                </div>
+            </div>
+            <div class="terminal-footer">
+                <span class="prompt">></span>
+                <input type="text" id="terminal-input" placeholder="Enter command (e.g. /status)..." autocomplete="off">
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
