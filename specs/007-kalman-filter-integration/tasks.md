@@ -14,10 +14,10 @@ description: "Dependency-ordered tasks for Kalman Filter Integration"
 
 **Purpose**: Implementation of the recursive filter logic.
 
-- [ ] T001 Create `src/services/kalman_service.py` with the `KalmanFilter` class
-- [ ] T002 Implement the `predict()` and `update()` methods using `numpy` matrix math
-- [ ] T003 [P] Add unit tests in `tests/unit/test_kalman.py` to verify convergence on synthetic "drifting" data
-- [ ] T004 Implement a `calculate_spread_and_zscore` method that uses the current filter state and error variance
+- [X] T001 Create `src/services/kalman_service.py` with the `KalmanFilter` class
+- [X] T002 Implement the `predict()` and `update()` methods using `numpy` matrix math
+- [X] T003 [P] Add unit tests in `tests/unit/test_kalman.py` to verify convergence on synthetic "drifting" data
+- [X] T004 Implement a `calculate_spread_and_zscore` method that uses the current filter state and error variance
 
 ---
 
@@ -25,9 +25,9 @@ description: "Dependency-ordered tasks for Kalman Filter Integration"
 
 **Purpose**: Ensure the bot doesn't "forget" the learned hedge ratio on restart.
 
-- [ ] T005 [P] Create the `kalman_state` table in `src/models/persistence.py` or via `scripts/init_db.py`
-- [ ] T006 Implement `save_kalman_state` and `load_kalman_state` in `src/models/persistence.py`
-- [ ] T007 Handle JSON serialization/deserialization for the 2x2 covariance matrices (P, Q)
+- [X] T005 [P] Create the `kalman_state` table in `src/models/persistence.py` or via `scripts/init_db.py`
+- [X] T006 Implement `save_kalman_state` and `load_kalman_state` in `src/models/persistence.py`
+- [X] T007 Handle JSON serialization/deserialization for the 2x2 covariance matrices (P, Q)
 
 ---
 
@@ -35,18 +35,18 @@ description: "Dependency-ordered tasks for Kalman Filter Integration"
 
 **Purpose**: Wire the Kalman Filter into the active monitoring loop.
 
-- [ ] T008 [US1] Update `ArbitrageService` in `src/services/arbitrage_service.py` to optionally use `KalmanFilter` instead of `OLS`
-- [ ] T009 [US1] Modify `ArbitrageMonitor.initialize_pairs` in `src/monitor.py` to seed new filters from OLS history if no persisted state exists
-- [ ] T010 [US1] Update the main loop in `src/monitor.py` to perform a Kalman update on every price tick
-- [ ] T011 [US2] Update `Signal` generation to use the Kalman-derived Z-score and log the `beta` to the `SignalRecord`
+- [X] T008 [US1] Update `ArbitrageService` in `src/services/arbitrage_service.py` to optionally use `KalmanFilter` instead of `OLS`
+- [X] T009 [US1] Modify `ArbitrageMonitor.initialize_pairs` in `src/monitor.py` to seed new filters from OLS history if no persisted state exists
+- [X] T010 [US1] Update the main loop in `src/monitor.py` to perform a Kalman update on every price tick
+- [X] T011 [US2] Update `Signal` generation to use the Kalman-derived Z-score and log the `beta` to the `SignalRecord`
 
 ---
 
 ## Phase N: Polish & Configuration
 
-- [ ] T012 Add `KALMAN_DELTA` and `KALMAN_R` parameters to `src/config.py` for fine-tuning
-- [ ] T013 [P] Add an "Exploding Beta" guard in `kalman_service.py` to prevent runaway values during extreme volatility
-- [ ] T014 Update the `Thought Journal` log in `src/monitor.py` to include the current Kalman Gain and Beta
+- [X] T012 Add `KALMAN_DELTA` and `KALMAN_R` parameters to `src/config.py` for fine-tuning
+- [X] T013 [P] Add an "Exploding Beta" guard in `kalman_service.py` to prevent runaway values during extreme volatility
+- [X] T014 Update the `Thought Journal` log in `src/monitor.py` to include the current Kalman Gain and Beta
 
 ---
 
