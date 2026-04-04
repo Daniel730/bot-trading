@@ -258,8 +258,15 @@ class ArbitrageMonitor:
                     active_signals=self.active_signals
                 )
                 
+                divergence_desc = "significantly out of sync" if abs(z_score) > 2.0 else "showing a clear divergence"
+                
                 approved = await notification_service.request_approval(
-                    f"Pair: {t_a}/{t_b}\nZ-Score: {z_score:.2f}\nBeta: {beta:.2f}\nRationale: {decision_state['final_verdict']}"
+                    f"I've found a solid trading opportunity! {t_a} and {t_b} are currently {divergence_desc}, and my models suggest they will likely converge soon.\n\n"
+                    f"🎯 *Verdict*: {decision_state['final_verdict']}\n\n"
+                    f"--- Technical Details ---\n"
+                    f"Pair: {t_a}/{t_b}\n"
+                    f"Z-Score: {z_score:.2f}\n"
+                    f"Beta: {beta:.2f}"
                 )
                 if approved:
                     sig_status = "Executing Trade"

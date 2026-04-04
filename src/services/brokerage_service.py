@@ -110,8 +110,14 @@ class BrokerageService:
         try:
             response = requests.get(url, headers=self.headers)
             if response.status_code == 200: 
-                return response.json()
-        except: pass
+                orders = response.json()
+                if orders:
+                    logger.info(f"T212: Found {len(orders)} pending orders.")
+                return orders
+            else:
+                logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
+        except Exception as e:
+            logger.error(f"T212: Error fetching orders: {e}")
         return []
 
     def has_pending_order(self, ticker: str) -> bool:
@@ -125,6 +131,28 @@ class BrokerageService:
         portfolio = self.get_portfolio()
         t212_ticker = self._format_ticker(ticker)
         return any(pos.get('ticker') == t212_ticker for pos in portfolio)
+
+    def get_pending_orders_value(self) -> float:
+        """Calculates the total cash currently committed to pending BUY orders."""
+        orders = self.get_pending_orders()
+        total_value = 0.0
+        for order in orders:
+            # For BUY orders, quantity is positive
+            qty = order.get('quantity', 0.0)
+            if qty > 0:
+                # Value = quantity * limit price (or estimated current price)
+                # T212 v0 order object usually has 'limitPrice' or 'stopPrice'
+                # Also checking for 'price' or 'fillPrice' (though fillPrice is for executed)
+                price = order.get('limitPrice') or order.get('stopPrice') or order.get('price', 0.0)
+                
+                if price == 0 and 'ticker' in order:
+                    logger.warning(f"T212: Pending order for {order['ticker']} has 0 price. Keys: {list(order.keys())}")
+                
+                total_value += (qty * price)
+        
+        if total_value > 0:
+            logger.info(f"T212: Total commitment calculated: ${total_value:.2f}")
+        return total_value
 
     def get_account_cash(self) -> float:
         """Retrieves free funds from the account."""

@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
@@ -18,6 +18,7 @@ class DashboardState:
     def __init__(self):
         self.stage = "Booting up..."
         self.details = "Initializing core components and services."
+        self.bot_start_time = datetime.now(timezone.utc).isoformat()
         self.portfolio_metrics = {
             "total_revenue": 0.0,
             "total_invested": 0.0,
@@ -38,7 +39,7 @@ class DashboardState:
                 "id": str(os.urandom(4).hex()),
                 "type": msg_type,
                 "text": text,
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "metadata": metadata or {}
             }
             self.terminal_messages.append(msg)
@@ -52,10 +53,11 @@ class DashboardState:
         message = json.dumps({
             "stage": self.stage, 
             "details": self.details,
+            "bot_start_time": self.bot_start_time,
             "metrics": self.portfolio_metrics,
             "active_signals": self.active_signals,
             "terminal_messages": self.terminal_messages,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
         for q in self.listeners:
             await q.put(message)
@@ -131,10 +133,11 @@ async def message_stream(request: Request, token: str = Query(None)):
         initial_data = json.dumps({
             "stage": dashboard_state.stage, 
             "details": dashboard_state.details,
+            "bot_start_time": dashboard_state.bot_start_time,
             "metrics": dashboard_state.portfolio_metrics,
             "active_signals": dashboard_state.active_signals,
             "terminal_messages": dashboard_state.terminal_messages,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
         await q.put(initial_data)
 
@@ -174,6 +177,21 @@ async def terminal_command(request: CommandRequest, token: str = Query(None)):
         raise HTTPException(status_code=400, detail=result.get("message"))
     return result
 
+@app.get("/api/logs")
+async def get_logs(date: Optional[str] = Query(None), token: str = Query(None)):
+    """Retrieves logs for a specific date or current session."""
+    verify_token(token)
+    from src.services.dashboard_service import dashboard_service
+    
+    target_date = date or datetime.now().date().isoformat()
+    
+    with dashboard_service.persistence._get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM logs WHERE date(timestamp) = date(?) ORDER BY timestamp DESC LIMIT 200",
+            (target_date,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
 class DashboardService:
     def __init__(self):
         self.server = None
@@ -204,6 +222,9 @@ class DashboardService:
                 from src.services.brokerage_service import BrokerageService
                 brokerage = BrokerageService()
                 total_cash = brokerage.get_account_cash()
+                pending_value = brokerage.get_pending_orders_value()
+                spendable_cash = total_cash - pending_value
+                
                 daily_allocation = total_cash * 0.25 # Principle I: 25% Daily Limit
                 daily_invested = self.persistence.get_daily_invested(datetime.now().date().isoformat(), is_shadow=is_shadow)
                 
@@ -212,6 +233,8 @@ class DashboardService:
                     "total_invested": self.persistence.get_current_investment(is_shadow=is_shadow),
                     "daily_profit": self.persistence.get_daily_pnl(datetime.now().date().isoformat(), is_shadow=is_shadow),
                     "available_cash": total_cash,
+                    "pending_orders_value": pending_value,
+                    "spendable_cash": spendable_cash,
                     "daily_budget": daily_allocation,
                     "daily_usage_pct": (daily_invested / daily_allocation * 100) if daily_allocation > 0 else 0
                 }

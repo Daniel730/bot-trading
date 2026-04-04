@@ -131,6 +131,8 @@ class NotificationService:
         from src.services.dashboard_service import dashboard_state
         from src.services.dashboard_service import dashboard_service
         
+        print(f"TERMINAL: Received command '{command}' with metadata {metadata}")
+        
         # Log the user message to the terminal first
         await dashboard_state.add_message("USER", command)
         
@@ -150,6 +152,7 @@ class NotificationService:
                     await self.send_message(f"✅ Dashboard Approval received for {cid}")
                 return {"status": "success", "message": "Approval processed"}
             else:
+                print(f"TERMINAL: Approval failed. CID '{cid}' not found in {list(self.pending_approvals.keys())}")
                 return {"status": "error", "message": "Invalid or expired correlation ID"}
         
         elif command == "/status":
