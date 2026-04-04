@@ -4,11 +4,13 @@ from polygon import RESTClient
 from typing import List, Optional
 from src.config import settings
 import asyncio
+from src.services.agent_log_service import agent_trace
 
 class DataService:
     def __init__(self):
         self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY)
 
+    @agent_trace("DataService.get_historical_data")
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
         """
         Fetches historical data using yfinance with fallback to 'Close'.
@@ -33,6 +35,7 @@ class DataService:
             print(f"DEBUG: yfinance error for {tickers}: {e}")
             raise
 
+    @agent_trace("DataService.get_latest_price")
     def get_latest_price(self, tickers: List[str]) -> dict:
         """
         Fetches the latest prices for given tickers using yfinance.
@@ -43,6 +46,7 @@ class DataService:
             if df.empty:
                 return {}
             
+            import random
             latest = {}
             # Handle multi-index (multiple tickers) or flat (single ticker)
             if len(tickers) > 1:
@@ -50,17 +54,23 @@ class DataService:
                 for ticker in tickers:
                     val = df['Close'][ticker].iloc[-1]
                     if not pd.isna(val):
+                        if settings.DEV_MODE:
+                            # Feature: Inject +/- 1.5% random volatility for 24/7 testing
+                            val = float(val) * (1 + random.uniform(-0.015, 0.015))
                         latest[ticker] = float(val)
             else:
                 ticker = tickers[0]
                 val = df['Close'].iloc[-1]
                 if not pd.isna(val):
+                    if settings.DEV_MODE:
+                        val = float(val) * (1 + random.uniform(-0.015, 0.015))
                     latest[ticker] = float(val)
             return latest
         except Exception as e:
             print(f"DEBUG: yfinance error for latest price {tickers}: {e}")
             return {}
 
+    @agent_trace("DataService.stream_realtime_data")
     async def stream_realtime_data(self, tickers: List[str], callback):
         """
         Connects to Polygon WebSocket to stream real-time prices.
