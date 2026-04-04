@@ -15,3 +15,12 @@
 - [X] T006 Update `dashboard/style.css` with new background image `/static/dashboard_bg.png`.
 - [X] T007 Enhance glassmorphism for `.side-panel` and `.bottom-hud`.
 - [X] T008 Verify text contrast for `--text-main` and `--text-muted`.
+
+## Phase 5: React Frontend Fixes
+- [X] T009 Slow down animation durations in `frontend/src/components/PixelBot.tsx` for a smoother look.
+- [X] T010 Remove thought-bubble (subtitles) from `frontend/src/App.tsx` and `frontend/src/App.css` to declutter UI.
+
+## Phase 6: React Sprite Animator Integration
+- [X] T011 Install `react-sprite-animator` in the `frontend` project.
+- [X] T012 Refactor `frontend/src/components/PixelBot.tsx` to use the `react-sprite-animator` component.
+- [X] T013 Verify animation states (idle, analyzing, executing) transition smoothly in the UI.

@@ -33,7 +33,6 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Initialize the database (SQLite)
-# Note: In production, you might want to mount a volume for the DB
 RUN python scripts/init_db.py
 
 # Expose any ports (MCP server might need one if used via HTTP, but FastMCP is usually stdio or SSE)

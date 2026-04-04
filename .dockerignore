@@ -16,6 +16,9 @@ env/
 *.sqlite
 dist/
 build/
+node_modules/
+frontend/node_modules/
+frontend/dist/
 *.egg-info/
 docker-compose.yml
 Dockerfile
