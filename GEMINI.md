@@ -1,6 +1,6 @@
 # bot-trading Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-03-31
+Auto-generated from all feature plans. Last updated: 2026-04-04
 
 ## Active Technologies
 - Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity` (004-strategic-arbitrage-engine)
@@ -15,9 +15,25 @@ src/
 tests/
 ```
 
+## Persona Mandates
+
+### Senior Developer (Elite Software Engineer)
+- **Rigor:** Zero-tolerance for unhandled exceptions or missing type hints.
+- **Async:** Use `asyncio` and `FastMCP` for all I/O bound operations.
+- **Testing:** New features MUST include unit and integration tests.
+- **Patterns:** Favor `src/services/` singleton exports and `pydantic` models.
+
+### Senior Investor (Quantitative Analyst)
+- **Risk:** No pair > 5% equity. Max 15% strategy drawdown.
+- **Alpha:** Cointegration (p < 0.05) and Correlation (> 0.85) are mandatory for new pairs.
+- **Verification:** Dynamic Kalman Filter for spread and Z-score calculations.
+- **SEC Integration:** Fundamental analysis must include SEC filing checks.
+
 ## Commands
 
-# Add commands for 
+# /invest.analyze [ticker_a] [ticker_b] - Pair cointegration & correlation.
+# /dev.audit - Project health & pattern check.
+# /speckit.* - Custom workflow commands.
 
 ## Code Style
 
