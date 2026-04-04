@@ -1,81 +1,69 @@
 from typing import TypedDict, Annotated, List, Dict
-from langgraph.graph import StateGraph, END
+import asyncio
 from src.agents.bull_agent import bull_agent
 from src.agents.bear_agent import bear_agent
-from src.agents.fundamental_analyst import fundamental_analyst
+from src.agents.fundamental_analyst import FundamentalAnalyst
+from src.services.sec_service import SECService
 
-class AgentState(TypedDict):
-    signal_context: dict
-    bull_verdict: dict
-    bear_verdict: dict
-    fundamental_verdict: dict # Feature 009: Replacing news with SEC Fundamental Analysis
-    final_confidence: float
-    reasoning: str
+class Orchestrator:
+    """
+    Refactored Orchestrator that executes the multi-agent debate 
+    without requiring the langgraph library.
+    """
+    def __init__(self):
+        self.fundamental_analyst = FundamentalAnalyst()
 
-async def bull_node(state: AgentState):
-    verdict = await bull_agent.evaluate(state['signal_context'])
-    return {"bull_verdict": verdict}
-
-async def bear_node(state: AgentState):
-    verdict = await bear_agent.evaluate(state['signal_context'])
-    return {"bear_verdict": verdict}
-
-from src.agents.news_analyst import news_analyst
-
-async def fundamental_node(state: AgentState):
-    """Feature 009: Analyzes SEC filings with fallback to News Analysis."""
-    ticker = state['signal_context']['ticker_a']
-    sec_sections = state['signal_context'].get('sec_sections', {})
-    sec_metadata = state['signal_context'].get('sec_metadata', None)
-    
-    if sec_sections:
-        verdict = await fundamental_analyst.analyze_structural_integrity(ticker, sec_sections, sec_metadata)
-    else:
-        # T018: Fallback to News Analysis
-        print(f"SEC Fallback: Using News Analysis for {ticker}")
-        news_verdict = await news_analyst.analyze_sentiment([ticker])
-        verdict = {
-            "integrity_score": news_verdict.get('sentiment_score', 0.5) * 100, # Map 0..1 to 0..100
-            "recommendation": "GO" if news_verdict.get('sentiment_score', 0.5) > 0.4 else "NO-GO",
-            "risk_factors": ["SEC Unavailable", "Fallback to News"],
-            "rationale": news_verdict.get('reasoning', "News analysis fallback")
+    async def ainvoke(self, input_data: dict) -> dict:
+        state: AgentState = {
+            "signal_context": input_data["signal_context"],
+            "bull_verdict": {},
+            "bear_verdict": {},
+            "fundamental_verdict": {},
+            "final_confidence": 0.0,
+            "final_verdict": ""
         }
-    
-    return {"fundamental_verdict": verdict}
 
-async def aggregator_node(state: AgentState):
-    # Consolidate agent outputs
-    bull_conf = state['bull_verdict']['confidence']
-    bear_conf = state['bear_verdict']['confidence']
-    
-    # Feature 009: High-weight fundamental analysis
-    f_verdict = state['fundamental_verdict']
-    integrity_score = f_verdict['integrity_score'] / 100.0
-    
-    # Absolute VETO if fundamental analyst recommends NO-GO
-    if f_verdict['recommendation'] == "NO-GO" or integrity_score < 0.4:
-        return {"final_confidence": 0.0, "reasoning": f"VETO: {f_verdict['rationale']}"}
-    
-    # Weighted average: Bull, Bear, and Fundamental Integrity
-    final_conf = (bull_conf + (1 - bear_conf) + integrity_score) / 3
-    reasoning = f"Aggregated: Bull({bull_conf}), Bear({bear_conf}), SEC-Integrity({integrity_score:.2f})"
-    
-    return {"final_confidence": final_conf, "reasoning": reasoning}
+        # 1. Parallel execution of Bull and Bear agents
+        # (Assuming bull_agent and bear_agent are available in scope)
+        bull_results, bear_results = await asyncio.gather(
+            bull_agent.evaluate(state['signal_context']),
+            bear_agent.evaluate(state['signal_context'])
+        )
+        state['bull_verdict'] = bull_results
+        state['bear_verdict'] = bear_results
 
-def create_orchestrator():
-    workflow = StateGraph(AgentState)
-    
-    workflow.add_node("bull", bull_node)
-    workflow.add_node("bear", bear_node)
-    workflow.add_node("fundamental", fundamental_node)
-    workflow.add_node("aggregator", aggregator_node)
-    
-    workflow.set_entry_point("bull")
-    workflow.add_edge("bull", "bear")
-    workflow.add_edge("bear", "fundamental")
-    workflow.add_edge("fundamental", "aggregator")
-    workflow.add_edge("aggregator", END)
-    
-    return workflow.compile()
+        # 2. Fundamental Analysis (SEC with News Fallback)
+        ticker_a = state['signal_context']['ticker_a']
+        ticker_b = state['signal_context']['ticker_b']
+        signal_id = state['signal_context'].get('signal_id')
 
-orchestrator = create_orchestrator()
+        # Analyze both tickers in the pair
+        fundamental_results = await asyncio.gather(
+            self.fundamental_analyst.analyze_ticker(signal_id, ticker_a),
+            self.fundamental_analyst.analyze_ticker(signal_id, ticker_b)
+        )
+        
+        f_signal_a, f_signal_b = fundamental_results
+        
+        # 3. Aggregation Logic with VETO
+        bull_conf = state['bull_verdict']['confidence']
+        bear_conf = state['bear_verdict']['confidence']
+        
+        score_a = f_signal_a.structural_integrity_score
+        score_b = f_signal_b.structural_integrity_score
+        
+        # Absolute VETO if structural integrity score < 40 for either ticker
+        if score_a < 40 or score_b < 40:
+            state["final_confidence"] = 0.0
+            veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
+            state["final_verdict"] = veto_reason
+        else:
+            # Combined score: average of structural integrity and bull/bear sentiment
+            avg_integrity = (score_a + score_b) / 200.0
+            final_conf = (bull_conf + (1 - bear_conf) + avg_integrity) / 3
+            state["final_confidence"] = final_conf
+            state["final_verdict"] = f"Aggregated: Bull({bull_conf:.2f}), Bear({bear_conf:.2f}), SEC-Avg-Integrity({avg_integrity:.2f})"
+        
+        return state
+
+orchestrator = Orchestrator()

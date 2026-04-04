@@ -1,35 +1,47 @@
-# Data Model: SEC Filings & CIK Mapping
+# Data Model: Agentic SEC RAG Analyst
 
-**Feature**: 009-sec-rag-analyst  
-**Date**: 2026-03-31
+## 1. Entities
 
-## Entities
+### FundamentalSignal
+Extends `ArbitrageSignal` with fundamental validation results.
 
-### `TickerCIKMap`
-Persistent mapping of market tickers to SEC Central Index Keys.
-- `ticker`: String (Primary Key, e.g., 'AAPL')
-- `cik`: String (10-digit zero-padded SEC ID)
-- `last_updated`: DateTime
+| Field | Type | Description |
+|-------|------|-------------|
+| `signal_id` | UUID | FK to base signal. |
+| `ticker` | String | Ticker being analyzed. |
+| `cik` | String | SEC Central Index Key. |
+| `structural_integrity_score` | Integer (0-100) | 0-100 score; <40 = VETO. |
+| `prosecutor_argument` | String | LLM-generated argument AGAINST the trade. |
+| `defender_argument` | String | LLM-generated argument FOR the trade. |
+| `final_reasoning` | String | Judge's final decision summary. |
+| `analyzed_at` | DateTime | Timestamp of analysis. |
 
-### `SecFilingCache`
-Metadata and local cache of recently analyzed filings to avoid redundant SEC API calls.
-- `pair_id`: String (Foreign Key)
-- `accession_number`: String (Unique filing ID)
-- `filing_type`: String ('10-K' or '10-Q')
-- `filing_date`: Date
-- `risk_summary`: Text (The agent's extracted risk summary)
-- `structural_integrity_score`: Integer (0-100)
+### CIKMapping
+Local cache for SEC mapping.
 
-## State Transitions
+| Field | Type | Description |
+|-------|------|-------------|
+| `ticker` | String (PK) | Stock ticker. |
+| `cik` | String | 10-digit CIK. |
+| `last_updated` | DateTime | Cache TTL management. |
 
-1. **Mapping**: On first request for a ticker, query the SEC JSON mapping and save to `TickerCIKMap`.
-2. **Retrieval**: 
-   - Check `SecFilingCache` for the latest filing.
-   - If stale (> 90 days for 10-K, > 30 days for 10-Q), fetch new metadata from EDGAR.
-3. **Analysis**:
-   - Extract sections (Item 1A, 7, 3).
-   - Agent produces `risk_summary` and `score`.
-   - Update cache.
+### SECReportSection
+Cache of extracted filings.
 
-## Relationships
-- A `Signal` will now link to a `SecFilingCache` record via the `ThoughtJournal` to show which document was used for the "GO/NO-GO" decision.
+| Field | Type | Description |
+|-------|------|-------------|
+| `cik` | String | Ticker CIK. |
+| `form_type` | String | '10-K' or '10-Q'. |
+| `period_end` | Date | Date of the filing period. |
+| `section_name` | String | 'Risk Factors' or 'MD&A'. |
+| `content` | Text | Cleaned text extracted from SEC. |
+| `cached_at` | DateTime | Cache management. |
+
+## 2. Relationships
+- One `ArbitrageSignal` has many (or 2) `FundamentalSignal` (one per ticker in the pair).
+- `FundamentalAnalyst` reads `SECReportSection` and writes to `FundamentalSignal`.
+
+## 3. Validation Rules
+- **VETO Gate**: If `structural_integrity_score` < 40 for either ticker, the signal's `confidence_score` MUST be set to 0.
+- **Cache TTL**: SEC filings only need to be updated once per quarter (90 days).
+- **Adversarial Integrity**: Prosecutor and Defender prompts MUST be distinct and isolated to avoid cross-contamination.

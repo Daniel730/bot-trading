@@ -1,54 +1,68 @@
-# Implementation Plan: Agentic SEC RAG Analyst
+# Implementation Plan: Agentic SEC RAG Analyst (with Profitability & Scalability Research)
 
-**Branch**: `009-sec-rag-analyst` | **Date**: 2026-03-31 | **Spec**: `/specs/009-sec-rag-analyst/spec.md`
+**Branch**: `009-sec-rag-analyst` | **Date**: 2026-04-04 | **Spec**: [/specs/009-sec-rag-analyst/spec.md]
+**Input**: Feature specification for Agentic SEC RAG Analyst + User request for profitability/scalability research.
 
 ## Summary
-Evolve the existing `NewsAnalyst` into a `FundamentalAnalyst` that validates arbitrage signals using official SEC filings (10-K, 10-Q). The system will map tickers to CIKs, fetch recent filings from EDGAR, extract high-risk sections (Risk Factors, MD&A, Legal Proceedings), and pass them to Gemini for structural risk analysis.
+
+This feature implements an SEC RAG Analyst to validate arbitrage signals against fundamental risks (10-K/10-Q filings). It aims to reduce false positives by 40% using an "Adversarial Debate" architecture. Additionally, this plan includes research into further profitability and scalability enhancements for the overall bot.
 
 ## Technical Context
 
-**Language/Version**: Python 3.11+
-**Primary Dependencies**: `requests`, `beautifulsoup4` (for HTML parsing), `sec-edgar-api` (optional helper)
-**Storage**: SQLite (`sec_filings_cache` and `ticker_cik_map`)
-**Testing**: `pytest` (validation of section extraction and CIK mapping)
-**Target Platform**: Linux / Docker
-**Project Type**: AI Agent / Data Acquisition Upgrade
-**Performance Goals**: Filing retrieval < 5s; Section extraction < 3s; Overall AI validation < 25s.
+**Language/Version**: Python 3.11
+**Primary Dependencies**: `FastMCP`, `pydantic`, `sec-api` (or direct EDGAR), `langchain` or native Gemini RAG, `pandas`, `statsmodels`
+**Storage**: SQLite (Signal records, Thought Journal, CIK mapping)
+**Testing**: `pytest`
+**Target Platform**: Linux Server (Dockerized)
+**Project Type**: MCP Server / Trading Bot Service
+**Performance Goals**: RAG processing < 20s, Sector Freeze < 5s
+**Constraints**: NYSE/NASDAQ hours, < 2% risk per trade
+**Scale/Scope**: Arbitrage pairs validation, fundamental risk filtering
 
 ## Constitution Check
 
-- **I. Preservação de Capital**: ✅ Fornece a defesa definitiva contra "Value Traps" ao identificar riscos legais/financeiros reais.
-- **II. Racionalidade Mecânica**: ✅ Transforma a validação qualitativa em uma análise baseada em documentos legais oficiais.
-- **III. Auditabilidade Total**: ✅ Trechos dos filings que justificam o veto serão persistidos no Thought Journal.
-- **IV. Operação Estrita**: ✅ O fetch de dados respeita os limites da SEC (10 req/s).
-- **V. Virtual-Pie First**: ✅ N/A (Foco em análise, não execução).
+*GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
+
+1. **Principle I (Capital Preservation)**: The SEC RAG Analyst implements a VETO mechanism (Score < 40/100) and adversarial validation. **PASS**
+2. **Principle II (Mechanical Rationality)**: Uses structured SEC data and MCP for deterministic tool calls. **PASS**
+3. **Principle III (Auditability)**: All RAG decisions and debate logs are persisted in the Thought Journal. **PASS**
+4. **Principle IV (Strict Operation)**: Inherits bot's operation window constraints. **PASS**
+5. **Principle V (Virtual-Pie First)**: SEC analysis informs the virtual-pie weights and risk clusters. **PASS**
 
 ## Project Structure
 
-### Documentation
+### Documentation (this feature)
+
 ```text
 specs/009-sec-rag-analyst/
-├── spec.md              # Feature specification
 ├── plan.md              # This file
-├── research.md          # EDGAR API and parsing strategy
-└── tasks.md             # Implementation tasks
+├── research.md          # Phase 0 output
+├── data-model.md        # Phase 1 output
+├── quickstart.md        # Phase 1 output
+├── contracts/           # Phase 1 output
+└── tasks.md             # Phase 2 output (to be generated)
 ```
 
-### Source Code Changes
+### Source Code (repository root)
+
 ```text
 src/
-├── services/
-│   ├── sec_service.py       # NEW: SEC fetching and Section parsing
-│   └── data_service.py      # UPDATED: Add CIK mapping logic
 ├── agents/
-│   └── fundamental_analyst.py # NEW: Gemini-powered RAG agent
+│   ├── fundamental_analyst.py  # New agent (evolved from NewsAnalyst)
+│   └── orchestrator.py         # Updated to include fundamental analysis step
+├── services/
+│   ├── sec_service.py          # SEC EDGAR integration
+│   └── agent_log_service.py    # Thought Journal persistence
 ├── models/
-│   └── persistence.py       # UPDATED: Cache for CIKs and filing metadata
-└── orchestrator.py          # UPDATED: Switch NewsAnalyst to FundamentalAnalyst
+│   ├── arbitrage_models.py     # Update with Structural Integrity Score
+│   └── persistence.py          # SQLite schema updates
 ```
+
+**Structure Decision**: Following the established `src/agents/` and `src/services/` singleton pattern.
 
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| Long-Context RAG | Precise reasoning | Standard RAG (Vector DB) often misses nuanced legal clauses scattered across pages. Gemini's context window allows for holistic analysis. |
+| Adversarial Debate | Reduce LLM hallucinations in risk assessment | Single-pass analysis is prone to over-optimism or missing subtle legal risks. |
+| RAG on 10-K/Q | Context window limits for large filings | Analyzing entire documents is token-expensive and noisy. |
