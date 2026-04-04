@@ -14,10 +14,10 @@ description: "Dependency-ordered tasks for Correlation Cluster Guard"
 
 **Purpose**: Core infrastructure for sector tracking.
 
-- [ ] T001 Update `src/config.py` with `MAX_SECTOR_EXPOSURE` and `PAIR_SECTORS` map
-- [ ] T002 Implement `check_cluster_exposure` in `src/services/risk_service.py` to calculate current sector weights
-- [ ] T003 [P] Add unit tests in `tests/unit/test_risk_clusters.py` to verify veto logic for overlapping sectors
-- [ ] T004 Implement a `get_active_portfolio_sectors` helper in `src/services/shadow_service.py` (and live equivalent)
+- [X] T001 Update `src/config.py` with `MAX_SECTOR_EXPOSURE` and `PAIR_SECTORS` map
+- [X] T002 Implement `check_cluster_exposure` in `src/services/risk_service.py` to calculate current sector weights
+- [X] T003 [P] Add unit tests in `tests/unit/test_risk_clusters.py` to verify veto logic for overlapping sectors
+- [X] T004 Implement a `get_active_portfolio_sectors` helper in `src/services/shadow_service.py` (and live equivalent)
 
 ---
 
@@ -25,9 +25,9 @@ description: "Dependency-ordered tasks for Correlation Cluster Guard"
 
 **Purpose**: Wire the guard into the monitoring loop.
 
-- [ ] T005 Update the main loop in `src/monitor.py` to check cluster exposure before signal generation
-- [ ] T006 Implement a "Pre-emptive Veto" log when a signal is skipped due to sector concentration
-- [ ] T007 Update the `AgentState` in `src/agents/orchestrator.py` to include `sector_overlap` in the context passed to the agents
+- [X] T005 Update the main loop in `src/monitor.py` to check cluster exposure before signal generation
+- [X] T006 Implement a "Pre-emptive Veto" log when a signal is skipped due to sector concentration
+- [X] T007 Update the `AgentState` in `src/agents/orchestrator.py` to include `sector_overlap` in the context passed to the agents
 
 ---
 
@@ -35,9 +35,9 @@ description: "Dependency-ordered tasks for Correlation Cluster Guard"
 
 **Purpose**: Auditability of cluster decisions.
 
-- [ ] T008 Update `Thought Journal` to log the current sector exposure % at the time of a trade decision
-- [ ] T009 Add "Sector Concentration" as a metric in the daily HTML report in `src/services/audit_service.py`
-- [ ] T010 [P] Add Telegram `/exposure` command to show current sector allocation via `notification_service.py`
+- [X] T008 Update `Thought Journal` to log the current sector exposure % at the time of a trade decision
+- [X] T009 Add "Sector Concentration" as a metric in the daily HTML report in `src/services/audit_service.py`
+- [X] T010 [P] Add Telegram `/exposure` command to show current sector allocation via `notification_service.py`
 
 ---
 
