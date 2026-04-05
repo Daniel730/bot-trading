@@ -77,6 +77,22 @@ services:
       retries: 5
       start_period: 15s
 
+  sec-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.daemon
+    container_name: sec-fundamental-worker
+    env_file:
+      - .env
+    volumes:
+      - .env:/app/.env
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
 volumes:
   redis_data:
   postgres_data:

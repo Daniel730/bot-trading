@@ -176,4 +176,18 @@ class PersistenceService:
             val = result.scalar_one_or_none()
             return val if val is not None else default
 
+    async def get_active_trading_universe(self) -> List[str]:
+        """Returns a unique list of all tickers currently in active trading pairs."""
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            # Query all tickers from both A and B sides of the pairs
+            stmt_a = select(TradingPair.ticker_a).where(TradingPair.status == "Active")
+            stmt_b = select(TradingPair.ticker_b).where(TradingPair.status == "Active")
+            
+            result_a = await session.execute(stmt_a)
+            result_b = await session.execute(stmt_b)
+            
+            tickers = set(result_a.scalars().all()) | set(result_b.scalars().all())
+            return sorted(list(tickers))
+
 persistence_service = PersistenceService()
