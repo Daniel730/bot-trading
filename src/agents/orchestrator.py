@@ -15,11 +15,10 @@ class Orchestrator:
         self.fundamental_analyst = FundamentalAnalyst()
 
     async def ainvoke(self, input_data: dict) -> dict:
-        from src.models.persistence import PersistenceManager
-        db = PersistenceManager()
+        from src.services.persistence_service import persistence_service
         
         # FR-004: Block new entries if in DEGRADED_MODE
-        operational_status = db.get_system_state("operational_status", "NORMAL")
+        operational_status = await persistence_service.get_system_state("operational_status", "NORMAL")
         
         state: AgentState = {
             "signal_context": input_data["signal_context"],
@@ -90,17 +89,18 @@ class Orchestrator:
         f_signal_a, f_signal_b = valid_fundamental_results
         
         # FR-003: Circuit Breaker Logic (Persistent)
-        consecutive_timeouts = int(db.get_system_state("consecutive_api_timeouts", "0"))
+        consecutive_timeouts_str = await persistence_service.get_system_state("consecutive_api_timeouts", "0")
+        consecutive_timeouts = int(consecutive_timeouts_str)
         
         if timeout_occurred:
             consecutive_timeouts += 1
-            db.set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
+            await persistence_service.set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
             if consecutive_timeouts >= 3:
-                db.set_system_state("operational_status", "DEGRADED_MODE")
+                await persistence_service.set_system_state("operational_status", "DEGRADED_MODE")
                 print("AGENT_LOGGER: CRITICAL - Circuit Breaker Tripped! Entering DEGRADED_MODE.")
         else:
             # Reset on full successful loop
-            db.set_system_state("consecutive_api_timeouts", "0")
+            await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         
         # 3. Aggregation Logic with VETO
         bull_conf = state['bull_verdict']['confidence']
