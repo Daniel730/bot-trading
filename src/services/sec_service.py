@@ -1,136 +1,156 @@
-import requests
-import logging
-from typing import Optional, List, Dict
+import os
+import asyncio
+from typing import Optional, Dict
+from datetime import datetime, date
+from edgar import set_identity, Company
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.models.persistence import PersistenceManager
 from src.config import settings
 
-logger = logging.getLogger(__name__)
+class SECRateLimitException(Exception):
+    """Custom exception for SEC rate limit (429)."""
+    pass
 
 class SECService:
-    """
-    Handles retrieval of SEC EDGAR filings and ticker-to-CIK mapping.
-    """
-    TICKER_CIK_URL = "https://www.sec.gov/files/company_tickers.json"
-    
-    def __init__(self):
-        self.persistence = PersistenceManager(settings.DB_PATH)
-        # SEC requires a descriptive User-Agent
-        self.headers = {
-            "User-Agent": "ArbitrageBot/1.0 (daniel@example.com)",
-            "Accept-Encoding": "gzip, deflate"
-        }
+    _instance = None
 
-    def get_cik_by_ticker(self, ticker: str) -> Optional[str]:
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(SECService, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self, persistence: PersistenceManager = None):
+        if self._initialized:
+            return
+        
+        self.persistence = persistence or PersistenceManager()
+        set_identity(settings.SEC_USER_AGENT)
+        
+        self._initialized = True
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(SECRateLimitException)
+    )
+    async def get_cik(self, ticker: str) -> Optional[str]:
         """
-        Retrieves the 10-digit CIK for a market ticker.
+        Retrieves the 10-digit CIK for a given ticker.
+        Uses local cache before querying SEC.
         """
-        # 1. Check local cache
         cached_cik = self.persistence.load_cik_mapping(ticker)
         if cached_cik:
             return cached_cik
 
-        # 2. Fetch from SEC if not cached
         try:
-            logger.info(f"Fetching CIK mapping from SEC for {ticker}...")
-            response = requests.get(self.TICKER_CIK_URL, headers=self.headers)
-            if response.status_code == 200:
-                data = response.json()
-                for entry in data.values():
-                    if entry['ticker'] == ticker.upper():
-                        cik = str(entry['cik_str']).zfill(10)
-                        self.persistence.save_cik_mapping(ticker.upper(), cik)
-                        return cik
-            else:
-                logger.error(f"SEC Ticker Map returned {response.status_code}")
+            # edgartools Company lookup is synchronous but fast
+            # We wrap it in run_in_executor if needed, but for now direct call
+            company = Company(ticker)
+            if company and company.cik:
+                cik = company.cik
+                self.persistence.save_cik_mapping(ticker, cik)
+                return cik
         except Exception as e:
-            logger.error(f"Error fetching SEC CIK mapping: {e}")
+            if "429" in str(e):
+                raise SECRateLimitException(f"SEC Rate Limit for {ticker}")
+            print(f"Error fetching CIK for {ticker}: {e}")
         
         return None
 
-    def get_latest_filings_metadata(self, ticker: str) -> List[Dict]:
+    async def fetch_latest_filing_metadata(self, ticker: str, form_type: str = "10-K") -> Optional[Dict]:
         """
-        Retrieves the metadata for the most recent 10-K and 10-Q filings.
+        Fetches metadata for the latest filing of a given type.
         """
-        cik = self.get_cik_by_ticker(ticker)
-        if not cik:
-            return []
-
-        url = f"https://data.sec.gov/submissions/CIK{cik}.json"
         try:
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200:
-                data = response.json()
-                recent_filings = data.get('filings', {}).get('recent', {})
-                
-                filings = []
-                # Find most recent 10-K and 10-Q
-                for i, f_type in enumerate(recent_filings.get('form', [])):
-                    if f_type in ['10-K', '10-Q'] and len(filings) < 5:
-                        acc_num = recent_filings['accessionNumber'][i].replace('-', '')
-                        doc_name = recent_filings['primaryDocument'][i]
-                        
-                        filings.append({
-                            "accession_number": recent_filings['accessionNumber'][i],
-                            "type": f_type,
-                            "date": recent_filings['filingDate'][i],
-                            "url": f"https://www.sec.gov/Archives/edgar/data/{cik}/{acc_num}/{doc_name}"
-                        })
-                return filings
-        except Exception as e:
-            logger.error(f"Error fetching filing metadata for {ticker}: {e}")
+            company = Company(ticker)
+            filings = company.get_filings(form=[form_type])
+            if not filings:
+                # Try 10-Q if 10-K requested and vice-versa if appropriate, or just return None
+                return None
             
-        return []
+            latest = filings.latest()
+            return {
+                "accession_number": latest.accession_no,
+                "filing_date": latest.filing_date,
+                "form": latest.form,
+                "filing": latest # Store the edgartools filing object
+            }
+        except Exception as e:
+            print(f"Error fetching latest filing for {ticker}: {e}")
+            return None
 
-    def fetch_filing_html(self, url: str) -> Optional[str]:
+    async def get_section_content(self, ticker: str, form_type: str, section: str) -> Optional[str]:
         """
-        Retrieves the raw HTML content of a specific SEC filing.
+        Extracts clean text from a filing section (e.g., 'Risk Factors').
         """
         try:
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200:
-                return response.text
-            logger.error(f"SEC Filing fetch returned {response.status_code}")
+            metadata = await self.fetch_latest_filing_metadata(ticker, form_type)
+            if not metadata:
+                return None
+            
+            filing = metadata["filing"]
+            doc = filing.obj()
+            
+            # Map section names to Item identifiers
+            # 10-K: Item 1A (Risk Factors), Item 7 (MD&A)
+            # 10-Q: Part II Item 1A (Risk Factors), Part I Item 2 (MD&A)
+            item_map = {
+                "Risk Factors": "Item 1A" if form_type == "10-K" else "Part II Item 1A",
+                "MD&A": "Item 7" if form_type == "10-K" else "Part I Item 2"
+            }
+            
+            item_id = item_map.get(section, section)
+            content = doc[item_id]
+            
+            if content is None:
+                return None
+            return content.text if hasattr(content, 'text') else str(content)
         except Exception as e:
-            logger.error(f"Error fetching SEC filing HTML: {e}")
-        return None
+            print(f"Error extracting section {section} from {ticker} {form_type}: {e}")
+            return None
 
-    def extract_sections(self, html_content: str) -> Dict[str, str]:
+    async def get_analyzed_sections(self, ticker: str) -> Dict:
         """
-        Extracts Item 1A (Risk Factors) and Item 7 (MD&A) from SEC filing HTML.
-        Uses a heuristic regex approach to find section boundaries.
+        Efficiently fetches Risk Factors and MD&A for a ticker.
         """
-        import re
-        from bs4 import BeautifulSoup
-
-        # Pre-process HTML to remove heavy tags
-        soup = BeautifulSoup(html_content, 'lxml')
-        for tag in soup(['script', 'style', 'table']):
-            tag.decompose()
+        result = {"sections": {}, "metadata": None}
         
-        text = soup.get_text(separator='\n')
-        
-        sections = {
-            "Item 1A": "",
-            "Item 7": "",
-            "Item 3": ""
-        }
+        # Try 10-K, then 10-Q
+        for form in ["10-K", "10-Q"]:
+            metadata = await self.fetch_latest_filing_metadata(ticker, form)
+            if not metadata:
+                continue
+            
+            filing = metadata["filing"]
+            try:
+                doc = filing.obj()
+                item_map = {
+                    "Risk Factors": "Item 1A" if form == "10-K" else "Part II Item 1A",
+                    "MD&A": "Item 7" if form == "10-K" else "Part I Item 2"
+                }
+                
+                rf_section = doc[item_map["Risk Factors"]]
+                mda_section = doc[item_map["MD&A"]]
+                
+                rf_content = rf_section.text if hasattr(rf_section, 'text') else str(rf_section) if rf_section else None
+                mda_content = mda_section.text if hasattr(mda_section, 'text') else str(mda_section) if mda_section else None
+                
+                if rf_content or mda_content:
+                    result["sections"] = {
+                        "Risk Factors": rf_content,
+                        "MD&A": mda_content
+                    }
+                    result["metadata"] = {
+                        "date": metadata["filing_date"],
+                        "type": form,
+                        "accession": metadata["accession_number"]
+                    }
+                    break
+            except Exception as e:
+                print(f"Error parsing filing for {ticker} {form}: {e}")
+                
+        return result
 
-        # Regex patterns for SEC Item headers
-        patterns = {
-            "Item 1A": r"Item\s+1A\.\s+Risk\s+Factors",
-            "Item 7": r"Item\s+7\.\s+Management’s\s+Discussion\s+and\s+Analysis",
-            "Item 3": r"Item\s+3\.\s+Legal\s+Proceedings"
-        }
-
-        # Simple heuristic: extract ~15,000 characters following the header
-        # In a full production RAG, we would find the NEXT item header to bound the text.
-        for item, pattern in patterns.items():
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                start_idx = match.start()
-                # Grab a significant chunk for analysis
-                sections[item] = text[start_idx : start_idx + 20000]
-        
-        return sections
-
+# Singleton instance
 sec_service = SECService()

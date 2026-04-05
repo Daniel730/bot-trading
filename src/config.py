@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     TRADING_212_MODE: str = "demo"
     DB_PATH: str = "trading_bot.db"
     DEV_MODE: bool = False
+    SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     
     # Operation Hours (WET)
     START_HOUR: int = 14
@@ -39,6 +40,10 @@ class Settings(BaseSettings):
     MAX_RISK_PER_TRADE: float = 0.02
     MAX_DRAWDOWN: float = 0.10
     APPROVAL_THRESHOLD: float = 100.0
+    
+    # Low-Budget Suite Parameters (Feature 014)
+    MAX_FRICTION_PCT: float = 0.015 # 1.5% default
+    MIN_TRADE_VALUE: float = 1.00 # Minimum $1 per fractional leg
     
     # Kalman Filter Parameters (Feature 007)
     KALMAN_DELTA: float = 1e-5 # Adaptation rate
@@ -66,7 +71,8 @@ class Settings(BaseSettings):
         'T_VZ': 'Telecommunications',
         'VLO_MPC': 'Energy',
         'COF_SYF': 'Financials',
-        'GS_MS': 'Financials'
+        'GS_MS': 'Financials',
+        'BTCE.DE_ZETH.DE': 'Crypto ETNs'
     }
     
     # Arbitrage Pairs
@@ -90,7 +96,8 @@ class Settings(BaseSettings):
         {'ticker_a': 'T', 'ticker_b': 'VZ'},
         {'ticker_a': 'VLO', 'ticker_b': 'MPC'},
         {'ticker_a': 'COF', 'ticker_b': 'SYF'},
-        {'ticker_a': 'GS', 'ticker_b': 'MS'}
+        {'ticker_a': 'GS', 'ticker_b': 'MS'},
+        {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'}
     ]
 
     # 24/7 Test Pairs (Crypto as proxies)

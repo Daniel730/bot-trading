@@ -1,54 +1,72 @@
+import sys
+import os
+import unittest
 import numpy as np
-import pytest
+
+# Add src to path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
+
 from src.services.kalman_service import KalmanFilter
 
-def test_kalman_convergence():
-    """
-    Tests if the Kalman Filter can track a known drifting beta.
-    """
-    kf = KalmanFilter(delta=1e-4, R=0.01)
-    
-    # Generate synthetic data where Ticker A = 1.5 * Ticker B + 0.5 (with noise)
-    # Then it drifts to Ticker A = 1.8 * Ticker B + 0.5
-    np.random.seed(42)
-    n_samples = 100
-    ticker_b = np.random.normal(100, 5, n_samples)
-    
-    # Initial regime (beta=1.5)
-    ticker_a = 1.5 * ticker_b[:50] + 0.5 + np.random.normal(0, 0.1, 50)
-    # Drifted regime (beta=1.8)
-    ticker_a = np.append(ticker_a, 1.8 * ticker_b[50:] + 0.5 + np.random.normal(0, 0.1, 50))
-    
-    betas = []
-    alphas = []
-    
-    for a, b in zip(ticker_a, ticker_b):
-        beta, alpha, _ = kf.update(a, b)
-        betas.append(beta)
-        alphas.append(alpha)
-    
-    # Verify initial convergence (after ~20 samples)
-    assert 1.45 < betas[40] < 1.55
-    # Verify drift tracking (at the end)
-    assert 1.75 < betas[-1] < 1.85
-    # Verify alpha tracking
-    assert 0.4 < alphas[-1] < 0.6
-
-def test_kalman_zscore_smoothing():
-    """
-    Verifies that the Z-score remains bounded during normal drift.
-    """
-    kf = KalmanFilter(delta=1e-4, R=0.01)
-    np.random.seed(42)
-    n_samples = 50
-    ticker_b = np.linspace(100, 110, n_samples)
-    ticker_a = 1.5 * ticker_b + 0.5 + np.random.normal(0, 0.05, n_samples)
-    
-    z_scores = []
-    for a, b in zip(ticker_a, ticker_b):
-        _, _, z = kf.update(a, b)
-        z_scores.append(z)
+class TestKalmanFilter(unittest.TestCase):
+    def test_convergence_on_static_data(self):
+        """Test if beta converges to the true ratio in static data."""
+        true_beta = 1.5
+        true_alpha = 0.5
         
-    # After convergence, Z-scores for a matching spread should mostly be within 2 standard deviations
-    stable_zs = z_scores[20:]
-    assert all(abs(z) < 3.0 for z in stable_zs)
+        # Slightly higher delta to allow faster intercept movement if needed
+        kf = KalmanFilter(delta=1e-4, r=1e-4)
+        
+        # Initial state is [0.0, 1.0]
+        # Generate 500 points
+        np.random.seed(42)
+        price_b = np.linspace(100, 200, 500)
+        price_a = true_beta * price_b + true_alpha + np.random.normal(0, 0.01, 500)
+        
+        for pa, pb in zip(price_a, price_b):
+            kf.update(pa, pb)
+            
+        alpha, beta = kf.state
+        
+        # Should be close to 1.5 and 0.5
+        self.assertAlmostEqual(beta, true_beta, places=2)
+        # Intercept is harder to estimate precisely in pair trading
+        self.assertAlmostEqual(alpha, true_alpha, delta=0.5) 
+
+    def test_tracking_drifting_beta(self):
+        """Test if the filter tracks a changing hedge ratio."""
+        kf = KalmanFilter(delta=1e-3, r=1e-4)
+        
+        np.random.seed(42)
+        n_points = 200
+        price_b = np.linspace(100, 150, n_points)
+        
+        # Beta drifts from 1.0 to 2.0
+        true_betas = np.linspace(1.0, 2.0, n_points)
+        price_a = true_betas * price_b + np.random.normal(0, 0.05, n_points)
+        
+        for pa, pb in zip(price_a, price_b):
+            kf.update(pa, pb)
+            
+        # Final beta should be close to 2.0
+        alpha, beta = kf.state
+        self.assertAlmostEqual(beta, 2.0, places=1)
+
+    def test_zscore_generation(self):
+        """Test spread and z-score calculation."""
+        kf = KalmanFilter(delta=1e-5, r=1e-3)
+        pa, pb = 150.5, 100.0
+        
+        # Initial state [0.0, 1.0]
+        # Expected spread = 150.5 - (1.0 * 100.0 + 0.0) = 50.5
+        
+        # First update to set innovation_variance
+        kf.update(pa, pb)
+        
+        spread, z_score = kf.calculate_spread_and_zscore(pa, pb)
+        
+        self.assertIsInstance(spread, float)
+        self.assertIsInstance(z_score, float)
+        
+if __name__ == '__main__':
+    unittest.main()

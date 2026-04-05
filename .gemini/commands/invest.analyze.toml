@@ -1,0 +1,9 @@
+# Command: invest.analyze
+# Use: /invest.analyze [ticker_a] [ticker_b]
+# Description: Performs cointegration and correlation analysis for a pair using 1y data.
+
+prompt = """
+Run the pair analysis for {{arg1}} and {{arg2}}.
+Command: python3 scripts/cli_analyze.py {{arg1}} {{arg2}}
+Output the results and explain if this pair is suitable for arbitrage based on the Senior Investor guidelines.
+"""
