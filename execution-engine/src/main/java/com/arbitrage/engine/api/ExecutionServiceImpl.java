@@ -15,6 +15,8 @@ import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Mono;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceImplBase {
@@ -73,34 +75,48 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 // 2. Mark in-flight in Redis
                 redisSync.markInFlight(signalId, "PENDING").block();
 
-                // 3. Process Legs
-                ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
-                        .setSignalId(request.getSignalId());
-
-                // For simplicity in MVP, we calculate for the first leg
-                ExecutionRequest.ExecutionLeg protoLeg = request.getLegs(0);
-                ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
-                BigDecimal requestedQty = new BigDecimal(String.valueOf(protoLeg.getQuantity()));
-                BigDecimal targetPrice = new BigDecimal(String.valueOf(protoLeg.getTargetPrice()));
+                // 3. Process ALL Legs
+                List<BigDecimal> actualVwaps = new ArrayList<>();
+                List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
                 BigDecimal maxSlippage = new BigDecimal(String.valueOf(request.getMaxSlippagePct()));
 
-                L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
-                BigDecimal actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
+                for (ExecutionRequest.ExecutionLeg protoLeg : request.getLegsList()) {
+                    ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
+                    BigDecimal requestedQty = new BigDecimal(String.valueOf(protoLeg.getQuantity()));
+                    BigDecimal targetPrice = new BigDecimal(String.valueOf(protoLeg.getTargetPrice()));
 
-                // 4. Slippage Guard
-                slippageGuard.validateSlippage(side, actualVwap, targetPrice, maxSlippage);
+                    L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
+                    BigDecimal actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
+
+                    // 4. Slippage Guard (All-or-Nothing)
+                    slippageGuard.validateSlippage(side, actualVwap, targetPrice, maxSlippage);
+                    
+                    actualVwaps.add(actualVwap);
+                    audits.add(new TradeLedgerRepository.TradeAudit(
+                            protoLeg.getTicker(),
+                            side.name(),
+                            requestedQty,
+                            targetPrice,
+                            actualVwap
+                    ));
+                }
 
                 // 5. Successful Logic (Execute with Broker)
-                logger.info("Trade Approved. VWAP: {}. Sending to broker...", actualVwap);
+                // If we reach here, ALL legs passed validation.
+                logger.info("Atomic Trade Approved for {} legs. Sending to broker...", request.getLegsCount());
                 
-                // ... Broker Integration ...
+                // ... Broker Integration (Mocked as success for now) ...
 
-                responseBuilder.setStatus(ExecutionStatus.STATUS_SUCCESS)
-                        .setActualVwap(actualVwap.doubleValue());
+                ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
+                        .setSignalId(request.getSignalId())
+                        .setStatus(ExecutionStatus.STATUS_SUCCESS);
 
-                // 6. Persist Audit
-                repository.saveAudit(signalId, request.getPairId(), protoLeg.getTicker(), side.name(), 
-                        requestedQty, targetPrice, actualVwap, "SUCCESS", 
+                if (!actualVwaps.isEmpty()) {
+                    responseBuilder.setActualVwap(actualVwaps.get(0).doubleValue());
+                }
+
+                // 6. Persist Audit for ALL legs
+                repository.saveAudits(signalId, request.getPairId(), audits, "SUCCESS", 
                         (System.nanoTime() - startTime) / 1_000_000L).subscribe();
 
                 responseBuilder.setProcessingTimeNs(System.nanoTime() - startTime);
@@ -171,10 +187,19 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 .setProcessingTimeNs(System.nanoTime() - startTime)
                 .build();
 
-        // Async audit save
-        repository.saveAudit(signalId, request.getPairId(), request.getLegs(0).getTicker(), 
-                request.getLegs(0).getSide().name(), new BigDecimal(String.valueOf(request.getLegs(0).getQuantity())), 
-                new BigDecimal(String.valueOf(request.getLegs(0).getTargetPrice())), BigDecimal.ZERO, status.name(), 
+        // Persist Audit for all legs with current failure status
+        List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
+        for (ExecutionRequest.ExecutionLeg leg : request.getLegsList()) {
+            audits.add(new TradeLedgerRepository.TradeAudit(
+                    leg.getTicker(),
+                    leg.getSide().name(),
+                    new BigDecimal(String.valueOf(leg.getQuantity())),
+                    new BigDecimal(String.valueOf(leg.getTargetPrice())),
+                    BigDecimal.ZERO
+            ));
+        }
+
+        repository.saveAudits(signalId, request.getPairId(), audits, status.name(), 
                 (System.nanoTime() - startTime) / 1_000_000L).subscribe();
 
         responseObserver.onNext(response);
