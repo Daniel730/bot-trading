@@ -1,6 +1,9 @@
 import requests
 import logging
 import base64
+import time
+import uuid
+import threading
 from typing import List, Dict, Any
 from src.config import settings
 
@@ -10,6 +13,9 @@ class BrokerageService:
     def __init__(self):
         self.api_key = settings.effective_t212_key.strip()
         self.api_secret = settings.T212_API_SECRET.strip()
+        self._cache = {}
+        self._cache_ttl = 5 # 5 seconds
+        self._cache_lock = threading.Lock() # FR-014: Single-Flight prevention
         
         # V0 is the standard for the current public beta API
         self.base_url = "https://demo.trading212.com/api/v0" if settings.is_t212_demo else "https://live.trading212.com/api/v0"
@@ -66,36 +72,70 @@ class BrokerageService:
             
         return f"{ticker}_US_EQ"
 
-    def place_market_order(self, ticker: str, quantity: float, side: str) -> Dict[str, Any]:
+    def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None) -> Dict[str, Any]:
         t212_ticker = self._format_ticker(ticker)
         
+        # Bug 2.3: Tick Size & Increment Validation
+        metadata = self.get_symbol_metadata(ticker)
+        qty_incr = float(metadata.get("quantityIncrement", 0.000001))
+        
         # T212 v0 Market Order: Positive quantity for BUY, Negative for SELL
-        # Feature 014: Increased precision to 6 decimal places for micro-budgets
-        final_qty = float(round(quantity, 6))
+        final_qty = float(round(quantity / qty_incr) * qty_incr)
+        final_qty = float(round(final_qty, 6))
+        
         if side.upper() == "SELL":
             final_qty = -abs(final_qty)
         else:
             final_qty = abs(final_qty)
 
+        # Bug 2.2: Idempotency Keys
+        client_order_id = str(uuid.uuid4())
+
         payload = {
             "ticker": t212_ticker,
-            "quantity": final_qty
+            "quantity": final_qty,
+            "clientOrderId": client_order_id # Standard idempotency field
         }
         
-        # v1 market order endpoint
-        url = f"{self.base_url}/equity/orders/market"
-        logger.info(f"T212: Executing {side} for {t212_ticker} (Qty: {final_qty})")
+        # Feature 018: Add slippage guard (limitPrice) if provided
+        if limit_price:
+            # Bug 2.3: Limit Price Tick Size
+            # We round to 2 decimals for US stocks as a sane default if metadata missing.
+            payload["limitPrice"] = float(round(limit_price, 2))
+            url = f"{self.base_url}/equity/orders/limit"
+            logger.info(f"T212: Executing LIMIT {side} for {t212_ticker} (Qty: {final_qty}, Limit: {payload['limitPrice']}, ID: {client_order_id[:8]})")
+        else:
+            # v1 market order endpoint
+            url = f"{self.base_url}/equity/orders/market"
+            logger.info(f"T212: Executing MARKET {side} for {t212_ticker} (Qty: {final_qty}, ID: {client_order_id[:8]})")
         
         try:
-            response = requests.post(url, headers=self.headers, json=payload)
+            response = requests.post(url, headers=self.headers, json=payload, timeout=15)
             if response.status_code == 200:
-                logger.info(f"T212: Order SUCCESS")
+                logger.info(f"T212: Order SUCCESS (ID: {client_order_id[:8]})")
                 return response.json()
             
             logger.warning(f"T212: Order failed ({response.status_code}): {response.text}")
             return {"status": "error", "message": response.text}
+        except requests.exceptions.Timeout:
+            # Bug 2.2: Recovery logic for Timeout
+            logger.error(f"T212: Timeout placing order {client_order_id}. Checking status...")
+            return self._recover_timeout_order(client_order_id, ticker)
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    def _recover_timeout_order(self, client_order_id: str, ticker: str) -> Dict[str, Any]:
+        """Polls for the order status after a timeout to prevent duplicates."""
+        time.sleep(2) # Give broker a moment to process
+        orders = self.get_pending_orders()
+        for o in orders:
+            if o.get('clientOrderId') == client_order_id:
+                logger.info(f"T212: Recovered timed-out order {client_order_id[:8]} - Found in PENDING.")
+                return o
+        
+        # Check history if it filled instantly
+        # (Hypothetical logic for history search)
+        return {"status": "timeout", "message": "Order status unknown after timeout. Check dashboard."}
 
     async def execute_order(self, ticker: str, amount_fiat: float, side: str = "buy") -> Dict[str, Any]:
         """
@@ -105,20 +145,45 @@ class BrokerageService:
 
     def check_dividends_and_reinvest(self):
         """
-        Feature 015 (FR-004): Fetches account activity to identify dividends and reinvests them.
+        Feature 015 (FR-004) / Feature 018 (FR-005): Fetches account activity to identify dividends and reinvests them.
+        Safety: Execution value capped at min(gross_dividend, available_free_cash).
         """
-        # In a real T212 API, we would poll /equity/history/orders or /equity/history/transactions
-        # This is a placeholder for the logic:
-        # 1. Fetch transactions from the last 24h
-        # 2. Filter for type='DIVIDEND'
-        # 3. For each dividend, identify the ticker and amount
-        # 4. Execute a BUY order for that ticker with the dividend amount
         logger.info("T212: Checking for new dividends to reinvest (DRIP)...")
-        # Example logic (hypothetical endpoint):
-        # url = f"{self.base_url}/equity/history/transactions"
-        # params = {"from": datetime.now() - timedelta(days=1)}
-        # response = requests.get(url, headers=self.headers, params=params)
-        # ... logic to process and reinvest ...
+        
+        # In a real T212 API, we poll transactions
+        url = f"{self.base_url}/history/transactions"
+        try:
+            # We look for dividends in the last 48 hours to be safe
+            start_timestamp = int((time.time() - (48 * 3600)) * 1000)
+            response = requests.get(url, headers=self.headers, params={"from": start_timestamp})
+            
+            if response.status_code != 200:
+                return False
+                
+            transactions = response.json()
+            available_cash = self.get_account_cash()
+            
+            for tx in transactions:
+                if tx.get('type') == 'DIVIDEND' and tx.get('amount', 0) > 0:
+                    ticker = tx.get('ticker')
+                    dividend_amount = float(tx.get('amount'))
+                    
+                    # Feature 018 Safety Cap
+                    execution_value = min(dividend_amount, available_cash)
+                    
+                    if execution_value < 1.0: # Minimum $1 trade size for fractional
+                        logger.info(f"DRIP: Skipping {ticker} (Value ${execution_value:.2f} < $1.00)")
+                        continue
+                        
+                    logger.info(f"DRIP: Reinvesting ${execution_value:.2f} into {ticker} (Dividend: ${dividend_amount:.2f}, Cash: ${available_cash:.2f})")
+                    res = self.place_value_order(ticker, execution_value, "BUY")
+                    
+                    if res.get("status") != "error":
+                        available_cash -= execution_value # Deduct for next reinvestment in loop
+        except Exception as e:
+            logger.error(f"DRIP: Error during reinvestment sweep: {e}")
+            return False
+            
         return True
 
     def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
@@ -163,7 +228,11 @@ class BrokerageService:
             
         logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares (Metadata: min={min_qty}, incr={qty_incr})")
         
-        result = self.place_market_order(ticker, final_quantity, side)
+        # Feature 018: Calculate 1% slippage-capped limitPrice
+        # BUY: price * 1.01, SELL: price * 0.99
+        limit_price = price * 1.01 if side.upper() == "BUY" else price * 0.99
+        
+        result = self.place_market_order(ticker, final_quantity, side, limit_price=limit_price)
         
         if result.get("status") != "error":
             agent_logger.log_fractional_trade(ticker, amount, final_quantity, price, side, friction)
@@ -186,28 +255,48 @@ class BrokerageService:
         return {}
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
-        url = f"{self.base_url}/equity/portfolio"
-        try:
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200: return response.json()
-        except: pass
-        return []
+        cache_key = "portfolio"
+        with self._cache_lock:
+            now = time.time()
+            if cache_key in self._cache:
+                data, timestamp = self._cache[cache_key]
+                if now - timestamp < self._cache_ttl:
+                    return data
+
+            url = f"{self.base_url}/equity/portfolio"
+            try:
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
+                    data = response.json()
+                    self._cache[cache_key] = (data, now)
+                    return data
+            except: pass
+            return []
 
     def get_pending_orders(self) -> List[Dict[str, Any]]:
         """Retrieves a list of all active/pending orders."""
-        url = f"{self.base_url}/equity/orders"
-        try:
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200: 
-                orders = response.json()
-                if orders:
-                    logger.info(f"T212: Found {len(orders)} pending orders.")
-                return orders
-            else:
-                logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
-        except Exception as e:
-            logger.error(f"T212: Error fetching orders: {e}")
-        return []
+        cache_key = "orders"
+        with self._cache_lock:
+            now = time.time()
+            if cache_key in self._cache:
+                data, timestamp = self._cache[cache_key]
+                if now - timestamp < self._cache_ttl:
+                    return data
+
+            url = f"{self.base_url}/equity/orders"
+            try:
+                response = requests.get(url, headers=self.headers, timeout=10)
+                if response.status_code == 200: 
+                    orders = response.json()
+                    self._cache[cache_key] = (orders, now)
+                    if orders:
+                        logger.info(f"T212: Found {len(orders)} pending orders.")
+                    return orders
+                else:
+                    logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
+            except Exception as e:
+                logger.error(f"T212: Error fetching orders: {e}")
+            return []
 
     def has_pending_order(self, ticker: str) -> bool:
         """Checks if there is already a pending order for the given ticker."""
