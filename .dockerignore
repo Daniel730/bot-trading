@@ -7,12 +7,14 @@ ENV/
 env/
 .env
 .env.local
+.env*
 .git/
 .gitignore
 .pytest_cache/
 .vscode/
 .idea/
 *.log
+*.log*
 *.sqlite
 dist/
 build/
@@ -21,5 +23,6 @@ frontend/node_modules/
 frontend/dist/
 *.egg-info/
 docker-compose.yml
-Dockerfile
+Dockerfile*
 .dockerignore
+coverage/
