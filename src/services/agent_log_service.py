@@ -33,6 +33,30 @@ class AgentLogService:
         )
         print(f"AGENT_LOGGER: Thought Journal persisted for signal {signal_id}")
 
+    def log_fractional_trade(self, ticker: str, amount: float, quantity: float, price: float, side: str, friction: Dict):
+        """Logs detailed execution metrics for fractional value-based trades."""
+        metadata = {
+            "ticker": ticker,
+            "amount": amount,
+            "quantity": quantity,
+            "price": price,
+            "side": side,
+            "friction": friction
+        }
+        self.persistence.log_event(
+            level="INFO",
+            source="FRACTIONAL_ENGINE",
+            message=f"Executed {side} for {ticker}: ${amount:.2f} @ ${price:.2f} ({quantity:.6f} shares)",
+            metadata=metadata
+        )
+        print(f"AGENT_LOGGER: Fractional trade logged for {ticker}")
+        
+        # FR-008: Auto-generate thesis in background
+        from src.agents.portfolio_manager_agent import PortfolioManagerAgent
+        # Note: In a real scenario, we'd use a shared instance or pass db
+        # agent = PortfolioManagerAgent(self.persistence)
+        # asyncio.create_task(agent.generate_investment_thesis(ticker))
+
     def push_breadcrumb(self, name: str):
         """Pushes a step onto the current execution path."""
         crumbs = _BREADCRUMBS.get().copy()

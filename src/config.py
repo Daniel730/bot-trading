@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     MAX_DRAWDOWN: float = 0.10
     APPROVAL_THRESHOLD: float = 100.0
     
+    # Low-Budget Suite Parameters (Feature 014)
+    MAX_FRICTION_PCT: float = 0.015 # 1.5% default
+    MIN_TRADE_VALUE: float = 1.00 # Minimum $1 per fractional leg
+    
     # Kalman Filter Parameters (Feature 007)
     KALMAN_DELTA: float = 1e-5 # Adaptation rate
     KALMAN_R: float = 0.001     # Measurement noise
