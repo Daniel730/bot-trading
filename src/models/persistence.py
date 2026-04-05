@@ -7,23 +7,30 @@ import json
 class PersistenceManager:
     def __init__(self, db_path: str = "trading_bot.db"):
         self.db_path = db_path
+        self._conn = None # For in-memory persistence
         self._init_db()
 
     def _get_connection(self):
+        if self.db_path == ":memory:":
+            if not self._conn:
+                self._conn = sqlite3.connect(self.db_path)
+                self._conn.row_factory = sqlite3.Row
+                self._load_vec(self._conn)
+            return self._conn
+
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        
+        self._load_vec(conn)
+        return conn
+
+    def _load_vec(self, conn):
         # Load sqlite-vec extension (Feature 015)
         try:
-            conn.enable_load_extension(True)
-            # The actual path might vary by OS, but we assume it's in the library path
-            # or we use the 'sqlite-vec' python package to find it.
             import sqlite_vec
+            conn.enable_load_extension(True)
             sqlite_vec.load(conn)
-        except Exception as e:
-            print(f"Warning: Could not load sqlite-vec extension: {e}")
-            
-        return conn
+        except (ImportError, Exception):
+            pass
 
     def _init_db(self):
         with self._get_connection() as conn:
@@ -208,11 +215,25 @@ class PersistenceManager:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS investment_goals (
                     id TEXT PRIMARY KEY,
+                    user_id TEXT,
                     name TEXT NOT NULL,
                     target_amount REAL,
                     current_amount REAL DEFAULT 0,
                     deadline DATE,
                     status TEXT DEFAULT 'Active'
+                )
+            """)
+
+            # UserLifeEvent
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_life_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    event_date DATE NOT NULL,
+                    description TEXT,
+                    impact_on_horizon TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """)
 
@@ -279,12 +300,12 @@ class PersistenceManager:
 
             conn.commit()
 
-    def save_investment_goal(self, name: str, target_amount: float, deadline: str) -> str:
+    def save_investment_goal(self, name: str, target_amount: float, deadline: str, user_id: str = None) -> str:
         goal_id = str(uuid.uuid4())[:8]
         with self._get_connection() as conn:
             conn.execute(
-                "INSERT INTO investment_goals (id, name, target_amount, deadline) VALUES (?, ?, ?, ?)",
-                (goal_id, name, target_amount, deadline)
+                "INSERT INTO investment_goals (id, name, target_amount, deadline, user_id) VALUES (?, ?, ?, ?, ?)",
+                (goal_id, name, target_amount, deadline, user_id)
             )
             conn.commit()
         return goal_id

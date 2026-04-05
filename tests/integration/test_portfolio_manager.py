@@ -6,6 +6,9 @@ from src.models.persistence import PersistenceManager
 @pytest.mark.anyio
 async def test_horizon_state_transition():
     db = PersistenceManager(":memory:")
+    # Manually trigger init if :memory: didn't work as expected or was reset
+    db._init_db() 
+    
     agent = PortfolioManagerAgent(db)
     
     user_id = "test_user"

@@ -10,6 +10,12 @@ build/
 dist/
 *.egg-info/
 
+# Node
+node_modules/
+
+# Logs
+*.log
+
 # Persistence
 *.sqlite
 *.db
