@@ -17,7 +17,7 @@
 
 **Purpose**: Project initialization and environment verification
 
-- [ ] T001 Verify project structure and branch `016-investor-suite-enforcement`
+- [X] T001 Verify project structure and branch `016-investor-suite-enforcement`
 - [ ] T002 [P] Verify mandatory API keys (T212, Data Service) via `speckit.verify-env`
 - [ ] T003 [P] Configure `pytest` for new architectural regression tests
 
@@ -27,7 +27,7 @@
 
 **Purpose**: Core data availability for architectural fixes
 
-- [ ] T004 [P] Ensure `data_service.get_latest_price` is fully functional for fallbacks in `src/services/data_service.py`
+- [X] T004 [P] Ensure `data_service.get_latest_price` is fully functional for fallbacks in `src/services/data_service.py`
 - [ ] T005 [P] Expose instrument metadata (`minTradeQuantity`, `quantityIncrement`) in `src/services/brokerage_service.py`
 - [ ] T006 [P] Define `calculate_friction` method in `src/services/risk_service.py` to replace/alias `FeeAnalyzer.check_fees`
 
@@ -41,13 +41,13 @@
 
 ### Tests for P0 (Critical)
 
-- [ ] T007 [P] [US1] Unit test for OLS regression with/without intercept in `tests/unit/test_arbitrage_math.py`
-- [ ] T008 [P] [US2] Integration test for $0.00 commitment fallback in `tests/integration/test_brokerage_safety.py`
+- [X] T007 [P] [US1] Unit test for OLS regression with/without intercept in `tests/unit/test_arbitrage_math.py`
+- [X] T008 [P] [US2] Integration test for $0.00 commitment fallback in `tests/integration/test_brokerage_safety.py`
 
 ### Implementation for P0
 
-- [ ] T009 [US1] Update `ArbitrageService.check_cointegration` to use `sm.add_constant(s2)` for OLS in `src/services/arbitrage_service.py`
-- [ ] T010 [US2] Update `BrokerageService.get_pending_orders_value` to use `data_service.get_latest_price` if `price == 0` for any order in `src/services/brokerage_service.py`
+- [X] T009 [US1] Update `ArbitrageService.check_cointegration` to use `sm.add_constant(s2)` for OLS in `src/services/arbitrage_service.py`
+- [X] T010 [US2] Update `BrokerageService.get_pending_orders_value` to use `data_service.get_latest_price` if `price == 0` for any order in `src/services/brokerage_service.py`
 
 ---
 
@@ -65,7 +65,7 @@
 ### Implementation for P1
 
 - [ ] T013 [US2] Update `BrokerageService.place_value_order` to validate quantity against `minTradeQuantity` and `quantityIncrement` from `get_symbol_metadata()` in `src/services/brokerage_service.py`
-- [ ] T014 [US2] Implement logic in `RiskService.calculate_friction` to convert flat spread inputs to percentage based on current price before comparison in `src/services/risk_service.py`
+- [X] T014 [US2] Implement logic in `RiskService.calculate_friction` to convert flat spread inputs to percentage based on current price before comparison in `src/services/risk_service.py`
 
 ---
 
@@ -77,13 +77,13 @@
 
 ### Tests for P2 (Medium)
 
-- [ ] T015 [P] [US3] Simulation test for agent crash in `tests/integration/test_orchestrator_resilience.py`
-- [ ] T016 [P] [US4] Region-aware hedging test in `tests/unit/test_hedging_compliance.py`
+- [X] T015 [P] [US3] Simulation test for agent crash in `tests/integration/test_orchestrator_resilience.py`
+- [X] T016 [P] [US4] Region-aware hedging test in `tests/unit/test_hedging_compliance.py`
 
 ### Implementation for P2
 
-- [ ] T017 [US3] Update `Orchestrator.ainvoke` to use `return_exceptions=True` in `asyncio.gather` calls for agents in `src/agents/orchestrator.py`
-- [ ] T018 [US4] Update `RiskService.check_hedging` to include a regional lookup for UCITS fallbacks (e.g., EU-equivalent inverse ETFs) in `src/services/risk_service.py`
+- [X] T017 [US3] Update `Orchestrator.ainvoke` to use `return_exceptions=True` in `asyncio.gather` calls for agents in `src/agents/orchestrator.py`
+- [X] T018 [US4] Update `RiskService.check_hedging` to include a regional lookup for UCITS fallbacks (e.g., EU-equivalent inverse ETFs) in `src/services/risk_service.py`
 
 ---
 
@@ -93,7 +93,7 @@
 
 - [ ] T019 [P] Update `docs/agents.md` to reflect new stability and compliance architecture
 - [ ] T020 [P] Run `/dev.audit` to ensure all architectural rules are enforced and no regressions exist
-- [ ] T021 Code cleanup and final type hint verification across updated services
+- [X] T021 Code cleanup and final type hint verification across updated services
 
 ---
 

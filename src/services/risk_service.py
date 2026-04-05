@@ -3,10 +3,10 @@ import numpy as np
 from src.services.agent_log_service import agent_trace
 
 class FeeAnalyzer:
-    def __init__(self, max_friction_pct: float = 0.02):
+    def __init__(self, max_friction_pct: float = 0.015):
         self.max_friction_pct = max_friction_pct
 
-    def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0) -> Dict:
+    def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0, flat_spread: float = 0.0) -> Dict:
         """
         Calculates total friction and determines if the trade is acceptable.
         """
@@ -18,7 +18,7 @@ class FeeAnalyzer:
                 "rejection_reason": "Amount must be greater than zero"
             }
 
-        total_friction = commission + fx_fee + spread_est
+        total_friction = commission + fx_fee + spread_est + flat_spread
         friction_pct = total_friction / amount_fiat
         
         is_acceptable = friction_pct <= self.max_friction_pct
@@ -63,32 +63,79 @@ class RiskService:
     @agent_trace("RiskService.check_hedging")
     async def check_hedging(self, hedging_state: str = "NORMAL") -> Dict[str, Any]:
         """
-        Feature 015 (T016): Auto-Hedging Protocol (DEFCON 1).
-        If state is DEFCON_1, suggests inverse ETFs for current long exposure.
+        Feature 015/017: Auto-Hedging Protocol (DEFCON 1).
+        Architecture Rule 5 (FR-005): Includes regional fallbacks (e.g., EU UCITS).
+        Architecture Rule 6 (FR-006): Bypass and alert if no mapping exists.
         """
         if hedging_state == "NORMAL":
             return {"status": "SAFE", "hedges": []}
         
-        # In DEFCON_1, we need to hedge.
-        # Fetch current long exposure (simplified)
+        try:
+            from src.config import settings
+        except ImportError:
+            class DummySettings: REGION = "US"
+            settings = DummySettings()
+            
+        region = getattr(settings, 'REGION', 'US')
+        
+        # FR-005: Hardcoded UCITS compliance mapping
+        hedge_map = {
+            "US": {
+                "SPY": "SH",
+                "QQQ": "PSQ",
+                "IWM": "RWM",
+                "DIA": "DOG"
+            },
+            "EU": {
+                "SPY": "XSPS.L", # Invesco S&P 500 Inverse UCITS
+                "QQQ": "SQQQ.L", # WisdomTree NASDAQ 100 3x Daily Short (Proxy)
+                "IWM": "R2SC.L"  # SPDR Russell 2000 US Small Cap UCITS
+            }
+        }
+        
+        current_map = hedge_map.get(region, hedge_map["US"])
         from src.services.brokerage_service import brokerage_service
         portfolio = brokerage_service.get_portfolio()
         
         suggested_hedges = []
         for pos in portfolio:
             ticker = pos.get('ticker', '').split('_')[0]
-            if ticker in self.inverse_etfs:
-                hedge_ticker = self.inverse_etfs[ticker]
+            if ticker in current_map:
+                hedge_ticker = current_map[ticker]
                 suggested_hedges.append({
                     "target": ticker,
                     "hedge": hedge_ticker,
-                    "amount": pos.get('quantity', 0) * pos.get('averagePrice', 0)
+                    "amount": pos.get('quantity', 0) * pos.get('averagePrice', 0),
+                    "region_compliant": region == "EU"
                 })
+            elif region == "EU":
+                # FR-006: Bypass hedge and log critical alert for unmapped assets in EU
+                print(f"AGENT_LOGGER: CRITICAL - EU Compliance Mapping missing for {ticker}. Hedge bypassed.")
         
         return {
             "status": "DEFCON_1",
+            "region": region,
             "hedges": suggested_hedges,
             "action": "AUTO_HEDGE_PROPOSED"
+        }
+
+    def calculate_friction(self, amount: float, ticker: str = "GENERIC", flat_spread: float = 0.5) -> Dict:
+        """
+        T007/FR-007: Calculates friction and enforces strict micro-budget rejection.
+        If trade < $5.00 and friction > 1.5%, status MUST be FRICTION_REJECT.
+        """
+        res = self.fee_analyzer.check_fees(ticker=ticker, amount_fiat=amount, flat_spread=flat_spread)
+        
+        status = "ACCEPTED"
+        # Decision 4 / FR-007: Micro-budget threshold check
+        if amount < 5.00 and not res["is_acceptable"]:
+            status = "FRICTION_REJECT"
+            
+        return {
+            "status": status,
+            "is_acceptable": res["is_acceptable"] if status == "ACCEPTED" else False,
+            "friction_pct": res["total_friction_percent"],
+            "rejection_reason": res["rejection_reason"]
         }
 
     def validate_trade(self, ticker: str, amount_fiat: float, win_prob: float, win_loss_ratio: float, hedging_state: str = "NORMAL") -> Dict:

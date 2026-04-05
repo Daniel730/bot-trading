@@ -9,6 +9,7 @@ from src.services.agent_log_service import agent_trace
 from src.services.redis_service import redis_service
 from polygon.websocket import WebSocketClient
 from polygon.websocket.models import Market, Feed
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 class DataService:
     def __init__(self):
@@ -44,7 +45,8 @@ class DataService:
     def get_latest_price(self, tickers: List[str]) -> dict:
         """
         Fetches the latest prices for given tickers. 
-        Tries Redis shadow book first, falls back to yfinance.
+        Tries Redis shadow book first, falls back to yfinance with retries.
+        Decision 1: Uses tenacity for 3-attempt exponential backoff.
         """
         latest = {}
         remaining_tickers = []
@@ -60,37 +62,53 @@ class DataService:
         if not remaining_tickers:
             return latest
 
-        # 2. Fallback to yfinance for remaining
+        # 2. Fallback to yfinance for remaining with retry logic
         try:
-            df = yf.download(remaining_tickers, period="1d", interval="1m", progress=False)
-            if df.empty:
-                return latest
+            yfinance_prices = self._get_latest_price_yfinance_with_retry(remaining_tickers)
+            latest.update(yfinance_prices)
+        except Exception as e:
+            print(f"AGENT_LOGGER: DataService retry failed after 3 attempts for {remaining_tickers}: {e}")
             
-            import random
-            # Handle multi-index (multiple tickers) or flat (single ticker)
-            if len(remaining_tickers) > 1:
-                for ticker in remaining_tickers:
-                    if ticker in df['Close'].columns:
-                        val = df['Close'][ticker].iloc[-1]
-                        if not pd.isna(val):
-                            if settings.DEV_MODE:
-                                val = float(val) * (1 + random.uniform(-0.015, 0.015))
-                            latest[ticker] = float(val)
-                            # Cache in Redis
-                            redis_service.set_price(ticker, float(val))
-            else:
-                ticker = remaining_tickers[0]
+        return latest
+
+    @retry(
+        wait=wait_exponential(multiplier=1, min=1, max=4), 
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(Exception),
+        reraise=True
+    )
+    def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
+        """Internal helper to fetch prices from yfinance with tenacity retries."""
+        results = {}
+        df = yf.download(tickers, period="1d", interval="1m", progress=False)
+        if df.empty:
+            raise ValueError(f"yfinance returned empty dataframe for {tickers}")
+        
+        import random
+        # Handle multi-index (multiple tickers) or flat (single ticker)
+        if len(tickers) > 1:
+            for ticker in tickers:
+                if 'Close' in df.columns and ticker in df['Close'].columns:
+                    val = df['Close'][ticker].iloc[-1]
+                    if not pd.isna(val):
+                        if settings.DEV_MODE:
+                            val = float(val) * (1 + random.uniform(-0.015, 0.015))
+                        results[ticker] = float(val)
+                        redis_service.set_price(ticker, float(val))
+        else:
+            ticker = tickers[0]
+            if 'Close' in df.columns:
                 val = df['Close'].iloc[-1]
                 if not pd.isna(val):
                     if settings.DEV_MODE:
                         val = float(val) * (1 + random.uniform(-0.015, 0.015))
-                    latest[ticker] = float(val)
-                    # Cache in Redis
+                    results[ticker] = float(val)
                     redis_service.set_price(ticker, float(val))
-            return latest
-        except Exception as e:
-            print(f"DEBUG: yfinance error for latest price {remaining_tickers}: {e}")
-            return latest
+                    
+        if not results:
+            raise ValueError(f"No valid prices found in yfinance response for {tickers}")
+            
+        return results
 
     @agent_trace("DataService.stream_realtime_data")
     async def stream_realtime_data(self, tickers: List[str]):
