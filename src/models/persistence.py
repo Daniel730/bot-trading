@@ -12,6 +12,17 @@ class PersistenceManager:
     def _get_connection(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        
+        # Load sqlite-vec extension (Feature 015)
+        try:
+            conn.enable_load_extension(True)
+            # The actual path might vary by OS, but we assume it's in the library path
+            # or we use the 'sqlite-vec' python package to find it.
+            import sqlite_vec
+            sqlite_vec.load(conn)
+        except Exception as e:
+            print(f"Warning: Could not load sqlite-vec extension: {e}")
+            
         return conn
 
     def _init_db(self):
@@ -133,9 +144,15 @@ class PersistenceManager:
                     level TEXT NOT NULL,
                     source TEXT NOT NULL,
                     message TEXT NOT NULL,
-                    metadata TEXT
+                    metadata TEXT,
+                    signal_id TEXT
                 )
             """)
+
+            # Feature 014 Migration for logs table
+            try:
+                cursor.execute("ALTER TABLE logs ADD COLUMN signal_id TEXT")
+            except sqlite3.OperationalError: pass
 
             # SecFilingCache - NEW for Feature 009
             cursor.execute("""
@@ -149,16 +166,156 @@ class PersistenceManager:
                     FOREIGN KEY (ticker) REFERENCES ticker_cik_map (ticker)
                 )
             """)
+
+            # Feature 014: Portfolio & DCA
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS portfolio_strategies (
+                ticker TEXT NOT NULL,
+                strategy_id TEXT NOT NULL,
+                target_weight REAL NOT NULL,
+                risk_profile TEXT NOT NULL,
+                PRIMARY KEY (ticker, strategy_id)
+            )
+            ''')
+
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS dca_schedules (
+                id TEXT PRIMARY KEY,
+                amount REAL NOT NULL,
+                frequency TEXT NOT NULL,
+                day_of_week INTEGER,
+                day_of_month INTEGER,
+                strategy_id TEXT NOT NULL,
+                next_run TEXT NOT NULL,
+                is_active BOOLEAN DEFAULT 1
+            )
+            ''')
+
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS fee_config (
+                key TEXT PRIMARY KEY,
+                value REAL NOT NULL
+            )
+            ''')
+
+            # Seed default fee config if not exists
+            cursor.execute("INSERT OR IGNORE INTO fee_config (key, value) VALUES ('max_friction_pct', 0.015)")
+            cursor.execute("INSERT OR IGNORE INTO fee_config (key, value) VALUES ('min_trade_value', 1.00)")
+
+            # Feature 015: Low-Budget Investor Suite
+
+            # InvestmentGoal
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS investment_goals (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    target_amount REAL,
+                    current_amount REAL DEFAULT 0,
+                    deadline DATE,
+                    status TEXT DEFAULT 'Active'
+                )
+            """)
+
+            # InvestmentHorizon
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS investment_horizons (
+                    id TEXT PRIMARY KEY,
+                    goal_id TEXT,
+                    horizon_type TEXT NOT NULL, -- Short, Medium, Long
+                    risk_tolerance TEXT NOT NULL,
+                    target_date DATE NOT NULL,
+                    FOREIGN KEY (goal_id) REFERENCES investment_goals (id)
+                )
+            """)
+
+            # CashSweep
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cash_sweeps (
+                    id TEXT PRIMARY KEY,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    type TEXT NOT NULL, -- SWEEP_IN, SWEEP_OUT
+                    amount REAL NOT NULL,
+                    ticker TEXT NOT NULL,
+                    balance_after REAL NOT NULL
+                )
+            """)
+
+            # TradeThesis - Updated for Feature 015
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS trade_theses (
+                    id TEXT PRIMARY KEY,
+                    trade_id TEXT,
+                    thesis_text TEXT NOT NULL,
+                    monte_carlo_path TEXT,
+                    voice_note_path TEXT,
+                    kelly_fraction REAL,
+                    explainability_scores TEXT, -- JSON
+                    risk_veto_status TEXT,
+                    FOREIGN KEY (trade_id) REFERENCES trade_records (id)
+                )
+            """)
+
+            # AgentPerformance
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_performance (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    agent_name TEXT UNIQUE NOT NULL,
+                    current_weight REAL DEFAULT 1.0,
+                    historical_accuracy REAL DEFAULT 0.0,
+                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # SyntheticOrder
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS synthetic_orders (
+                    ticker TEXT PRIMARY KEY,
+                    activation_price REAL,
+                    trailing_pct REAL,
+                    highest_price REAL,
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """)
+
             conn.commit()
 
-    def log_event(self, level: str, source: str, message: str, metadata: dict = None):
+    def save_investment_goal(self, name: str, target_amount: float, deadline: str) -> str:
+        goal_id = str(uuid.uuid4())[:8]
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO investment_goals (id, name, target_amount, deadline) VALUES (?, ?, ?, ?)",
+                (goal_id, name, target_amount, deadline)
+            )
+            conn.commit()
+        return goal_id
+
+    def get_investment_goals(self) -> List[Dict]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM investment_goals WHERE status = 'Active'").fetchall()
+            return [dict(row) for row in rows]
+
+    def save_cash_sweep(self, sweep_type: str, amount: float, ticker: str, balance_after: float):
+        sweep_id = str(uuid.uuid4())
+        with self._get_connection() as conn:
+            conn.execute(
+                "INSERT INTO cash_sweeps (id, timestamp, type, amount, ticker, balance_after) VALUES (?, ?, ?, ?, ?, ?)",
+                (sweep_id, datetime.now(), sweep_type, amount, ticker, balance_after)
+            )
+            conn.commit()
+
+    def get_latest_cash_balance(self) -> float:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT balance_after FROM cash_sweeps ORDER BY timestamp DESC LIMIT 1").fetchone()
+            return float(row["balance_after"]) if row else 0.0
+
+    def log_event(self, level: str, source: str, message: str, metadata: dict = None, signal_id: str = None):
         """Persists a system or terminal event for auditability."""
         log_id = str(uuid.uuid4())
         metadata_json = json.dumps(metadata) if metadata else None
         with self._get_connection() as conn:
             conn.execute(
-                "INSERT INTO logs (id, timestamp, level, source, message, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                (log_id, datetime.now(), level, source, message, metadata_json)
+                "INSERT INTO logs (id, timestamp, level, source, message, metadata, signal_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (log_id, datetime.now(), level, source, message, metadata_json, signal_id)
             )
             conn.commit()
 
@@ -354,3 +511,92 @@ class PersistenceManager:
                 (is_shadow,)
             ).fetchone()
             return float(row["total"] or 0.0)
+
+    # Feature 014: Portfolio & DCA Persistence
+
+    def save_portfolio_strategy(self, strategy_id: str, ticker: str, weight: float, risk_profile: str):
+        """Saves a strategy component (asset weight)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO portfolio_strategies (strategy_id, ticker, target_weight, risk_profile) 
+                   VALUES (?, ?, ?, ?)""",
+                (strategy_id, ticker, weight, risk_profile)
+            )
+            conn.commit()
+
+    def get_portfolio_strategy(self, strategy_id: str) -> List[Dict]:
+        """Returns all assets and weights for a specific strategy."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT ticker, target_weight, risk_profile FROM portfolio_strategies WHERE strategy_id = ?",
+                (strategy_id,)
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def save_dca_schedule(self, amount: float, frequency: str, strategy_id: str, next_run: datetime, day_of_week: int = None, day_of_month: int = None):
+        """Persists a new DCA investment schedule."""
+        schedule_id = str(uuid.uuid4())[:8]
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT INTO dca_schedules (id, amount, frequency, strategy_id, next_run, day_of_week, day_of_month) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (schedule_id, amount, frequency, strategy_id, next_run.isoformat(), day_of_week, day_of_month)
+            )
+            conn.commit()
+        return schedule_id
+
+    def get_active_dca_schedules(self) -> List[Dict]:
+        """Returns all enabled DCA schedules."""
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM dca_schedules WHERE is_active = 1").fetchall()
+            return [dict(row) for row in rows]
+
+    def update_dca_next_run(self, schedule_id: str, next_run: datetime):
+        """Updates the next execution time for a schedule."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE dca_schedules SET next_run = ? WHERE id = ?",
+                (next_run.isoformat(), schedule_id)
+            )
+            conn.commit()
+
+    def set_fee_config(self, key: str, value: float):
+        """Updates a global fee or threshold setting."""
+        with self._get_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO fee_config (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+
+    def get_fee_config(self, key: str, default: float = 0.0) -> float:
+        """Retrieves a fee or threshold setting."""
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT value FROM fee_config WHERE key = ?", (key,)).fetchone()
+            return float(row["value"]) if row else default
+
+    def save_trade_thesis(self, trade_id: str, vectorized_reasoning: bytes, confidence_scores: Dict, macro_state: Dict):
+        """Stores the reasoning and confidence levels for a trade (T021)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT INTO trade_theses (trade_id, vectorized_reasoning, confidence_scores, macro_state) 
+                   VALUES (?, ?, ?, ?)""",
+                (trade_id, vectorized_reasoning, json.dumps(confidence_scores), json.dumps(macro_state))
+            )
+            conn.commit()
+
+    def save_user_life_event(self, user_id: str, event_type: str, event_date: str, description: str):
+        """Persists a life event that impacts the investment horizon (T027)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                """INSERT INTO user_life_events (user_id, event_type, event_date, description) 
+                   VALUES (?, ?, ?, ?)""",
+                (user_id, event_type, event_date, description)
+            )
+            conn.commit()
+
+    def save_investment_thesis(self, trade_id: str, thesis_text: str):
+        """Saves the structured natural language justification for a trade (T029)."""
+        with self._get_connection() as conn:
+            conn.execute(
+                "UPDATE trade_theses SET thesis_text = ? WHERE trade_id = ?",
+                (thesis_text, trade_id)
+            )
+            conn.commit()
