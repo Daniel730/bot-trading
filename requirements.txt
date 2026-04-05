@@ -27,3 +27,4 @@ redis
 websockets
 openai
 matplotlib
+prefect
