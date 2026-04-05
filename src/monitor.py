@@ -327,8 +327,24 @@ class ArbitrageMonitor:
                 return
 
             target_cash = per_trade_limit / 2.0 # Split between both legs
-            size_a = round(target_cash / price_a, 4)
-            size_b = round(target_cash / price_b, 4)
+            
+            # Feature 014: Fee Analyzer Integration
+            # We estimate friction based on a nominal 0.5% spread + any commissions
+            friction_a = risk_service.calculate_friction(target_cash, spread_pct=0.5)
+            friction_b = risk_service.calculate_friction(target_cash, spread_pct=0.5)
+            
+            check_a = risk_service.is_trade_allowed(target_cash, friction_a['friction_pct'])
+            check_b = risk_service.is_trade_allowed(target_cash, friction_b['friction_pct'])
+            
+            if not check_a['allowed']:
+                logger.warning(f"VETO {t_a}: {check_a['reason']}")
+                return
+            if not check_b['allowed']:
+                logger.warning(f"VETO {t_b}: {check_b['reason']}")
+                return
+
+            size_a = round(target_cash / price_a, 6)
+            size_b = round(target_cash / price_b, 6)
 
             logger.info(f"LIVE EXECUTION: {direction} for {t_a}/{t_b} at {price_a}/{price_b} (Target: ${target_cash:.2f} per side)")
             
@@ -366,6 +382,36 @@ class ArbitrageMonitor:
 
             self.persistence.save_trade(pair['id'], direction, size_a, size_b, price_a, price_b, is_shadow=False)
 
+    async def check_synthetic_orders(self, latest_prices: dict):
+        """
+        Feature 015 (FR-012): In-Memory Synthetic Trailing Stop evaluation.
+        """
+        with self.persistence._get_connection() as conn:
+            rows = conn.execute("SELECT * FROM synthetic_orders WHERE is_active = 1").fetchall()
+            for row in rows:
+                order = dict(row)
+                ticker = order['ticker']
+                if ticker not in latest_prices:
+                    continue
+                
+                current_price = latest_prices[ticker]
+                highest = order['highest_price'] or order['activation_price']
+                trail_pct = order['trailing_pct']
+                
+                # Update high-water mark
+                if current_price > highest:
+                    conn.execute("UPDATE synthetic_orders SET highest_price = ? WHERE ticker = ?", (current_price, ticker))
+                    highest = current_price
+                
+                # Check for stop trigger: current_price < highest * (1 - trail_pct)
+                stop_price = highest * (1 - trail_pct)
+                if current_price <= stop_price:
+                    logger.warning(f"SYNTHETIC STOP TRIGGERED: {ticker} at {current_price:.2f} (Stop: {stop_price:.2f})")
+                    # Execute sell order
+                    self.brokerage.place_market_order(ticker, 1.0, "SELL") # Simplified quantity
+                    conn.execute("UPDATE synthetic_orders SET is_active = 0 WHERE ticker = ?", (ticker,))
+            conn.commit()
+
     async def run(self):
         # 1. Connectivity check
         key = settings.effective_t212_key
@@ -390,7 +436,11 @@ class ArbitrageMonitor:
         logger.info("Starting Telegram Listener...")
         await notification_service.start_listening()
         
-        # 3. Main Loop
+        logger.info(f"Starting DCA Service for Feature 015...")
+        from src.services.dca_service import dca_service
+        asyncio.create_task(dca_service.process_schedules())
+        
+        # 4. Main Loop
         while True:
             now = datetime.now()
             
@@ -433,6 +483,9 @@ class ArbitrageMonitor:
             # Execute pair processing concurrently
             tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
             await asyncio.gather(*tasks)
+            
+            # Feature 015: Check synthetic orders
+            await self.check_synthetic_orders(latest_prices)
             
             await asyncio.sleep(15)
 
