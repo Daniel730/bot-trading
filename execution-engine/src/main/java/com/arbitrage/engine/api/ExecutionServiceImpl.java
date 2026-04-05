@@ -1,5 +1,6 @@
 package com.arbitrage.engine.api;
 
+import com.arbitrage.engine.core.ExecutionConstants;
 import com.arbitrage.engine.core.VwapCalculator;
 import com.arbitrage.engine.core.models.ExecutionLeg;
 import com.arbitrage.engine.core.models.L2OrderBook;
@@ -48,20 +49,23 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             long startTime = System.nanoTime();
             UUID signalId = UUID.fromString(request.getSignalId());
 
-            // 1. Idempotency Check
-            Boolean alreadyProcessing = redisSync.exists(signalId).block();
-            if (Boolean.TRUE.equals(alreadyProcessing)) {
-                logger.warn("Duplicate request detected for {}. Returning existing status.", signalId);
-                String status = redisSync.getStatus(signalId).block();
+            // 1. Atomic Idempotency Check (US1)
+            String idempotencyStatus = redisSync.checkAndSetIdempotency(signalId).block();
+            if (!"OK".equals(idempotencyStatus)) {
+                logger.warn("Duplicate request detected for {}. Status: {}. Returning cached status.", signalId, idempotencyStatus);
                 
                 responseObserver.onNext(ExecutionResponse.newBuilder()
                         .setSignalId(request.getSignalId())
-                        .setStatus(parseStatus(status))
+                        .setStatus(parseStatus(idempotencyStatus))
                         .setMessage("Duplicate request - returning cached status")
                         .build());
                 responseObserver.onCompleted();
                 return;
             }
+
+            ExecutionStatus finalStatus = ExecutionStatus.STATUS_BROKER_ERROR;
+            String errorMessage = null;
+            BigDecimal actualVwap = BigDecimal.ZERO;
 
             try {
                 // 2. Latency Check
@@ -70,14 +74,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     throw new LatencyTimeoutException("Stale Alpha - Latency too high");
                 }
 
-                // 2. Mark in-flight in Redis
-                redisSync.markInFlight(signalId, "PENDING").block();
-
                 // 3. Process Legs
-                ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
-                        .setSignalId(request.getSignalId());
-
-                // For simplicity in MVP, we calculate for the first leg
                 ExecutionRequest.ExecutionLeg protoLeg = request.getLegs(0);
                 ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
                 BigDecimal requestedQty = new BigDecimal(String.valueOf(protoLeg.getQuantity()));
@@ -85,7 +82,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 BigDecimal maxSlippage = new BigDecimal(String.valueOf(request.getMaxSlippagePct()));
 
                 L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
-                BigDecimal actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
+                actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
 
                 // 4. Slippage Guard
                 slippageGuard.validateSlippage(side, actualVwap, targetPrice, maxSlippage);
@@ -95,26 +92,56 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 
                 // ... Broker Integration ...
 
-                responseBuilder.setStatus(ExecutionStatus.STATUS_SUCCESS)
-                        .setActualVwap(actualVwap.doubleValue());
-
-                // 6. Persist Audit
-                repository.saveAudit(signalId, request.getPairId(), protoLeg.getTicker(), side.name(), 
-                        requestedQty, targetPrice, actualVwap, "SUCCESS", 
-                        (System.nanoTime() - startTime) / 1_000_000L).subscribe();
-
-                responseBuilder.setProcessingTimeNs(System.nanoTime() - startTime);
-                responseObserver.onNext(responseBuilder.build());
-                responseObserver.onCompleted();
+                finalStatus = ExecutionStatus.STATUS_SUCCESS;
 
             } catch (VwapCalculator.InsufficientMarketDepthException e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_DEPTH, e.getMessage(), startTime, responseObserver);
+                finalStatus = ExecutionStatus.STATUS_REJECTED_DEPTH;
+                errorMessage = e.getMessage();
             } catch (SlippageGuard.SlippageViolationException e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_SLIPPAGE, e.getMessage(), startTime, responseObserver);
+                finalStatus = ExecutionStatus.STATUS_REJECTED_SLIPPAGE;
+                errorMessage = e.getMessage();
             } catch (LatencyTimeoutException e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_LATENCY, e.getMessage(), startTime, responseObserver);
+                finalStatus = ExecutionStatus.STATUS_REJECTED_LATENCY;
+                errorMessage = e.getMessage();
             } catch (Exception e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_BROKER_ERROR, e.getMessage(), startTime, responseObserver);
+                finalStatus = ExecutionStatus.STATUS_BROKER_ERROR;
+                errorMessage = e.getMessage();
+            } finally {
+                // 6. Guaranteed State Cleanup (US2)
+                String terminalStatus = finalStatus.name().replace("STATUS_", "");
+                redisSync.updateStatus(signalId, terminalStatus).block();
+
+                // 7. Reliable Ledger Persistence (US3) - Blocking wait on persistence
+                try {
+                    repository.saveAudit(
+                        signalId, 
+                        request.getPairId(), 
+                        request.getLegs(0).getTicker(), 
+                        request.getLegs(0).getSide().name(), 
+                        new BigDecimal(String.valueOf(request.getLegs(0).getQuantity())), 
+                        new BigDecimal(String.valueOf(request.getLegs(0).getTargetPrice())), 
+                        actualVwap, 
+                        terminalStatus, 
+                        (System.nanoTime() - startTime) / 1_000_000L
+                    ).block(); // Blocking wait for persistence/DLQ push
+                } catch (Exception e) {
+                    logger.error("Failed to ensure ledger persistence for {}.", signalId, e);
+                    // If even the DLQ push fails, we already have finalStatus set.
+                }
+
+                // 8. Final gRPC Response
+                ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
+                        .setSignalId(request.getSignalId())
+                        .setStatus(finalStatus)
+                        .setActualVwap(actualVwap.doubleValue())
+                        .setProcessingTimeNs(System.nanoTime() - startTime);
+                
+                if (errorMessage != null) {
+                    responseBuilder.setMessage(errorMessage);
+                }
+
+                responseObserver.onNext(responseBuilder.build());
+                responseObserver.onCompleted();
             }
         });
     }
@@ -154,30 +181,14 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
     }
 
     private ExecutionStatus parseStatus(String status) {
+        if (status == null) return ExecutionStatus.STATUS_NOT_FOUND;
         try {
+            if (status.startsWith("STATUS_")) {
+                return ExecutionStatus.valueOf(status);
+            }
             return ExecutionStatus.valueOf("STATUS_" + status);
         } catch (Exception e) {
             return ExecutionStatus.STATUS_BROKER_ERROR;
         }
-    }
-
-    private void handleError(UUID signalId, ExecutionRequest request, ExecutionStatus status, String msg, long startTime, StreamObserver<ExecutionResponse> responseObserver) {
-        logger.error("Execution failed for {}: {}", signalId, msg);
-        
-        ExecutionResponse response = ExecutionResponse.newBuilder()
-                .setSignalId(request.getSignalId())
-                .setStatus(status)
-                .setMessage(msg)
-                .setProcessingTimeNs(System.nanoTime() - startTime)
-                .build();
-
-        // Async audit save
-        repository.saveAudit(signalId, request.getPairId(), request.getLegs(0).getTicker(), 
-                request.getLegs(0).getSide().name(), new BigDecimal(String.valueOf(request.getLegs(0).getQuantity())), 
-                new BigDecimal(String.valueOf(request.getLegs(0).getTargetPrice())), BigDecimal.ZERO, status.name(), 
-                (System.nanoTime() - startTime) / 1_000_000L).subscribe();
-
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
     }
 }
