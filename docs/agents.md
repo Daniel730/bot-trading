@@ -1,9 +1,12 @@
 # Agent Hierarchy
 
-## PortfolioManagerAgent (Orchestrator)
-Acts as the user-facing Robo-Advisor.
-- **Responsibilities**: Goal tracking, horizon management, trade orchestration.
-- **Logic**: Kelly Criterion sizing, Sharpe-based portfolio optimization.
+## Orchestrator (Multi-Agent Debate)
+Coordinates adversarial signals from Bull, Bear, and Fundamental agents.
+- **Responsibilities**: Parallel signal evaluation, SEC-based veto logic, consensus aggregation.
+- **Resilience**: Implements `return_exceptions=True` in concurrent execution to ensure system uptime during individual agent or API failures.
+- **Compliance**: Integrates region-aware hedging (DEFCON 1) with UCITS fallback support for EU regulated environments.
+
+## PortfolioManagerAgent (Robo-Advisor)
 
 ## MacroEconomicAgent (Environment Monitor)
 Provides global market context.

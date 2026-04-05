@@ -123,28 +123,50 @@ class BrokerageService:
 
     def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
         """
-        Feature 014: Executes a value-based order by calculating required quantity.
+        Feature 014/016: Executes a value-based order by calculating required quantity.
+        Enforces minTradeQuantity and quantityIncrement from brokerage metadata.
         """
         from src.services.data_service import data_service
         from src.services.risk_service import risk_service
         from src.services.agent_log_service import agent_logger
         
+        # 1. Friction analysis before execution (Architecture Rule 3)
+        friction_res = risk_service.calculate_friction(amount, ticker=ticker)
+        if not friction_res["is_acceptable"]:
+            return {"status": "error", "message": friction_res["rejection_reason"]}
+        friction = friction_res["friction_pct"]
+
+        # 2. Price and Quantity calculation
         prices = data_service.get_latest_price([ticker])
         if ticker not in prices:
             return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
         
         price = prices[ticker]
-        quantity = round(amount / price, 6)
+        raw_quantity = amount / price
         
-        # Friction analysis before execution
-        friction = risk_service.calculate_friction(amount, spread_pct=0.5) # Estimate 0.5%
+        # 3. Metadata validation (Architecture Rule 4)
+        metadata = self.get_symbol_metadata(ticker)
+        min_qty = float(metadata.get("minTradeQuantity", 0.0))
+        qty_incr = float(metadata.get("quantityIncrement", 0.0))
         
-        logger.info(f"T212: Calculated value order for {ticker}: ${amount} / ${price:.2f} = {quantity:.6f} shares")
+        if min_qty > 0 and raw_quantity < min_qty:
+            return {
+                "status": "error", 
+                "message": f"Quantity {raw_quantity:.6f} below minTradeQuantity {min_qty} for {ticker}"
+            }
+            
+        final_quantity = raw_quantity
+        if qty_incr > 0:
+            # Round to nearest increment: round(qty / incr) * incr
+            final_quantity = round(raw_quantity / qty_incr) * qty_incr
+            final_quantity = float(round(final_quantity, 6)) # Float precision cleanup
+            
+        logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares (Metadata: min={min_qty}, incr={qty_incr})")
         
-        result = self.place_market_order(ticker, quantity, side)
+        result = self.place_market_order(ticker, final_quantity, side)
         
         if result.get("status") != "error":
-            agent_logger.log_fractional_trade(ticker, amount, quantity, price, side, friction)
+            agent_logger.log_fractional_trade(ticker, amount, final_quantity, price, side, friction)
             
         return result
 
@@ -213,7 +235,18 @@ class BrokerageService:
                 price = order.get('limitPrice') or order.get('stopPrice') or order.get('price', 0.0)
                 
                 if price == 0 and 'ticker' in order:
-                    logger.warning(f"T212: Pending order for {order['ticker']} has 0 price. Keys: {list(order.keys())}")
+                    logger.warning(f"T212: Pending order for {order['ticker']} has 0 price. Attempting fallback...")
+                    from src.services.data_service import data_service
+                    fallback_prices = data_service.get_latest_price([order['ticker']])
+                    # Try both original and potentially formatted ticker from data_service response
+                    price = fallback_prices.get(order['ticker'], 0.0)
+                    if price > 0:
+                        logger.info(f"T212: Fallback price for {order['ticker']} found: ${price:.2f}")
+                    else:
+                        # Decision 1 / FR-002: If fallback also 0.0, we cannot calculate value safely
+                        logger.error(f"T212: Critical failure - fallback price also 0.0 for {order['ticker']}")
+                        # We skip this order's value to avoid underestimating commitment, 
+                        # but log it as a critical failure.
                 
                 total_value += (qty * price)
         

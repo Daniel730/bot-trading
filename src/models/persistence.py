@@ -298,7 +298,30 @@ class PersistenceManager:
                 )
             """)
 
+            # SystemState - Resolve Production Rigor Gaps (Decision 2)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS system_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
+            # Seed initial state
+            cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('operational_status', 'NORMAL')")
+            cursor.execute("INSERT OR IGNORE INTO system_state (key, value) VALUES ('consecutive_api_timeouts', '0')")
+
             conn.commit()
+
+    def set_system_state(self, key: str, value: str):
+        """Updates a persistent system state value (Decision 2)."""
+        with self._get_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES (?, ?)", (key, value))
+            conn.commit()
+
+    def get_system_state(self, key: str, default: str = None) -> Optional[str]:
+        """Retrieves a persistent system state value (Decision 2)."""
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT value FROM system_state WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else default
 
     def save_investment_goal(self, name: str, target_amount: float, deadline: str, user_id: str = None) -> str:
         goal_id = str(uuid.uuid4())[:8]
