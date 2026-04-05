@@ -199,4 +199,63 @@ class ExecutionIntegrationTest {
         assertEquals(ExecutionStatus.STATUS_REJECTED_LATENCY, responseHolder[0].getStatus());
         assertTrue(responseHolder[0].getMessage().contains("Stale Alpha"));
     }
+
+    @Test
+    void testExecuteTrade_MultiLeg_AtomicFailure() throws InterruptedException {
+        String signalId = UUID.randomUUID().toString();
+        
+        // KO is fine
+        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", 
+            List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))), 
+            List.of()));
+            
+        // PEP has slippage (Price 101.00 > Target 100.00 * 1.005)
+        when(l2FeedService.getLatestBook("PEP")).thenReturn(new L2OrderBook("PEP", 
+            List.of(new L2OrderBook.Level(new BigDecimal("101.00"), new BigDecimal("100"))), 
+            List.of()));
+
+        ExecutionRequest request = ExecutionRequest.newBuilder()
+                .setSignalId(signalId)
+                .setPairId("KO_PEP")
+                .setTimestampNs(System.nanoTime())
+                .setMaxSlippagePct(0.005)
+                .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
+                        .setTicker("KO")
+                        .setSide(Side.SIDE_BUY)
+                        .setQuantity(10.0)
+                        .setTargetPrice(50.0)
+                        .build())
+                .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
+                        .setTicker("PEP")
+                        .setSide(Side.SIDE_BUY)
+                        .setQuantity(5.0)
+                        .setTargetPrice(100.0)
+                        .build())
+                .build();
+
+        CountDownLatch latch = new CountDownLatch(1);
+        final ExecutionResponse[] responseHolder = new ExecutionResponse[1];
+
+        service.executeTrade(request, new StreamObserver<ExecutionResponse>() {
+            @Override
+            public void onNext(ExecutionResponse value) {
+                responseHolder[0] = value;
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                fail(t.getMessage());
+            }
+
+            @Override
+            public void onCompleted() {
+                latch.countDown();
+            }
+        });
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        assertNotNull(responseHolder[0]);
+        // The entire request should be rejected because PEP failed
+        assertEquals(ExecutionStatus.STATUS_REJECTED_SLIPPAGE, responseHolder[0].getStatus());
+    }
 }
