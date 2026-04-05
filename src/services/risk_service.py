@@ -1,131 +1,136 @@
+from typing import Dict, Optional, Any, List
 import numpy as np
-import logging
-from typing import List, Dict, Optional
-from datetime import datetime, timedelta
-from src.config import settings
+from src.services.agent_log_service import agent_trace
 
-logger = logging.getLogger(__name__)
+class FeeAnalyzer:
+    def __init__(self, max_friction_pct: float = 0.02):
+        self.max_friction_pct = max_friction_pct
+
+    def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0) -> Dict:
+        """
+        Calculates total friction and determines if the trade is acceptable.
+        """
+        if amount_fiat <= 0:
+            return {
+                "ticker": ticker,
+                "is_acceptable": False,
+                "total_friction_percent": 1.0,
+                "rejection_reason": "Amount must be greater than zero"
+            }
+
+        total_friction = commission + fx_fee + spread_est
+        friction_pct = total_friction / amount_fiat
+        
+        is_acceptable = friction_pct <= self.max_friction_pct
+        
+        return {
+            "ticker": ticker,
+            "is_acceptable": is_acceptable,
+            "total_friction_percent": friction_pct,
+            "rejection_reason": None if is_acceptable else f"Friction {friction_pct:.2%} exceeds limit {self.max_friction_pct:.2%}"
+        }
+
+class KellyCalculator:
+    def __init__(self, fractional_kelly: float = 0.25):
+        self.fractional_kelly = fractional_kelly
+
+    def calculate_size(self, win_prob: float, win_loss_ratio: float) -> float:
+        """
+        Calculates position size using the Kelly Criterion.
+        f* = (p * b - q) / b
+        """
+        if win_loss_ratio <= 0:
+            return 0.0
+            
+        loss_prob = 1 - win_prob
+        kelly_f = (win_prob * win_loss_ratio - loss_prob) / win_loss_ratio
+        
+        # Apply fractional Kelly and clamp to [0, 1]
+        size = max(0.0, kelly_f * self.fractional_kelly)
+        return min(size, 1.0)
 
 class RiskService:
     def __init__(self):
-        self.sector_freezes: Dict[str, datetime] = {} # sector -> expiry_time
-        self.HALT_DURATION_MINUTES = 60 # 1 hour freeze on correlated risk
-
-    def calculate_kelly_size(self, confidence_score: float, structural_integrity_score: Optional[int] = None, win_loss_ratio: float = 1.0) -> float:
-        """
-        Calculates position size using Fractional Kelly Criterion.
-        f* = p - (1-p)/b
-        Additionally adjusts the final fraction based on the structural integrity score.
-        """
-        p = confidence_score
-        b = win_loss_ratio
-        if b == 0: return 0
-        
-        kelly_f = p - (1 - p) / b
-        
-        # Apply fractional Kelly
-        suggested_size = max(0, kelly_f * settings.KELLY_FRACTION)
-        
-        # Feature 009: Dynamic Kelly adjustment based on Structural Integrity
-        # If integrity is high (e.g., 90+), we take the full suggested size.
-        # If integrity is borderline (e.g., 40-50), we reduce the size by up to 50%.
-        if structural_integrity_score is not None:
-            # Linear scaling from 0.5 (at score 40) to 1.0 (at score 100)
-            adjustment = max(0.5, (structural_integrity_score - 40) / 60.0 + 0.5)
-            # Ensure adjustment doesn't exceed 1.0
-            adjustment = min(1.0, adjustment)
-            suggested_size *= adjustment
-            logger.info(f"Dynamic Kelly: Integrity {structural_integrity_score} -> Adjustment {adjustment:.2f}")
-
-        # Limit by max risk per trade
-        return min(suggested_size, settings.MAX_RISK_PER_TRADE)
-
-    def evaluate_correlated_risks(self, sector: str, ticker_risks: List[Dict]):
-        """
-        SC-004: Dispara um 'Sector Freeze' se riscos correlacionados forem detetados em 3+ ativos.
-        :param ticker_risks: List of dicts with 'ticker' and 'score'.
-        """
-        low_integrity_count = sum(1 for r in ticker_risks if r['score'] < 50)
-        
-        if low_integrity_count >= 3:
-            rationale = f"Correlated Risk: {low_integrity_count} tickers in sector '{sector}' have integrity score < 50."
-            self.trigger_sector_freeze(sector, rationale)
-            return True
-        return False
-
-    @staticmethod
-    def monte_carlo_var(returns: np.ndarray, confidence_level: float = 0.95, simulations: int = 10000) -> float:
-        """
-        Calculates Value at Risk using Monte Carlo simulation.
-        """
-        if len(returns) < 2: return 0.0
-        
-        mu = np.mean(returns)
-        sigma = np.std(returns)
-        
-        sim_returns = np.random.normal(mu, sigma, simulations)
-        var = np.percentile(sim_returns, (1 - confidence_level) * 100)
-        return abs(var)
-
-    @staticmethod
-    def check_cluster_exposure(sector: str, active_portfolio: List[Dict]) -> Dict:
-        """
-        Calculates current exposure for a sector and returns a status dict.
-        :param sector: The sector to check.
-        :param active_portfolio: List of active trades with their 'size' and 'sector'.
-        """
-        total_portfolio_value = sum(trade.get('size', 0) for trade in active_portfolio)
-        if total_portfolio_value == 0:
-            return {"exposure_pct": 0.0, "allowed": True}
-            
-        sector_value = sum(trade.get('size', 0) for trade in active_portfolio if trade.get('sector') == sector)
-        exposure_pct = sector_value / total_portfolio_value
-        
-        allowed = exposure_pct < settings.MAX_SECTOR_EXPOSURE
-        
-        return {
-            "exposure_pct": exposure_pct,
-            "allowed": allowed,
-            "current_sector_value": sector_value,
-            "total_portfolio_value": total_portfolio_value
+        self.fee_analyzer = FeeAnalyzer()
+        self.kelly_calculator = KellyCalculator()
+        self.inverse_etfs = {
+            "SPY": "SH",     # ProShares Short S&P500
+            "QQQ": "PSQ",    # ProShares Short QQQ
+            "IWM": "RWM",    # ProShares Short Russell2000
+            "DIA": "DOG"     # ProShares Short Dow30
         }
 
-    def trigger_sector_freeze(self, sector: str, rationale: str):
+    @agent_trace("RiskService.check_hedging")
+    async def check_hedging(self, hedging_state: str = "NORMAL") -> Dict[str, Any]:
         """
-        Triggers a temporary halt for all trades in a specific sector.
+        Feature 015 (T016): Auto-Hedging Protocol (DEFCON 1).
+        If state is DEFCON_1, suggests inverse ETFs for current long exposure.
         """
-        expiry = datetime.now() + timedelta(minutes=self.HALT_DURATION_MINUTES)
-        self.sector_freezes[sector] = expiry
-        logger.warning(f"🚨 SECTOR CIRCUIT BREAKER: '{sector}' frozen until {expiry.strftime('%H:%M:%S')}! Rationale: {rationale}")
-
-    def is_sector_frozen(self, sector: str) -> bool:
-        """
-        Checks if a sector is currently under a freeze.
-        """
-        if sector not in self.sector_freezes:
-            return False
+        if hedging_state == "NORMAL":
+            return {"status": "SAFE", "hedges": []}
         
-        if datetime.now() > self.sector_freezes[sector]:
-            del self.sector_freezes[sector]
-            return False
-            
-        return True
+        # In DEFCON_1, we need to hedge.
+        # Fetch current long exposure (simplified)
+        from src.services.brokerage_service import brokerage_service
+        portfolio = brokerage_service.get_portfolio()
+        
+        suggested_hedges = []
+        for pos in portfolio:
+            ticker = pos.get('ticker', '').split('_')[0]
+            if ticker in self.inverse_etfs:
+                hedge_ticker = self.inverse_etfs[ticker]
+                suggested_hedges.append({
+                    "target": ticker,
+                    "hedge": hedge_ticker,
+                    "amount": pos.get('quantity', 0) * pos.get('averagePrice', 0)
+                })
+        
+        return {
+            "status": "DEFCON_1",
+            "hedges": suggested_hedges,
+            "action": "AUTO_HEDGE_PROPOSED"
+        }
 
-    @staticmethod
-    def get_all_sector_exposures(active_portfolio: List[Dict]) -> Dict[str, float]:
+    def validate_trade(self, ticker: str, amount_fiat: float, win_prob: float, win_loss_ratio: float, hedging_state: str = "NORMAL") -> Dict:
         """
-        Returns a map of sector name -> exposure percentage.
+        Performs full risk validation for a proposed trade.
         """
-        total_value = sum(trade.get('size', 0) for trade in active_portfolio)
-        if total_value == 0:
-            return {}
-            
-        exposures = {}
-        sectors = set(trade.get('sector', 'Unknown') for trade in active_portfolio)
-        for sector in sectors:
-            sector_value = sum(trade.get('size', 0) for trade in active_portfolio if trade.get('sector') == sector)
-            exposures[sector] = sector_value / total_value
-            
-        return exposures
+        # DEFCON 1 Veto: Reject high-volatility long trades if market risk is extreme
+        if hedging_state == "DEFCON_1" and ticker not in self.inverse_etfs.values():
+            return {
+                "ticker": ticker,
+                "is_acceptable": False,
+                "rejection_reason": "DEFCON_1: Market risk extreme. Long trades suppressed."
+            }
+
+        fee_check = self.fee_analyzer.check_fees(ticker, amount_fiat)
+        kelly_fraction = self.kelly_calculator.calculate_size(win_prob, win_loss_ratio)
+        
+        is_acceptable = fee_check["is_acceptable"] and kelly_fraction > 0
+        
+        return {
+            "ticker": ticker,
+            "is_acceptable": is_acceptable,
+            "fee_status": fee_check,
+            "kelly_fraction": kelly_fraction,
+            "final_amount": amount_fiat * kelly_fraction if is_acceptable else 0.0
+        }
 
 risk_service = RiskService()
+
+class PortfolioOptimizer:
+    def calculate_covariance(self, returns_df):
+        """
+        Calculates the covariance matrix for a set of asset returns.
+        """
+        return returns_df.cov()
+
+    def get_sharpe_ratio(self, returns, risk_free_rate=0.02):
+        """
+        Calculates the Sharpe Ratio.
+        """
+        mean_return = returns.mean()
+        std_dev = returns.std()
+        if std_dev == 0:
+            return 0.0
+        return (mean_return - risk_free_rate) / std_dev

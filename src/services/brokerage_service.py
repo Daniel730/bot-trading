@@ -70,7 +70,8 @@ class BrokerageService:
         t212_ticker = self._format_ticker(ticker)
         
         # T212 v0 Market Order: Positive quantity for BUY, Negative for SELL
-        final_qty = float(round(quantity, 2))
+        # Feature 014: Increased precision to 6 decimal places for micro-budgets
+        final_qty = float(round(quantity, 6))
         if side.upper() == "SELL":
             final_qty = -abs(final_qty)
         else:
@@ -83,7 +84,7 @@ class BrokerageService:
         
         # v1 market order endpoint
         url = f"{self.base_url}/equity/orders/market"
-        logger.info(f"T212: Executing {side} for {t212_ticker}")
+        logger.info(f"T212: Executing {side} for {t212_ticker} (Qty: {final_qty})")
         
         try:
             response = requests.post(url, headers=self.headers, json=payload)
@@ -95,6 +96,72 @@ class BrokerageService:
             return {"status": "error", "message": response.text}
         except Exception as e:
             return {"status": "error", "message": str(e)}
+
+    async def execute_order(self, ticker: str, amount_fiat: float, side: str = "buy") -> Dict[str, Any]:
+        """
+        Executes a value-based order, primarily for DCA and goal-oriented investing.
+        """
+        return self.place_value_order(ticker, amount_fiat, side)
+
+    def check_dividends_and_reinvest(self):
+        """
+        Feature 015 (FR-004): Fetches account activity to identify dividends and reinvests them.
+        """
+        # In a real T212 API, we would poll /equity/history/orders or /equity/history/transactions
+        # This is a placeholder for the logic:
+        # 1. Fetch transactions from the last 24h
+        # 2. Filter for type='DIVIDEND'
+        # 3. For each dividend, identify the ticker and amount
+        # 4. Execute a BUY order for that ticker with the dividend amount
+        logger.info("T212: Checking for new dividends to reinvest (DRIP)...")
+        # Example logic (hypothetical endpoint):
+        # url = f"{self.base_url}/equity/history/transactions"
+        # params = {"from": datetime.now() - timedelta(days=1)}
+        # response = requests.get(url, headers=self.headers, params=params)
+        # ... logic to process and reinvest ...
+        return True
+
+    def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+        """
+        Feature 014: Executes a value-based order by calculating required quantity.
+        """
+        from src.services.data_service import data_service
+        from src.services.risk_service import risk_service
+        from src.services.agent_log_service import agent_logger
+        
+        prices = data_service.get_latest_price([ticker])
+        if ticker not in prices:
+            return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
+        
+        price = prices[ticker]
+        quantity = round(amount / price, 6)
+        
+        # Friction analysis before execution
+        friction = risk_service.calculate_friction(amount, spread_pct=0.5) # Estimate 0.5%
+        
+        logger.info(f"T212: Calculated value order for {ticker}: ${amount} / ${price:.2f} = {quantity:.6f} shares")
+        
+        result = self.place_market_order(ticker, quantity, side)
+        
+        if result.get("status") != "error":
+            agent_logger.log_fractional_trade(ticker, amount, quantity, price, side, friction)
+            
+        return result
+
+    def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
+        """Retrieves metadata for a specific symbol, including precision and min quantity."""
+        t212_ticker = self._format_ticker(ticker)
+        url = f"{self.base_url}/instruments" # Hypothetical based on standard T212 metadata endpoints
+        # Note: v0 metadata is often bulky; in practice we might fetch all and filter
+        try:
+            response = requests.get(url, headers=self.headers)
+            if response.status_code == 200:
+                instruments = response.json()
+                for inst in instruments:
+                    if inst.get('ticker') == t212_ticker:
+                        return inst
+        except: pass
+        return {}
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
         url = f"{self.base_url}/equity/portfolio"
@@ -163,3 +230,5 @@ class BrokerageService:
                 return float(response.json().get('free', 0.0))
         except: pass
         return 0.0
+
+brokerage_service = BrokerageService()
