@@ -82,4 +82,12 @@ class RedisService:
             
         return count <= limit
 
+    async def get_fundamental_score(self, ticker: str) -> Optional[dict]:
+        """Gets the cached fundamental score for a ticker."""
+        return await self.get_json(f"sec:integrity:{ticker}")
+
+    async def set_fundamental_score(self, ticker: str, score_data: dict):
+        """Sets the fundamental score for a ticker with a 24h TTL."""
+        await self.set_json(f"sec:integrity:{ticker}", score_data, ex=86400)
+
 redis_service = RedisService()
