@@ -1,0 +1,20 @@
+{
+  "name": "FeeAnalyzer",
+  "interface": "check_fees",
+  "input": {
+    "ticker": "TEXT",
+    "amount_fiat": "DECIMAL",
+    "price_per_share": "DECIMAL",
+    "broker": "TEXT"
+  },
+  "output": {
+    "is_acceptable": "BOOLEAN",
+    "total_friction_percent": "DECIMAL",
+    "breakdown": {
+      "commission": "DECIMAL",
+      "fx_fee": "DECIMAL",
+      "spread_est": "DECIMAL"
+    },
+    "rejection_reason": "TEXT (optional)"
+  }
+}

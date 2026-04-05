@@ -17,6 +17,18 @@ class AIValidationStatus(str, Enum):
     PENDING = "PENDING"
     GO = "GO"
     NO_GO = "NO_GO"
+    VETOED = "VETOED"
+
+class FundamentalSignal(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    signal_id: str
+    ticker: str
+    cik: Optional[str] = None
+    structural_integrity_score: int = Field(ge=0, le=100)
+    prosecutor_argument: str
+    defender_argument: str
+    final_reasoning: str
+    analyzed_at: datetime = Field(default_factory=datetime.now)
 
 class UserApprovalStatus(str, Enum):
     PENDING = "PENDING"

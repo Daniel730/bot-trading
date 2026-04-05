@@ -1,0 +1,55 @@
+services:
+  redis:
+    image: redis:alpine
+    container_name: trading-redis
+    ports:
+      - "6379:6379"
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: trading-bot
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - .env:/app/.env
+      - ./trading_bot.sqlite:/app/trading_bot.sqlite
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+      mcp-server:
+        condition: service_healthy
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-server
+    command: python src/mcp_server.py
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - .env:/app/.env
+      - ./trading_bot.sqlite:/app/trading_bot.sqlite
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-s", "-I", "http://localhost:8000/sse"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

@@ -1,76 +1,50 @@
----
-
-description: "Dependency-ordered tasks for Agentic SEC RAG Analyst"
----
-
 # Tasks: Agentic SEC RAG Analyst
 
-**Input**: Design documents from `/specs/009-sec-rag-analyst/`
-**Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md
+## 1. Summary
+This document outlines the execution plan for the SEC RAG Analyst feature, including the profitability and scalability research items requested by the user.
 
-**Organization**: Tasks group by data acquisition, parsing, agent logic, and orchestration integration.
+## 2. Implementation Strategy
+- **MVP First**: Focus on the core SEC integration (CIK mapping and extraction) before implementing the full Adversarial RAG.
+- **Incremental Delivery**: Deliver User Story 1 (Structural Risk Detection) as the primary milestone.
+- **Parallelism**: Independent service (SECService) can be developed in parallel with model updates.
 
-## Phase 1: SEC Data Infrastructure (Phase 1)
+## 3. Dependency Graph
+```text
+Phase 1 (Setup) 
+  └── Phase 2 (Foundational)
+        └── Phase 3 (US1: Structural Risk Detection)
+              └── Phase 4 (Polish & Scalability)
+```
 
-**Purpose**: Establish connection to SEC EDGAR and handle ticker mappings.
+## 4. Parallel Execution Examples
+- **US1**: `T006` (Models) and `T007` (SECService) can be started simultaneously.
 
-- [ ] T001 Implement `TickerCIKMap` table and `save_cik_mapping` in `src/models/persistence.py`
-- [ ] T002 Implement `SECService.get_cik_by_ticker` in `src/services/sec_service.py` using SEC official JSON
-- [ ] T003 Implement `SECService.get_latest_filings_metadata` to retrieve URLs for 10-K/10-Q
-- [ ] T004 [P] Add unit tests for CIK mapping and metadata retrieval in `tests/unit/test_sec_data.py`
+## 5. Phases
 
----
+### Phase 1: Setup
+- [X] T001 Install new dependencies (`edgartools`, `pydantic`) in `requirements.txt`
+- [X] T002 Update `.env.template` with `SEC_USER_AGENT` placeholder
+- [X] T003 [P] Create `scripts/verify_sec_parser.py` for manual integration tests
 
-## Phase 2: Semantic Sectioning (Phase 2)
+### Phase 2: Foundational
+- [X] T004 Implement CIK local cache in `src/models/persistence.py`
+- [X] T005 [P] Implement `SECService` interface in `src/services/sec_service.py` (Ticker-to-CIK and Section extraction)
 
-**Purpose**: Extract critical text segments from large HTML/XBRL filings.
+### Phase 3: User Story 1 - Structural Risk Detection
+**Story Goal**: Implement SEC-based risk filtering for arbitrage signals.
+**Independent Test**: Run `scripts/verify_sec_parser.py --ticker AAPL` and confirm "Risk Factors" section extraction.
 
-- [ ] T005 Implement `SECService.fetch_filing_html` with user-agent compliance (SEC requirement)
-- [ ] T006 Implement regex-based parser to extract `Item 1A (Risk Factors)` and `Item 7 (MD&A)`
-- [ ] T007 Implement extraction for `Item 3 (Legal Proceedings)`
-- [ ] T008 [P] Add tests verifying section extraction against sample 10-K HTML files
+- [X] T006 [P] [US1] Create `FundamentalSignal` model in `src/models/arbitrage_models.py`
+- [X] T007 [P] [US1] Implement `fetch_latest_filing` in `src/services/sec_service.py`
+- [X] T008 [US1] Implement `FundamentalAnalyst` in `src/agents/fundamental_analyst.py` with Adversarial Debate (Prosecutor/Defender)
+- [X] T009 [US1] Update `src/agents/orchestrator.py` to call `FundamentalAnalyst` and enforce VETO logic (FR-004)
+- [X] T010 [US1] Implement fallback to News Analysis in `src/agents/fundamental_analyst.py` (FR-005)
 
----
+### Phase 4: Polish & Scalability (User Request)
+- [X] T011 Update `src/services/risk_service.py` with Dynamic Kelly based on `structural_integrity_score`
+- [X] T012 [P] Implement Sector Freeze logic in `src/services/risk_service.py` based on correlated risks (SC-004)
+- [X] T013 Ensure 100% CIK accuracy via unit tests in `tests/unit/test_sec_data.py` (SC-003)
+- [X] T014 Final audit of Thought Journal logs in `src/services/agent_log_service.py` for auditability (Principle III)
 
-## Phase 3: Fundamental Agent (Phase 3)
-
-**Purpose**: Create the Gemini-powered analyst that reasons over the filings.
-
-- [ ] T009 Create `src/agents/fundamental_analyst.py` (evolving from `news_analyst.py`)
-- [ ] T010 Implement the "Structural Risk Prompt" focusing on debt, litigation, and contract breaches
-- [ ] T011 Integrate section text into the agent's context window for "Long-Context RAG"
-- [ ] T012 Implement `structural_integrity_score` (0-100) logic based on agent findings
-
----
-
-## Phase 4: Integration & Orchestration (Phase 4)
-
-**Purpose**: Wire the RAG analyst into the signal validation loop.
-
-- [ ] T013 Update `src/agents/orchestrator.py` to replace `news_node` with `fundamental_node`
-- [ ] T014 Update the `aggregator_node` to give high weight (veto power) to the Fundamental Analyst's integrity score
-- [ ] T015 Update `src/monitor.py` to pass SEC context to the orchestrator
-- [ ] T016 Log extracted risk factors to the `Thought Journal` for full auditability
-
----
-
-## Phase N: Polish & Caching
-
-- [ ] T017 Implement `sec_filings_cache` in SQLite to prevent redundant parsing and API calls
-- [ ] T018 Add a fallback to News Analysis if SEC EDGAR is unreachable or the filing is unavailable
-- [ ] T019 [P] Performance optimization: Ensure filing fetch and parse doesn't block the monitor loop
-
----
-
-## Dependencies & Execution Order
-
-1. **Infrastructure (Phase 1)**: Core prerequisite for all SEC data.
-2. **Parsing (Phase 2)**: Necessary to provide clean text to the AI.
-3. **Agent Logic (Phase 3)**: The "brain" of the feature.
-4. **Integration (Phase 4)**: Deployment into the bot's workflow.
-
-### Implementation Strategy
-
-1. **CIK First**: Ensure we can find companies before we try to read their files.
-2. **Sectioning Validation**: SEC HTML is messy; ensure the parser works on top 5 tickers (AAPL, MSFT, KO, JPM, XOM).
-3. **Veto Power**: During the first week, use the RAG findings as a "Warning" in Telegram before giving it full "Veto" power in the code.
+## 6. MVP Scope
+- **User Story 1** (T001-T010) is the MVP. It provides the core fundamental risk filtering required for "Racionalidade Mecânica".

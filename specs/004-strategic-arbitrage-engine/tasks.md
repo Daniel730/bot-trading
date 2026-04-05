@@ -117,7 +117,7 @@ description: "Execution tasks for Strategic Arbitrage Engine"
 - [x] T023 Implement NYSE operating hours (14:30-21:00 WET) guard in `src/monitor.py`
 - [x] T024 Implement slippage tolerance check before order execution in `src/monitor.py`
 - [x] T025 [P] Hardening: Add `ArbitrageError` exception hierarchy in `src/models/arbitrage_models.py`
-- [ ] T027 [SC] Verify SC-002 (AI Latency < 30s) and SC-004 (Portfolio Drift < 0.5%) using performance logs and simulation results
+- [X] T027 [SC] Verify SC-002 (AI Latency < 30s) and SC-004 (Portfolio Drift < 0.5%) using performance logs and simulation results
 - [x] T026 Run final validation of all `quickstart.md` steps
 
 ---

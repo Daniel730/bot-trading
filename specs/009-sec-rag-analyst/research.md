@@ -1,31 +1,42 @@
-# Research: Agentic RAG for SEC EDGAR
+# Research: SEC RAG Analyst & Scalability Enhancements
 
-**Feature**: 009-sec-rag-analyst  
-**Date**: 2026-03-31
+## Phase 0: Technical Decisions
 
-## Technical Decision: SEC Data Sourcing
+### 1. SEC Data Extraction & RAG
+- **Decision**: Use `edgartools` (Python) for automated filing discovery and `sec-api` (mapping) or direct EDGAR (text extraction).
+- **Rationale**: `edgartools` provides a high-level API for filtering 10-K/10-Q by ticker/CIK. Text extraction will focus on Item 1A (Risk Factors) and Item 7 (MD&A).
+- **Alternatives**: `sec-edgar-downloader` (too low-level), `BeautifulSoup` scraping (fragile).
 
-### Choice: SEC-API.io or Official EDGAR REST API
-- **Selection**: We will start with the **Official EDGAR REST API** (free) combined with a local parser for XBRL/HTML sections.
-- **Rationale**: The official API is highly reliable and provides full JSON indexes of filings. For complex section extraction (e.g., Extracting Item 1A: Risk Factors), we will use regex-based segmentation or the `sec-api` python wrapper if needed.
+### 2. Adversarial RAG Architecture
+- **Decision**: Implement a "Prosecutor vs. Defender" Debate Pattern.
+- **Rationale**: 
+    - **Prosecutor**: Finds evidence in 10-K/Q that *invalidates* the arbitrage trade (risks).
+    - **Defender**: Finds context that *mitigates* or explains those risks.
+    - **Judge (Gemini)**: Emits final 'Structural Integrity Score'.
+- **Security**: Use XML delimiters (`<context>`) and system-level semantic guards to prevent prompt injection from SEC filings.
 
-## RAG Strategy: "Semantic Sectioning"
+### 3. Profitability & Scalability (User Request)
+- **A. Fractional Kelly Criterion (Implementation)**:
+    - **Current**: 0.25x (Quarter-Kelly) per Constitution.
+    - **Enhancement**: Dynamic Kelly based on the 'Confidence Score' from the Fundamental Analyst.
+- **B. Kalman Filter Integration (Spec 007)**:
+    - **Goal**: Move from rolling windows to dynamic beta estimation for z-scores, reducing lag and "false signals" during regime shifts.
+- **C. Correlation Cluster Guard (Spec 008)**:
+    - **Goal**: Prevent the bot from taking 5 different "Buy" positions in the same sector (e.g., all Banking), which leads to catastrophic tail risk.
+- **D. Scalability via Multi-Broker abstraction**:
+    - **Goal**: Support Alpaca or Interactive Brokers alongside Trading 212 to increase liquidity and capital capacity.
+- **E. Alternative Data (Macro/Sentiment)**:
+    - **Goal**: Use Gemini to analyze FED minutes or high-impact news as a "Sector Freeze" trigger.
 
-Instead of embedding the entire 100-page document (which is token-inefficient), we will use **Semantic Sectioning**:
-1.  **Index**: Retrieve the URL for the most recent 10-K or 10-Q.
-2.  **Sectioning**: Extract only:
-    -   *Item 1A: Risk Factors*
-    -   *Item 7: Management's Discussion and Analysis (MD&A)*
-    -   *Item 3: Legal Proceedings*
-3.  **Context Injection**: Pass these segments into the Gemini context window directly (since Gemini 1.5 Pro has a 1M+ token limit, we may bypass a vector DB initially and use "Long-Context RAG" for better reasoning).
+## Technical Unknowns & Clarifications
 
-## CIK Mapping
-The SEC uses CIK (Central Index Key), not tickers. We need a robust mapping:
--   **Solution**: Use the `sec-edgar-api` mapping or the official SEC Ticker-to-CIK JSON file.
+| Unknown | Finding | Decision |
+|---------|---------|----------|
+| Ticker-to-CIK Mapping | SEC maintains a JSON mapping file (ticker.json). | Fetch and cache this file locally in `persistence.py`. |
+| RAG Vector DB | For single-asset analysis, context usually fits in Gemini's long context window. | No Vector DB for now; use long-context retrieval (Map-Reduce pattern). |
+| Rate Limits | SEC EDGAR allows 10 requests/sec. | Implement `tenacity` retries and rate-limiting in `sec_service.py`. |
 
-## Expected Risks
--   **Rate Limiting**: SEC EDGAR limits to 10 requests per second. Our bot polls every 15s for 20 pairs, so we must cache filings locally.
--   **Inconsistent HTML**: SEC filings have non-standard HTML structures. Mitigation: Implement a "Heuristic Parser" that looks for specific header patterns.
-
-## Performance Goals
--   **Latency**: Retrieval (5s) + Parsing (3s) + LLM Inference (10s) = ~18s total. Well within our 30s target for AI validation.
+## Summary of Profitability Boosters
+1. **False Positive Reduction**: SEC RAG filters out "Value Traps" (tickers falling for fundamental reasons, not noise).
+2. **Execution Efficiency**: Kalman filter enters trades at the optimal turn.
+3. **Risk Diversification**: Cluster Guard ensures non-correlated bets.

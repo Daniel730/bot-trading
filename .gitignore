@@ -10,6 +10,12 @@ build/
 dist/
 *.egg-info/
 
+# Node
+node_modules/
+
+# Logs
+*.log
+
 # Persistence
 *.sqlite
 *.db
@@ -25,3 +31,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# Agent Logs
+logs/
+AGENT_ERROR.md

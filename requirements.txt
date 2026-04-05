@@ -6,6 +6,7 @@ python-dotenv
 statsmodels
 pandas
 pytest
+pytest-asyncio
 tenacity
 holidays
 python-telegram-bot
@@ -16,3 +17,13 @@ numpy
 quantstats
 langgraph
 scipy
+google-generativeai
+sse-starlette
+fastapi
+uvicorn
+edgartools
+sqlite-vec
+redis
+websockets
+openai
+matplotlib

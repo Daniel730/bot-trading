@@ -22,6 +22,24 @@ class VirtualPieAsset:
     last_price: float = 0.0
 
 @dataclass
+class PortfolioStrategy:
+    ticker: str
+    strategy_id: str
+    target_weight: float
+    risk_profile: str
+
+@dataclass
+class DCASchedule:
+    id: str
+    amount: float
+    frequency: str
+    day_of_week: Optional[int]
+    day_of_month: Optional[int]
+    strategy_id: str
+    next_run: str
+    is_active: bool
+
+@dataclass
 class Signal:
     id: str
     timestamp: datetime
@@ -29,10 +47,22 @@ class Signal:
     z_score: float
     status: str  # PENDING_AI, PENDING_USER_CONFIRM, APPROVED, REJECTED, EXECUTED, EXPIRED
 
+@dataclass
+class TradingOrder:
+    id: str
+    ticker: str
+    order_type: str  # MARKET, LIMIT, STOP
+    direction: str  # BUY, SELL
+    quantity: Optional[float] = None
+    fiat_value: Optional[float] = None
+    is_fractional: bool = False
+    status: str = "PENDING"
+    created_at: datetime = datetime.now()
+
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS virtual_pie (
         ticker TEXT PRIMARY KEY,
@@ -41,7 +71,37 @@ def init_db():
         last_price REAL DEFAULT 0.0
     )
     ''')
-    
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS portfolio_strategies (
+        ticker TEXT NOT NULL,
+        strategy_id TEXT NOT NULL,
+        target_weight REAL NOT NULL,
+        risk_profile TEXT NOT NULL,
+        PRIMARY KEY (ticker, strategy_id)
+    )
+    ''')
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS dca_schedules (
+        id TEXT PRIMARY KEY,
+        amount REAL NOT NULL,
+        frequency TEXT NOT NULL,
+        day_of_week INTEGER,
+        day_of_month INTEGER,
+        strategy_id TEXT NOT NULL,
+        next_run TEXT NOT NULL,
+        is_active BOOLEAN DEFAULT 1
+    )
+    ''')
+
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS fee_config (
+        key TEXT PRIMARY KEY,
+        value REAL NOT NULL
+    )
+    ''')
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS trading_pairs (
         id TEXT PRIMARY KEY,
@@ -55,7 +115,7 @@ def init_db():
         FOREIGN KEY (asset_b) REFERENCES virtual_pie (ticker)
     )
     ''')
-    
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS signals (
         id TEXT PRIMARY KEY,
@@ -66,7 +126,7 @@ def init_db():
         FOREIGN KEY (pair_id) REFERENCES trading_pairs (id)
     )
     ''')
-    
+
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS audit_logs (
         timestamp TEXT NOT NULL,
@@ -81,9 +141,14 @@ def init_db():
         FOREIGN KEY (signal_id) REFERENCES signals (id)
     )
     ''')
-    
+
+    # Seed default fee config if not exists
+    cursor.execute("INSERT OR IGNORE INTO fee_config (key, value) VALUES ('max_friction_pct', 0.015)")
+    cursor.execute("INSERT OR IGNORE INTO fee_config (key, value) VALUES ('min_trade_value', 1.00)")
+
     conn.commit()
     conn.close()
+
 
 if __name__ == "__main__":
     init_db()
