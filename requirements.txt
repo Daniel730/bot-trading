@@ -22,3 +22,8 @@ sse-starlette
 fastapi
 uvicorn
 edgartools
+sqlite-vec
+redis
+websockets
+openai
+matplotlib

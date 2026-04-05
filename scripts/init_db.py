@@ -121,6 +121,103 @@ def init_db():
         )
     """)
 
+    # InvestmentGoal
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS investment_goals (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            target_amount REAL,
+            current_amount REAL DEFAULT 0,
+            deadline DATE,
+            status TEXT DEFAULT 'Active'
+        )
+    """)
+
+    # InvestmentHorizon
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS investment_horizons (
+            id TEXT PRIMARY KEY,
+            goal_id TEXT,
+            horizon_type TEXT NOT NULL, -- Short, Medium, Long
+            risk_tolerance TEXT NOT NULL,
+            target_date DATE NOT NULL,
+            FOREIGN KEY (goal_id) REFERENCES investment_goals (id)
+        )
+    """)
+
+    # CashSweep
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS cash_sweeps (
+            id TEXT PRIMARY KEY,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            type TEXT NOT NULL, -- SWEEP_IN, SWEEP_OUT
+            amount REAL NOT NULL,
+            ticker TEXT NOT NULL,
+            balance_after REAL NOT NULL
+        )
+    """)
+
+    # VolatilitySurface
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS volatility_surfaces (
+            id TEXT PRIMARY KEY,
+            vix_value REAL,
+            skew_value REAL,
+            hedging_state TEXT DEFAULT 'NORMAL',
+            hedged_asset TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # SentimentAnomaly
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sentiment_anomalies (
+            ticker TEXT PRIMARY KEY,
+            social_score REAL,
+            dark_pool_volume REAL,
+            anomaly_detected BOOLEAN,
+            confidence REAL
+        )
+    """)
+
+    # TelemetryRecord
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS telemetry_records (
+            payload_id TEXT PRIMARY KEY,
+            signal_type TEXT NOT NULL,
+            theoretical_pnl REAL,
+            actual_pnl REAL,
+            agent_weights TEXT, -- JSON
+            is_synced BOOLEAN DEFAULT FALSE
+        )
+    """)
+
+    # TradeThesis
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trade_theses (
+            id TEXT PRIMARY KEY,
+            trade_id TEXT,
+            thesis_text TEXT NOT NULL,
+            monte_carlo_path TEXT,
+            voice_note_path TEXT,
+            kelly_fraction REAL,
+            explainability_scores TEXT, -- JSON
+            risk_veto_status TEXT,
+            FOREIGN KEY (trade_id) REFERENCES trade_records (id)
+        )
+    """)
+
+    # SyntheticOrder
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS synthetic_orders (
+            ticker TEXT PRIMARY KEY,
+            activation_price REAL,
+            trailing_pct REAL,
+            highest_price REAL,
+            is_active BOOLEAN DEFAULT TRUE
+        )
+    """)
+
     conn.commit()
     conn.close()
     print(f"Database initialized at {DB_PATH}")
