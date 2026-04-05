@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import yfinance as yf
+import pytz
 from datetime import datetime
 from src.config import settings
 from src.services.data_service import data_service
@@ -82,25 +83,14 @@ class ArbitrageMonitor:
                 # We always try to monitor if the pair is defined, but cointegration is a quality flag
                 pair_id = self.persistence.save_pair(ticker_a, ticker_b, hedge)
                 
-                # 2. Check for persisted Kalman state
-                saved_state = self.persistence.load_kalman_state(pair_id)
-                if saved_state:
-                    logger.info(f"Loading persisted Kalman state for {ticker_a}/{ticker_b}")
-                    kf = arbitrage_service.get_or_create_filter(
-                        pair_id, 
-                        delta=settings.KALMAN_DELTA, 
-                        r=settings.KALMAN_R,
-                        initial_state=[saved_state['alpha'], saved_state['beta']],
-                        initial_covariance=saved_state['p_matrix']
-                    )
-                else:
-                    logger.info(f"Seeding new Kalman filter for {ticker_a}/{ticker_b} from OLS")
-                    kf = arbitrage_service.get_or_create_filter(
-                        pair_id,
-                        delta=settings.KALMAN_DELTA,
-                        r=settings.KALMAN_R,
-                        initial_state=[0.0, hedge]
-                    )
+                # 2. Initialize Kalman filter (ArbitrageService handles persistence)
+                kf = arbitrage_service.get_or_create_filter(
+                    pair_id, 
+                    delta=settings.KALMAN_DELTA, 
+                    r=settings.KALMAN_R,
+                    # If no state exists in DB, it will use these seeds for a fresh filter
+                    initial_state=[0.0, hedge]
+                )
 
                 metrics = arbitrage_service.get_spread_metrics(hist_data[col_a], hist_data[col_b], hedge)
                 self.active_pairs.append({
@@ -162,19 +152,13 @@ class ArbitrageMonitor:
             alpha, beta = state_vec
             spread, z_score = kf.calculate_spread_and_zscore(price_a, price_b)
             
-            # Persist Kalman state
-            kf_state = kf.get_state_dict()
-            self.persistence.save_kalman_state(
-                pair_id=pair['id'],
-                alpha=alpha,
-                beta=beta,
-                p_matrix=kf_state['p_matrix'],
-                q_matrix=kf_state['q_matrix'],
-                r_value=kf_state['r_value'],
-                ve=innovation_var
-            )
+            # Persist Kalman state (ArbitrageService handles persistence)
+            arbitrage_service.save_filter_state(pair['id'], kf, innovation_var)
 
             # Feature: Trade Exit Logic
+            # Bug 2.1: Always refresh portfolio before critical exit decisions
+            self.brokerage.get_portfolio() 
+            
             open_trade = self.persistence.get_open_trade(pair['id'], is_shadow=(self.mode == "shadow"))
             if open_trade:
                 # Exit condition: Z-score reverts to mean (e.g. abs(z) < 0.5)
@@ -360,6 +344,7 @@ class ArbitrageMonitor:
                 orders.append({"ticker": t_b, "qty": size_b, "side": "SELL"})
 
             cash_available = self.brokerage.get_account_cash()
+            success_count = 0
             
             for order in orders:
                 # Prevent duplicate pending orders
@@ -367,20 +352,34 @@ class ArbitrageMonitor:
                     logger.warning(f"SKIPPING {order['side']}: {order['ticker']} already has a pending order.")
                     continue
 
+                res = {"status": "error"}
                 if order['side'] == "SELL":
                     if self.brokerage.is_ticker_owned(order['ticker']):
-                        self.brokerage.place_market_order(order['ticker'], order['qty'], "SELL")
+                        res = self.brokerage.place_market_order(order['ticker'], order['qty'], "SELL")
                     else:
                         logger.warning(f"SKIPPING SELL: {order['ticker']} not owned (T212 Invest does not support Shorting)")
                 else: # BUY
                     cost = order['qty'] * (price_a if order['ticker'] == t_a else price_b)
                     if cash_available >= cost:
-                        self.brokerage.place_market_order(order['ticker'], order['qty'], "BUY")
-                        cash_available -= cost
+                        res = self.brokerage.place_market_order(order['ticker'], order['qty'], "BUY")
+                        if res.get("status") != "error":
+                            cash_available -= cost
                     else:
                         logger.error(f"INSUFFICIENT FUNDS: Need ${cost:.2f}, have ${cash_available:.2f} for {order['ticker']}")
 
-            self.persistence.save_trade(pair['id'], direction, size_a, size_b, price_a, price_b, is_shadow=False)
+                if res.get("status") != "error":
+                    success_count += 1
+                else:
+                    logger.error(f"TRADE EXECUTION FAILED for leg {order['ticker']} ({order['side']})")
+
+            # Bug 2.1: Only save trade if BOTH legs were accepted (Institutional Rigor)
+            if success_count == 2:
+                self.persistence.save_trade(pair['id'], direction, size_a, size_b, price_a, price_b, is_shadow=False)
+                logger.info(f"TRADE SAVED: {t_a}/{t_b} {direction} fully routed.")
+            elif success_count == 1:
+                logger.critical(f"BROKEN LEG DETECTED for {t_a}/{t_b}! One leg failed. Manual intervention may be required.")
+                # Feature 018: In a broken leg scenario, we should ideally close the successful leg or notify immediately
+                await notification_service.send_message(f"🚨 **BROKEN LEG ALERT** 🚨\n\nPair: {t_a}/{t_b}\nDirection: {direction}\nOnly 1 of 2 orders was accepted. Check brokerage immediately!")
 
     async def check_synthetic_orders(self, latest_prices: dict):
         """
@@ -459,9 +458,21 @@ class ArbitrageMonitor:
                     logger.warning("\n" + "!"*50 + "\n!!! DEVELOPMENT MODE ACTIVE: MONITORING 24/7 !!!\n" + "!"*50)
                     self.last_dev_warning = now
             else:
-                # Market hours check (14:30 - 21:00 WET)
-                if now.weekday() >= 5 or (now.hour < 14 or (now.hour == 14 and now.minute < 30)) or now.hour >= 21:
-                    await dashboard_service.update_state("Market Closed", "Waiting for market hours (14:30 - 21:00 WET)")
+                # Market hours check (NYSE/NASDAQ: 09:30 - 16:00 ET)
+                market_tz = pytz.timezone(settings.MARKET_TIMEZONE)
+                now_market = datetime.now(market_tz)
+                
+                is_weekend = now_market.weekday() >= 5
+                
+                # Opening/Closing evaluation in market local time
+                opening_time = now_market.replace(hour=settings.START_HOUR, minute=settings.START_MINUTE, second=0, microsecond=0)
+                closing_time = now_market.replace(hour=settings.END_HOUR, minute=settings.END_MINUTE, second=0, microsecond=0)
+                
+                if is_weekend or now_market < opening_time or now_market >= closing_time:
+                    status_msg = f"Waiting for market hours (09:30 - 16:00 {now_market.strftime('%Z')})"
+                    if is_weekend: status_msg = "Market Closed (Weekend)"
+                    
+                    await dashboard_service.update_state("Market Closed", status_msg)
                     await asyncio.sleep(60)
                     continue
 

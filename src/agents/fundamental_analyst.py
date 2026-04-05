@@ -10,6 +10,7 @@ from src.services.sec_service import SECService
 from src.services.agent_log_service import AgentLogService
 from src.models.arbitrage_models import FundamentalSignal
 from src.services.notification_service import NotificationService
+from src.utils import extract_json
 
 class StructuralIntegrityResult(BaseModel):
     score: int = Field(ge=0, le=100)
@@ -111,12 +112,7 @@ class FundamentalAnalyst:
 
         try:
             response = self.model.generate_content(prompt)
-            # Simple JSON extraction (assuming Gemini follows instructions)
-            text = response.text.strip()
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            
-            data = json.loads(text)
+            data = extract_json(response.text)
             return StructuralIntegrityResult(**data)
         except Exception as e:
             print(f"[FundamentalAnalyst] LLM Debate failed: {e}")

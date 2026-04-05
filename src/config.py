@@ -29,11 +29,12 @@ class Settings(BaseSettings):
     DEV_MODE: bool = False
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     
-    # Operation Hours (WET)
-    START_HOUR: int = 14
+    # Operation Hours (America/New_York)
+    START_HOUR: int = 9
     START_MINUTE: int = 30
-    END_HOUR: int = 21
+    END_HOUR: int = 16
     END_MINUTE: int = 0
+    MARKET_TIMEZONE: str = "America/New_York"
     
     # Risk Parameters
     KELLY_FRACTION: float = 0.25

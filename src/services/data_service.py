@@ -19,24 +19,23 @@ class DataService:
     @agent_trace("DataService.get_historical_data")
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
         """
-        Fetches historical data using yfinance with fallback to 'Close'.
+        Fetches historical data using yfinance with auto_adjust=True.
         """
         try:
-            df = yf.download(tickers, period=period, interval=interval, progress=False)
+            # Bug 1.2: Enforce auto_adjust=True to handle splits and dividends correctly
+            df = yf.download(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
             if df.empty:
                 raise ValueError(f"No data returned for {tickers}")
             
-            # Handle multi-index columns if multiple tickers, or single index if one
-            if 'Adj Close' in df.columns:
-                return df['Adj Close']
-            elif 'Close' in df.columns:
+            # When auto_adjust=True, 'Adj Close' is usually not present, 'Close' IS the adjusted close
+            if 'Close' in df.columns:
                 return df['Close']
             else:
-                # In some cases yf returns a flat DF with columns like 'Adj Close_KO'
-                cols = [c for c in df.columns if 'Adj Close' in c or 'Close' in c]
+                # In some cases yf returns a flat DF
+                cols = [c for c in df.columns if 'Close' in c]
                 if cols:
                     return df[cols]
-                raise KeyError(f"Neither 'Adj Close' nor 'Close' found in columns: {df.columns}")
+                raise KeyError(f"Adjusted 'Close' not found in columns: {df.columns}")
         except Exception as e:
             print(f"DEBUG: yfinance error for {tickers}: {e}")
             raise
