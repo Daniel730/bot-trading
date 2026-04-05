@@ -106,8 +106,7 @@ class KalmanFilter:
     def get_state_dict(self):
         """Return state for persistence."""
         return {
-            "alpha": float(self.state[0]),
-            "beta": float(self.state[1]),
+            "alpha_beta": self.state.tolist(), # [alpha, beta]
             "p_matrix": self.P.tolist(),
             "q_matrix": self.Q.tolist(),
             "r_value": float(self.R)

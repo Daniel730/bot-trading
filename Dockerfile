@@ -12,7 +12,7 @@ ENV PYTHONPATH=/app
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    libsqlite3-dev \
+    libpq-dev \
     curl \
     gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -32,10 +32,8 @@ COPY .env.template /app/.env.template
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Initialize the database (SQLite)
-RUN python scripts/init_db.py
-
-# Expose any ports (MCP server might need one if used via HTTP, but FastMCP is usually stdio or SSE)
+# Expose any ports
+ (MCP server might need one if used via HTTP, but FastMCP is usually stdio or SSE)
 # For now, no specific port is required by the monitor.
 
 # Create Gemini CLI config directory and registry file

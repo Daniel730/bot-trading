@@ -1,12 +1,33 @@
 services:
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
     container_name: trading-redis
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     restart: always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: trading-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bot_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bot_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-trading_bot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot_admin} -d ${POSTGRES_DB:-trading_bot}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,10 +43,11 @@ services:
       - .env
     volumes:
       - .env:/app/.env
-      - ./trading_bot.sqlite:/app/trading_bot.sqlite
     restart: always
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       mcp-server:
         condition: service_healthy
@@ -42,10 +64,11 @@ services:
       - .env
     volumes:
       - .env:/app/.env
-      - ./trading_bot.sqlite:/app/trading_bot.sqlite
     restart: always
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-s", "-I", "http://localhost:8000/sse"]
@@ -53,3 +76,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 15s
+
+volumes:
+  redis_data:
+  postgres_data:

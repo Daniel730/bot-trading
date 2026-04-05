@@ -2,6 +2,8 @@ from fastmcp import FastMCP
 from typing import List, Dict, Optional
 import json
 from src.config import settings
+from src.services.redis_service import redis_service
+from src.services.persistence_service import persistence_service, OrderSide
 
 mcp = FastMCP("Arbitrage-Elite-Engine")
 
@@ -9,35 +11,41 @@ mcp = FastMCP("Arbitrage-Elite-Engine")
 async def get_market_data(tickers: List[str], source: str = "yfinance", lookback: str = "30d") -> str:
     """
     Fetches market data for specified tickers.
-    :param tickers: List of ticker symbols.
-    :param source: Data source ('yfinance' or 'Polygon-WS').
-    :param lookback: Time window for historical baseline.
     """
-    # Implementation placeholder for T006
+    # Use Redis shadow book for latest prices if available
+    prices = {}
+    for ticker in tickers:
+        price = await redis_service.get_price(ticker)
+        if price:
+            prices[ticker] = price
+            
     return json.dumps({
         "status": "success",
-        "data": f"Data for {tickers} from {source} with {lookback} lookback"
+        "prices": prices,
+        "source": source
     })
 
 @mcp.tool()
 async def execute_trade(ticker: str, side: str, quantity: float, mode: str = "SHADOW") -> str:
     """
-    Executes a trade on Trading 212.
-    :param ticker: Symbol to trade.
-    :param side: 'BUY' or 'SELL'.
-    :param quantity: Number of shares.
-    :param mode: 'LIVE' or 'SHADOW'.
+    Executes a trade and logs to persistence.
     """
-    # Implementation placeholder for Phase 2/3
+    import uuid
+    order_id = str(uuid.uuid4())
+    
+    # Log to PostgreSQL
+    await persistence_service.log_trade({
+        "order_id": order_id,
+        "ticker": ticker,
+        "side": OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL,
+        "quantity": quantity,
+        "price": 0.0, # Placeholder
+        "metadata": {"mode": mode}
+    })
+    
     return json.dumps({
         "status": "success",
-        "trade": {
-            "ticker": ticker,
-            "side": side,
-            "quantity": quantity,
-            "mode": mode,
-            "timestamp": "2026-03-29T12:00:00"
-        }
+        "order_id": order_id
     })
 
 @mcp.tool()

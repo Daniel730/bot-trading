@@ -24,6 +24,8 @@ uvicorn
 edgartools
 sqlite-vec
 redis
+sqlalchemy
+asyncpg
 websockets
 openai
 matplotlib
