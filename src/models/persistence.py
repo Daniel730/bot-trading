@@ -1,8 +1,10 @@
 import sqlite3
 import uuid
+import time
 from datetime import datetime
 from typing import List, Optional, Dict
 import json
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 class PersistenceManager:
     def __init__(self, db_path: str = "trading_bot.db"):
@@ -10,15 +12,25 @@ class PersistenceManager:
         self._conn = None # For in-memory persistence
         self._init_db()
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        stop=stop_after_attempt(5),
+        retry=retry_if_exception_type(sqlite3.OperationalError),
+        reraise=True
+    )
     def _get_connection(self):
+        """
+        Retrieves a database connection with retry logic for locks.
+        Decision 2: 30s timeout for busy handlers.
+        """
         if self.db_path == ":memory:":
             if not self._conn:
-                self._conn = sqlite3.connect(self.db_path)
+                self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
                 self._conn.row_factory = sqlite3.Row
                 self._load_vec(self._conn)
             return self._conn
 
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         self._load_vec(conn)
         return conn
