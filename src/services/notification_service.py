@@ -14,6 +14,158 @@ class NotificationService:
         # Register handlers
         self.app.add_handler(CallbackQueryHandler(self._handle_callback))
         self.app.add_handler(CommandHandler("exposure", self._handle_exposure))
+        self.app.add_handler(CommandHandler("invest", self._handle_invest))
+        self.app.add_handler(CommandHandler("cash", self._handle_cash))
+        self.app.add_handler(CommandHandler("portfolio", self._handle_portfolio))
+        self.app.add_handler(CommandHandler("why", self._handle_why))
+        self.app.add_handler(CommandHandler("macro", self._handle_macro))
+
+    async def _handle_macro(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Displays macro economic summary."""
+        try:
+            from src.agents.macro_economic_agent import macro_economic_agent
+            summary = await macro_economic_agent.get_macro_summary()
+            message = macro_economic_agent.format_summary_for_telegram(summary)
+            await update.message.reply_text(text=message, parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Error: {str(e)}")
+
+    async def _handle_why(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Explains the thesis for a ticker: /why [ticker]"""
+        try:
+            if not context.args:
+                await update.message.reply_text("Usage: /why [ticker]")
+                return
+            
+            ticker = context.args[0].upper()
+            from src.agents.portfolio_manager_agent import portfolio_manager
+            
+            await update.message.reply_text(f"🔍 Analyzing internal logs for {ticker}...")
+            thesis = await portfolio_manager.generate_investment_thesis(ticker)
+            await update.message.reply_text(text=thesis, parse_mode="Markdown")
+            
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Error: {str(e)}")
+
+    async def _handle_portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Creates or updates a portfolio strategy: /portfolio define [id] ticker=T weight=W ..."""
+        try:
+            args = context.args
+            if not args or args[0].lower() != "define":
+                await update.message.reply_text("Usage: /portfolio define [id] ticker=T weight=W ...\nExample: /portfolio define safe ticker=SPY weight=0.6 ticker=BND weight=0.4")
+                return
+            
+            strategy_id = args[1]
+            # Parse pairs
+            assets = []
+            current_ticker = None
+            for item in args[2:]:
+                if item.startswith("ticker="):
+                    current_ticker = item.split("=")[1].upper()
+                elif item.startswith("weight="):
+                    weight = float(item.split("=")[1])
+                    if current_ticker:
+                        assets.append({"ticker": current_ticker, "weight": weight})
+                        current_ticker = None
+            
+            from src.models.persistence import PersistenceManager
+            persistence = PersistenceManager(settings.DB_PATH)
+            
+            for asset in assets:
+                persistence.save_portfolio_strategy(strategy_id, asset['ticker'], asset['weight'], "Balanced")
+            
+            await update.message.reply_text(f"✅ Strategy '{strategy_id}' defined with {len(assets)} assets.")
+            
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Error: {str(e)}")
+
+    async def _handle_invest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Executes a value-based fractional order or schedules DCA: /invest [amount] of [ticker] OR /invest schedule amount=X frequency=Y strategy=S"""
+        try:
+            args = context.args
+            if not args:
+                await update.message.reply_text("Usage:\n/invest [amount] of [ticker]\n/invest schedule amount=X frequency=Y strategy=S")
+                return
+
+            if args[0].lower() == "schedule":
+                # Parse schedule args
+                params = {}
+                for item in args[1:]:
+                    if "=" in item:
+                        k, v = item.split("=")
+                        params[k] = v
+                
+                amount = float(params.get("amount", 0))
+                frequency = params.get("frequency", "weekly")
+                strategy_id = params.get("strategy", "safe")
+                
+                from src.models.persistence import PersistenceManager
+                from datetime import datetime, timedelta
+                persistence = PersistenceManager(settings.DB_PATH)
+                
+                # Default next run to 1 minute from now for testing
+                next_run = datetime.now() + timedelta(minutes=1)
+                
+                persistence.save_dca_schedule(amount, frequency, strategy_id, next_run)
+                await update.message.reply_text(f"✅ DCA Scheduled: ${amount:.2f} {frequency} into '{strategy_id}'. First run: {next_run.strftime('%H:%M:%S')}")
+                return
+
+            if len(args) < 3 or args[1].lower() != "of":
+                await update.message.reply_text("Usage: /invest [amount] of [ticker]\nExample: /invest 10 of AAPL")
+                return
+            
+            amount = float(args[0])
+            ticker = args[2].upper()
+            
+            from src.services.brokerage_service import BrokerageService
+            brokerage = BrokerageService()
+            
+            await update.message.reply_text(f"⏳ Processing investment: ${amount:.2f} of {ticker}...")
+            
+            # Execute value-based order
+            result = brokerage.place_value_order(ticker, amount, "BUY")
+            
+            if result.get("status") == "error":
+                await update.message.reply_text(f"❌ Failed: {result.get('message')}")
+            else:
+                # result normally contains the order object from T212
+                order_id = result.get('orderId', 'N/A')
+                await update.message.reply_text(f"✅ SUCCESS: Invested ${amount:.2f} in {ticker}\nOrder ID: {order_id}")
+                
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Error: {str(e)}")
+
+    async def _handle_cash(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Displays account cash balance and SGOV sweep status: /cash"""
+        try:
+            from src.services.brokerage_service import BrokerageService
+            from src.services.cash_management_service import cash_management_service
+            brokerage = BrokerageService()
+            
+            cash = brokerage.get_account_cash()
+            sweep_ticker = cash_management_service.sweep_ticker
+            
+            portfolio = brokerage.get_portfolio()
+            sweep_pos = next((p for p in portfolio if p['ticker'] == brokerage._format_ticker(sweep_ticker)), None)
+            
+            sweep_value = 0.0
+            if sweep_pos:
+                # v0 doesn't always have current value, but we can approximate or use DataService
+                qty = sweep_pos.get('quantity', 0.0)
+                from src.services.data_service import data_service
+                prices = data_service.get_latest_price([sweep_ticker])
+                price = prices.get(sweep_ticker, 0.0)
+                sweep_value = qty * price
+
+            message = "💰 *Cash Management Summary*\n\n"
+            message += f"💵 *Free Cash*: ${cash:.2f}\n"
+            message += f"🛡️ *{sweep_ticker} Sweep*: ${sweep_value:.2f}\n"
+            message += f"📊 *Total Liquidity*: ${cash + sweep_value:.2f}\n"
+            
+            await update.message.reply_text(text=message, parse_mode="Markdown")
+            
+        except Exception as e:
+            await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
     async def _handle_exposure(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Displays current sector exposure."""
