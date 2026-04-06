@@ -54,16 +54,15 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             long startTime = System.nanoTime();
             UUID signalId = UUID.fromString(request.getSignalId());
 
-            // 1. Idempotency Check
-            Boolean alreadyProcessing = redisSync.exists(signalId).block();
-            if (Boolean.TRUE.equals(alreadyProcessing)) {
-                logger.warn("Duplicate request detected for {}. Returning existing status.", signalId);
-                String status = redisSync.getStatus(signalId).block();
+            // 1. Idempotency Check (Atomic via Lua)
+            String redisStatus = redisSync.checkAndMarkInFlight(signalId, "PENDING", 3600).block();
+            if (!"NEW".equals(redisStatus)) {
+                logger.warn("Duplicate request detected for {}. Status was: {}", signalId, redisStatus);
                 
                 responseObserver.onNext(ExecutionResponse.newBuilder()
                         .setSignalId(request.getSignalId())
-                        .setStatus(parseStatus(status))
-                        .setMessage("Duplicate request - returning cached status")
+                        .setStatus(parseStatus(redisStatus))
+                        .setMessage("Duplicate request - returning existing status")
                         .build());
                 responseObserver.onCompleted();
                 return;
@@ -75,9 +74,6 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 if (nowNs - request.getTimestampNs() > 50_000_000L) { // 50ms
                     throw new LatencyTimeoutException("Stale Alpha - Latency too high");
                 }
-
-                // 2. Mark in-flight in Redis
-                redisSync.markInFlight(signalId, "PENDING").block();
 
                 // 3. Process ALL Legs
                 List<BigDecimal> actualVwaps = new ArrayList<>();

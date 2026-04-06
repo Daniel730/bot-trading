@@ -11,3 +11,15 @@ CREATE TABLE IF NOT EXISTS trade_ledger (
     latency_ms BIGINT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS fill_analysis (
+    id SERIAL PRIMARY KEY,
+    signal_id UUID NOT NULL,
+    ticker VARCHAR(10) NOT NULL,
+    mid_price DECIMAL(18,10),
+    fill_price DECIMAL(18,10),
+    slippage_bps DECIMAL(10,4),
+    l2_depth_available DECIMAL(18,10),
+    is_realistic BOOLEAN,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

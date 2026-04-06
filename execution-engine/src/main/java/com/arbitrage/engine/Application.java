@@ -18,6 +18,7 @@ public class Application {
 
         Server server = ServerBuilder.forPort(PORT)
                 // .addService(...) // Will add services in Phase 2
+                .intercept(new com.arbitrage.engine.api.LatencyInterceptor())
                 .executor(executor)
                 .build();
 
