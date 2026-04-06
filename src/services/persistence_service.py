@@ -106,6 +106,15 @@ class SystemState(Base):
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
 
+class PortfolioPerformance(Base):
+    __tablename__ = "portfolio_performance"
+    
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, server_default=func.now())
+    total_equity: Mapped[float] = mapped_column(Numeric(20, 10))
+    daily_return: Mapped[float] = mapped_column(Numeric(20, 10))
+    cumulative_drawdown: Mapped[float] = mapped_column(Numeric(20, 10))
+    sharpe_ratio: Mapped[float] = mapped_column(Numeric(20, 10))
+
 class PersistenceService:
     _instance = None
 
@@ -144,6 +153,13 @@ class PersistenceService:
             async with session.begin():
                 reasoning = AgentReasoning(**reasoning_data)
                 session.add(reasoning)
+
+    async def save_portfolio_performance(self, perf_data: dict):
+        """Saves daily portfolio performance metrics (Sharpe, Drawdown)."""
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                perf = PortfolioPerformance(**perf_data)
+                session.add(perf)
 
     async def close_trade(self, signal_id: uuid.UUID, exit_prices: dict, pnl: float):
         """Marks trades with a specific signal_id as CLOSED and records PnL."""

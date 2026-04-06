@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     POSTGRES_USER: str = Field(default="bot_admin", validation_alias="POSTGRES_USER")
     POSTGRES_PASSWORD: str = Field(default="bot_pass", validation_alias="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field(default="trading_bot", validation_alias="POSTGRES_DB")
+    # Infrastructure (SQLite - Legacy/Fallback)
+    DB_PATH: str = Field(default="logs/trading_bot.db", validation_alias="DB_PATH")
 
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
