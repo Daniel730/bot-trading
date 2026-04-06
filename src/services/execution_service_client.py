@@ -35,8 +35,22 @@ class ExecutionServiceClient:
     async def execute_trade(self, signal_id: str, pair_id: str, legs: List[dict], 
                      max_slippage: float = 0.001, risk_multiplier: float = 1.0) -> Optional[execution_pb2.ExecutionResponse]:
         """
-        Sends an ExecutionRequest to the Java Engine.
+        Sends an ExecutionRequest to the Java Engine with Redis idempotency.
         """
+        # T016: Implement Redis idempotency lock
+        from src.services.redis_service import redis_service
+        lock_key = f"idempotency:{signal_id}"
+        
+        # SET key value NX EX 60
+        is_locked = await redis_service.set_nx(lock_key, "LOCKED", expire=60)
+        if not is_locked:
+            logger.warning(f"Idempotency: Signal {signal_id} is already being processed. Rejecting duplicate.")
+            return execution_pb2.ExecutionResponse(
+                signal_id=signal_id,
+                status=execution_pb2.STATUS_BROKER_ERROR,
+                message="Duplicate Request - Signal already in process"
+            )
+
         try:
             execution_legs = []
             for leg in legs:

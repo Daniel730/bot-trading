@@ -21,6 +21,11 @@ class OrderStatus(enum.Enum):
     OPEN = "OPEN"
     CLOSED = "CLOSED"
 
+class AchievabilityStatus(enum.Enum):
+    PERFECT = "PERFECT"
+    ACCEPTABLE = "ACCEPTABLE"
+    UNACHIEVABLE = "UNACHIEVABLE"
+
 class DecisionType(enum.Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -46,6 +51,19 @@ class TradeLedger(Base):
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.COMPLETED)
     execution_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, name="metadata")
+    latency_rtt_ns: Mapped[Optional[int]] = mapped_column(Integer)
+    clock_sync_status: Mapped[Optional[bool]] = mapped_column(Boolean)
+
+class FillAnalysis(Base):
+    __tablename__ = "fill_analysis"
+    
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    trade_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("trade_ledger.id"), index=True)
+    theoretical_mid_price: Mapped[float] = mapped_column(Numeric(20, 10))
+    vwap_fill_price: Mapped[float] = mapped_column(Numeric(20, 10))
+    slippage_bps: Mapped[int] = mapped_column(Integer)
+    achievability_status: Mapped[AchievabilityStatus] = mapped_column(Enum(AchievabilityStatus))
+    audit_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class AgentReasoning(Base):
     __tablename__ = "agent_reasoning"
@@ -99,7 +117,6 @@ class PersistenceService:
                 db_url,
                 pool_size=20,
                 max_overflow=10,
-                expire_on_commit=False,
                 pool_pre_ping=True
             )
             cls._instance.AsyncSessionLocal = async_sessionmaker(
