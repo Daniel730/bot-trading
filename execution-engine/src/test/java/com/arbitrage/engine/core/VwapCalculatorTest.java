@@ -13,7 +13,7 @@ class VwapCalculatorTest {
 
     @Test
     void calculateVwap_BuyMultipleLevels_Success() {
-        L2OrderBook book = new L2OrderBook("KO", List.of(
+        L2OrderBook book = new L2OrderBook("KO", System.currentTimeMillis(), List.of(
             new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("10")),
             new L2OrderBook.Level(new BigDecimal("50.10"), new BigDecimal("20"))
         ), List.of());
@@ -26,7 +26,7 @@ class VwapCalculatorTest {
 
     @Test
     void calculateVwap_SellMultipleLevels_Success() {
-        L2OrderBook book = new L2OrderBook("KO", List.of(), List.of(
+        L2OrderBook book = new L2OrderBook("KO", System.currentTimeMillis(), List.of(), List.of(
             new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("10")),
             new L2OrderBook.Level(new BigDecimal("49.90"), new BigDecimal("20"))
         ));
@@ -39,7 +39,7 @@ class VwapCalculatorTest {
 
     @Test
     void calculateVwap_InsufficientDepth_ThrowsException() {
-        L2OrderBook book = new L2OrderBook("KO", List.of(
+        L2OrderBook book = new L2OrderBook("KO", System.currentTimeMillis(), List.of(
             new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("10"))
         ), List.of());
 

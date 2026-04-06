@@ -2,6 +2,8 @@ package com.arbitrage.engine.api;
 
 import com.arbitrage.engine.core.VwapCalculator;
 import com.arbitrage.engine.core.models.ExecutionLeg;
+import com.arbitrage.engine.config.EnvironmentConfig;
+import com.arbitrage.engine.core.models.ExecutionMode;
 import com.arbitrage.engine.core.models.L2OrderBook;
 import com.arbitrage.engine.grpc.*;
 import com.arbitrage.engine.persistence.RedisOrderSync;
@@ -27,15 +29,17 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
     private final TradeLedgerRepository repository;
     private final RedisOrderSync redisSync;
     private final L2FeedService l2FeedService;
+    private final Broker broker;
     private final Timer executionTimer = Timer.builder("execution.latency")
             .description("Time taken for execution loop")
             .publishPercentiles(0.5, 0.9, 0.95, 0.99)
             .register(Metrics.globalRegistry);
 
-    public ExecutionServiceImpl(TradeLedgerRepository repository, RedisOrderSync redisSync, L2FeedService l2FeedService) {
+    public ExecutionServiceImpl(TradeLedgerRepository repository, RedisOrderSync redisSync, L2FeedService l2FeedService, Broker broker) {
         this.repository = repository;
         this.redisSync = redisSync;
         this.l2FeedService = l2FeedService;
+        this.broker = broker;
     }
 
     public static class LatencyTimeoutException extends RuntimeException {
@@ -78,7 +82,9 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 // 3. Process ALL Legs
                 List<BigDecimal> actualVwaps = new ArrayList<>();
                 List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
+                List<Broker.BrokerLeg> brokerLegs = new ArrayList<>();
                 BigDecimal maxSlippage = new BigDecimal(String.valueOf(request.getMaxSlippagePct()));
+                ExecutionMode mode = EnvironmentConfig.isDryRun() ? ExecutionMode.PAPER : ExecutionMode.LIVE;
 
                 for (ExecutionRequest.ExecutionLeg protoLeg : request.getLegsList()) {
                     ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
@@ -92,12 +98,15 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     slippageGuard.validateSlippage(side, actualVwap, targetPrice, maxSlippage);
                     
                     actualVwaps.add(actualVwap);
+                    brokerLegs.add(new Broker.BrokerLeg(protoLeg.getTicker(), side, requestedQty, actualVwap));
                     audits.add(new TradeLedgerRepository.TradeAudit(
                             protoLeg.getTicker(),
                             side.name(),
                             requestedQty,
                             targetPrice,
-                            actualVwap
+                            actualVwap,
+                            mode,
+                            "VWAP calculated from L2 OrderBook"
                     ));
                 }
 
@@ -105,23 +114,36 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 // If we reach here, ALL legs passed validation.
                 logger.info("Atomic Trade Approved for {} legs. Sending to broker...", request.getLegsCount());
                 
-                // ... Broker Integration (Mocked as success for now) ...
+                Broker.BrokerExecutionRequest brokerRequest = new Broker.BrokerExecutionRequest(
+                        signalId,
+                        request.getPairId(),
+                        brokerLegs
+                );
 
-                ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
-                        .setSignalId(request.getSignalId())
-                        .setStatus(ExecutionStatus.STATUS_SUCCESS);
+                broker.execute(brokerRequest).subscribe(brokerResponse -> {
+                    ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
+                            .setSignalId(request.getSignalId());
 
-                if (!actualVwaps.isEmpty()) {
-                    responseBuilder.setActualVwap(actualVwaps.get(0).doubleValue());
-                }
+                    if (brokerResponse.success()) {
+                        responseBuilder.setStatus(ExecutionStatus.STATUS_SUCCESS);
+                        if (!actualVwaps.isEmpty()) {
+                            responseBuilder.setActualVwap(actualVwaps.get(0).doubleValue());
+                        }
+                        repository.saveAudits(signalId, request.getPairId(), audits, "SUCCESS", 
+                                (System.nanoTime() - startTime) / 1_000_000L).subscribe();
+                    } else {
+                        responseBuilder.setStatus(ExecutionStatus.STATUS_BROKER_ERROR)
+                                .setMessage(brokerResponse.message());
+                        repository.saveAudits(signalId, request.getPairId(), audits, "BROKER_ERROR", 
+                                (System.nanoTime() - startTime) / 1_000_000L).subscribe();
+                    }
 
-                // 6. Persist Audit for ALL legs
-                repository.saveAudits(signalId, request.getPairId(), audits, "SUCCESS", 
-                        (System.nanoTime() - startTime) / 1_000_000L).subscribe();
-
-                responseBuilder.setProcessingTimeNs(System.nanoTime() - startTime);
-                responseObserver.onNext(responseBuilder.build());
-                responseObserver.onCompleted();
+                    responseBuilder.setProcessingTimeNs(System.nanoTime() - startTime);
+                    responseObserver.onNext(responseBuilder.build());
+                    responseObserver.onCompleted();
+                }, error -> {
+                    handleError(signalId, request, ExecutionStatus.STATUS_BROKER_ERROR, error.getMessage(), startTime, responseObserver);
+                });
 
             } catch (VwapCalculator.InsufficientMarketDepthException e) {
                 handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_DEPTH, e.getMessage(), startTime, responseObserver);
@@ -189,13 +211,16 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
 
         // Persist Audit for all legs with current failure status
         List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
+        ExecutionMode mode = EnvironmentConfig.isDryRun() ? ExecutionMode.PAPER : ExecutionMode.LIVE;
         for (ExecutionRequest.ExecutionLeg leg : request.getLegsList()) {
             audits.add(new TradeLedgerRepository.TradeAudit(
                     leg.getTicker(),
                     leg.getSide().name(),
                     new BigDecimal(String.valueOf(leg.getQuantity())),
                     new BigDecimal(String.valueOf(leg.getTargetPrice())),
-                    BigDecimal.ZERO
+                    BigDecimal.ZERO,
+                    mode,
+                    "Error: " + msg
             ));
         }
 

@@ -5,6 +5,7 @@ import java.util.List;
 
 public record L2OrderBook(
     String ticker,
+    long timestamp,
     List<Level> asks,
     List<Level> bids
 ) {
