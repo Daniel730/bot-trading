@@ -1,36 +1,29 @@
 # gRPC Interceptor Contract: Model Calibration
 
-This document defines the high-precision latency measurement contract across Python and Java services.
-
 ## Java Side (Server Interceptor)
-
-The Java Execution Engine MUST implement a `ServerInterceptor` that captures the precise arrival and completion time of every execution request.
-
 - **Class**: `LatencyInterceptor`
 - **Hook**: `interceptCall`
 - **Logic**:
   - `startNs = System.nanoTime()`
-  - `onMessage(request)` -> Store `startNs` in context.
-  - `onHalfClose()` -> `receivedNs = System.nanoTime()`
-  - `close()` -> `processedNs = System.nanoTime()`
-  - Send these timestamps back to Python via gRPC metadata headers (trailers) or a dedicated telemetry log.
+  - `onHalfClose()` -> `x-received-ns = startNs`
+  - `close()` -> `x-processed-ns = System.nanoTime()`
+  - **Metadata Propagation**: Send back `x-received-ns` and `x-processed-ns` as gRPC **Trailers** (after message body).
 
 ## Python Side (Client Interceptor)
-
-The Python Orchestrator MUST implement a `UnaryUnaryClientInterceptor` to wrap all outgoing execution requests.
-
 - **Class**: `LatencyClientInterceptor`
 - **Hook**: `intercept_unary_unary`
 - **Logic**:
   - `sentNs = time.perf_counter_ns()`
-  - `call = continuation(client_call_details, request)`
+  - Send `x-sent-ns = sentNs` in **Headers**.
   - `receivedNs = time.perf_counter_ns()`
-  - Calculate `RTT = receivedNs - sentNs`.
-  - Push metrics to Redis for real-time monitoring.
+  - De-serialize Trailers: `x-received-ns`, `x-processed-ns`.
+- **Error Handling**: 
+  - If gRPC status is `DEADLINE_EXCEEDED`, log `latency_rtt_ns` as `null` and trigger immediate `LATENCY_ALARM`.
 
-## Common Metadata Headers
+## Data Types & Precision
+- All timestamps MUST be `int64` representing nanoseconds.
+- Python: `int` (64-bit by default in Python 3).
+- Java: `long`.
 
-Metadata keys for timestamp exchange (optional, if using header-based RTT calculation):
-- `x-sent-ns`: Python Client Sent Time.
-- `x-received-ns`: Java Server Received Time.
-- `x-processed-ns`: Java Server Processed Time.
+## Versioning
+- Both sides MUST include a `x-metric-version: 1` header. Mismatched versions must result in a `WARNING` log but allow trade processing.

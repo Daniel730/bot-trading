@@ -19,27 +19,47 @@ class LatencyService:
         if not metrics:
             return {"status": "no_data"}
 
-        rtts = [m['rtt_ns'] / 1_000_000 for m in metrics]
+        # Decompose metrics
+        rtts = []
+        stale_times = []
+        violations = 0
         
+        for m in metrics:
+            # RTT from Client perspective
+            rtt = m.get('rtt_ns', 0) / 1_000_000
+            rtts.append(rtt)
+            
+            # Alpha Stale Time = Server Received - Client Sent (T007)
+            # Both are int64 nanoseconds
+            sent = m.get('client_sent_ns', 0)
+            received = m.get('server_received_ns', 0)
+            if sent and received:
+                stale_times.append((received - sent) / 1_000_000)
+            
+            # Violation check for FR-006
+            if rtt > self.alarm_threshold_ms:
+                violations += 1
+
         avg_rtt = np.mean(rtts)
         p95_rtt = np.percentile(rtts, 95)
-        p99_rtt = np.percentile(rtts, 99)
-        max_rtt = np.max(rtts)
+        
+        # FR-006: Trigger if RTT > 1ms for > 10% of samples
+        violation_rate = violations / len(metrics)
+        status = "HEALTHY"
+        if violation_rate > 0.10:
+            status = "DEGRADED"
+            logger.error(f"LATENCY_ALARM: {violation_rate:.1%} of samples exceeded {self.alarm_threshold_ms}ms")
+            # T009: Send alert via notification service
+            # await notification_service.send_alert(f"gRPC Latency Alarm: {violation_rate:.1%} violations")
 
         report = {
             "sample_size": len(metrics),
             "avg_rtt_ms": float(avg_rtt),
             "p95_rtt_ms": float(p95_rtt),
-            "p99_rtt_ms": float(p99_rtt),
-            "max_rtt_ms": float(max_rtt),
-            "status": "HEALTHY" if avg_rtt < self.alarm_threshold_ms else "DEGRADED"
+            "avg_stale_time_ms": float(np.mean(stale_times)) if stale_times else 0,
+            "violation_rate": float(violation_rate),
+            "status": status
         }
-
-        # Check for alarm trigger (T016)
-        if avg_rtt > self.alarm_threshold_ms:
-            logger.warning(f"LATENCY_ALARM: Average RTT {avg_rtt:.3f}ms exceeds threshold {self.alarm_threshold_ms}ms")
-            # Notification logic can be triggered here or in Phase 6
-            # await notification_service.send_alert(f"gRPC Latency Alarm: Avg RTT {avg_rtt:.2f}ms")
 
         return report
 

@@ -95,6 +95,10 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     
                     actualVwaps.add(actualVwap);
                     brokerLegs.add(new Broker.BrokerLeg(protoLeg.getTicker(), side, requestedQty, actualVwap));
+                    
+                    // FR-004: Include full L2 snapshot levels in reasoning_metadata
+                    String l2SnapshotJson = book.toJson(); 
+                    
                     audits.add(new TradeLedgerRepository.TradeAudit(
                             protoLeg.getTicker(),
                             side.name(),
@@ -102,7 +106,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                             targetPrice,
                             actualVwap,
                             mode,
-                            "VWAP calculated from L2 OrderBook"
+                            "{\"strategy\": \"VWAP\", \"l2_snapshot\": " + l2SnapshotJson + "}"
                     ));
                 }
 

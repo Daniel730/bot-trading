@@ -90,6 +90,11 @@ class RedisService:
         """Sets the fundamental score for a ticker with a 24h TTL."""
         await self.set_json(f"sec:integrity:{ticker}", score_data, ex=86400)
 
+    async def set_nx(self, key: str, value: Any, expire: int = 60) -> bool:
+        """Atomic SET NX EX."""
+        result = await self.client.set(key, value, nx=True, ex=expire)
+        return bool(result)
+
     async def push_latency_metrics(self, metrics: dict):
         """Pushes a latency metric to a Redis list with a 1h TTL (via expiration on key)."""
         key = "latency:metrics:raw"

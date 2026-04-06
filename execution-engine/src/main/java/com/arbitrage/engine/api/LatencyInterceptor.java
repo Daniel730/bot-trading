@@ -29,6 +29,7 @@ public class LatencyInterceptor implements ServerInterceptor {
                 // Add server-side timestamps to trailers for client to read
                 trailers.put(Metadata.Key.of("x-received-ns", Metadata.ASCII_STRING_MARSHALLER), String.valueOf(arrivalNs));
                 trailers.put(Metadata.Key.of("x-processed-ns", Metadata.ASCII_STRING_MARSHALLER), String.valueOf(processedNs));
+                trailers.put(Metadata.Key.of("x-metric-version", Metadata.ASCII_STRING_MARSHALLER), "1");
                 
                 if (sentNsStr != null) {
                     long sentNs = Long.parseLong(sentNsStr);
