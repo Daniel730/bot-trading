@@ -1,10 +1,9 @@
 package com.arbitrage.engine.persistence;
 
-import io.r2dbc.spi.Connection;
+import com.arbitrage.engine.core.models.ExecutionMode;
 import io.r2dbc.spi.ConnectionFactory;
 import io.r2dbc.spi.Result;
 import io.r2dbc.spi.Statement;
-import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import java.math.BigDecimal;
@@ -24,7 +23,9 @@ public class TradeLedgerRepository {
         String side,
         BigDecimal requestedQty,
         BigDecimal requestedPrice,
-        BigDecimal actualVwap
+        BigDecimal actualVwap,
+        ExecutionMode executionMode,
+        String reasoningMetadata
     ) {}
 
     public Mono<Void> saveAudits(
@@ -35,53 +36,47 @@ public class TradeLedgerRepository {
         long latencyMs
     ) {
         return Mono.from(connectionFactory.create())
-            .flatMap(connection -> {
-                Statement statement = connection.createStatement(
-                    "INSERT INTO trade_ledger (signal_id, pair_id, ticker, side, requested_qty, requested_price, actual_vwap, status, latency_ms) " +
-                    "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
-                );
+            .flatMap(connection -> 
+                Mono.from(connection.beginTransaction())
+                    .then(Mono.defer(() -> {
+                        Statement statement = connection.createStatement(
+                            "INSERT INTO trade_ledger (signal_id, pair_id, ticker, side, requested_qty, requested_price, actual_vwap, status, latency_ms, execution_mode, reasoning_metadata) " +
+                            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
+                        );
 
-                for (int i = 0; i < audits.size(); i++) {
-                    TradeAudit audit = audits.get(i);
-                    statement.bind("$1", signalId);
-                    statement.bind("$2", pairId);
-                    statement.bind("$3", audit.ticker());
-                    statement.bind("$4", audit.side());
-                    statement.bind("$5", audit.requestedQty());
-                    statement.bind("$6", audit.requestedPrice());
-                    statement.bind("$7", audit.actualVwap());
-                    statement.bind("$8", status);
-                    statement.bind("$9", latencyMs);
-                    if (i < audits.size() - 1) {
-                        statement.add();
-                    }
-                }
+                        for (int i = 0; i < audits.size(); i++) {
+                            TradeAudit audit = audits.get(i);
+                            statement.bind(0, signalId);
+                            statement.bind(1, pairId);
+                            statement.bind(2, audit.ticker());
+                            statement.bind(3, audit.side());
+                            statement.bind(4, audit.requestedQty());
+                            statement.bind(5, audit.requestedPrice());
+                            statement.bind(6, audit.actualVwap());
+                            statement.bind(7, status);
+                            statement.bind(8, latencyMs);
+                            statement.bind(9, audit.executionMode().name());
+                            statement.bind(10, audit.reasoningMetadata());
+                            if (i < audits.size() - 1) {
+                                statement.add();
+                            }
+                        }
 
-                return Mono.from(statement.execute())
-                    .flatMap(Result::getRowsUpdated)
-                    .then(Mono.from(connection.close()));
-            });
-    }
-
-    public Mono<Void> saveAudit(
-        UUID signalId,
-        String pairId,
-        String ticker,
-        String side,
-        BigDecimal requestedQty,
-        BigDecimal requestedPrice,
-        BigDecimal actualVwap,
-        String status,
-        long latencyMs
-    ) {
-        return saveAudits(signalId, pairId, List.of(new TradeAudit(ticker, side, requestedQty, requestedPrice, actualVwap)), status, latencyMs);
+                        return Flux.from(statement.execute())
+                            .flatMap(Result::getRowsUpdated)
+                            .then();
+                    }))
+                    .then(Mono.from(connection.commitTransaction()))
+                    .onErrorResume(e -> Mono.from(connection.rollbackTransaction()).then(Mono.error(e)))
+                    .then(Mono.from(connection.close()))
+            );
     }
 
     public Mono<String> getStatus(UUID signalId) {
         return Mono.from(connectionFactory.create())
             .flatMapMany(connection -> connection.createStatement(
                 "SELECT status FROM trade_ledger WHERE signal_id = $1"
-            ).bind("$1", signalId).execute())
+            ).bind(0, signalId).execute())
             .flatMap(result -> result.map((row, metadata) -> row.get("status", String.class)))
             .next();
     }

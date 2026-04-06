@@ -66,7 +66,7 @@ class ExecutionIntegrationTest {
     void testExecuteTrade_Success() throws InterruptedException {
         String signalId = UUID.randomUUID().toString();
         
-        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", 
+        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", System.currentTimeMillis(),
             List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))), 
             List.of()));
 
@@ -114,7 +114,7 @@ class ExecutionIntegrationTest {
         String signalId = UUID.randomUUID().toString();
         
         // Price moved to 51.00, which is > 50.00 * 1.01
-        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", 
+        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", System.currentTimeMillis(),
             List.of(new L2OrderBook.Level(new BigDecimal("51.00"), new BigDecimal("100"))), 
             List.of()));
 
@@ -205,12 +205,12 @@ class ExecutionIntegrationTest {
         String signalId = UUID.randomUUID().toString();
         
         // KO is fine
-        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", 
+        when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", System.currentTimeMillis(),
             List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))), 
             List.of()));
             
         // PEP has slippage (Price 101.00 > Target 100.00 * 1.005)
-        when(l2FeedService.getLatestBook("PEP")).thenReturn(new L2OrderBook("PEP", 
+        when(l2FeedService.getLatestBook("PEP")).thenReturn(new L2OrderBook("PEP", System.currentTimeMillis(),
             List.of(new L2OrderBook.Level(new BigDecimal("101.00"), new BigDecimal("100"))), 
             List.of()));
 
