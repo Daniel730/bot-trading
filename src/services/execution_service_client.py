@@ -33,12 +33,15 @@ class ExecutionServiceClient:
         return self._stub
 
     async def execute_trade(self, signal_id: str, pair_id: str, legs: List[dict], 
-                     max_slippage: float = 0.001, risk_multiplier: float = 1.0) -> Optional[execution_pb2.ExecutionResponse]:
+                     max_slippage: Optional[float] = None, risk_multiplier: Optional[float] = None) -> Optional[execution_pb2.ExecutionResponse]:
         """
         Sends an ExecutionRequest to the Java Engine with Redis idempotency.
+        Fetches dynamic risk parameters from RiskService if not provided.
         """
         # T016: Implement Redis idempotency lock
         from src.services.redis_service import redis_service
+        from src.services.risk_service import risk_service
+        
         lock_key = f"idempotency:{signal_id}"
         
         # SET key value NX EX 60
@@ -52,6 +55,19 @@ class ExecutionServiceClient:
             )
 
         try:
+            # Fetch dynamic risk parameters if not provided
+            if max_slippage is None or risk_multiplier is None:
+                # Use the first ticker from legs as reference for volatility
+                ref_ticker = legs[0]['ticker'] if legs else "GENERIC"
+                params = await risk_service.get_execution_params(ref_ticker)
+                
+                if max_slippage is None:
+                    max_slippage = params["max_slippage_pct"]
+                if risk_multiplier is None:
+                    risk_multiplier = params["risk_multiplier"]
+                
+                logger.info(f"RiskService: Using dynamic params for {signal_id}: max_slippage={max_slippage}, risk_mult={risk_multiplier}")
+
             execution_legs = []
             for leg in legs:
                 execution_legs.append(execution_pb2.ExecutionRequest.ExecutionLeg(

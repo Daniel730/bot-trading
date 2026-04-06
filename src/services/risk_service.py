@@ -60,6 +60,45 @@ class RiskService:
             "DIA": "DOG"     # ProShares Short Dow30
         }
 
+    async def get_execution_params(self, ticker: str) -> Dict[str, float]:
+        """
+        Calculates dynamic risk parameters for the Java Execution Engine.
+        FR-002: RiskScale = f(Sharpe, MaxDrawdown)
+        FR-004: ExecutionServiceClient accepts dynamic max_slippage derived from VolatilitySwitch.
+        """
+        from src.services.performance_service import performance_service
+        from src.services.volatility_service import volatility_service
+        
+        perf_metrics = await performance_service.get_portfolio_metrics()
+        sharpe = perf_metrics.get("sharpe_ratio", 1.0)
+        drawdown = perf_metrics.get("max_drawdown", 0.0)
+        
+        # SC-001: Position size scales linearly with drawdown: 0% at 15% drawdown
+        risk_multiplier = 1.0
+        if drawdown >= 0.15:
+            risk_multiplier = 0.0
+        elif drawdown > 0:
+            risk_multiplier = max(0.0, 1.0 - (drawdown / 0.15))
+            
+        # User Story 1 Acceptance 2: Sharpe ratio < 0.5 => Kelly fraction capped at 0.1
+        if sharpe < 0.5:
+            risk_multiplier = min(risk_multiplier, 0.1)
+
+        # User Story 3: Tighten maxSlippage if Volatility Switch is HIGH
+        vol_status = await volatility_service.get_volatility_status(ticker)
+        
+        # Default slippage 0.1% (0.001)
+        # Acceptance Scenario: Reduce from 0.001 to 0.0005 in high vol
+        max_slippage = 0.001
+        if vol_status == "HIGH_VOLATILITY":
+            max_slippage = 0.0005
+            
+        return {
+            "risk_multiplier": risk_multiplier,
+            "max_slippage_pct": max_slippage,
+            "volatility_status": vol_status
+        }
+
     @agent_trace("RiskService.check_hedging")
     async def check_hedging(self, hedging_state: str = "NORMAL") -> Dict[str, Any]:
         """
