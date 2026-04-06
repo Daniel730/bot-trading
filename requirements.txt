@@ -30,3 +30,5 @@ websockets
 openai
 matplotlib
 prefect
+grpcio
+grpcio-tools

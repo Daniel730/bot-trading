@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     MAX_FRICTION_PCT: float = 0.015 # 1.5% default
     MIN_TRADE_VALUE: float = 1.00 # Minimum $1 per fractional leg
     
+    # gRPC & Latency (Feature 027)
+    EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
+    EXECUTION_ENGINE_PORT: int = Field(default=50051, validation_alias="EXECUTION_ENGINE_PORT")
+    LATENCY_ALARM_THRESHOLD_MS: float = Field(default=1.0, validation_alias="LATENCY_ALARM_THRESHOLD_MS")
+
     # Kalman Filter Parameters (Feature 007)
     KALMAN_DELTA: float = 1e-5 # Adaptation rate
     KALMAN_R: float = 0.001     # Measurement noise

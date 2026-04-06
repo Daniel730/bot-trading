@@ -90,4 +90,17 @@ class RedisService:
         """Sets the fundamental score for a ticker with a 24h TTL."""
         await self.set_json(f"sec:integrity:{ticker}", score_data, ex=86400)
 
+    async def push_latency_metrics(self, metrics: dict):
+        """Pushes a latency metric to a Redis list with a 1h TTL (via expiration on key)."""
+        key = "latency:metrics:raw"
+        await self.client.lpush(key, json.dumps(metrics))
+        await self.client.ltrim(key, 0, 999) # Keep only last 1000 samples
+        await self.client.expire(key, 3600) # Expire after 1 hour of inactivity
+
+    async def get_recent_latency(self, count: int = 100) -> list:
+        """Retrieves the most recent latency metrics from Redis."""
+        key = "latency:metrics:raw"
+        samples = await self.client.lrange(key, 0, count - 1)
+        return [json.loads(s) for s in samples]
+
 redis_service = RedisService()
