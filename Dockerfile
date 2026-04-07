@@ -33,7 +33,7 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # Expose any ports
- (MCP server might need one if used via HTTP, but FastMCP is usually stdio or SSE)
+# (MCP server might need one if used via HTTP, but FastMCP is usually stdio or SSE)
 # For now, no specific port is required by the monitor.
 
 # Create Gemini CLI config directory and registry file
