@@ -93,13 +93,13 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 List<BigDecimal> actualVwaps = new ArrayList<>();
                 List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
                 List<Broker.BrokerLeg> brokerLegs = new ArrayList<>();
-                BigDecimal maxSlippage = new BigDecimal(String.valueOf(request.getMaxSlippagePct()));
+                BigDecimal maxSlippage = new BigDecimal(request.getMaxSlippagePct());
                 ExecutionMode mode = EnvironmentConfig.isDryRun() ? ExecutionMode.PAPER : ExecutionMode.LIVE;
 
                 for (ExecutionRequest.ExecutionLeg protoLeg : request.getLegsList()) {
                     ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
-                    BigDecimal requestedQty = new BigDecimal(String.valueOf(protoLeg.getQuantity()));
-                    BigDecimal targetPrice = new BigDecimal(String.valueOf(protoLeg.getTargetPrice()));
+                    BigDecimal requestedQty = new BigDecimal(protoLeg.getQuantity());
+                    BigDecimal targetPrice = new BigDecimal(protoLeg.getTargetPrice());
 
                     L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
                     BigDecimal actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
@@ -141,7 +141,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     if (brokerResponse.success()) {
                         responseBuilder.setStatus(ExecutionStatus.STATUS_SUCCESS);
                         if (!actualVwaps.isEmpty()) {
-                            responseBuilder.setActualVwap(actualVwaps.get(0).doubleValue());
+                            responseBuilder.setActualVwap(actualVwaps.get(0).toPlainString());
                         }
                         repository.saveAudits(signalId, request.getPairId(), audits, "SUCCESS", 
                                 (System.nanoTime() - startTime) / 1_000_000L).subscribe();
@@ -252,8 +252,8 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             audits.add(new TradeLedgerRepository.TradeAudit(
                     leg.getTicker(),
                     leg.getSide().name(),
-                    new BigDecimal(String.valueOf(leg.getQuantity())),
-                    new BigDecimal(String.valueOf(leg.getTargetPrice())),
+                    new BigDecimal(leg.getQuantity()),
+                    new BigDecimal(leg.getTargetPrice()),
                     BigDecimal.ZERO,
                     mode,
                     "Error: " + msg

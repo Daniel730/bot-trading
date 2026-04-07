@@ -1,6 +1,7 @@
 import grpc
 import logging
 import time
+from decimal import Decimal
 from typing import List, Optional
 from src.generated import execution_pb2
 from src.generated import execution_pb2_grpc
@@ -9,22 +10,27 @@ from src.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Hard deadline for all RPC calls (feature 033).
+# Exceeding this triggers immediate cancellation and fallback logic.
+_RPC_DEADLINE_SECONDS = 0.050
+
+
+def _to_decimal_str(value) -> str:
+    """Serialise a numeric value to an exact decimal string, avoiding float repr."""
+    return str(Decimal(str(value)))
+
+
 class ExecutionServiceClient:
     def __init__(self, host: str = None, port: int = None):
         self.host = host or settings.EXECUTION_ENGINE_HOST
         self.port = port or settings.EXECUTION_ENGINE_PORT
         self.channel_url = f"{self.host}:{self.port}"
-        
-        # Initialize interceptor
         self.interceptor = LatencyClientInterceptor()
-        
-        # Create channel and intercept it
         self._channel = None
         self._stub = None
 
     async def get_stub(self):
         if self._stub is None:
-            # Use async channel
             self._channel = grpc.aio.insecure_channel(
                 self.channel_url,
                 interceptors=[self.interceptor]
@@ -32,100 +38,131 @@ class ExecutionServiceClient:
             self._stub = execution_pb2_grpc.ExecutionServiceStub(self._channel)
         return self._stub
 
-    async def execute_trade(self, signal_id: str, pair_id: str, legs: List[dict], 
-                     max_slippage: Optional[float] = None, risk_multiplier: Optional[float] = None) -> Optional[execution_pb2.ExecutionResponse]:
+    async def execute_trade(
+        self,
+        signal_id: str,
+        pair_id: str,
+        legs: List[dict],
+        max_slippage: Optional[float] = None,
+        risk_multiplier: Optional[float] = None,
+    ) -> Optional[execution_pb2.ExecutionResponse]:
         """
-        Sends an ExecutionRequest to the Java Engine with Redis idempotency.
-        Fetches dynamic risk parameters from RiskService if not provided.
+        Sends an ExecutionRequest to the Java engine.
+
+        All price/quantity/slippage fields are transmitted as exact decimal
+        strings (feature 033) to prevent IEEE-754 precision loss across the
+        gRPC boundary. The call is subject to a strict 50 ms deadline;
+        DEADLINE_EXCEEDED triggers immediate cancellation with no retry.
         """
-        # T016: Implement Redis idempotency lock
         from src.services.redis_service import redis_service
         from src.services.risk_service import risk_service
-        
+
         lock_key = f"idempotency:{signal_id}"
-        
-        # SET key value NX EX 60
         is_locked = await redis_service.set_nx(lock_key, "LOCKED", expire=60)
         if not is_locked:
-            logger.warning(f"Idempotency: Signal {signal_id} is already being processed. Rejecting duplicate.")
+            logger.warning(
+                "Idempotency: Signal %s already in-flight. Rejecting duplicate.", signal_id
+            )
             return execution_pb2.ExecutionResponse(
                 signal_id=signal_id,
                 status=execution_pb2.STATUS_BROKER_ERROR,
-                message="Duplicate Request - Signal already in process"
+                message="Duplicate Request - Signal already in process",
             )
 
         try:
-            # Fetch dynamic risk parameters if not provided
             if max_slippage is None or risk_multiplier is None:
-                # Use the first ticker from legs as reference for volatility
-                ref_ticker = legs[0]['ticker'] if legs else "GENERIC"
+                ref_ticker = legs[0]["ticker"] if legs else "GENERIC"
                 params = await risk_service.get_execution_params(ref_ticker)
-                
                 if max_slippage is None:
                     max_slippage = params["max_slippage_pct"]
                 if risk_multiplier is None:
                     risk_multiplier = params["risk_multiplier"]
-                
-                logger.info(f"RiskService: Using dynamic params for {signal_id}: max_slippage={max_slippage}, risk_mult={risk_multiplier}")
+                logger.info(
+                    "RiskService: dynamic params for %s — slippage=%s mult=%s",
+                    signal_id, max_slippage, risk_multiplier,
+                )
 
-            execution_legs = []
-            for leg in legs:
-                execution_legs.append(execution_pb2.ExecutionRequest.ExecutionLeg(
-                    ticker=leg['ticker'],
-                    side=execution_pb2.SIDE_BUY if leg['side'].upper() == "BUY" else execution_pb2.SIDE_SELL,
-                    quantity=leg['quantity'],
-                    target_price=leg['target_price']
-                ))
+            execution_legs = [
+                execution_pb2.ExecutionRequest.ExecutionLeg(
+                    ticker=leg["ticker"],
+                    side=(
+                        execution_pb2.SIDE_BUY
+                        if leg["side"].upper() == "BUY"
+                        else execution_pb2.SIDE_SELL
+                    ),
+                    quantity=_to_decimal_str(leg["quantity"]),
+                    target_price=_to_decimal_str(leg["target_price"]),
+                )
+                for leg in legs
+            ]
 
             request = execution_pb2.ExecutionRequest(
                 signal_id=signal_id,
                 pair_id=pair_id,
                 timestamp_ns=time.time_ns(),
-                max_slippage_pct=max_slippage,
-                risk_multiplier=risk_multiplier,
-                legs=execution_legs
+                max_slippage_pct=_to_decimal_str(max_slippage),
+                risk_multiplier=_to_decimal_str(risk_multiplier),
+                legs=execution_legs,
             )
 
-            logger.info(f"gRPC: Sending ExecutionRequest {signal_id} to {self.channel_url}")
+            logger.info("gRPC: Sending ExecutionRequest %s to %s", signal_id, self.channel_url)
             stub = await self.get_stub()
-            response = await stub.ExecuteTrade(request)
+            response = await stub.ExecuteTrade(request, timeout=_RPC_DEADLINE_SECONDS)
             return response
-        except grpc.RpcError as e:
-            logger.error(f"gRPC Error executing trade {signal_id}: {e.code()} - {e.details()}")
+
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                logger.error(
+                    "gRPC DEADLINE_EXCEEDED for %s — 50 ms budget exhausted, cancelling.",
+                    signal_id,
+                )
+            else:
+                logger.error(
+                    "gRPC error executing trade %s: %s — %s", signal_id, e.code(), e.details()
+                )
             return None
         except Exception as e:
-            logger.error(f"Unexpected error in gRPC ExecutionServiceClient: {e}")
+            logger.error("Unexpected error in ExecutionServiceClient.execute_trade: %s", e)
             return None
 
-    async def get_trade_status(self, signal_id: str) -> Optional[execution_pb2.ExecutionResponse]:
-        """
-        Queries the status of a previous signal.
-        """
+    async def get_trade_status(
+        self, signal_id: str
+    ) -> Optional[execution_pb2.ExecutionResponse]:
         try:
-            request = execution_pb2.TradeStatusRequest(signal_id=signal_id)
             stub = await self.get_stub()
-            return await stub.GetTradeStatus(request)
-        except grpc.RpcError as e:
-            logger.error(f"gRPC Error getting status for {signal_id}: {e.code()} - {e.details()}")
+            return await stub.GetTradeStatus(
+                execution_pb2.TradeStatusRequest(signal_id=signal_id),
+                timeout=_RPC_DEADLINE_SECONDS,
+            )
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                logger.error("gRPC DEADLINE_EXCEEDED on GetTradeStatus for %s.", signal_id)
+            else:
+                logger.error("gRPC error on GetTradeStatus %s: %s", signal_id, e.code())
             return None
 
-    async def trigger_kill_switch(self, reason: str, liquidate: bool = True) -> Optional[execution_pb2.KillSwitchResponse]:
-        """
-        US2: Bypasses decision loop to immediately halt Java engine.
-        """
+    async def trigger_kill_switch(
+        self, reason: str, liquidate: bool = True
+    ) -> Optional[execution_pb2.KillSwitchResponse]:
         try:
-            request = execution_pb2.KillSwitchRequest(reason=reason, liquidate=liquidate)
             stub = await self.get_stub()
-            return await stub.TriggerKillSwitch(request)
-        except grpc.RpcError as e:
-            logger.error(f"gRPC Error triggering Kill Switch: {e.code()} - {e.details()}")
+            return await stub.TriggerKillSwitch(
+                execution_pb2.KillSwitchRequest(reason=reason, liquidate=liquidate),
+                timeout=_RPC_DEADLINE_SECONDS,
+            )
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                logger.error("gRPC DEADLINE_EXCEEDED on TriggerKillSwitch.")
+            else:
+                logger.error("gRPC error on TriggerKillSwitch: %s — %s", e.code(), e.details())
             return None
         except Exception as e:
-            logger.error(f"Unexpected error triggering Kill Switch: {e}")
+            logger.error("Unexpected error in ExecutionServiceClient.trigger_kill_switch: %s", e)
             return None
 
     async def close(self):
         if self._channel:
             await self._channel.close()
+
 
 execution_client = ExecutionServiceClient()
