@@ -1,0 +1,86 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import type { RiskTelemetry, ThoughtTelemetry, TelemetryMessage } from '../services/api';
+
+const API_BASE = (window.location.port === '5173' || window.location.port === '3000')
+  ? `${window.location.protocol}//${window.location.hostname}:8080` 
+  : window.location.origin;
+
+const WS_BASE = API_BASE.replace('http', 'ws');
+
+export const useTelemetry = (token: string | null) => {
+  const [isConnected, setIsConnected] = useState(false);
+  const [risk, setRisk] = useState<RiskTelemetry | null>(null);
+  const [thoughts, setThoughts] = useState<ThoughtTelemetry[]>([]);
+  const [botState, setBotState] = useState<string>('IDLE');
+  
+  const ws = useRef<WebSocket | null>(null);
+  const reconnectTimeout = useRef<number | null>(null);
+  const retryCount = useRef(0);
+
+  const connect = useCallback(() => {
+    if (!token) return;
+
+    const url = new URL('/ws/telemetry', WS_BASE);
+    url.searchParams.set('token', token);
+
+    const socket = new WebSocket(url.toString());
+
+    socket.onopen = () => {
+      console.log('Telemetry WebSocket Connected');
+      setIsConnected(true);
+      retryCount.current = 0;
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const message: TelemetryMessage = JSON.parse(event.data);
+        
+        switch (message.type) {
+          case 'risk':
+            setRisk(message.data as RiskTelemetry);
+            break;
+          case 'thought':
+            setThoughts(prev => {
+              const newThoughts = [...prev, message.data as ThoughtTelemetry];
+              return newThoughts.slice(-100); // Ring-buffer: keep last 100
+            });
+            break;
+          case 'bot_state':
+            setBotState(message.data.state || 'IDLE');
+            break;
+        }
+      } catch (err) {
+        console.error('Failed to parse telemetry message:', err);
+      }
+    };
+
+    socket.onclose = () => {
+      console.log('Telemetry WebSocket Disconnected');
+      setIsConnected(false);
+      
+      // Exponential backoff reconnect
+      const delay = Math.min(1000 * Math.pow(2, retryCount.current), 30000);
+      reconnectTimeout.current = window.setTimeout(() => {
+        retryCount.current++;
+        connect();
+      }, delay);
+    };
+
+    socket.onerror = (err) => {
+      console.error('Telemetry WebSocket Error:', err);
+      socket.close();
+    };
+
+    ws.current = socket;
+  }, [token]);
+
+  useEffect(() => {
+    connect();
+    return () => {
+      if (ws.current) ws.current.close();
+      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
+    };
+  }, [connect]);
+
+  return { isConnected, risk, thoughts, botState };
+};

@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TelemetryUpdate",
+  "type": "object",
+  "required": ["type", "timestamp", "data"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["risk", "thought", "bot_state"]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "data": {
+      "type": "object",
+      "oneOf": [
+        {
+          "title": "RiskMetrics",
+          "properties": {
+            "risk_multiplier": { "type": "number", "minimum": 0, "maximum": 1 },
+            "max_drawdown_pct": { "type": "number" },
+            "volatility_status": { "type": "string", "enum": ["NORMAL", "HIGH_VOLATILITY"] },
+            "l2_entropy": { "type": "number" }
+          },
+          "required": ["risk_multiplier", "max_drawdown_pct", "volatility_status"]
+        },
+        {
+          "title": "AgentThought",
+          "properties": {
+            "agent_name": { "type": "string" },
+            "signal_id": { "type": "string" },
+            "thought": { "type": "string" },
+            "verdict": { "type": "string", "enum": ["BULLISH", "BEARISH", "NEUTRAL", "VETO"] }
+          },
+          "required": ["agent_name", "thought", "verdict"]
+        },
+        {
+          "title": "BotState",
+          "properties": {
+            "mood": { "type": "string", "enum": ["IDLE", "DOUBT", "GLITCH", "HAPPY"] },
+            "reason": { "type": "string" }
+          },
+          "required": ["mood"]
+        }
+      ]
+    }
+  }
+}

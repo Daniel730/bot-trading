@@ -47,6 +47,31 @@ Updates will be streamed via WebSocket as JSON objects with the following types:
 }
 ```
 
+### 4. Pixel Bot State (`type: "bot_state"`)
+```json
+{
+  "type": "bot_state",
+  "timestamp": "2026-04-06T12:00:03.000Z",
+  "data": {
+    "mood": "GLITCH",
+    "reason": "Volatility switch triggered (Entropy: 0.85)"
+  }
+}
+```
+
+## Frontend State Management
+
+### Log Ring-Buffer
+- **Structure**: `Array<ThoughtUpdate>`
+- **Max Entries**: 100
+- **Policy**: `Push New` -> `Shift Old` if `Length > 100`.
+
+### PixelBot Moods
+- `IDLE`: Normal monitoring.
+- `DOUBT`: Low achievability/high uncertainty.
+- `GLITCH`: High entropy/volatility protection.
+- `HAPPY`: High performance/profitable execution.
+
 ## Backend States
 
 ### Telemetry Queue
