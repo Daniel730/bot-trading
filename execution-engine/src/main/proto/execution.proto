@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package com.arbitrage.engine;
+
+option java_multiple_files = true;
+option java_package = "com.arbitrage.engine.grpc";
+option java_outer_classname = "ExecutionProto";
+
+service ExecutionService {
+  // Submit an atomic arbitrage trade request.
+  rpc ExecuteTrade(ExecutionRequest) returns (ExecutionResponse) {}
+
+  // Check the status of a previously submitted trade (Reconciliation).
+  rpc GetTradeStatus(TradeStatusRequest) returns (ExecutionResponse) {}
+}
+
+message ExecutionRequest {
+  string signal_id = 1;      // UUID from Python agent_reasoning
+  string pair_id = 2;        // e.g., "KO_PEP"
+  int64 timestamp_ns = 3;    // Current time in nanoseconds for TTL check
+  double max_slippage_pct = 4; // Max allowed slippage (e.g., 0.001)
+  double risk_multiplier = 5;  // Position size scaler (e.g., 0.5)
+
+  message ExecutionLeg {
+    string ticker = 1;       // Ticker symbol (e.g., "KO")
+    Side side = 2;           // BUY or SELL
+    double quantity = 3;     // Total quantity requested
+    double target_price = 4; // Expected entry price
+  }
+
+  repeated ExecutionLeg legs = 6;
+}
+
+message TradeStatusRequest {
+  string signal_id = 1; // UUID of the original signal
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+message ExecutionResponse {
+  string signal_id = 1;
+  ExecutionStatus status = 2;
+  string message = 3;
+  double actual_vwap = 4;
+  int64 processing_time_ns = 5; // Internal latency for auditing
+}
+
+enum ExecutionStatus {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_SUCCESS = 1;
+  STATUS_REJECTED_SLIPPAGE = 2;
+  STATUS_REJECTED_DEPTH = 3;
+  STATUS_REJECTED_LATENCY = 4;
+  STATUS_BROKER_ERROR = 5;
+  STATUS_NOT_FOUND = 6; // Used for reconciliation
+}
