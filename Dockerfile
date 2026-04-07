@@ -32,6 +32,20 @@ COPY .env.template /app/.env.template
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
+# Regenerate gRPC/protobuf stubs from the canonical proto so Python types
+# always match the execution-engine without requiring manually committed stubs.
+COPY execution-engine/src/main/proto/ /app/proto/
+RUN python -m grpc_tools.protoc \
+        -I /app/proto \
+        --python_out=/app/src/generated \
+        --grpc_python_out=/app/src/generated \
+        /app/proto/execution.proto && \
+    # grpc_tools emits a bare 'import execution_pb2' which fails when the
+    # module lives inside a package; rewrite to the fully-qualified path.
+    sed -i \
+        's/^import execution_pb2 as execution__pb2/from src.generated import execution_pb2 as execution__pb2/' \
+        /app/src/generated/execution_pb2_grpc.py
+
 # Expose any ports
 # (MCP server might need one if used via HTTP, but FastMCP is usually stdio or SSE)
 # For now, no specific port is required by the monitor.
