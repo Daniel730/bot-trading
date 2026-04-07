@@ -51,6 +51,8 @@ services:
         condition: service_healthy
       mcp-server:
         condition: service_healthy
+      execution-engine:
+        condition: service_started
 
   mcp-server:
     build:
@@ -70,12 +72,25 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      execution-engine:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-s", "-I", "http://localhost:8000/sse"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 15s
+
+  execution-engine:
+    build:
+      context: ./execution-engine
+      dockerfile: Dockerfile
+    container_name: execution-engine
+    ports:
+      - "50051:50051"
+    env_file:
+      - .env
+    restart: always
 
   sec-worker:
     build:

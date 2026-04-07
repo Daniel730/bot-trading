@@ -132,23 +132,25 @@ class ArbitrageMonitor:
             # Signal Generation
             if abs(z_score) > 2.0:
                 signal_id = str(uuid.uuid4())
-                
+                logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
+
                 # Update Active Signals for Dashboard
                 signal_entry = next((s for s in self.active_signals if s['ticker_a'] == t_a and s['ticker_b'] == t_b), None)
                 if not signal_entry:
                     signal_entry = {"ticker_a": t_a, "ticker_b": t_b, "z_score": z_score, "status": "Analyzing"}
                     self.active_signals.append(signal_entry)
-                
+
                 # AI Validation
                 signal_context = {
                     "ticker_a": t_a, "ticker_b": t_b,
                     "z_score": z_score, "dynamic_beta": state_vec[1],
                     "signal_id": signal_id
                 }
-                
+
                 decision_state = await orchestrator.ainvoke({"signal_context": signal_context})
                 await audit_service.log_thought_process(signal_id, decision_state)
-                
+                logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
+
                 if decision_state['final_confidence'] > 0.5:
                     approved = await notification_service.request_approval(f"Opportunity in {t_a}/{t_b}. Z:{z_score:.2f}")
                     if approved:
@@ -205,6 +207,14 @@ class ArbitrageMonitor:
             persistence_service.init_db(),
             self.initialize_pairs()
         )
+        await dashboard_service.start()
+        await notification_service.start_listening()
+
+        # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
+        # from a previous crashed session doesn't silently block all signals.
+        await persistence_service.set_system_state("operational_status", "NORMAL")
+        await persistence_service.set_system_state("consecutive_api_timeouts", "0")
+        logger.info("Circuit breaker reset to NORMAL on startup.")
         
         try:
             while True:
@@ -225,7 +235,7 @@ class ArbitrageMonitor:
         finally:
             # Graceful shutdown of database pools
             await persistence_service.engine.dispose()
-            await redis_service.client.close()
+            await redis_service.client.aclose()
             logger.info("Service shutdown complete.")
 
 if __name__ == "__main__":

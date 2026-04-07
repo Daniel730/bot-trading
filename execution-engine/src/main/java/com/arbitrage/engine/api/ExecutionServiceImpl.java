@@ -5,6 +5,7 @@ import com.arbitrage.engine.core.models.ExecutionLeg;
 import com.arbitrage.engine.config.EnvironmentConfig;
 import com.arbitrage.engine.core.models.ExecutionMode;
 import com.arbitrage.engine.core.models.L2OrderBook;
+import com.arbitrage.engine.broker.Broker;
 import com.arbitrage.engine.grpc.*;
 import com.arbitrage.engine.persistence.RedisOrderSync;
 import com.arbitrage.engine.persistence.TradeLedgerRepository;
@@ -221,7 +222,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 .setSuccess(true)
                 .setStatusMessage("System Halted. Kill Switch Active.")
                 .setOrdersCancelled(cancelled)
-                .setPositions_liquidated(liquidated) // Note: proto camelCase to snake_case mapping
+                .setPositionsLiquidated(liquidated)
                 .build());
         responseObserver.onCompleted();
     }

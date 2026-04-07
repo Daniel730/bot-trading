@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew compileJava test --no-daemon)",
+      "Bash(gradle --version)",
+      "Bash(docker info:*)",
+      "Bash(docker build:*)"
+    ]
+  }
+}
