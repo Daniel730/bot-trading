@@ -44,6 +44,11 @@ class ExecutionServiceStub(object):
                 request_serializer=execution__pb2.TradeStatusRequest.SerializeToString,
                 response_deserializer=execution__pb2.ExecutionResponse.FromString,
                 _registered_method=True)
+        self.TriggerKillSwitch = channel.unary_unary(
+                '/com.arbitrage.engine.ExecutionService/TriggerKillSwitch',
+                request_serializer=execution__pb2.KillSwitchRequest.SerializeToString,
+                response_deserializer=execution__pb2.KillSwitchResponse.FromString,
+                _registered_method=True)
 
 
 class ExecutionServiceServicer(object):
@@ -63,6 +68,13 @@ class ExecutionServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def TriggerKillSwitch(self, request, context):
+        """T007: Emergency Kill Switch to immediately halt trading and liquidate.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ExecutionServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -75,6 +87,11 @@ def add_ExecutionServiceServicer_to_server(servicer, server):
                     servicer.GetTradeStatus,
                     request_deserializer=execution__pb2.TradeStatusRequest.FromString,
                     response_serializer=execution__pb2.ExecutionResponse.SerializeToString,
+            ),
+            'TriggerKillSwitch': grpc.unary_unary_rpc_method_handler(
+                    servicer.TriggerKillSwitch,
+                    request_deserializer=execution__pb2.KillSwitchRequest.FromString,
+                    response_serializer=execution__pb2.KillSwitchResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -131,6 +148,33 @@ class ExecutionService(object):
             '/com.arbitrage.engine.ExecutionService/GetTradeStatus',
             execution__pb2.TradeStatusRequest.SerializeToString,
             execution__pb2.ExecutionResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def TriggerKillSwitch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/com.arbitrage.engine.ExecutionService/TriggerKillSwitch',
+            execution__pb2.KillSwitchRequest.SerializeToString,
+            execution__pb2.KillSwitchResponse.FromString,
             options,
             channel_credentials,
             insecure,

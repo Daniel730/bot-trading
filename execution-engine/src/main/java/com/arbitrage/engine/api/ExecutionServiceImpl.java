@@ -20,10 +20,12 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceImplBase {
     private static final Logger logger = LoggerFactory.getLogger(ExecutionServiceImpl.class);
 
+    private final AtomicBoolean killSwitchActive = new AtomicBoolean(false);
     private final VwapCalculator vwapCalculator = new VwapCalculator();
     private final SlippageGuard slippageGuard = new SlippageGuard();
     private final TradeLedgerRepository repository;
@@ -50,6 +52,17 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
 
     @Override
     public void executeTrade(ExecutionRequest request, StreamObserver<ExecutionResponse> responseObserver) {
+        if (killSwitchActive.get()) {
+            logger.warn("Trade rejected - Kill Switch Active: {}", request.getSignalId());
+            responseObserver.onNext(ExecutionResponse.newBuilder()
+                    .setSignalId(request.getSignalId())
+                    .setStatus(ExecutionStatus.STATUS_HALTED)
+                    .setMessage("Execution Engine is HALTED via Kill Switch")
+                    .build());
+            responseObserver.onCompleted();
+            return;
+        }
+
         executionTimer.record(() -> {
             long startTime = System.nanoTime();
             UUID signalId = UUID.fromString(request.getSignalId());
@@ -187,6 +200,28 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
         responseObserver.onNext(ExecutionResponse.newBuilder()
                 .setSignalId(request.getSignalId())
                 .setStatus(ExecutionStatus.STATUS_NOT_FOUND)
+                .build());
+        responseObserver.onCompleted();
+    }
+
+    @Override
+    public void triggerKillSwitch(KillSwitchRequest request, StreamObserver<KillSwitchResponse> responseObserver) {
+        logger.warn("!!! KILL SWITCH TRIGGERED !!! Reason: {}", request.getReason());
+        killSwitchActive.set(true);
+
+        int cancelled = broker.cancelAllOrders();
+        int liquidated = 0;
+
+        if (request.getLiquidate()) {
+            logger.warn("EMERGENCY LIQUIDATION INITIATED...");
+            liquidated = broker.liquidateAllPositions();
+        }
+
+        responseObserver.onNext(KillSwitchResponse.newBuilder()
+                .setSuccess(true)
+                .setStatusMessage("System Halted. Kill Switch Active.")
+                .setOrdersCancelled(cancelled)
+                .setPositions_liquidated(liquidated) // Note: proto camelCase to snake_case mapping
                 .build());
         responseObserver.onCompleted();
     }

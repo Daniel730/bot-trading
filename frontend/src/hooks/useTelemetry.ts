@@ -82,5 +82,5 @@ export const useTelemetry = (token: string | null) => {
     };
   }, [connect]);
 
-  return { isConnected, risk, thoughts, botState };
+  return { isConnected, risk, thoughts, botState, ws };
 };
