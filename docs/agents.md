@@ -17,3 +17,10 @@ Provides global market context.
 Handles post-trade evaluation and self-correction.
 - **Responsibilities**: Vectorized trade post-mortems, agent weight updates.
 - **Logic**: 30-day performance review, dynamic confidence adjustment.
+
+## Decoupled Fundamental RAG (Asynchronous SEC Analysis)
+Separates high-latency financial statement analysis from the real-time signal evaluation path.
+- **Process Isolation**: A standalone background daemon (`src/daemons/sec_fundamental_worker.py`) executes in a dedicated Docker container to prevent GIL stalls in the main trading loop.
+- **Materialized View**: Fundamental integrity scores are cached in Redis with a 24-hour TTL, enabling sub-millisecond retrieval during signal debates.
+- **Deterministic Universe**: The background worker automatically analyzes all tickers defined in the `active_pairs` database, ensuring cache readiness before signals fire.
+- **Resilience**: The worker implements exponential backoff for SEC EDGAR API rate limits, while the Orchestrator provides a safe default (50) and high-priority telemetry alerts on cache misses.

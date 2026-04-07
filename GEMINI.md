@@ -1,13 +1,13 @@
 # bot-trading Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-04-05
+Auto-generated from all feature plans. Last updated: 2026-04-06
 
 ## Active Technologies
-## Active Technologies
-- Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity` (004-strategic-arbitrage-engine)
+- Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity`, `grpcio`, `grpcio-tools`, `numpy`, `scipy` (028-dynamic-risk-and-volatility-switch)
 - SQLite (Arbitrage pairs, Signal records, Virtual Pie state, Trade Ledger, DCA Schedules, Portfolio Strategies) (014-low-budget-investor-suite)
-
-- (002-trading-arbitrage-bot)
+- PostgreSQL (R2DBC) (028-dynamic-risk-and-volatility-switch)
+- Redis (Idempotency, Entropy, Latency Telemetry) (028-dynamic-risk-and-volatility-switch)
+- gRPC (Python/Java with Nanosecond Interceptors) (027-model-calibration)
 
 ## Project Structure
 
@@ -18,16 +18,29 @@ src/
     macro_economic_agent.py (Feature 014)
   services/
     dca_service.py (Feature 014)
+    performance_service.py (Feature 028)
+    volatility_service.py (Feature 028)
+    execution_service_client.py (Feature 027)
+    calibration_service.py (Feature 027)
 ```
 
-## Persona Mandates
+## Recent Changes
+- 028-dynamic-risk-and-volatility-switch: Added Performance Service (Sharpe/Drawdown) and Volatility Switch (L2 Entropy).
+- 027-model-calibration: Added gRPC Latency Monitoring (Nanosecond Interceptors), Redis Idempotency hardening, and Shadow Mode Fill Realism Audit (Walk-the-Book VWAP).
+- 014-low-budget-investor-suite: Added Fractional Engine, DCA Service, Portfolio Manager, and Macro Agent.
 
 ### Senior Developer (Elite Software Engineer)
 - **Rigor:** Zero-tolerance for unhandled exceptions or missing type hints.
 - **Async:** Use `asyncio` and `FastMCP` for all I/O bound operations.
-- **Testing:** New features MUST include unit and integration tests.
+- **Testing:** New features MUST include unit and integration tests. (MANDATORY for 027)
 - **Patterns:** Favor `src/services/` singleton exports and `pydantic` models.
 - **Fractional Precision:** Use 6 decimal places for fractional share calculations (Feature 014).
+- **Latency Monitoring:** Sub-millisecond gRPC RTT is a hard requirement. `LATENCY_ALARM` triggers if >10% of samples exceed 1ms.
+
+### Senior Investor (Quantitative Analyst)
+- **Alpha Verification:** "Achievable Alpha" must be verified via `CalibrationService` audits against L2 snapshots.
+- **Simulation Fidelity:** Shadow Mode must penalize trade size via 0.5bps impact per 10% depth consumed.
+- **Clock Sync:** Clock drift between environments must remain <100μs (enforced via `chrony`).
 
 ### Senior Investor (Quantitative Analyst)
 - **Risk:** No pair > 5% equity. Max 15% strategy drawdown.
