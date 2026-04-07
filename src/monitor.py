@@ -47,8 +47,36 @@ class ArbitrageMonitor:
         self.daily_start_cash = 0.0
         self.daily_halted = False
 
+    async def verify_entropy_baselines(self):
+        """
+        US1: Enforce mandatory startup check against Redis L2 entropy baselines.
+        Refuses to boot if baselines are missing for any active pair when LIVE_CAPITAL_DANGER=True.
+        """
+        logger.info("VALIDATING L2 ENTROPY BASELINES (LIVE_CAPITAL_DANGER=True)...")
+        missing_baselines = []
+        for pair in settings.ARBITRAGE_PAIRS:
+            ticker_a, ticker_b = pair['ticker_a'], pair['ticker_b']
+            # Entropy service stores baselines as 'entropy_baseline:{ticker}'
+            baseline_a = await redis_service.client.get(f"entropy_baseline:{ticker_a}")
+            baseline_b = await redis_service.client.get(f"entropy_baseline:{ticker_b}")
+            
+            if not baseline_a: missing_baselines.append(ticker_a)
+            if not baseline_b: missing_baselines.append(ticker_b)
+            
+        if missing_baselines:
+            error_msg = f"CRITICAL: Missing L2 Entropy Baselines for: {list(set(missing_baselines))}. Refusing to boot in LIVE mode."
+            logger.critical(error_msg)
+            # Send alert before exiting
+            await notification_service.send_message(error_msg)
+            raise SystemExit(error_msg)
+            
+        logger.info("L2 ENTROPY BASELINES VALIDATED. Proceeding with Live Startup.")
+
     async def initialize_pairs(self):
         """Initializes cointegration metrics and Kalman filters."""
+        if settings.LIVE_CAPITAL_DANGER:
+            await self.verify_entropy_baselines()
+            
         pairs_to_init = settings.ARBITRAGE_PAIRS
         logger.info(f"Initializing pairs in {'DEV' if settings.DEV_MODE else 'PROD'} mode...")
         

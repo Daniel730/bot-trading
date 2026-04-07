@@ -109,6 +109,21 @@ class ExecutionServiceClient:
             logger.error(f"gRPC Error getting status for {signal_id}: {e.code()} - {e.details()}")
             return None
 
+    async def trigger_kill_switch(self, reason: str, liquidate: bool = True) -> Optional[execution_pb2.KillSwitchResponse]:
+        """
+        US2: Bypasses decision loop to immediately halt Java engine.
+        """
+        try:
+            request = execution_pb2.KillSwitchRequest(reason=reason, liquidate=liquidate)
+            stub = await self.get_stub()
+            return await stub.TriggerKillSwitch(request)
+        except grpc.RpcError as e:
+            logger.error(f"gRPC Error triggering Kill Switch: {e.code()} - {e.details()}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error triggering Kill Switch: {e}")
+            return None
+
     async def close(self):
         if self._channel:
             await self._channel.close()
