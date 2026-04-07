@@ -1,6 +1,6 @@
 # bot-trading Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-04-06
+Auto-generated from all feature plans. Last updated: 2026-04-07
 
 ## Active Technologies
 - Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity`, `grpcio`, `grpcio-tools`, `numpy`, `scipy` (028-dynamic-risk-and-volatility-switch)

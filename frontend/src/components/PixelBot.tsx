@@ -3,7 +3,7 @@ import React from 'react';
 import { SpriteAnimator } from 'react-sprite-animator';
 
 interface PixelBotProps {
-  mood: 'idle' | 'analyzing' | 'executing';
+  mood: 'idle' | 'analyzing' | 'executing' | 'doubt' | 'glitch' | 'happy';
 }
 
 const PixelBot: React.FC<PixelBotProps> = ({ mood }) => {
@@ -11,10 +11,13 @@ const PixelBot: React.FC<PixelBotProps> = ({ mood }) => {
   const moodConfig = {
     idle: { startFrame: 0, fps: 4 },
     analyzing: { startFrame: 4, fps: 6 },
-    executing: { startFrame: 8, fps: 10 }
+    executing: { startFrame: 8, fps: 10 },
+    doubt: { startFrame: 12, fps: 5 },
+    glitch: { startFrame: 16, fps: 12 },
+    happy: { startFrame: 20, fps: 8 }
   };
 
-  const { startFrame, fps } = moodConfig[mood];
+  const config = moodConfig[mood] || moodConfig.idle;
 
   return (
     <div className="pixel-bot-container" style={{ 
@@ -24,15 +27,17 @@ const PixelBot: React.FC<PixelBotProps> = ({ mood }) => {
       justifyContent: 'center', 
       alignItems: 'center',
       position: 'relative',
-      overflow: 'visible'
+      overflow: 'visible',
+      willChange: 'transform',
+      transform: 'translate3d(0,0,0)'
     }}>
-      <div style={{ transform: 'scale(8)', imageRendering: 'pixelated' }}>
+      <div style={{ transform: 'scale(8)', imageRendering: 'pixelated', willChange: 'transform' }}>
         <SpriteAnimator
           sprite="/assets/bot_spritesheet.png"
           width={64}
           height={64}
-          fps={fps}
-          startFrame={startFrame}
+          fps={config.fps}
+          startFrame={config.startFrame}
           frameCount={4}
           wrapAfter={4}
         />

@@ -60,6 +60,30 @@ class Orchestrator:
         
         bull_results, bear_results, score_data_a, score_data_b = results
         
+        # Broadcast intermediate agent thoughts
+        sig_id = state['signal_context'].get('signal_id', 'N/A')
+        
+        telemetry_service.broadcast("thought", {
+            "agent_name": "BULL_AGENT",
+            "signal_id": sig_id,
+            "thought": str(bull_results.get("reasoning", "Analysis complete")) if not isinstance(bull_results, Exception) else f"Error: {bull_results}",
+            "verdict": "BULLISH" if not isinstance(bull_results, Exception) and bull_results.get("confidence", 0) > 0.5 else "NEUTRAL"
+        })
+        
+        telemetry_service.broadcast("thought", {
+            "agent_name": "BEAR_AGENT",
+            "signal_id": sig_id,
+            "thought": str(bear_results.get("reasoning", "Analysis complete")) if not isinstance(bear_results, Exception) else f"Error: {bear_results}",
+            "verdict": "BEARISH" if not isinstance(bear_results, Exception) and bear_results.get("confidence", 0) > 0.5 else "NEUTRAL"
+        })
+
+        telemetry_service.broadcast("thought", {
+            "agent_name": "SEC_AGENT",
+            "signal_id": sig_id,
+            "thought": f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}",
+            "verdict": "VETO" if score_a < 40 or score_b < 40 else "NEUTRAL"
+        })
+        
         # Track if any major API timeout occurred for circuit breaker
         timeout_occurred = False
         
@@ -130,6 +154,16 @@ class Orchestrator:
             state["final_verdict"] = f"Aggregated: Bull({bull_conf:.2f}), Bear({bear_conf:.2f}), SEC-Avg-Integrity({avg_integrity:.2f})"
         
         # FR-004, US2: Broadcast final verdict to Telemetry
+        mood = "IDLE"
+        if timeout_occurred:
+            mood = "GLITCH"
+        elif state["final_confidence"] > 0.8:
+            mood = "HAPPY"
+        elif state["final_confidence"] < 0.3:
+            mood = "DOUBT"
+            
+        telemetry_service.broadcast("bot_state", {"state": mood})
+        
         telemetry_service.broadcast("thought", {
             "agent_name": "ORCHESTRATOR",
             "signal_id": state['signal_context'].get('signal_id', 'N/A'),

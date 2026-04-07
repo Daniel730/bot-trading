@@ -4,37 +4,37 @@
 
 ## Current State Analysis
 
-### Telemetry Implementation
-- **File**: `src/services/telemetry_service.py`
-- **Current State**: Primarily a stub for syncing outcomes to an external central server (POST requests).
-- **Gaps**: No real-time streaming capability or local dashboard broadcast mechanism.
+### Frontend Dual-Path
+The project currently has two frontends:
+1.  **Vanilla (`/dashboard`)**: Uses SSE and simple DOM manipulation.
+2.  **React (`/frontend`)**: Uses Vite and Framer Motion.
+- **Decision**: Feature 029 will prioritize the React frontend for institucional use, keeping the vanilla dashboard as a fallback.
 
-### Dashboard Streaming
-- **File**: `src/services/dashboard_service.py`
-- **Current State**: Uses Server-Sent Events (SSE) via `EventSourceResponse` in FastAPI to push metrics and terminal messages.
-- **Gaps**: SSE is uni-directional and might be less efficient for high-frequency "fire-and-forget" telemetry compared to WebSockets for this specific real-time requirement.
+### Sprite Animation (Pixel Bot)
+- **Library**: `react-sprite-animator` is already present in `frontend/src/components/PixelBot.tsx`.
+- **Performance**: Standard React state updates for every WebSocket tick can cause re-renders. We will use `React.memo` and scoped state to isolate the Pixel Bot and Log list.
 
-### Agent Logging
-- **File**: `src/services/agent_log_service.py`
-- **Current State**: Uses `PersistenceManager` (SQLite) to log thoughts synchronously (via `print` and DB writes).
-- **Gaps**: No connection between agent reasoning generation and the real-time dashboard stream.
+### DOM Performance (Ring-Buffer)
+- **Problem**: Long-running dashboards accumulate thousands of `<div>` nodes, leading to "layout thrashing" and high memory usage.
+- **Solution**: A strict ring-buffer (FIFO) implementation in React. When the list length exceeds 100, the oldest entry is dropped from state.
 
 ## Proposed Technical Solutions
 
 ### Asynchronous Telemetry Manager
-Instead of each agent calling the dashboard directly, we will implement a centralized `TelemetryManager` within `TelemetryService` that uses an `asyncio.Queue`. 
-- Producers (Agents, RiskService) push to the queue.
-- A background consumer task drains the queue and broadcasts via WebSockets.
-- This ensures zero latency impact on the producer's execution path.
+- Producers (Agents, RiskService) push to `asyncio.Queue`.
+- Consumer task broadcasts via WebSockets.
+- Ensures zero latency impact on the producer's execution path.
 
-### WebSocket over SSE
-While SSE works for the current dashboard, WebSockets provide a more robust full-duplex channel for interactive telemetry and lower overhead for frequent, small JSON updates (thoughts, risk ticks).
+### Pixel Bot Mood Mapping
+| Regime | Logic | Pixel Bot Expression |
+| :--- | :--- | :--- |
+| **Volatile** | `volatility_status == HIGH` | `GLITCH` |
+| **Uncertain** | `fill_achievability < 90%` OR `kalman_mismatch` | `DOUBT` |
+| **Optimal** | `sharpe > 1.5` AND `active_trades` | `HAPPY/AGGRESSIVE` |
+| **Normal** | Default | `IDLE` |
 
-### Risk Parameter Hooks
-We will add hooks in `RiskService.get_execution_params` to automatically push the calculated `risk_multiplier`, `max_drawdown`, and `volatility_status` to the `TelemetryService`.
-
-## Performance Benchmarks (Estimated)
-- **JSON Serialization**: < 1ms for small updates.
-- **Queue Push**: < 0.1ms (atomic `put_nowait`).
-- **End-to-end Latency**: ~20-50ms (network-dependent).
-- **Execution Path Overhead**: Near zero due to fire-and-forget.
+### CSS Hardware Acceleration
+To prevent browser freezing during high-frequency updates, we will enforce:
+- `will-change: transform, opacity` on all dynamic elements.
+- `transform: translate3d(0,0,0)` to force GPU composition.
+- Throttled UI updates (max 60fps) for the log stream.

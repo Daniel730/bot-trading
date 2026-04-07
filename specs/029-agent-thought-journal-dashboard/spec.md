@@ -3,7 +3,7 @@
 **Feature Branch**: `029-agent-thought-journal-dashboard`  
 **Created**: 2026-04-06  
 **Status**: Draft  
-**Input**: User description: "1. Architect an asynchronous WebSocket telemetry stream from the Python Orchestrator to the frontend dashboard. 2. Visually expose the active Risk Multiplier, Current Drawdown %, and Volatility Status (L2 Shannon Entropy level). 3. Stream the 'Thought Journal' of the Orchestrator, Bull, Bear, and SEC Agents without blocking the main trading loop. 4. The telemetry service must use a decoupled fire-and-forget pattern to guarantee zero latency impact on the core arbitrage execution hot path."
+**Input**: User description: "1. Architect an asynchronous WebSocket telemetry stream from the Python Orchestrator to the React/vanilla frontend. 2. Implement the 'Pixel Bot' UI element that dynamically updates its sprite/expression (idle, doubt, glitch, happy) based on the agent's Thought Journal and Risk States. 3. Visually expose the active Risk Multiplier, Current Drawdown %, and Volatility Status (L2 Shannon Entropy level). 4. The frontend must use a strict ring-buffer (max 100 entries) for the Thought Journal logs to prevent DOM bloat and memory leaks. 5. The backend telemetry service must use a decoupled fire-and-forget pattern to guarantee zero latency impact on the core arbitrage execution hot path."
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -18,46 +18,50 @@ As a trader, I want to see the real-time risk parameters (Risk Multiplier, Drawd
 
 ---
 
-### User Story 2 - Agent Thought Streaming (Priority: P1)
+### User Story 2 - Pixel Bot Emotional State (Priority: P1)
 
-As a quant developer, I want to see the live reasoning process (Bull, Bear, and SEC agent arguments) as it happens, so I can audit the AI's decision-making in real-time.
+As a quant developer, I want the Pixel Bot to reflect the system's health and market conditions via visual expressions, so I can intuitively sense the risk regime.
 
 **Acceptance Scenarios**:
 
-1. **Given** a new arbitrage signal is being processed, **When** the Bull and Bear agents complete their evaluation, **Then** their arguments must appear in the "Thought Journal" section of the dashboard within 200ms of generation.
+1. **Given** the Volatility Switch is triggered (High Entropy), **When** the dashboard updates, **Then** the Pixel Bot expression must switch to "GLITCH".
+2. **Given** a high Sharpe ratio and active execution, **When** trades are delta-neutral, **Then** the Pixel Bot must appear "HAPPY/AGGRESSIVE".
+3. **Given** a Kalman Filter covariance mismatch or L2 fill achievability < 90%, **When** the bot is uncertain, **Then** it must display "DOUBT".
 
 ---
 
-### User Story 3 - Zero-Latency Telemetry (Priority: P1)
+### User Story 3 - Zero-Latency Telemetry & Stable UI (Priority: P1)
 
-As a systems architect, I want the telemetry streaming to have zero impact on the execution latency of the trading loop, ensuring that dashboard updates do not delay order submission.
+As a systems architect, I want the telemetry streaming and UI rendering to be non-blocking and memory-safe, ensuring the command center remains responsive during high-volume signal bursts.
 
 **Acceptance Scenarios**:
 
-1. **Given** the system is under load (100 signals/sec), **When** telemetry is being streamed to multiple dashboard clients, **Then** the gRPC `ExecuteTrade` latency must remain within the 1.5ms budget.
+1. **Given** a burst of 10,000 telemetry messages, **When** the dashboard is open, **Then** the browser memory must remain stable due to the 100-entry ring-buffer.
+2. **Given** hardware-accelerated CSS is enabled, **When** the Pixel Bot animates, **Then** the main thread must not experience layout thrashing.
 
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
 - **FR-001**: System MUST implement a WebSocket server endpoint in `DashboardService` (FastAPI) to stream real-time JSON updates.
-- **FR-002**: `TelemetryService` MUST implement an asynchronous, non-blocking `push_update` method using a `fire-and-forget` pattern (e.g., `asyncio.create_task` or a background worker).
+- **FR-002**: `TelemetryService` MUST implement an asynchronous, non-blocking `push_update` method using a `fire-and-forget` pattern.
 - **FR-003**: System MUST stream the following risk metrics: `risk_multiplier`, `max_drawdown`, `volatility_status`, and `l2_entropy`.
 - **FR-004**: System MUST stream agent thoughts including `bull_argument`, `bear_argument`, and `fundamental_summary`.
-- **FR-005**: The frontend `app.js` MUST be updated to handle WebSocket connections and dynamically update the HUD and Thought Journal components.
-- **FR-006**: Telemetry data MUST be batched or throttled if necessary to prevent frontend performance degradation, without affecting the backend trading loop.
+- **FR-005**: Pixel Bot MUST support 4 states: `IDLE` (monitoring/SEC), `DOUBT` (low confidence/Kalman mismatch), `GLITCH` (high volatility), `HAPPY` (high sharpe/executing).
+- **FR-006**: Frontend MUST implement a strict ring-buffer (max 100 entries) for the Thought Journal logs to prevent DOM bloat.
+- **FR-007**: Frontend MUST use hardware-accelerated CSS (e.g., `translate3d`, `will-change`) for all animations.
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: Dashboard updates arrive within 500ms of the backend event.
-- **SC-002**: Zero increase in `ExecuteTrade` gRPC latency (measured via nanosecond interceptors) when telemetry is active.
-- **SC-003**: WebSocket connection supports at least 5 concurrent dashboard sessions without backend performance impact.
-- **SC-004**: 100% of "Thought Journal" entries generated by agents are successfully displayed on the dashboard.
+- **SC-001**: Dashboard updates arrive within 100ms of the backend event.
+- **SC-002**: Zero increase in `ExecuteTrade` gRPC latency when telemetry is active.
+- **SC-003**: Frontend memory usage remains < 256MB even after 24h of continuous telemetry streaming.
+- **SC-004**: Pixel Bot state transitions occur in < 50ms upon receipt of the corresponding telemetry message.
 
 ## Assumptions
 
-- **Browser Support**: The user's browser supports modern WebSockets.
-- **Network Stability**: The connection between the bot (Python) and the dashboard (Browser) is stable enough for streaming.
-- **FastAPI/Uvicorn**: The existing FastAPI setup is capable of handling WebSocket upgrades.
+- **Browser Support**: The user's browser supports modern WebSockets and hardware acceleration.
+- **Network Stability**: The connection between the bot and the dashboard is stable enough for streaming.
+- **Vite/React**: The frontend uses Vite and React as per the established project structure.
