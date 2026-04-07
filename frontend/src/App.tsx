@@ -40,6 +40,8 @@ const App: React.FC = () => {
     derivedMood = 'glitch';
   } else if ((risk?.risk_multiplier || 1) < 0.5) {
     derivedMood = 'doubt';
+  } else if (thoughts.length > 0 && thoughts[thoughts.length - 1].verdict === 'BULLISH' && botState === 'EXECUTING') {
+    derivedMood = 'happy';
   }
 
   useEffect(() => {

@@ -28,4 +28,16 @@ public interface Broker {
     ) {}
 
     Mono<BrokerExecutionResponse> execute(BrokerExecutionRequest request);
+
+    /**
+     * T009: Immediately cancel all pending L2 orders.
+     * @return Number of orders cancelled.
+     */
+    int cancelAllOrders();
+
+    /**
+     * T009: Immediately liquidate all open positions using Market Orders.
+     * @return Number of positions liquidated.
+     */
+    int liquidateAllPositions();
 }

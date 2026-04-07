@@ -55,4 +55,16 @@ public class MockBroker implements Broker {
             }
         });
     }
+
+    @Override
+    public int cancelAllOrders() {
+        logger.info("MOCK: All orders cancelled.");
+        return 0;
+    }
+
+    @Override
+    public int liquidateAllPositions() {
+        logger.info("MOCK: All positions liquidated.");
+        return 0;
+    }
 }
