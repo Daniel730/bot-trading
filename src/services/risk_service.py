@@ -86,12 +86,22 @@ class RiskService:
 
         # User Story 3: Tighten maxSlippage if Volatility Switch is HIGH
         vol_status = await volatility_service.get_volatility_status(ticker)
+        l2_entropy = await volatility_service.get_l2_entropy(ticker)
         
         # Default slippage 0.1% (0.001)
         # Acceptance Scenario: Reduce from 0.001 to 0.0005 in high vol
         max_slippage = 0.001
         if vol_status == "HIGH_VOLATILITY":
             max_slippage = 0.0005
+            
+        # FR-003, US1: Broadcast risk parameters for Dashboard
+        from src.services.telemetry_service import telemetry_service
+        telemetry_service.broadcast("risk", {
+            "risk_multiplier": risk_multiplier,
+            "max_drawdown_pct": drawdown,
+            "volatility_status": vol_status,
+            "l2_entropy": l2_entropy
+        })
             
         return {
             "risk_multiplier": risk_multiplier,

@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from fastapi import FastAPI, Request, HTTPException, Query
+from fastapi import FastAPI, Request, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,6 +13,34 @@ from src.models.persistence import PersistenceManager
 from src.config import settings
 
 logger = logging.getLogger(__name__)
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"New WebSocket client connected. Total: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            logger.info(f"WebSocket client disconnected. Total: {len(self.active_connections)}")
+
+    async def broadcast(self, message: str):
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(message)
+            except Exception as e:
+                logger.error(f"Error sending to WebSocket client: {e}")
+                disconnected.append(connection)
+        
+        for conn in disconnected:
+            self.disconnect(conn)
+
+connection_manager = ConnectionManager()
 
 class DashboardState:
     def __init__(self):
@@ -135,6 +163,26 @@ async def message_stream(request: Request, token: str = Query(None)):
 async def ping():
     return {"status": "alive", "stage": dashboard_state.stage}
 
+@app.websocket("/ws/telemetry")
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+    try:
+        verify_token(token)
+    except HTTPException:
+        await websocket.close(code=4003) # Forbidden
+        return
+
+    await connection_manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive, though we mostly broadcast from server -> client
+            data = await websocket.receive_text()
+            # Handle incoming client messages if needed (e.g. ping)
+    except WebSocketDisconnect:
+        connection_manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        connection_manager.disconnect(websocket)
+
 @app.post("/api/terminal/command")
 async def terminal_command(request: CommandRequest, token: str = Query(None)):
     verify_token(token)
@@ -169,6 +217,9 @@ class DashboardService:
 
     async def start(self):
         try:
+            from src.services.telemetry_service import telemetry_service
+            telemetry_service.start_broadcast_loop()
+            
             config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
             self.server = uvicorn.Server(config)
             asyncio.create_task(self.server.serve())
