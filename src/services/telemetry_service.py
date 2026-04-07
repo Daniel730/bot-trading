@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 class TelemetryService:
     def __init__(self):
         self.endpoint = "https://api.arbitrage-elite.com/telemetry" # Placeholder
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        # US4: Zero-Latency Telemetry. Enforce 10,000 maxsize to prevent OOM.
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
         self._broadcast_task: Optional[asyncio.Task] = None
 
     def start_broadcast_loop(self):
@@ -49,15 +50,13 @@ class TelemetryService:
         }
         
         try:
-            # Atomic non-blocking push
+            # US4: Zero-Latency Telemetry.
+            # Atomic non-blocking push. Never block the execution hot-path.
             self._queue.put_nowait(update)
         except asyncio.QueueFull:
-            logger.warning("Telemetry: Queue full. Dropping oldest record.")
-            try:
-                self._queue.get_nowait()
-                self._queue.put_nowait(update)
-            except Exception:
-                pass
+            # If full, drop the current update to prevent blocking or OOM.
+            # Telemetry is a luxury; execution is life and death.
+            pass
         except Exception as e:
             logger.error(f"Error putting to telemetry queue: {e}")
 

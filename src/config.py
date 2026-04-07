@@ -42,6 +42,7 @@ class Settings(BaseSettings):
 
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
+    LIVE_CAPITAL_DANGER: bool = Field(default=False, validation_alias="LIVE_CAPITAL_DANGER")
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     
     # Operation Hours (America/New_York)

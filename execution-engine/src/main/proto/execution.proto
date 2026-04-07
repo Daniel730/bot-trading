@@ -12,6 +12,21 @@ service ExecutionService {
 
   // Check the status of a previously submitted trade (Reconciliation).
   rpc GetTradeStatus(TradeStatusRequest) returns (ExecutionResponse) {}
+
+  // T007: Emergency Kill Switch to immediately halt trading and liquidate.
+  rpc TriggerKillSwitch(KillSwitchRequest) returns (KillSwitchResponse) {}
+}
+
+message KillSwitchRequest {
+  string reason = 1;         // Why the kill switch was triggered
+  bool liquidate = 2;        // Whether to liquidate all open positions
+}
+
+message KillSwitchResponse {
+  bool success = 1;
+  string status_message = 2;
+  int32 orders_cancelled = 3;
+  int32 positions_liquidated = 4;
 }
 
 message ExecutionRequest {
@@ -57,4 +72,5 @@ enum ExecutionStatus {
   STATUS_REJECTED_LATENCY = 4;
   STATUS_BROKER_ERROR = 5;
   STATUS_NOT_FOUND = 6; // Used for reconciliation
+  STATUS_HALTED = 7;    // Rejection due to Kill Switch activation
 }

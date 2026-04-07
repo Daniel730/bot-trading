@@ -7,6 +7,9 @@ interface ThoughtJournalProps {
 }
 
 const ThoughtJournal: React.FC<ThoughtJournalProps> = ({ thoughts }) => {
+  // T015: Enforce strict 100-entry ring-buffer for rendering performance
+  const displayThoughts = thoughts.slice(-100);
+
   const getVerdictColor = (verdict: string) => {
     switch (verdict) {
       case 'BULLISH': return 'var(--success)';
@@ -19,7 +22,7 @@ const ThoughtJournal: React.FC<ThoughtJournalProps> = ({ thoughts }) => {
   return (
     <div className="thought-journal" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <AnimatePresence initial={false}>
-        {[...thoughts].reverse().map((thought, idx) => (
+        {[...displayThoughts].reverse().map((thought, idx) => (
           <motion.div
             key={`${thought.signal_id}-${idx}`}
             initial={{ opacity: 0, x: -10 }}
