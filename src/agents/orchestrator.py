@@ -129,6 +129,15 @@ class Orchestrator:
             state["final_confidence"] = final_conf
             state["final_verdict"] = f"Aggregated: Bull({bull_conf:.2f}), Bear({bear_conf:.2f}), SEC-Avg-Integrity({avg_integrity:.2f})"
         
+        # FR-004, US2: Broadcast final verdict to Telemetry
+        telemetry_service.broadcast("thought", {
+            "agent_name": "ORCHESTRATOR",
+            "signal_id": state['signal_context'].get('signal_id', 'N/A'),
+            "ticker_pair": f"{ticker_a}_{ticker_b}",
+            "thought": state["final_verdict"],
+            "verdict": "EXECUTE" if state["final_confidence"] > 0.5 else "REJECT"
+        })
+
         return state
 
 orchestrator = Orchestrator()
