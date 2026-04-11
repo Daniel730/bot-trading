@@ -33,17 +33,22 @@ message ExecutionRequest {
   string signal_id = 1;      // UUID from Python agent_reasoning
   string pair_id = 2;        // e.g., "KO_PEP"
   int64 timestamp_ns = 3;    // Current time in nanoseconds for TTL check
-  double max_slippage_pct = 4; // Max allowed slippage (e.g., 0.001)
-  double risk_multiplier = 5;  // Position size scaler (e.g., 0.5)
+  string max_slippage_pct = 4; // Max allowed slippage as exact decimal string (e.g., "0.001")
+  string risk_multiplier = 5;  // Position size scaler as exact decimal string (e.g., "0.5")
 
   message ExecutionLeg {
-    string ticker = 1;       // Ticker symbol (e.g., "KO")
-    Side side = 2;           // BUY or SELL
-    double quantity = 3;     // Total quantity requested
-    double target_price = 4; // Expected entry price
+    string ticker = 1;        // Ticker symbol (e.g., "KO")
+    Side side = 2;            // BUY or SELL
+    string quantity = 3;      // Total quantity as exact decimal string
+    string target_price = 4;  // Expected entry price as exact decimal string
   }
 
   repeated ExecutionLeg legs = 6;
+
+  // Idempotency key: a client-generated UUID stamped before each gRPC call.
+  // The server uses this to deduplicate retried requests at the wire level,
+  // independent of the upstream signal_id lifecycle.
+  string client_order_id = 7;
 }
 
 message TradeStatusRequest {
@@ -60,7 +65,7 @@ message ExecutionResponse {
   string signal_id = 1;
   ExecutionStatus status = 2;
   string message = 3;
-  double actual_vwap = 4;
+  string actual_vwap = 4;       // Filled VWAP as exact decimal string
   int64 processing_time_ns = 5; // Internal latency for auditing
 }
 

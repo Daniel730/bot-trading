@@ -1,8 +1,4 @@
-import json
 import os
-import asyncio
-from datetime import datetime
-from typing import Dict, List, Optional
 import google.generativeai as genai
 from pydantic import BaseModel, Field
 

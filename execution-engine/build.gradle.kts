@@ -2,6 +2,7 @@ plugins {
     java
     application
     id("com.google.protobuf") version "0.9.4"
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 group = "com.arbitrage"
@@ -43,14 +44,14 @@ protobuf {
         artifact = "com.google.protobuf:protoc:3.25.1"
     }
     plugins {
-        id("grpc") {
+        create("grpc") {
             artifact = "io.grpc:protoc-gen-grpc-java:1.62.2"
         }
     }
     generateProtoTasks {
-        all().forEach {
-            it.plugins {
-                id("grpc") {}
+        all().forEach { task ->
+            task.plugins {
+                create("grpc") { }
             }
         }
     }
@@ -68,4 +69,10 @@ java {
 
 tasks.test {
     useJUnitPlatform()
+}
+
+tasks.withType<com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar> {
+    archiveBaseName.set("execution-engine")
+    archiveClassifier.set("all")
+    archiveVersion.set("1.0-SNAPSHOT")
 }

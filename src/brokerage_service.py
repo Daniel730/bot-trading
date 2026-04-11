@@ -1,14 +1,12 @@
 import logging
-from typing import Dict, Optional
+from typing import Dict
 from src.models.trading_models import TradingOrder
 
 class BrokerageError(Exception):
     """Base exception for brokerage operations."""
-    pass
 
 class FractionalOrderError(BrokerageError):
     """Exception raised for errors in fractional order execution."""
-    pass
 
 class BrokerageService:
     def __init__(self, api_key: str):

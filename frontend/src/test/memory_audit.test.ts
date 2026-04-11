@@ -9,11 +9,13 @@ class MockWebSocket {
   onclose: any;
   onerror: any;
   close = vi.fn();
-  constructor(public url: string) {
+  url: string;
+  constructor(url: string) {
+    this.url = url;
     setTimeout(() => this.onopen?.(), 0);
   }
 }
-(global as any).WebSocket = MockWebSocket;
+(globalThis as any).WebSocket = MockWebSocket;
 
 describe('Telemetry Memory Stability', () => {
   it('strictly enforces 100-entry limit under extreme burst', async () => {
