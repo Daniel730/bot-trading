@@ -167,6 +167,18 @@ class Orchestrator:
             # Reset on full successful loop
             await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         
+        # FR-010: Feedback Loop Integration
+        # Scale confidence based on recent historical performance (Global Strategy Accuracy)
+        accuracy_str = await persistence_service.get_system_state("global_strategy_accuracy", "0.5")
+        global_accuracy = float(accuracy_str)
+        
+        # Accuracy penalty: if global accuracy < 0.4, we scale down everything
+        performance_multiplier = 1.0
+        if global_accuracy < 0.4:
+            performance_multiplier = 0.7 # 30% penalty
+        elif global_accuracy > 0.7:
+            performance_multiplier = 1.1 # 10% boost for high-performing periods
+
         # 3. Aggregation Logic with VETO
         bull_conf = state['bull_verdict']['confidence']
         bear_conf = state['bear_verdict']['confidence']
@@ -206,7 +218,8 @@ class Orchestrator:
             p_advice_b = await portfolio_manager_agent.get_optimization_advice(ticker_b)
             
             # Final confidence uses AI ensemble weights instead of equal 33% splits
-            final_conf = (bull_conf * w_bull) + ((1 - bear_conf) * w_bear) + (avg_integrity * w_sec)
+            base_conf = (bull_conf * w_bull) + ((1 - bear_conf) * w_bear) + (avg_integrity * w_sec)
+            final_conf = base_conf * performance_multiplier
             
             # If any of the new tickers significantly degrade Sortino, we penalize confidence
             if not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]:
