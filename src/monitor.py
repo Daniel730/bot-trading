@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import yfinance as yf
-import pytz
 from datetime import datetime
 from src.config import settings
 from src.services.data_service import data_service
@@ -14,7 +13,6 @@ from src.services.notification_service import notification_service
 from src.services.audit_service import audit_service
 from src.services.risk_service import risk_service
 from src.services.brokerage_service import BrokerageService
-from src.services.agent_log_service import agent_logger
 from src.services.dashboard_service import dashboard_service
 import uuid
 
@@ -77,7 +75,10 @@ class ArbitrageMonitor:
         if settings.LIVE_CAPITAL_DANGER:
             await self.verify_entropy_baselines()
             
-        pairs_to_init = settings.ARBITRAGE_PAIRS
+        if settings.DEV_MODE:
+            pairs_to_init = settings.CRYPTO_TEST_PAIRS
+        else:
+            pairs_to_init = settings.ARBITRAGE_PAIRS
         logger.info(f"Initializing pairs in {'DEV' if settings.DEV_MODE else 'PROD'} mode...")
         
         for pair_config in pairs_to_init:
@@ -128,6 +129,9 @@ class ArbitrageMonitor:
             
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
+            
+            # Sprint J: Heartbeat log for pair health
+            logger.info(f"SCAN [{t_a}/{t_b}] Current Z-Score: {z_score:.2f} | Beta: {state_vec[1]:.4f}")
 
             # Signal Generation
             if abs(z_score) > 2.0:
@@ -156,6 +160,8 @@ class ArbitrageMonitor:
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
                         await self.execute_trade(pair, direction, price_a, price_b, signal_id)
+                else:
+                    logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
             else:
                 # Cleanup inactive signals
                 self.active_signals = [s for s in self.active_signals if not (s['ticker_a'] == t_a and s['ticker_b'] == t_b)]
@@ -167,24 +173,78 @@ class ArbitrageMonitor:
         """Executes a trade and logs to PostgreSQL."""
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         
-        # Sizing (Simplified for brevity)
-        target_cash = 100.0 
+        # Sprint D.2: Bid-Ask Slippage Protection
+        bid_a, ask_a = await data_service.get_bid_ask(t_a)
+        bid_b, ask_b = await data_service.get_bid_ask(t_b)
+        
+        if bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0:
+            spread_a = (ask_a - bid_a) / bid_a if bid_a > 0 else 0
+            spread_b = (ask_b - bid_b) / bid_b if bid_b > 0 else 0
+            total_spread = spread_a + spread_b
+            if total_spread > 0.003:
+                logger.warning(f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > 0.3% max threshold.")
+                return
+        else:
+            logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
+        
+        total_cash = self.brokerage.get_account_cash() if hasattr(self.brokerage, 'get_account_cash') else 2000.0
+        
+        # Sprint B: Risk Service validation with Half-Kelly and Max 5% Port limit
+        risk_res = risk_service.validate_trade(
+            ticker=f"{t_a}_{t_b}",
+            total_portfolio_cash=total_cash,
+            amount_fiat=total_cash, 
+            win_prob=0.55,
+            win_loss_ratio=1.0
+        )
+        
+        if not risk_res["is_acceptable"]:
+            logger.warning(f"Live execute rejected by RiskService: {risk_res.get('rejection_reason', 'Insufficient Kelly Fraction')}")
+            return
+            
+        target_cash = risk_res["final_amount"]
+        logger.info(f"RISK APPROVED SIZE: {target_cash:.2f} for {t_a}/{t_b} (Kelly: {risk_res['kelly_fraction']:.4f})")
+        
         size_a = round(target_cash / price_a, 6)
         size_b = round(target_cash / price_b, 6)
 
-        # Mock execution results
-        order_id_a = str(uuid.uuid4())
-        order_id_b = str(uuid.uuid4())
+        # Determina a direção (Side) para cada perna
+        side_a = "SELL" if direction == "Short-Long" else "BUY"
+        side_b = "BUY" if direction == "Short-Long" else "SELL"
+
+        if settings.PAPER_TRADING:
+            # Em paper trading, simplesmente simulamos o trade usando o shadow_service
+            logger.info(f"PAPER TRADING: Executing shadow trade {direction} for {t_a}/{t_b}")
+            await shadow_service.execute_simulated_trade(pair['id'], direction, size_a, size_b, price_a, price_b)
+            return
+
+        # Chamada ao broker (T212 via Fractional Engine)
+        
+        exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
+        exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
+        
+        logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
+        
+        # Leg A
+        res_a = self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
+        status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
+        order_id_a = res_a.get("orderId", str(uuid.uuid4()))
+        
+        # Leg B
+        res_b = self.brokerage.place_value_order(exec_t_b, target_cash, side_b)
+        status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
+        order_id_b = res_b.get("orderId", str(uuid.uuid4()))
 
         # Log Leg A
         await persistence_service.log_trade({
             "order_id": order_id_a,
             "signal_id": uuid.UUID(signal_id),
             "ticker": t_a,
-            "side": OrderSide.SELL if direction == "Short-Long" else OrderSide.BUY,
+            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
             "quantity": size_a,
             "price": price_a,
-            "status": OrderStatus.COMPLETED
+            "status": status_a,
+            "metadata": {"broker_response": res_a}
         })
 
         # Log Leg B
@@ -192,13 +252,14 @@ class ArbitrageMonitor:
             "order_id": order_id_b,
             "signal_id": uuid.UUID(signal_id),
             "ticker": t_b,
-            "side": OrderSide.BUY if direction == "Short-Long" else OrderSide.SELL,
+            "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
             "quantity": size_b,
             "price": price_b,
-            "status": OrderStatus.COMPLETED
+            "status": status_b,
+            "metadata": {"broker_response": res_b}
         })
         
-        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction}")
+        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
 
     async def run(self):
         # Initial Setup
@@ -208,8 +269,51 @@ class ArbitrageMonitor:
             self.initialize_pairs()
         )
         await dashboard_service.start()
+        
+        # Sprint J: Start Telegram Listener (Async)
         await notification_service.start_listening()
+        
+        # Sprint C: Startup Health Checks
+        logger.info("Running System Health Checks...")
+        
+        # 1. PostgreSQL Check
+        try:
+            async with persistence_service.engine.connect() as conn:
+                pass
+        except Exception as e:
+            msg = f"CRITICAL INIT ERROR: PostgreSQL connection failed! {e}"
+            logger.error(msg)
+            await notification_service.send_alert(msg)
+            return
 
+        # 2. Redis Check
+        try:
+            await redis_service.client.ping()
+        except Exception as e:
+            msg = f"CRITICAL INIT ERROR: Redis connection failed! {e}"
+            logger.error(msg)
+            await notification_service.send_alert(msg)
+            return
+
+        # 3. Trading 212 API Check (if not exclusively paper/mocked)
+        if not settings.PAPER_TRADING:
+            await asyncio.sleep(1) # Rate limit safety delay
+            try:
+                # Basic metadata fetch test as a health ping because test_connection might be deprecated
+                test_ping = self.brokerage.get_portfolio()
+                if isinstance(test_ping, dict) and test_ping.get("status") == "error":
+                    raise Exception(f"T212 error: {test_ping.get('message')}")
+            except Exception as e:
+                msg = f"CRITICAL INIT ERROR: Trading 212 API connection failed! {e}"
+                logger.error(msg)
+                await notification_service.send_alert(msg)
+                return
+                
+        logger.info("All Health Checks Passed (Postgres, Redis, T212). Bot is active.")
+        
+        # Sprint J: Signal the user via Telegram that we are entering MISSION MODE
+        await notification_service.send_message("📊 *System Health*: All Checks Passed.\n\n🔄 *Mode*: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
+        
         # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
         # from a previous crashed session doesn't silently block all signals.
         await persistence_service.set_system_state("operational_status", "NORMAL")
@@ -218,7 +322,27 @@ class ArbitrageMonitor:
         
         try:
             while True:
-                await dashboard_service.update_state("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
+                try:
+                    from src.services.performance_service import performance_service
+                    p_metrics = await performance_service.get_portfolio_metrics()
+                    await dashboard_service.update_metrics(p_metrics)
+                    
+                    pnl = await persistence_service.get_total_pnl()
+                    await dashboard_service.update(
+                        stage="Monitoring", 
+                        details=f"Scanning {len(self.active_pairs)} pairs...", 
+                        pnl=pnl
+                    )
+                except Exception as e:
+                    logger.error(f"Error pushing metrics to dashboard: {e}")
+                    await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
+                # Exit Strategy Loop
+                try:
+                    open_signals = await persistence_service.get_open_signals()
+                    for signal in open_signals:
+                        await self._evaluate_exit_conditions(signal)
+                except Exception as e:
+                    logger.error(f"Error evaluating open signals for exits: {e}")
                 
                 all_tickers = []
                 for p in self.active_pairs:
@@ -227,7 +351,11 @@ class ArbitrageMonitor:
                 latest_prices = await data_service.get_latest_price(list(set(all_tickers)))
 
                 tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
-                await asyncio.gather(*tasks)
+                results = await asyncio.gather(*tasks)
+                
+                # Sprint J: Heartbeat log to show activity
+                active_signals = [r for r in results if r and r.get('confidence', 0) > 0.6]
+                logger.info(f"--- Iteration Complete: {len(self.active_pairs)} pairs scanned. {len(active_signals)} potential signals detected. ---")
                 
                 await asyncio.sleep(15)
         except asyncio.CancelledError:
@@ -237,6 +365,68 @@ class ArbitrageMonitor:
             await persistence_service.engine.dispose()
             await redis_service.client.aclose()
             logger.info("Service shutdown complete.")
+
+    async def _evaluate_exit_conditions(self, signal: dict):
+        """Monitors open positions for Take Profit or Stop Loss."""
+        sig_id = signal["signal_id"]
+        legs = signal.get("legs", [])
+        if len(legs) != 2: return
+        
+        leg_a, leg_b = legs[0], legs[1]
+        t_a, t_b = leg_a["ticker"], leg_b["ticker"]
+        
+        # Get real-time prices
+        prices = await data_service.get_latest_price([t_a, t_b])
+        if t_a not in prices or t_b not in prices: return
+        
+        p_a, p_b = prices[t_a], prices[t_b]
+        
+        current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
+        cost_basis = signal["total_cost_basis"]
+        
+        # 1. Financial Kill Switch Check
+        if risk_service.check_financial_kill_switch(current_value, cost_basis, max_loss_pct=0.02):
+            logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
+            await self._close_position(signal, p_a, p_b, reason="FINANCIAL_STOP_LOSS")
+            return
+            
+        # 2. Statistical Stop Loss / Take profit
+        pair_id = f"{t_a}_{t_b}"
+        kf = await arbitrage_service.get_or_create_filter(pair_id)
+        if not kf: return
+        
+        # Calculate current dynamic z-score based on latest price
+        spread, z_score = kf.calculate_spread_and_zscore(p_a, p_b)
+        
+        # Statistical Take Profit (Mean Reversion complete)
+        if abs(z_score) <= 0.5:
+            logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
+            await self._close_position(signal, p_a, p_b, reason="STATISTICAL_TAKE_PROFIT")
+        
+        # Statistical Stop Loss (Cointegration break)
+        elif abs(z_score) >= 3.5:
+            logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
+            await self._close_position(signal, p_a, p_b, reason="STATISTICAL_STOP_LOSS")
+
+    async def _close_position(self, signal: dict, price_a: float, price_b: float, reason: str):
+        sig_id = signal["signal_id"]
+        logger.info(f"Closing position {sig_id} Reason: {reason}")
+        
+        for leg in signal["legs"]:
+            ticker = leg["ticker"]
+            qty = leg["quantity"]
+            # Close order side is opposite of open
+            side = "SELL" if leg["side"] == "BUY" else "BUY"
+            
+            exec_t = settings.DEV_EXECUTION_TICKERS.get(ticker, ticker) if settings.DEV_MODE else ticker
+            if not settings.PAPER_TRADING:
+                p = price_a if ticker == signal["legs"][0]["ticker"] else price_b
+                self.brokerage.place_value_order(exec_t, float(qty * p), side)
+                
+        # Calculate approximate PnL based on generic values
+        pnl = 0.0 # This could be expanded via actual order fill prices
+        await persistence_service.close_trade(uuid.UUID(sig_id), {signal["legs"][0]["ticker"]: price_a, signal["legs"][1]["ticker"]: price_b}, pnl)
+
 
 if __name__ == "__main__":
     monitor = ArbitrageMonitor(mode="live")
