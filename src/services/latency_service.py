@@ -1,8 +1,7 @@
 import logging
 import numpy as np
-from typing import Dict, List, Optional
+from typing import Dict
 from src.services.redis_service import redis_service
-from src.services.notification_service import notification_service
 from src.config import settings
 
 logger = logging.getLogger(__name__)

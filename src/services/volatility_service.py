@@ -1,6 +1,5 @@
 import numpy as np
 import logging
-from typing import Dict, Optional
 from src.services.redis_service import redis_service
 
 logger = logging.getLogger(__name__)

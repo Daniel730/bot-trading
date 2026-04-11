@@ -1,5 +1,4 @@
 import os
-import sys
 import traceback
 import json
 from datetime import datetime
@@ -52,7 +51,6 @@ class AgentLogService:
         print(f"AGENT_LOGGER: Fractional trade logged for {ticker}")
         
         # FR-008: Auto-generate thesis in background
-        from src.agents.portfolio_manager_agent import PortfolioManagerAgent
         # Note: In a real scenario, we'd use a shared instance or pass db
         # agent = PortfolioManagerAgent(self.persistence)
         # asyncio.create_task(agent.generate_investment_thesis(ticker))

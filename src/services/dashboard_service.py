@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from typing import List
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
@@ -11,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 import uvicorn
 from src.models.persistence import PersistenceManager
 from src.config import settings
+from src.services.brokerage_service import brokerage_service
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +95,8 @@ class DashboardState:
             self.details = details
             if active_signals is not None:
                 self.active_signals = active_signals
+            if pnl is not None:
+                self.portfolio_metrics["daily_profit"] = pnl
             await self._broadcast()
 
     async def update_metrics(self, metrics: dict):
@@ -232,10 +236,14 @@ class DashboardService:
         while True:
             try:
                 is_shadow = settings.TRADING_212_MODE.lower() == "demo" or settings.DEV_MODE
-                from src.services.brokerage_service import BrokerageService
-                brokerage = BrokerageService()
-                total_cash = brokerage.get_account_cash()
-                pending_value = brokerage.get_pending_orders_value()
+                
+                total_cash = 0.0
+                pending_value = 0.0
+                
+                if not settings.PAPER_TRADING:
+                    total_cash = brokerage_service.get_account_cash()
+                    pending_value = brokerage_service.get_pending_orders_value()
+                
                 spendable_cash = total_cash - pending_value
                 
                 daily_allocation = total_cash * 0.25 
@@ -255,6 +263,14 @@ class DashboardService:
             except Exception as e:
                 logger.error(f"DASHBOARD POLLING ERROR: {e}")
             await asyncio.sleep(10)
+
+    async def update_metrics(self, metrics: dict):
+        """Proxy to dashboard_init_state and broadcast."""
+        await dashboard_state.update_metrics(metrics)
+
+    async def update(self, stage: str, details: str, pnl: float = None, signals: int = None, active_signals: list = None):
+        """Proxy for high-level status updates."""
+        await dashboard_state.update(stage, details, pnl, signals, active_signals)
 
     async def update_state(self, stage: str, details: str, pnl: float = None, signals: int = None, active_signals: list = None):
         await dashboard_state.update(stage, details, pnl, signals, active_signals)

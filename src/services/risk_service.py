@@ -1,5 +1,4 @@
-from typing import Dict, Optional, Any, List
-import numpy as np
+from typing import Dict, Any, List
 from src.services.agent_log_service import agent_trace
 
 class FeeAnalyzer:
@@ -187,9 +186,10 @@ class RiskService:
             "rejection_reason": res["rejection_reason"]
         }
 
-    def validate_trade(self, ticker: str, amount_fiat: float, win_prob: float, win_loss_ratio: float, hedging_state: str = "NORMAL") -> Dict:
+    def validate_trade(self, ticker: str, total_portfolio_cash: float, amount_fiat: float, win_prob: float = 0.55, win_loss_ratio: float = 1.0, hedging_state: str = "NORMAL") -> Dict:
         """
         Performs full risk validation for a proposed trade.
+        Uses Half-Kelly and enforces max 5% absolute portfolio exposure per trade.
         """
         # DEFCON 1 Veto: Reject high-volatility long trades if market risk is extreme
         if hedging_state == "DEFCON_1" and ticker not in self.inverse_etfs.values():
@@ -200,17 +200,66 @@ class RiskService:
             }
 
         fee_check = self.fee_analyzer.check_fees(ticker, amount_fiat)
+        
+        # User defined overrides for Kelly calculation: 0.55 win probability by default
         kelly_fraction = self.kelly_calculator.calculate_size(win_prob, win_loss_ratio)
         
-        is_acceptable = fee_check["is_acceptable"] and kelly_fraction > 0
+        # HALF-KELLY constraint
+        half_kelly_fraction = kelly_fraction / 2.0
+        
+        # Max 5% of portfolio total value per position
+        max_allowed_fiat = total_portfolio_cash * 0.05
+        
+        # Proposed value using the adjusted Kelly multiplied by the configured standard allocation or the entire portfolio (scaled). We fallback to minimum of calculated ones.
+        proposed_fiat = amount_fiat * half_kelly_fraction
+        final_amount = min(proposed_fiat, max_allowed_fiat)
+        
+        # Ensure minimum friction limits are kept
+        is_acceptable = fee_check["is_acceptable"] and final_amount > 1.0 # At least $1 to execute
         
         return {
             "ticker": ticker,
             "is_acceptable": is_acceptable,
             "fee_status": fee_check,
-            "kelly_fraction": kelly_fraction,
-            "final_amount": amount_fiat * kelly_fraction if is_acceptable else 0.0
+            "kelly_fraction": half_kelly_fraction,
+            "final_amount": final_amount if is_acceptable else 0.0,
+            "rejection_reason": fee_check["rejection_reason"] if not is_acceptable else ""
         }
+
+    def check_financial_kill_switch(self, position_current_value: float, position_cost_basis: float, max_loss_pct: float = 0.02) -> bool:
+        """
+        Hard financial stop-loss guard. If position loses more than maximum loss percentage (2% default).
+        Returns True if Kill switch triggered (abort position).
+        """
+        if position_cost_basis <= 0: return False
+        
+        loss_pct = (position_cost_basis - position_current_value) / position_cost_basis
+        if loss_pct >= max_loss_pct:
+            return True
+        return False
+
+    def get_all_sector_exposures(self, portfolio: List[Dict]) -> Dict[str, float]:
+        """
+        Calculates the sector exposure of the active portfolio as a percentage.
+        portfolio format expected: [{"ticker": str, "size": float, "sector": str}]
+        """
+        if not portfolio:
+            return {}
+            
+        total_size = sum(p.get("size", 0.0) for p in portfolio)
+        if total_size == 0.0:
+            return {}
+            
+        exposures = {}
+        for p in portfolio:
+            sector = p.get("sector", "General")
+            size = p.get("size", 0.0)
+            exposures[sector] = exposures.get(sector, 0.0) + size
+            
+        for sector in exposures:
+            exposures[sector] = exposures[sector] / total_size
+            
+        return exposures
 
 risk_service = RiskService()
 

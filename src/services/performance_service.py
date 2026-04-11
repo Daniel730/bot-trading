@@ -11,16 +11,48 @@ class PerformanceService:
 
     async def get_portfolio_metrics(self) -> Dict[str, float]:
         """
-        Calculates rolling 30-day Sharpe ratio and maximum drawdown.
-        Currently uses a baseline for simulation until full ledger historicals are populated.
+        Calculates rolling 30-day Sharpe ratio and maximum drawdown using data from TradeLedger.
+        Uses $2000 as base account capital if no capital snapshot exists.
         """
-        # FR-001: System MUST track daily portfolio returns, cumulative drawdown, and rolling 30-day Sharpe ratio
+        # Sprint D.3: Fetch Dynamic Risk-Free Rate (^TNX)
+        self.risk_free_rate = await self.get_dynamic_risk_free_rate()
         
-        # TODO: Implement actual SQL calculation from trade_ledger and portfolio_performance
-        # For now, return safe defaults that can be overridden in tests
+        # Fetch daily PnL from the PostgreSQL TradeLedger via caching or live query
+        daily_pnl = await persistence_service.get_daily_returns()
+        
+        if not daily_pnl:
+            return {"sharpe_ratio": 1.0, "max_drawdown": 0.0}
+            
+        # Convert daily absolute PnL into returns
+        # Sort dates incrementally
+        sorted_dates = sorted(daily_pnl.keys())
+        base_capital = 2000.0
+        
+        returns_list = []
+        cum_returns_value = []
+        current_equity = base_capital
+        
+        for date in sorted_dates[-30:]:  # Rolling 30 days max for Sharpe
+            p = daily_pnl[date]
+            daily_return = p / current_equity if current_equity > 0 else 0
+            returns_list.append(daily_return)
+            current_equity += p
+            
+        # For Max Drawdown we might want the absolute high timeline
+        eval_equity = base_capital
+        for date in sorted_dates:
+            eval_equity += daily_pnl[date]
+            cum_returns_value.append(eval_equity)
+            
+        returns_arr = np.array(returns_list)
+        cum_returns_arr = np.array(cum_returns_value)
+        
+        sharpe = self.calculate_sharpe(returns_arr)
+        drawdown = self.calculate_max_drawdown(cum_returns_arr)
+        
         return {
-            "sharpe_ratio": 1.5,
-            "max_drawdown": 0.02
+            "sharpe_ratio": float(sharpe) if not np.isnan(sharpe) else 1.0,
+            "max_drawdown": float(drawdown) if not np.isnan(drawdown) else 0.0
         }
 
     def calculate_sharpe(self, returns: np.ndarray) -> float:
@@ -39,5 +71,19 @@ class PerformanceService:
         peak = np.where(peak == 0, 1, peak)
         drawdown = (peak - cumulative_returns) / peak
         return np.max(drawdown)
+
+    async def get_dynamic_risk_free_rate(self) -> float:
+        """Fetches the US 10-Year Treasury Yield (^TNX) from YFinance as a dynamic RFR."""
+        try:
+            import yfinance as yf
+            import asyncio
+            def fetch_tnx():
+                info = yf.Ticker("^TNX").info
+                # ^TNX is quoted in % directly (e.g. 4.2 means 4.2%)
+                return info.get("previousClose", 4.0) / 100.0
+            return await asyncio.to_thread(fetch_tnx)
+        except Exception as e:
+            logger.warning(f"Could not fetch dynamic risk-free rate (^TNX), using 2% fallback: {e}")
+            return 0.02
 
 performance_service = PerformanceService()

@@ -1,7 +1,6 @@
 from fastmcp import FastMCP
-from typing import List, Dict, Optional
+from typing import List, Dict
 import json
-from src.config import settings
 from src.services.redis_service import redis_service
 from src.services.persistence_service import persistence_service, OrderSide
 from src.services.execution_service_client import execution_client
