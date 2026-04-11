@@ -1,10 +1,8 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Dict
 from src.services.persistence_service import persistence_service, FrequencyType
-from src.services.brokerage_service import brokerage_service
 from src.services.agent_log_service import agent_trace
-import uuid
 
 class DRIPManager:
     """Manages micro-dividend accumulation and sweep logic."""

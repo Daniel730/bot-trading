@@ -82,20 +82,15 @@ class TradeLedger(BaseModel):
 
 class ArbitrageError(Exception):
     """Custom exception hierarchy for arbitrage-related errors."""
-    pass
 
 class BrokerageError(ArbitrageError):
     """Errors related to brokerage API interactions."""
-    pass
 
 class DataServiceError(ArbitrageError):
     """Errors related to market data polling."""
-    pass
 
 class OperatingHoursError(ArbitrageError):
     """Raised when an operation is attempted outside of market hours."""
-    pass
 
 class SlippageError(ArbitrageError):
     """Raised when current prices exceed slippage tolerance."""
-    pass

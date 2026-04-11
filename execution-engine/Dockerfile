@@ -1,8 +1,10 @@
 # Stage 1: Build
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM gradle:8.7-jdk21 AS builder
 WORKDIR /app
 COPY . .
-RUN ./gradlew build --no-daemon
+RUN gradle generateProto --no-daemon; \
+    find /home/gradle/.gradle -name "*.exe" -exec chmod +x {} \; && \
+    gradle shadowJar --no-daemon
 
 # Stage 2: Runtime
 FROM gcr.io/distroless/java21-debian12

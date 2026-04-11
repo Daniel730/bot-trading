@@ -1,9 +1,9 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, Numeric, DateTime, JSON, Enum, Index, func, Boolean, Integer, Text, ForeignKey
+from sqlalchemy import String, Numeric, DateTime, JSON, Enum, func, Boolean, Integer, Text, ForeignKey
 import enum
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 import uuid
 from src.config import settings
 
@@ -77,6 +77,14 @@ class AgentReasoning(Base):
     decision: Mapped[DecisionType] = mapped_column(Enum(DecisionType))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
+class AgentPerformance(Base):
+    __tablename__ = "agent_performance"
+    
+    agent_name: Mapped[str] = mapped_column(String(50), primary_key=True)
+    successes: Mapped[int] = mapped_column(Integer, default=1)
+    failures: Mapped[int] = mapped_column(Integer, default=1)
+    last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
 class DCASchedules(Base):
     __tablename__ = "dca_schedules"
     
@@ -114,6 +122,25 @@ class PortfolioPerformance(Base):
     daily_return: Mapped[float] = mapped_column(Numeric(20, 10))
     cumulative_drawdown: Mapped[float] = mapped_column(Numeric(20, 10))
     sharpe_ratio: Mapped[float] = mapped_column(Numeric(20, 10))
+
+class OptimizedAllocation(Base):
+    __tablename__ = "optimized_allocations"
+    
+    ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
+    target_weight: Mapped[float] = mapped_column(Numeric(10, 6))
+    last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class UniverseCandidate(Base):
+    __tablename__ = "universe_candidates"
+    
+    pair_id: Mapped[str] = mapped_column(String(50), primary_key=True) # ticker_a_ticker_b
+    sector: Mapped[str] = mapped_column(String(50))
+    p_value: Mapped[float] = mapped_column(Numeric(10, 6))
+    correlation: Mapped[float] = mapped_column(Numeric(10, 6))
+    expected_return: Mapped[float] = mapped_column(Numeric(10, 6)) # Projected annual return
+    volatility: Mapped[float] = mapped_column(Numeric(10, 6))
+    sortino: Mapped[float] = mapped_column(Numeric(10, 6))
+    found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class PersistenceService:
     _instance = None
@@ -172,6 +199,39 @@ class PersistenceService:
                 )
                 await session.execute(stmt)
 
+    async def get_open_signals(self) -> List[dict]:
+        """
+        Retrieves all currently OPEN positions grouped by signal_id, 
+        returning the average cost basis, current side, etc.
+        """
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            # We fetch all OPEN orders that represent trades
+            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.OPEN)
+            result = await session.execute(stmt)
+            trades = result.scalars().all()
+            
+            # Map grouped by signal_id
+            signals = {}
+            for t in trades:
+                sig = str(t.signal_id)
+                if sig not in signals:
+                    signals[sig] = {
+                        "signal_id": sig,
+                        "legs": [],
+                        "total_cost_basis": 0.0
+                    }
+                signals[sig]["legs"].append({
+                    "ticker": t.ticker,
+                    "side": t.side.value,
+                    "quantity": float(t.quantity),
+                    "price": float(t.price),
+                    "execution_timestamp": t.execution_timestamp
+                })
+                signals[sig]["total_cost_basis"] += float(t.quantity * t.price)
+                
+            return list(signals.values())
+
     async def get_active_dca_schedules(self) -> List[DCASchedules]:
         """Retrieves active DCA schedules."""
         from sqlalchemy import select
@@ -222,5 +282,88 @@ class PersistenceService:
             
             tickers = set(result_a.scalars().all()) | set(result_b.scalars().all())
             return sorted(list(tickers))
+
+    async def get_daily_returns(self) -> Dict[str, float]:
+        """Returns aggregated daily PnL mapping of form {'YYYY-MM-DD': pnl_sum} based on CLOSED trades."""
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.CLOSED)
+            result = await session.execute(stmt)
+            trades = result.scalars().all()
+            
+            daily_pnl = {}
+            for t in trades:
+                if not t.metadata_json or "pnl" not in t.metadata_json:
+                    continue
+                day_str = t.execution_timestamp.strftime("%Y-%m-%d")
+                pnl = float(t.metadata_json["pnl"])
+                daily_pnl[day_str] = daily_pnl.get(day_str, 0.0) + pnl
+                
+            return daily_pnl
+
+    async def get_total_pnl(self) -> float:
+        """Returns the absolute sum of all closed trade PnL."""
+        daily_returns = await self.get_daily_returns()
+        return sum(daily_returns.values())
+
+    async def get_agent_metrics(self, agent_name: str) -> tuple[int, int]:
+        """Returns (successes, failures) for Thompson Sampling."""
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(AgentPerformance).where(AgentPerformance.agent_name == agent_name)
+            result = await session.execute(stmt)
+            ap = result.scalar_one_or_none()
+            if ap:
+                return ap.successes, ap.failures
+            return 1, 1 # Beta(1,1) uniform prior
+
+    async def update_agent_metrics(self, agent_name: str, is_success: bool):
+        """Increments success or failure count for a given agent via an UPSERT."""
+        from sqlalchemy.dialects.postgresql import insert
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = insert(AgentPerformance).values(
+                    agent_name=agent_name,
+                    successes=2 if is_success else 1,
+                    failures=1 if is_success else 2
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[AgentPerformance.agent_name],
+                    set_=dict(
+                        successes=AgentPerformance.successes + (1 if is_success else 0),
+                        failures=AgentPerformance.failures + (0 if is_success else 1)
+                    )
+                )
+                await session.execute(stmt)
+
+    async def get_active_portfolio_tickers(self) -> List[str]:
+        """Returns a list of unique tickers with COMPLETED (open) trades in the ledger."""
+        from sqlalchemy import select, distinct
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(distinct(TradeLedger.ticker)).where(TradeLedger.status == OrderStatus.COMPLETED)
+            result = await session.execute(stmt)
+            return [row[0] for row in result.all()]
+
+    async def get_optimized_allocations(self) -> Dict[str, float]:
+        """Returns target weights for all optimized tickers."""
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(OptimizedAllocation)
+            result = await session.execute(stmt)
+            return {row[0].ticker: float(row[0].target_weight) for row in result.all()}
+
+    async def update_optimized_allocation(self, ticker: str, weight: float):
+        """Updates or inserts a target weight for a ticker."""
+        from sqlalchemy.dialects.postgresql import insert
+        async with self.AsyncSessionLocal() as session:
+            stmt = insert(OptimizedAllocation).values(
+                ticker=ticker,
+                target_weight=weight
+            ).on_conflict_do_update(
+                index_elements=['ticker'],
+                set_={'target_weight': weight, 'last_updated': func.now()}
+            )
+            await session.execute(stmt)
+            await session.commit()
 
 persistence_service = PersistenceService()

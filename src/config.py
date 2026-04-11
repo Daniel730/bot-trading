@@ -1,4 +1,3 @@
-import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -42,6 +41,10 @@ class Settings(BaseSettings):
 
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
+    PAPER_TRADING: bool = True
+    MAX_ALLOCATION_PERCENTAGE: float = 10.0
+    SGOV_SWEEP_TICKER: str = "SGOV"
+    MIN_SWEEP_THRESHOLD: float = 10.0
     LIVE_CAPITAL_DANGER: bool = Field(default=False, validation_alias="LIVE_CAPITAL_DANGER")
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     

@@ -1,39 +1,42 @@
-import requests
-import logging
-import base64
-import time
-import uuid
 import threading
 from typing import List, Dict, Any
 from src.config import settings
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
+import requests
+import logging
 
 logger = logging.getLogger(__name__)
 
 class BrokerageService:
-    def __init__(self):
-        self.api_key = settings.effective_t212_key.strip()
-        self.api_secret = settings.T212_API_SECRET.strip()
+    def __init__(self, api_key: str = None, api_secret: str = None):
+        self.api_key = api_key or settings.effective_t212_key.strip()
+        self.api_secret = api_secret or settings.T212_API_SECRET.strip()
         self._cache = {}
         self._cache_ttl = 5 # 5 seconds
         self._cache_lock = threading.Lock() # FR-014: Single-Flight prevention
         
+        # In-memory cache for API endpoints
+        self._metadata_cache = {}
+        self._metadata_last_fetch = 0
+        self._METADATA_TTL_SECONDS = 86400  # 24 hours
+        
         # V0 is the standard for the current public beta API
         self.base_url = "https://demo.trading212.com/api/v0" if settings.is_t212_demo else "https://live.trading212.com/api/v0"
         
-        # Feature 004: T212 v0 requires Basic Auth (Key:Secret base64 encoded)
-        if self.api_key and self.api_secret:
-            auth_str = f"{self.api_key}:{self.api_secret}"
-            encoded_auth = base64.b64encode(auth_str.encode()).decode()
-            self.headers = {
-                "Authorization": f"Basic {encoded_auth}",
-                "Content-Type": "application/json"
-            }
-        else:
-            # Fallback for v1 or key-only if secret is missing (likely to 401 on v0)
-            self.headers = {
+        self.session = requests.Session()
+        
+        # FR-016: Key Sanitization
+        if self.api_key:
+            self.session.headers.update({
                 "Authorization": self.api_key,
                 "Content-Type": "application/json"
-            }
+            })
+            # Log sanitized key for debugging 401s
+            masked_key = f"{self.api_key[:4]}...{self.api_key[-4:]}" if len(self.api_key) > 8 else "****"
+            logger.info(f"T212 Service Initialized. Auth Key: {masked_key} | Mode: {'DEMO' if settings.is_t212_demo else 'LIVE'}")
+        else:
+            logger.error("T212 ERROR: No API Key found in settings.")
+            self.session.headers.update({"Content-Type": "application/json"})
 
     def test_connection(self) -> bool:
         """Tests v0 endpoints with direct authorization."""
@@ -155,7 +158,7 @@ class BrokerageService:
         try:
             # We look for dividends in the last 48 hours to be safe
             start_timestamp = int((time.time() - (48 * 3600)) * 1000)
-            response = requests.get(url, headers=self.headers, params={"from": start_timestamp})
+            response = self.session.get(url, headers=self.headers, params={"from": start_timestamp})
             
             if response.status_code != 200:
                 return False
@@ -239,21 +242,46 @@ class BrokerageService:
             
         return result
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
-        """Retrieves metadata for a specific symbol, including precision and min quantity."""
+        """Retrieves metadata for a specific symbol, using an internal 24-hour cache to avoid 429 errors."""
         t212_ticker = self._format_ticker(ticker)
-        url = f"{self.base_url}/instruments" # Hypothetical based on standard T212 metadata endpoints
-        # Note: v0 metadata is often bulky; in practice we might fetch all and filter
+        
+        now = time.time()
+        # Se cache for válido e existir o ticker
+        if (now - self._metadata_last_fetch) < self._METADATA_TTL_SECONDS and t212_ticker in self._metadata_cache:
+            return self._metadata_cache[t212_ticker]
+
+        url = f"{self.base_url}/instruments"
         try:
-            response = requests.get(url, headers=self.headers)
+            response = self.session.get(url)
             if response.status_code == 200:
                 instruments = response.json()
-                for inst in instruments:
-                    if inst.get('ticker') == t212_ticker:
-                        return inst
-        except: pass
-        return {}
+                # Atualizar todo o cache
+                self._metadata_cache = {inst.get('ticker'): inst for inst in instruments}
+                self._metadata_last_fetch = now
+                
+                return self._metadata_cache.get(t212_ticker, {})
+            elif response.status_code == 401:
+                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                raise requests.exceptions.HTTPError("401 Unauthorized")
+            else:
+                logger.error(f"T212 Metadata Error: {response.status_code} - {response.text}")
+                return {}
+        except Exception as e:
+            if isinstance(e, requests.exceptions.HTTPError): raise
+            logger.error(f"Error fetching metadata for {ticker}: {e}")
+            return {}
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
     def get_portfolio(self) -> List[Dict[str, Any]]:
         cache_key = "portfolio"
         with self._cache_lock:
@@ -265,14 +293,24 @@ class BrokerageService:
 
             url = f"{self.base_url}/equity/portfolio"
             try:
-                response = requests.get(url, headers=self.headers, timeout=10)
+                # Explicit headers to avoid session-level stripping
+                headers = {"Authorization": self.api_key, "Content-Type": "application/json"}
+                response = self.session.get(url, headers=headers, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
                     self._cache[cache_key] = (data, now)
                     return data
-            except: pass
+                elif response.status_code == 401:
+                    logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                    raise requests.exceptions.HTTPError("401 Unauthorized")
+            except: raise
             return []
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
     def get_pending_orders(self) -> List[Dict[str, Any]]:
         """Retrieves a list of all active/pending orders."""
         cache_key = "orders"
@@ -285,16 +323,21 @@ class BrokerageService:
 
             url = f"{self.base_url}/equity/orders"
             try:
-                response = requests.get(url, headers=self.headers, timeout=10)
+                headers = {"Authorization": self.api_key, "Content-Type": "application/json"}
+                response = self.session.get(url, headers=headers, timeout=10)
                 if response.status_code == 200: 
                     orders = response.json()
                     self._cache[cache_key] = (orders, now)
                     if orders:
                         logger.info(f"T212: Found {len(orders)} pending orders.")
                     return orders
+                elif response.status_code == 401:
+                    logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                    raise requests.exceptions.HTTPError("401 Unauthorized")
                 else:
                     logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
             except Exception as e:
+                if isinstance(e, requests.exceptions.HTTPError): raise
                 logger.error(f"T212: Error fetching orders: {e}")
             return []
 
@@ -343,14 +386,23 @@ class BrokerageService:
             logger.info(f"T212: Total commitment calculated: ${total_value:.2f}")
         return total_value
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
     def get_account_cash(self) -> float:
         """Retrieves free funds from the account."""
         url = f"{self.base_url}/equity/account/cash"
         try:
-            response = requests.get(url, headers=self.headers)
+            headers = {"Authorization": self.api_key, "Content-Type": "application/json"}
+            response = self.session.get(url, headers=headers)
             if response.status_code == 200:
                 return float(response.json().get('free', 0.0))
-        except: pass
+            elif response.status_code == 401:
+                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                raise requests.exceptions.HTTPError("401 Unauthorized")
+        except: raise
         return 0.0
 
 brokerage_service = BrokerageService()

@@ -4,7 +4,6 @@ import signal
 import sys
 import pytz
 from datetime import datetime
-from typing import List
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 # Add project root to sys.path
@@ -44,8 +43,9 @@ class SECFundamentalWorker:
         while self.is_running:
             try:
                 if not self.is_within_window():
-                    print("AGENT_LOGGER: SEC Worker outside pre-market window (04:00-09:15 EST). EXITING.")
-                    break
+                    print("AGENT_LOGGER: SEC Worker outside pre-market window (04:00-09:15 EST). Waiting 1 hour...")
+                    await asyncio.sleep(3600)
+                    continue
                     
                 universe = await persistence_service.get_active_trading_universe()
                 print(f"AGENT_LOGGER: SEC Worker processing universe: {universe}")
@@ -67,8 +67,8 @@ class SECFundamentalWorker:
                     print(f"AGENT_LOGGER: SEC Worker cycle complete. Sleeping for {self.loop_interval}s.")
                     await asyncio.sleep(self.loop_interval)
                 else:
-                    print("AGENT_LOGGER: Pre-market window closed. EXITING.")
-                    break
+                    print("AGENT_LOGGER: Pre-market window closed. Waiting for next window...")
+                    await asyncio.sleep(3600)
                 
             except Exception as e:
                 print(f"AGENT_LOGGER: SEC Worker error in main loop: {e}")

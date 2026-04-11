@@ -1,12 +1,11 @@
 import pandas as pd
-import numpy as np
-from statsmodels.tsa.stattools import coint, adfuller
+from statsmodels.tsa.stattools import adfuller
+import asyncio
 import statsmodels.api as sm
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict
 from src.services.kalman_service import KalmanFilter
 from src.services.agent_log_service import agent_trace
 from src.services.redis_service import redis_service
-from src.config import settings
 
 class ArbitrageService:
     def __init__(self):
@@ -26,6 +25,26 @@ class ArbitrageService:
                 initial_state = saved_state['x']
                 initial_covariance = saved_state['P']
                 print(f"DEBUG: [ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
+            else:
+                kf = KalmanFilter(delta=delta, r=r)
+                # D.1 Kalman Pre-Warming
+                try:
+                    from src.services.data_service import DataService
+                    t_a, t_b = pair_id.split('_')
+                    ds = DataService()
+                    print(f"DEBUG: [ArbitrageService] No Redis state for {pair_id}. Initiating 30d historical pre-warming...")
+                    df = await asyncio.to_thread(ds.get_historical_data, [t_a, t_b], "30d", "1h")
+                    for i in range(len(df)):
+                        price_a = float(df[t_a].iloc[i])
+                        price_b = float(df[t_b].iloc[i])
+                        if pd.isna(price_a) or pd.isna(price_b): continue
+                        kf.update(price_a, price_b)
+                    
+                    self.filters[pair_id] = kf
+                    print(f"DEBUG: [ArbitrageService] Pre-warming complete for {pair_id}. Filter matrices converged.")
+                    return kf
+                except Exception as e:
+                    print(f"DEBUG: [ArbitrageService] Pre-warming failed for {pair_id}, falling back to cold start: {e}")
 
         self.filters[pair_id] = KalmanFilter(
             delta=delta, 

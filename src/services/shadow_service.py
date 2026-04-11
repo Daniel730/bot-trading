@@ -79,13 +79,20 @@ class ShadowService:
             trades = result.scalars().all()
             
             portfolio = []
-            # This logic needs refinement to group by signal_id if we want pair-level exposure
+            # Map sectors by searching in PAIR_SECTORS
             for trade in trades:
-                # Mocking sector lookup for now
+                sector = "General"
+                # Search pair_sectors based on ticker 
+                for pair_key, pair_sector in settings.PAIR_SECTORS.items():
+                    tickers_in_pair = pair_key.split('_')
+                    if trade.ticker in tickers_in_pair:
+                        sector = pair_sector
+                        break
+                        
                 portfolio.append({
                     "ticker": trade.ticker,
-                    "size": trade.quantity * trade.price,
-                    "sector": "General" 
+                    "size": float(trade.quantity * trade.price), # Cast to float
+                    "sector": sector 
                 })
             return portfolio
 
