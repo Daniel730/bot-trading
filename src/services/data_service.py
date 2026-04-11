@@ -114,6 +114,25 @@ class DataService:
             
         return results
 
+    @agent_trace("DataService.get_bid_ask")
+    async def get_bid_ask(self, ticker: str) -> tuple[float, float]:
+        """Fetches the actual real-time bid and ask for slippage calculation via yfinance."""
+        try:
+            def fetch():
+                info = yf.Ticker(ticker).info
+                bid = info.get('bid', 0.0)
+                ask = info.get('ask', 0.0)
+                # Fallback to currentPrice if bid/ask is missing (e.g. after hours)
+                if bid == 0.0 or ask == 0.0:
+                    current = info.get('currentPrice', info.get('previousClose', 1.0))
+                    return current, current 
+                return bid, ask
+            return await asyncio.to_thread(fetch)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to fetch Bid/Ask for {ticker}: {e}")
+            return 0.0, 0.0
+
     @agent_trace("DataService.stream_realtime_data")
     async def stream_realtime_data(self, tickers: List[str]):
         """

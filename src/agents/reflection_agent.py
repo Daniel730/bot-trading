@@ -1,77 +1,72 @@
-import json
-from src.models.persistence import PersistenceManager
 from src.services.agent_log_service import agent_trace
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 class ReflectionAgent:
-    def __init__(self, db_path: str = "trading_bot.db"):
-        self.persistence = PersistenceManager(db_path)
+    def __init__(self):
+        pass
 
     @agent_trace("ReflectionAgent.reflect_on_trade")
-    async def reflect_on_trade(self, trade_id: str):
+    async def reflect_on_trade(self, signal_id: str):
         """
-        Conducts a post-mortem on a closed trade to identify lessons learned.
+        Conducts a post-mortem on closed trades bound to a signal_id to identify lessons learned.
         """
-        # 1. Fetch trade data
-        with self.persistence._get_connection() as conn:
-            row = conn.execute("SELECT * FROM trade_records WHERE id = ?", (trade_id,)).fetchone()
-            if not row:
-                logger.error(f"ReflectionAgent: Trade {trade_id} not found.")
+        from src.services.persistence_service import persistence_service, TradeLedger, OrderStatus, OrderSide
+        from sqlalchemy import select
+        
+        async with persistence_service.AsyncSessionLocal() as session:
+            stmt = select(TradeLedger).where(TradeLedger.signal_id == signal_id).where(TradeLedger.status == OrderStatus.COMPLETED)
+            result = await session.execute(stmt)
+            trades = await result.all() # AsyncResult methods must be awaited
+            
+            if not trades:
+                logger.error(f"ReflectionAgent: No COMPLETED trades found for signal {signal_id}.")
                 return
             
-            trade = dict(row)
-            pnl = trade.get('pnl', 0.0)
+            # Combined PnL from metadata. result.all() returns list of Row objects.
+            pnl = sum([float(t[0].metadata_json.get('pnl', 0.0)) for t in trades if t[0].metadata_json])
             
-            # 2. Analyze factors (Simplified)
-            # In a real system, we'd fetch agent weights and SHAP values
+            # Check the prevailing trade side to figure out who was right
+            primary_side = trades[0][0].side 
+            
             is_success = pnl > 0
             
             reflection_note = "✅ SUCCESS: " if is_success else "❌ FAILED: "
             if is_success:
-                reflection_note += "Signal validation from news agents was key to catching the reversal."
+                reflection_note += f"MAB captured alpha on {primary_side.value}."
             else:
-                reflection_note += "Slippage during entry exceeded 0.5%, eroding projected alpha."
+                reflection_note += f"MAB weights misled by noise on {primary_side.value}."
             
-            # 3. Update agent weights based on performance
-            await self._update_agent_weights(trade_id, is_success)
+            # Reward/Penalize agents based on outcome
+            await self._update_agent_weights(primary_side, is_success)
             
-            # 4. Save reflection to database
-            # We use TradeThesis table for this
-            conn.execute(
-                "UPDATE trade_theses SET risk_veto_status = ? WHERE trade_id = ?",
-                ("REFLECTED", trade_id)
-            )
-            conn.commit()
-            
-            logger.info(f"ReflectionAgent: Completed reflection for trade {trade_id}: {reflection_note}")
+            logger.info(f"ReflectionAgent: Completed reflection for signal {signal_id}: {reflection_note}")
 
-    async def _update_agent_weights(self, trade_id: str, is_success: bool):
-        """
-        Updates agent weights (Simplified implementation of SHAP/LIME logic).
-        """
-        # Constitution III: SHAP/LIME explainability metrics
-        # For each agent that contributed to the signal, increment/decrement its weight
-        with self.persistence._get_connection() as conn:
-            # Placeholder for agent weight adjustment logic
-            cursor = conn.cursor()
-            cursor.execute("SELECT agent_name FROM agent_performance")
-            agents = cursor.fetchall()
+    async def _update_agent_weights(self, primary_side, is_success: bool):
+        from src.services.persistence_service import persistence_service, OrderSide
+        
+        # If the trade was a BUY, Bull was advocating for it. If SELL, Bear was.
+        # SEC Agent supports all valid trades, so if it was a success it was right.
+        if primary_side == OrderSide.BUY:
+            bull_correct = is_success
+            bear_correct = not is_success
+        else: # SELL
+            bear_correct = is_success
+            bull_correct = not is_success
             
-            for agent in agents:
-                name = agent[0]
-                adjustment = 0.01 if is_success else -0.01
-                conn.execute(
-                    "UPDATE agent_performance SET current_weight = current_weight + ?, last_updated = ? WHERE agent_name = ?",
-                    (adjustment, datetime.now(), name)
-                )
-            conn.commit()
+        sec_correct = is_success
+
+        await persistence_service.update_agent_metrics("BULL_AGENT", bull_correct)
+        await persistence_service.update_agent_metrics("BEAR_AGENT", bear_correct)
+        await persistence_service.update_agent_metrics("SEC_AGENT", sec_correct)
 
     def get_explainability_scores(self, trade_id: str) -> dict:
         """
-        Generates SHAP-like values for which agents influenced the trade decision.
+        Stub for generating SHAP-like values for which agents influenced the trade decision.
         """
+        # Could read actual beta expectations via get_agent_metrics
         return {
             "bull_agent": 0.45,
             "bear_agent": -0.12,

@@ -1,12 +1,9 @@
 import logging
-import pandas as pd
-from typing import Dict, List, Optional
-from src.services.persistence_service import persistence_service
-from src.services.redis_service import redis_service
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
-from src.services.persistence_service import persistence_service, AchievabilityStatus
+from src.services.persistence_service import AchievabilityStatus
 from datetime import datetime, timezone
 
 class CalibrationService:

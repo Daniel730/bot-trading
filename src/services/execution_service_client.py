@@ -1,6 +1,7 @@
 import grpc
 import logging
 import time
+import uuid
 from decimal import Decimal
 from typing import List, Optional
 from src.generated import execution_pb2
@@ -96,6 +97,7 @@ class ExecutionServiceClient:
                 for leg in legs
             ]
 
+            client_order_id = str(uuid.uuid4())
             request = execution_pb2.ExecutionRequest(
                 signal_id=signal_id,
                 pair_id=pair_id,
@@ -103,7 +105,9 @@ class ExecutionServiceClient:
                 max_slippage_pct=_to_decimal_str(max_slippage),
                 risk_multiplier=_to_decimal_str(risk_multiplier),
                 legs=execution_legs,
+                client_order_id=client_order_id,
             )
+            logger.debug("gRPC: client_order_id=%s for signal=%s", client_order_id, signal_id)
 
             logger.info("gRPC: Sending ExecutionRequest %s to %s", signal_id, self.channel_url)
             stub = await self.get_stub()

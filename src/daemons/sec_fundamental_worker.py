@@ -4,7 +4,6 @@ import signal
 import sys
 import pytz
 from datetime import datetime
-from typing import List
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 # Add project root to sys.path

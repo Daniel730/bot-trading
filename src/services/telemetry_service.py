@@ -1,9 +1,7 @@
-import requests
 import json
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
-from src.services.persistence_service import persistence_service
+from typing import Optional, Any
 from src.services.agent_log_service import agent_trace
 import logging
 

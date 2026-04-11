@@ -73,8 +73,8 @@ class KalmanFilter:
             self.P = new_P
             
             # Reasonableness Guard: Prevent exploding beta
-            # beta is state[1]
-            self.state[1] = np.clip(self.state[1], 0.1, 10.0)
+            # beta is state[1]. We allow up to 1000 for high-price-diff pairs (BTC/ETH)
+            self.state[1] = np.clip(self.state[1], 0.001, 1000.0)
             
         except (ValueError, np.linalg.LinAlgError) as e:
             # Log error and reset to initial known sane state
