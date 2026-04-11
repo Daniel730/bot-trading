@@ -67,6 +67,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
         executionTimer.record(() -> {
             long startTime = System.nanoTime();
             UUID signalId = UUID.fromString(request.getSignalId());
+            logger.info("executeTrade: signal_id={} client_order_id={}", signalId, request.getClientOrderId());
 
             // 1. Idempotency Check (Atomic via Lua)
             String redisStatus = redisSync.checkAndMarkInFlight(signalId, "PENDING", 3600).block();

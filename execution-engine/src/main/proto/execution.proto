@@ -44,6 +44,11 @@ message ExecutionRequest {
   }
 
   repeated ExecutionLeg legs = 6;
+
+  // Idempotency key: a client-generated UUID stamped before each gRPC call.
+  // The server uses this to deduplicate retried requests at the wire level,
+  // independent of the upstream signal_id lifecycle.
+  string client_order_id = 7;
 }
 
 message TradeStatusRequest {
