@@ -12,7 +12,9 @@ from src.services.shadow_service import shadow_service
 from src.services.notification_service import notification_service
 from src.services.audit_service import audit_service
 from src.services.risk_service import risk_service
+from src.services.market_regime_service import market_regime_service
 from src.services.brokerage_service import BrokerageService
+from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service
 import uuid
 
@@ -208,6 +210,19 @@ class ArbitrageMonitor:
         size_a = round(target_cash / price_a, 6)
         size_b = round(target_cash / price_b, 6)
 
+        # Capture market regime and initial context for the TradeJournal
+        regime_info = await market_regime_service.classify_current_regime(t_a)
+        await persistence_service.log_trade_journal({
+            "signal_id": uuid.UUID(signal_id),
+            "entry_regime": regime_info["regime"],
+            "metrics_at_entry": {
+                "z_score": risk_res.get("z_score", 0.0), # Fallback if not passed
+                "win_prob": 0.55,
+                "regime_confidence": regime_info["confidence"],
+                "features": regime_info["features"]
+            }
+        })
+
         # Determina a direção (Side) para cada perna
         side_a = "SELL" if direction == "Short-Long" else "BUY"
         side_b = "BUY" if direction == "Short-Long" else "SELL"
@@ -387,7 +402,7 @@ class ArbitrageMonitor:
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis, max_loss_pct=0.02):
             logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
-            await self._close_position(signal, p_a, p_b, reason="FINANCIAL_STOP_LOSS")
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH)
             return
             
         # 2. Statistical Stop Loss / Take profit
@@ -401,16 +416,16 @@ class ArbitrageMonitor:
         # Statistical Take Profit (Mean Reversion complete)
         if abs(z_score) <= 0.5:
             logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
-            await self._close_position(signal, p_a, p_b, reason="STATISTICAL_TAKE_PROFIT")
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT)
         
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= 3.5:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
-            await self._close_position(signal, p_a, p_b, reason="STATISTICAL_STOP_LOSS")
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS)
 
-    async def _close_position(self, signal: dict, price_a: float, price_b: float, reason: str):
+    async def _close_position(self, signal: dict, price_a: float, price_b: float, reason: ExitReason):
         sig_id = signal["signal_id"]
-        logger.info(f"Closing position {sig_id} Reason: {reason}")
+        logger.info(f"Closing position {sig_id} Reason: {reason.value}")
         
         for leg in signal["legs"]:
             ticker = leg["ticker"]
@@ -425,7 +440,7 @@ class ArbitrageMonitor:
                 
         # Calculate approximate PnL based on generic values
         pnl = 0.0 # This could be expanded via actual order fill prices
-        await persistence_service.close_trade(uuid.UUID(sig_id), {signal["legs"][0]["ticker"]: price_a, signal["legs"][1]["ticker"]: price_b}, pnl)
+        await persistence_service.close_trade(uuid.UUID(sig_id), {signal["legs"][0]["ticker"]: price_a, signal["legs"][1]["ticker"]: price_b}, pnl, exit_reason=reason)
 
 
 if __name__ == "__main__":

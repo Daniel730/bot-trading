@@ -37,6 +37,20 @@ class FrequencyType(enum.Enum):
     WEEKLY = "WEEKLY"
     MONTHLY = "MONTHLY"
 
+class MarketRegime(enum.Enum):
+    TRENDING_UP = "TRENDING_UP"
+    TRENDING_DOWN = "TRENDING_DOWN"
+    VOLATILE = "VOLATILE"
+    SIDEWAYS = "SIDEWAYS"
+    STABLE = "STABLE"
+
+class ExitReason(enum.Enum):
+    TAKE_PROFIT = "TAKE_PROFIT"
+    STOP_LOSS = "STOP_LOSS"
+    KILL_SWITCH = "KILL_SWITCH"
+    MANUAL = "MANUAL"
+    TIMEOUT = "TIMEOUT"
+
 class TradeLedger(Base):
     __tablename__ = "trade_ledger"
     
@@ -123,6 +137,28 @@ class PortfolioPerformance(Base):
     cumulative_drawdown: Mapped[float] = mapped_column(Numeric(20, 10))
     sharpe_ratio: Mapped[float] = mapped_column(Numeric(20, 10))
 
+class MarketRegimeHistory(Base):
+    __tablename__ = "market_regime_history"
+    
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    regime: Mapped[MarketRegime] = mapped_column(Enum(MarketRegime))
+    confidence: Mapped[float] = mapped_column(Numeric(5, 4))
+    features: Mapped[Optional[dict]] = mapped_column(JSON)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+class TradeJournal(Base):
+    __tablename__ = "trade_journal"
+    
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    signal_id: Mapped[uuid.UUID] = mapped_column(index=True, unique=True)
+    entry_regime: Mapped[MarketRegime] = mapped_column(Enum(MarketRegime))
+    exit_reason: Mapped[Optional[ExitReason]] = mapped_column(Enum(ExitReason))
+    efficiency_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))
+    reflection_text: Mapped[Optional[str]] = mapped_column(Text)
+    metrics_at_entry: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
 class OptimizedAllocation(Base):
     __tablename__ = "optimized_allocations"
     
@@ -188,16 +224,48 @@ class PersistenceService:
                 perf = PortfolioPerformance(**perf_data)
                 session.add(perf)
 
-    async def close_trade(self, signal_id: uuid.UUID, exit_prices: dict, pnl: float):
+    async def log_market_regime(self, regime_data: dict):
+        """Logs current market regime classification."""
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                entry = MarketRegimeHistory(**regime_data)
+                session.add(entry)
+
+    async def log_trade_journal(self, journal_data: dict):
+        """Logs or updates a trade journal entry."""
+        from sqlalchemy.dialects.postgresql import insert
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = insert(TradeJournal).values(**journal_data)
+                # If signal_id exists, update values
+                update_dict = {k: v for k, v in journal_data.items() if k != 'signal_id'}
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[TradeJournal.signal_id],
+                    set_=update_dict
+                )
+                await session.execute(stmt)
+
+    async def close_trade(self, signal_id: uuid.UUID, exit_prices: dict, pnl: float, exit_reason: Optional[ExitReason] = None):
         """Marks trades with a specific signal_id as CLOSED and records PnL."""
         from sqlalchemy import update
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(
                     status=OrderStatus.CLOSED,
-                    metadata_json={"exit_prices": exit_prices, "pnl": pnl}
+                    metadata_json={"exit_prices": exit_prices, "pnl": pnl, "exit_reason": exit_reason.value if exit_reason else None}
                 )
                 await session.execute(stmt)
+                
+                # Update TradeJournal if it exists
+                if exit_reason:
+                    stmt_j = update(TradeJournal).where(TradeJournal.signal_id == signal_id).values(
+                        exit_reason=exit_reason
+                    )
+                    await session.execute(stmt_j)
+
+        # Trigger reflection in the background
+        from src.agents.reflection_agent import reflection_agent
+        asyncio.create_task(reflection_agent.reflect_on_trade(str(signal_id)))
 
     async def get_open_signals(self) -> List[dict]:
         """
