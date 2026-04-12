@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import pandas as pd
 import yfinance as yf
 from datetime import datetime
 from src.config import settings
@@ -17,6 +18,7 @@ from src.services.brokerage_service import BrokerageService
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service
 import uuid
+import pytz
 
 # Disable yfinance cache
 yf.set_tz_cache_location("/tmp/yf_cache")
@@ -46,6 +48,26 @@ class ArbitrageMonitor:
         self.current_day = None
         self.daily_start_cash = 0.0
         self.daily_halted = False
+
+    def is_market_open(self) -> bool:
+        """
+        Fix M-10: Checks if the market is currently open based on America/New_York time.
+        Bypassed if DEV_MODE=true or if it's a crypto pair.
+        """
+        if settings.DEV_MODE:
+            return True
+            
+        tz = pytz.timezone(settings.MARKET_TIMEZONE)
+        now = datetime.now(tz)
+        
+        # Weekend check
+        if now.weekday() >= 5:
+            return False
+            
+        start_time = now.replace(hour=settings.START_HOUR, minute=settings.START_MINUTE, second=0, microsecond=0)
+        end_time = now.replace(hour=settings.END_HOUR, minute=settings.END_MINUTE, second=0, microsecond=0)
+        
+        return start_time <= now <= end_time
 
     async def verify_entropy_baselines(self):
         """
@@ -86,13 +108,24 @@ class ArbitrageMonitor:
         for pair_config in pairs_to_init:
             ticker_a, ticker_b = pair_config['ticker_a'], pair_config['ticker_b']
             try:
-                hist_data = data_service.get_historical_data([ticker_a, ticker_b])
+                # Wrap sync historical data fetch
+                hist_data = await asyncio.to_thread(data_service.get_historical_data, [ticker_a, ticker_b])
+                if hist_data is None or hist_data.empty:
+                    logger.warning(f"No historical data for {ticker_a}/{ticker_b}")
+                    continue
+
                 col_a = next((c for c in hist_data.columns if ticker_a in c), None)
                 col_b = next((c for c in hist_data.columns if ticker_b in c), None)
                 
                 if not col_a or not col_b: continue
 
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(hist_data[col_a], hist_data[col_b])
+                
+                # Bug L-01: Guard against NaN/Inf hedge ratio
+                import numpy as np
+                if pd.isna(hedge) or np.isinf(hedge):
+                    logger.warning(f"Invalid hedge ratio for {ticker_a}/{ticker_b}: {hedge}. Using 1.0.")
+                    hedge = 1.0
                 
                 pair_id = f"{ticker_a}_{ticker_b}"
                 
@@ -114,12 +147,19 @@ class ArbitrageMonitor:
             except Exception as e:
                 logger.error(f"Error initializing {ticker_a}/{ticker_b}: {e}")
 
-    async def process_pair(self, pair: dict, latest_prices: dict):
+    async def process_pair(self, pair: dict, latest_prices: dict) -> dict:
         """Processes a single pair for signals and validation."""
+        diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
         try:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
+            
+            # Bug M-10: Market hours enforcement
+            is_crypto = "-USD" in t_a or "-USD" in t_b
+            if not is_crypto and not self.is_market_open():
+                return diagnostic
+                
             if t_a not in latest_prices or t_b not in latest_prices:
-                return
+                return diagnostic
             
             price_a = latest_prices[t_a]
             price_b = latest_prices[t_b]
@@ -162,14 +202,21 @@ class ArbitrageMonitor:
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
                         await self.execute_trade(pair, direction, price_a, price_b, signal_id)
+                        diagnostic["verdict"] = "EXECUTED"
                 else:
                     logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
+                    diagnostic["verdict"] = "VETOED"
+                
+                diagnostic["confidence"] = decision_state['final_confidence']
             else:
                 # Cleanup inactive signals
                 self.active_signals = [s for s in self.active_signals if not (s['ticker_a'] == t_a and s['ticker_b'] == t_b)]
+            
+            return diagnostic
 
         except Exception as e:
             logger.error(f"Error processing pair {pair.get('ticker_a')}: {e}")
+            return diagnostic
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id):
         """Executes a trade and logs to PostgreSQL."""
@@ -182,20 +229,26 @@ class ArbitrageMonitor:
         if bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0:
             spread_a = (ask_a - bid_a) / bid_a if bid_a > 0 else 0
             spread_b = (ask_b - bid_b) / bid_b if bid_b > 0 else 0
-            total_spread = spread_a + spread_b
+            # Bug L-02: Proportional spread calculation
+            total_spread = (1 + spread_a) * (1 + spread_b) - 1
             if total_spread > 0.003:
                 logger.warning(f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > 0.3% max threshold.")
                 return
         else:
             logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
         
-        total_cash = self.brokerage.get_account_cash() if hasattr(self.brokerage, 'get_account_cash') else 2000.0
+        # Bug H-02: Wrap sync brokerage calls in asyncio.to_thread
+        total_cash = await asyncio.to_thread(self.brokerage.get_account_cash)
+        if total_cash is None:
+            total_cash = 2000.0 # Fallback
         
         # Sprint B: Risk Service validation with Half-Kelly and Max 5% Port limit
+        # Bug L-03: Pass per-pair allocation (5% max) instead of full portfolio
+        per_pair_alloc = total_cash * 0.05
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
             total_portfolio_cash=total_cash,
-            amount_fiat=total_cash, 
+            amount_fiat=per_pair_alloc, 
             win_prob=0.55,
             win_loss_ratio=1.0
         )
@@ -205,23 +258,13 @@ class ArbitrageMonitor:
             return
             
         target_cash = risk_res["final_amount"]
-        logger.info(f"RISK APPROVED SIZE: {target_cash:.2f} for {t_a}/{t_b} (Kelly: {risk_res['kelly_fraction']:.4f})")
+        logger.info(f"RISK APPROVED SIZE: {target_cash:.2f} per leg for {t_a}/{t_b} (Kelly: {risk_res['kelly_fraction']:.4f})")
         
         size_a = round(target_cash / price_a, 6)
         size_b = round(target_cash / price_b, 6)
 
-        # Capture market regime and initial context for the TradeJournal
+        # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
-        await persistence_service.log_trade_journal({
-            "signal_id": uuid.UUID(signal_id),
-            "entry_regime": regime_info["regime"],
-            "metrics_at_entry": {
-                "z_score": risk_res.get("z_score", 0.0), # Fallback if not passed
-                "win_prob": 0.55,
-                "regime_confidence": regime_info["confidence"],
-                "features": regime_info["features"]
-            }
-        })
 
         # Determina a direção (Side) para cada perna
         side_a = "SELL" if direction == "Short-Long" else "BUY"
@@ -240,15 +283,27 @@ class ArbitrageMonitor:
         
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
         
-        # Leg A
-        res_a = self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
+        # Leg A - Await async brokerage
+        res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
         status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
-        order_id_a = res_a.get("orderId", str(uuid.uuid4()))
+        order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
         
-        # Leg B
-        res_b = self.brokerage.place_value_order(exec_t_b, target_cash, side_b)
+        # Leg B - Await async brokerage
+        res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b)
         status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
-        order_id_b = res_b.get("orderId", str(uuid.uuid4()))
+        order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
+
+        # M-05: Journal written only after both broker legs have returned
+        await persistence_service.log_trade_journal({
+            "signal_id": uuid.UUID(signal_id),
+            "entry_regime": regime_info["regime"],
+            "metrics_at_entry": {
+                "z_score": risk_res.get("z_score", 0.0),
+                "win_prob": 0.55,
+                "regime_confidence": regime_info["confidence"],
+                "features": regime_info["features"]
+            }
+        })
 
         # Log Leg A
         await persistence_service.log_trade({
@@ -314,8 +369,8 @@ class ArbitrageMonitor:
         if not settings.PAPER_TRADING:
             await asyncio.sleep(1) # Rate limit safety delay
             try:
-                # Basic metadata fetch test as a health ping because test_connection might be deprecated
-                test_ping = self.brokerage.get_portfolio()
+                # Await async brokerage call
+                test_ping = await self.brokerage.get_portfolio()
                 if isinstance(test_ping, dict) and test_ping.get("status") == "error":
                     raise Exception(f"T212 error: {test_ping.get('message')}")
             except Exception as e:
@@ -436,11 +491,17 @@ class ArbitrageMonitor:
             exec_t = settings.DEV_EXECUTION_TICKERS.get(ticker, ticker) if settings.DEV_MODE else ticker
             if not settings.PAPER_TRADING:
                 p = price_a if ticker == signal["legs"][0]["ticker"] else price_b
-                self.brokerage.place_value_order(exec_t, float(qty * p), side)
+                await self.brokerage.place_value_order(exec_t, float(qty * p), side)
                 
-        # Calculate approximate PnL based on generic values
-        pnl = 0.0 # This could be expanded via actual order fill prices
-        await persistence_service.close_trade(uuid.UUID(sig_id), {signal["legs"][0]["ticker"]: price_a, signal["legs"][1]["ticker"]: price_b}, pnl, exit_reason=reason)
+        # M-04: Compute realized PnL from entry vs exit price per leg
+        exit_prices = {signal["legs"][0]["ticker"]: price_a, signal["legs"][1]["ticker"]: price_b}
+        pnl = 0.0
+        for leg in signal["legs"]:
+            qty = leg["quantity"]
+            entry = leg["price"]
+            exit_p = exit_prices[leg["ticker"]]
+            pnl += (exit_p - entry) * qty if leg["side"] == "BUY" else (entry - exit_p) * qty
+        await persistence_service.close_trade(uuid.UUID(sig_id), exit_prices, pnl, exit_reason=reason)
 
 
 if __name__ == "__main__":
