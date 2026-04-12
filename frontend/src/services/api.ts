@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 
 export interface PortfolioMetrics {
-  daily_budget: number;
-  total_invested: number;
-  daily_profit: number;
-  daily_usage_pct: number;
+  daily_budget: number | null;
+  total_invested: number | null;
+  daily_profit: number | null;
+  daily_usage_pct: number | null;
 }
 
 export interface Signal {
@@ -45,6 +45,12 @@ export interface DashboardData {
   stage: string;
   details?: string;
   metrics?: PortfolioMetrics;
+  market_regime?: {
+    regime: string;
+    confidence: number;
+    features?: any;
+  };
+  global_accuracy?: number;
   active_signals?: Signal[];
   terminal_messages?: TerminalMessage[];
   timestamp: string;
