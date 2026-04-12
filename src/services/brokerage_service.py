@@ -1,9 +1,11 @@
 import threading
+import time
 from typing import List, Dict, Any
 from src.config import settings
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 import requests
 import logging
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +27,35 @@ class BrokerageService:
         
         self.session = requests.Session()
         
-        # FR-016: Key Sanitization
+        # FR-016: Key Sanitization & Verification
         if self.api_key:
-            self.session.headers.update({
-                "Authorization": self.api_key,
-                "Content-Type": "application/json"
-            })
-            # Log sanitized key for debugging 401s
-            masked_key = f"{self.api_key[:4]}...{self.api_key[-4:]}" if len(self.api_key) > 8 else "****"
-            logger.info(f"T212 Service Initialized. Auth Key: {masked_key} | Mode: {'DEMO' if settings.is_t212_demo else 'LIVE'}")
+            auth_key_len = len(self.api_key)
+            secret_len = len(self.api_secret) if self.api_secret else 0
+            
+            # Update session headers
+            self.session.headers.update(self.headers)
+            
+            masked_key = f"{self.api_key[:4]}...{self.api_key[-4:]}" if auth_key_len > 8 else "****"
+            logger.info(f"T212 Service Initialized. Auth: {'BASIC (Key+Secret)' if secret_len > 0 else 'DIRECT (Key Only)'} | KeyLen: {auth_key_len} | SecretLen: {secret_len} | Mode: {'DEMO' if settings.is_t212_demo else 'LIVE'}")
         else:
             logger.error("T212 ERROR: No API Key found in settings.")
             self.session.headers.update({"Content-Type": "application/json"})
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        """Constructs the correct header based on available credentials."""
+        headers = {"Content-Type": "application/json"}
+        
+        if self.api_key and self.api_secret:
+            # Standard Basic Auth for T212
+            creds = f"{self.api_key}:{self.api_secret}"
+            encoded = base64.b64encode(creds.encode()).decode()
+            headers["Authorization"] = f"Basic {encoded}"
+        elif self.api_key:
+            # Fallback to direct key if no secret
+            headers["Authorization"] = self.api_key
+            
+        return headers
 
     def test_connection(self) -> bool:
         """Tests v0 endpoints with direct authorization."""
@@ -158,7 +177,7 @@ class BrokerageService:
         try:
             # We look for dividends in the last 48 hours to be safe
             start_timestamp = int((time.time() - (48 * 3600)) * 1000)
-            response = self.session.get(url, headers=self.headers, params={"from": start_timestamp})
+            response = self.session.get(url, headers=self.session.headers, params={"from": start_timestamp})
             
             if response.status_code != 200:
                 return False
@@ -166,6 +185,9 @@ class BrokerageService:
             transactions = response.json()
             available_cash = self.get_account_cash()
             
+            if available_cash is None:
+                logger.warning("DRIP: Account cash unavailable. Skipping reinvestment.")
+                return False
             for tx in transactions:
                 if tx.get('type') == 'DIVIDEND' and tx.get('amount', 0) > 0:
                     ticker = tx.get('ticker')
@@ -293,9 +315,8 @@ class BrokerageService:
 
             url = f"{self.base_url}/equity/portfolio"
             try:
-                # Explicit headers to avoid session-level stripping
-                headers = {"Authorization": self.api_key, "Content-Type": "application/json"}
-                response = self.session.get(url, headers=headers, timeout=10)
+                # Use property headers for consistency
+                response = self.session.get(url, headers=self.headers, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
                     self._cache[cache_key] = (data, now)
@@ -323,8 +344,7 @@ class BrokerageService:
 
             url = f"{self.base_url}/equity/orders"
             try:
-                headers = {"Authorization": self.api_key, "Content-Type": "application/json"}
-                response = self.session.get(url, headers=headers, timeout=10)
+                response = self.session.get(url, headers=self.headers, timeout=10)
                 if response.status_code == 200: 
                     orders = response.json()
                     self._cache[cache_key] = (orders, now)
@@ -392,17 +412,26 @@ class BrokerageService:
         reraise=True
     )
     def get_account_cash(self) -> float:
-        """Retrieves free funds from the account."""
-        url = f"{self.base_url}/equity/account/cash"
-        try:
-            headers = {"Authorization": self.api_key, "Content-Type": "application/json"}
-            response = self.session.get(url, headers=headers)
-            if response.status_code == 200:
-                return float(response.json().get('free', 0.0))
-            elif response.status_code == 401:
-                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
-                raise requests.exceptions.HTTPError("401 Unauthorized")
-        except: raise
-        return 0.0
+        """Retrieves free funds from the account. Tries v0, fallbacks to v1 on 401."""
+        endpoints = [f"{self.base_url}/equity/account/cash", self.base_url.replace("/v0", "/v1") + "/equity/account/cash"]
+        
+        last_error = "Unknown"
+        for url in endpoints:
+            try:
+                response = self.session.get(url, timeout=10)
+                if response.status_code == 200:
+                    return float(response.json().get('free', 0.0))
+                elif response.status_code == 401:
+                    last_error = f"401 Unauthorized on {url}"
+                    logger.warning(f"T212 Auth Failure on {url}. Data: {response.text}")
+                else:
+                    logger.warning(f"T212 Endpoint {url} returned {response.status_code}")
+            except Exception as e:
+                logger.error(f"T212 Request error on {url}: {e}")
+        
+        # If all failed with 401, raise to trigger external error handling
+        if "401" in last_error:
+            raise requests.exceptions.HTTPError(last_error)
+        return None
 
 brokerage_service = BrokerageService()
