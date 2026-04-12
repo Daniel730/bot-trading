@@ -263,7 +263,8 @@ class Orchestrator:
         for ticker in [ticker_a, ticker_b]:
             beacon = BEACON_ASSETS.get(ticker)
             if beacon:
-                regime = await macro_economic_agent.get_ticker_regime(beacon)
+                regime_data = await macro_economic_agent.get_ticker_regime(beacon)
+                regime = regime_data.get("regime", "NEUTRAL")
                 if regime == "EXTREME_VOLATILITY":
                     state["final_confidence"] = 0.0
                     state["final_verdict"] = f"CRITICAL VETO: Sector Leader {beacon} in Flash Crash! Aborting trade for {ticker}."
