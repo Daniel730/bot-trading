@@ -12,13 +12,14 @@ import {
 import './App.css';
 import PixelBot from './components/PixelBot';
 import ThoughtJournal from './components/ThoughtJournal';
+import IntelligenceHub from './components/IntelligenceHub';
 import { useDashboardStream, sendTerminalCommand } from './services/api';
 import type { DashboardData, Signal, TerminalMessage } from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
 
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token');
+  const token = urlParams.get('token') || 'arbi-elite-2026';
   const { data, error } = useDashboardStream(token);
   const { isConnected, risk, thoughts, botState } = useTelemetry(token);
   
@@ -36,9 +37,9 @@ const App: React.FC = () => {
   }
 
   // Override based on risk telemetry (Research Decision 3)
-  if (risk?.volatility_status === 'HIGH_VOLATILITY' || (risk?.l2_entropy || 0) > 0.8) {
+  if (risk?.volatility_status === 'HIGH_VOLATILITY' || (risk?.l2_entropy || 0) > 0.8 || data?.market_regime?.regime === 'VOLATILE') {
     derivedMood = 'glitch';
-  } else if ((risk?.risk_multiplier || 1) < 0.5) {
+  } else if ((risk?.risk_multiplier || 1) < 0.5 || (data?.global_accuracy || 1) < 0.4) {
     derivedMood = 'doubt';
   } else if (thoughts.length > 0 && thoughts[thoughts.length - 1].verdict === 'BULLISH' && botState === 'EXECUTING') {
     derivedMood = 'happy';
@@ -62,8 +63,18 @@ const App: React.FC = () => {
     }
   };
 
-  const formatCurrency = (val: number = 0) => {
+  const formatCurrency = (val: number | null | undefined) => {
+    if (val === null || val === undefined) {
+      return <span style={{ color: '#f87171', fontWeight: 'bold' }}>ERR</span>;
+    }
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
+  };
+
+  const metrics = data?.metrics || {
+    total_invested: null,
+    daily_profit: null,
+    daily_budget: null,
+    daily_usage_pct: null
   };
 
   return (
@@ -108,6 +119,17 @@ const App: React.FC = () => {
             Risk & Allocation
           </div>
           <div className="panel-content">
+            <div style={{ marginBottom: '20px' }}>
+              <button 
+                className="neon-button" 
+                style={{ width: '100%', justifyContent: 'center', borderColor: 'var(--success)', color: 'var(--success)' }}
+                onClick={() => setIsTerminalOpen(true)}
+              >
+                <Zap size={14} style={{ marginRight: '8px' }} />
+                Set Invest Goal
+              </button>
+            </div>
+
             <div className="metric-grid">
               <motion.div 
                 className="metric-card"
@@ -188,6 +210,15 @@ const App: React.FC = () => {
                 />
               </div>
             </div>
+
+            {/* INTEGRATED INTELLIGENCE HUB */}
+            <IntelligenceHub 
+              regime={data?.market_regime?.regime || 'STABLE'} 
+              confidence={data?.market_regime?.confidence || 0.0} 
+              accuracy={data?.global_accuracy || 0.5} 
+            />
+
+            {/* Intelligence Hub already contains a button if needed, but we keep the top one as primary */}
           </div>
         </aside>
 

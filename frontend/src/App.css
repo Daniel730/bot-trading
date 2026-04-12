@@ -239,17 +239,33 @@ header {
   box-shadow: 0 0 15px rgba(0, 242, 255, 0.3);
 }
 
-/* Custom Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
+/* Elite Robot Animations */
+@keyframes elite-float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
 }
-::-webkit-scrollbar-track {
-  background: transparent;
+@keyframes elite-shadow {
+  0%, 100% { transform: scale(1); opacity: 0.2; }
+  50% { transform: scale(1.3); opacity: 0.4; }
 }
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
+@keyframes elite-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
 }
-::-webkit-scrollbar-thumb:hover {
-  background: var(--primary);
+@keyframes screen-flicker {
+  0% { opacity: 0.95; }
+  5% { opacity: 1; }
+  10% { opacity: 0.9; }
+  15% { opacity: 1; }
+  100% { opacity: 0.98; }
+}
+
+.elite-floating { animation: elite-float 4s ease-in-out infinite; }
+.elite-shadow { animation: elite-shadow 4s ease-in-out infinite; }
+.elite-breathe { animation: elite-breathe 2s ease-in-out infinite; }
+.screen-area { animation: screen-flicker 0.2s infinite; }
+
+.pixel-bot-elite-final {
+  image-rendering: pixelated;
+  user-select: none;
 }
