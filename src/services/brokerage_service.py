@@ -96,7 +96,8 @@ class BrokerageService:
             
         return f"{ticker}_US_EQ"
 
-    def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
+    async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
+        # P-03: Method is now async so _recover_timeout_order can be awaited correctly
         t212_ticker = self._format_ticker(ticker)
 
         # Bug M-13: Tick Size & Increment Validation using Decimal
@@ -124,7 +125,7 @@ class BrokerageService:
             "quantity": final_qty,
             "clientOrderId": client_order_id
         }
-        
+
         # Feature 018: Add slippage guard (limitPrice) if provided
         if limit_price:
             # Bug M-13: Limit Price Tick Size
@@ -136,17 +137,19 @@ class BrokerageService:
         else:
             url = f"{self.base_url}/equity/orders/market"
             logger.info(f"T212: Executing MARKET {side} for {t212_ticker} (Qty: {final_qty}, ID: {client_order_id[:8]})")
-        
+
         try:
-            response = requests.post(url, headers=self.headers, json=payload, timeout=15)
+            # P-03: Use asyncio.to_thread so the blocking requests.post doesn't stall the event loop
+            response = await asyncio.to_thread(
+                requests.post, url, headers=self.headers, json=payload, timeout=15
+            )
             if response.status_code == 200:
                 logger.info(f"T212: Order SUCCESS (ID: {client_order_id[:8]})")
                 return response.json()
-            
+
             logger.warning(f"T212: Order failed ({response.status_code}): {response.text}")
             return {"status": "error", "message": response.text}
         except requests.exceptions.Timeout:
-            # Bug 2.2: Recovery logic for Timeout
             logger.error(f"T212: Timeout placing order {client_order_id}. Checking status...")
             return await self._recover_timeout_order(client_order_id, ticker)
         except Exception as e:
@@ -181,7 +184,12 @@ class BrokerageService:
         url = f"{self.base_url}/history/transactions"
         try:
             start_timestamp = int((time.time() - (48 * 3600)) * 1000)
-            response = self.session.get(url, headers=self.session.headers, params={"from": start_timestamp})
+            # B-05: Wrap sync requests.Session.get in to_thread to avoid blocking the event loop
+            response = await asyncio.to_thread(
+                self.session.get, url,
+                headers=self.session.headers,
+                params={"from": start_timestamp}
+            )
             
             if response.status_code != 200:
                 return False

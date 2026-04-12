@@ -1,3 +1,4 @@
+from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Any, List
 from src.services.agent_log_service import agent_trace
 
@@ -212,7 +213,13 @@ class RiskService:
         
         # Proposed value using the adjusted Kelly multiplied by the configured standard allocation or the entire portfolio (scaled). We fallback to minimum of calculated ones.
         proposed_fiat = amount_fiat * half_kelly_fraction
-        final_amount = min(proposed_fiat, max_allowed_fiat)
+        # L-11: Use Decimal arithmetic and round to cents to avoid float drift in 5%-equity enforcement
+        final_amount = float(
+            min(
+                Decimal(str(proposed_fiat)),
+                Decimal(str(max_allowed_fiat))
+            ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+        )
         
         # Ensure minimum friction limits are kept
         is_acceptable = fee_check["is_acceptable"] and final_amount > 1.0 # At least $1 to execute

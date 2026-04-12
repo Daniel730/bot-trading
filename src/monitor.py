@@ -288,18 +288,39 @@ class ArbitrageMonitor:
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
         
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
-        
-        # Leg A - Await async brokerage
+
+        # T-02: Atomic execution guard — abort if Leg A fails; emergency-close if Leg B fails
+        # Leg A
         res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
         status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
-        
-        # Leg B - Await async brokerage
+
+        if status_a == OrderStatus.FAILED:
+            logger.error(f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. No position opened.")
+            return
+
+        # Leg B
         res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b)
         status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
-        # M-05: Journal written only after both broker legs have returned
+        if status_b == OrderStatus.FAILED:
+            logger.critical(
+                f"ATOMIC FAILURE: Leg A ({exec_t_a}) succeeded but Leg B ({exec_t_b}) failed. "
+                f"Placing emergency close on Leg A to prevent orphaned directional exposure."
+            )
+            close_side_a = "BUY" if side_a == "SELL" else "SELL"
+            close_res = await self.brokerage.place_value_order(exec_t_a, target_cash, close_side_a)
+            if close_res.get("status") == "error":
+                logger.critical(
+                    f"EMERGENCY CLOSE FAILED on {exec_t_a}! Position is orphaned. "
+                    f"Manual intervention required. Response: {close_res}"
+                )
+            else:
+                logger.info(f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed.")
+            return
+
+        # M-05: Journal written only after both broker legs have returned successfully
         await persistence_service.log_trade_journal({
             "signal_id": uuid.UUID(signal_id),
             "entry_regime": regime_info["regime"],
@@ -412,26 +433,36 @@ class ArbitrageMonitor:
                 except Exception as e:
                     logger.error(f"Error pushing metrics to dashboard: {e}")
                     await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
-                # Exit Strategy Loop
+                # Exit Strategy Loop — M-06: run all exit evaluations concurrently
+                open_signals = []
                 try:
                     open_signals = await persistence_service.get_open_signals()
-                    for signal in open_signals:
-                        await self._evaluate_exit_conditions(signal)
+                    if open_signals:
+                        await asyncio.gather(
+                            *[self._evaluate_exit_conditions(signal) for signal in open_signals],
+                            return_exceptions=True  # one signal failing doesn't block the rest
+                        )
                 except Exception as e:
                     logger.error(f"Error evaluating open signals for exits: {e}")
-                
+
                 all_tickers = []
                 for p in self.active_pairs:
                     all_tickers.extend([p['ticker_a'], p['ticker_b']])
-                
+
                 latest_prices = await data_service.get_latest_price(list(set(all_tickers)))
 
                 tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
                 results = await asyncio.gather(*tasks)
-                
-                # Sprint J: Heartbeat log to show activity
+
+                # L-14: Enriched heartbeat — show analyzed vs vetoed vs open signal counts
                 active_signals = [r for r in results if r and r.get('confidence', 0) > 0.6]
-                logger.info(f"--- Iteration Complete: {len(self.active_pairs)} pairs scanned. {len(active_signals)} potential signals detected. ---")
+                vetoed = [r for r in results if r and r.get('vetoed')]
+                logger.info(
+                    f"--- Iteration: {len(self.active_pairs)} pairs scanned | "
+                    f"{len(active_signals)} signals above threshold | "
+                    f"{len(vetoed)} vetoed | "
+                    f"{len(open_signals)} open positions ---"
+                )
                 
                 await asyncio.sleep(15)
         except asyncio.CancelledError:
