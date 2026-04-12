@@ -63,7 +63,7 @@ public class RedisOrderSync {
             initialStatus, 
             String.valueOf(System.currentTimeMillis()), 
             String.valueOf(ttlSeconds)
-        ).next().map(Object::toString);
+        ).next().map(res -> res == null ? "NEW" : res.toString());
     }
 
     public void close() {

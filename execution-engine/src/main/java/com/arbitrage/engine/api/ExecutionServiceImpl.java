@@ -64,112 +64,117 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             return;
         }
 
-        executionTimer.record(() -> {
-            long startTime = System.nanoTime();
-            UUID signalId = UUID.fromString(request.getSignalId());
-            logger.info("executeTrade: signal_id={} client_order_id={}", signalId, request.getClientOrderId());
+        UUID signalId = UUID.fromString(request.getSignalId());
+        long startTime = System.nanoTime();
+        logger.info("executeTrade: signal_id={} client_order_id={}", signalId, request.getClientOrderId());
 
-            // 1. Idempotency Check (Atomic via Lua)
-            String redisStatus = redisSync.checkAndMarkInFlight(signalId, "PENDING", 3600).block();
-            if (!"NEW".equals(redisStatus)) {
-                logger.warn("Duplicate request detected for {}. Status was: {}", signalId, redisStatus);
-                
-                responseObserver.onNext(ExecutionResponse.newBuilder()
-                        .setSignalId(request.getSignalId())
-                        .setStatus(parseStatus(redisStatus))
-                        .setMessage("Duplicate request - returning existing status")
-                        .build());
-                responseObserver.onCompleted();
-                return;
-            }
-
-            try {
-                // 2. Latency Check
-                long nowNs = System.nanoTime();
-                if (nowNs - request.getTimestampNs() > 50_000_000L) { // 50ms
-                    throw new LatencyTimeoutException("Stale Alpha - Latency too high");
+        // 1. Idempotency Check & Reactive Pipeline
+        redisSync.checkAndMarkInFlight(signalId, "PENDING", 3600)
+            .flatMap(redisStatus -> {
+                if (!"NEW".equals(redisStatus)) {
+                    logger.warn("Duplicate request detected for {}. Status was: {}", signalId, redisStatus);
+                    ExecutionResponse response = ExecutionResponse.newBuilder()
+                            .setSignalId(request.getSignalId())
+                            .setStatus(parseStatus(redisStatus))
+                            .setMessage("Duplicate request - returning existing status")
+                            .build();
+                    responseObserver.onNext(response);
+                    responseObserver.onCompleted();
+                    return Mono.empty();
                 }
 
-                // 3. Process ALL Legs
-                List<BigDecimal> actualVwaps = new ArrayList<>();
-                List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
-                List<Broker.BrokerLeg> brokerLegs = new ArrayList<>();
-                BigDecimal maxSlippage = new BigDecimal(request.getMaxSlippagePct());
-                ExecutionMode mode = EnvironmentConfig.isDryRun() ? ExecutionMode.PAPER : ExecutionMode.LIVE;
-
-                for (ExecutionRequest.ExecutionLeg protoLeg : request.getLegsList()) {
-                    ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
-                    BigDecimal requestedQty = new BigDecimal(protoLeg.getQuantity());
-                    BigDecimal targetPrice = new BigDecimal(protoLeg.getTargetPrice());
-
-                    L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
-                    BigDecimal actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
-
-                    // 4. Slippage Guard (All-or-Nothing)
-                    slippageGuard.validateSlippage(side, actualVwap, targetPrice, maxSlippage);
-                    
-                    actualVwaps.add(actualVwap);
-                    brokerLegs.add(new Broker.BrokerLeg(protoLeg.getTicker(), side, requestedQty, actualVwap));
-                    
-                    // FR-004: Include full L2 snapshot levels in reasoning_metadata
-                    String l2SnapshotJson = book.toJson(); 
-                    
-                    audits.add(new TradeLedgerRepository.TradeAudit(
-                            protoLeg.getTicker(),
-                            side.name(),
-                            requestedQty,
-                            targetPrice,
-                            actualVwap,
-                            mode,
-                            "{\"strategy\": \"VWAP\", \"l2_snapshot\": " + l2SnapshotJson + "}"
-                    ));
-                }
-
-                // 5. Successful Logic (Execute with Broker)
-                // If we reach here, ALL legs passed validation.
-                logger.info("Atomic Trade Approved for {} legs. Sending to broker...", request.getLegsCount());
-                
-                Broker.BrokerExecutionRequest brokerRequest = new Broker.BrokerExecutionRequest(
-                        signalId,
-                        request.getPairId(),
-                        brokerLegs
-                );
-
-                broker.execute(brokerRequest).subscribe(brokerResponse -> {
-                    ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
-                            .setSignalId(request.getSignalId());
-
-                    if (brokerResponse.success()) {
-                        responseBuilder.setStatus(ExecutionStatus.STATUS_SUCCESS);
-                        if (!actualVwaps.isEmpty()) {
-                            responseBuilder.setActualVwap(actualVwaps.get(0).toPlainString());
-                        }
-                        repository.saveAudits(signalId, request.getPairId(), audits, "SUCCESS", 
-                                (System.nanoTime() - startTime) / 1_000_000L).subscribe();
-                    } else {
-                        responseBuilder.setStatus(ExecutionStatus.STATUS_BROKER_ERROR)
-                                .setMessage(brokerResponse.message());
-                        repository.saveAudits(signalId, request.getPairId(), audits, "BROKER_ERROR", 
-                                (System.nanoTime() - startTime) / 1_000_000L).subscribe();
+                try {
+                    // 2. Latency Check
+                    long nowNs = System.nanoTime();
+                    if (nowNs - request.getTimestampNs() > 50_000_000L) { // 50ms
+                        throw new LatencyTimeoutException("Stale Alpha - Latency too high");
                     }
 
-                    responseBuilder.setProcessingTimeNs(System.nanoTime() - startTime);
-                    responseObserver.onNext(responseBuilder.build());
-                    responseObserver.onCompleted();
-                }, error -> {
-                    handleError(signalId, request, ExecutionStatus.STATUS_BROKER_ERROR, error.getMessage(), startTime, responseObserver);
-                });
+                    // 3. Process ALL Legs
+                    List<BigDecimal> actualVwaps = new ArrayList<>();
+                    List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
+                    List<Broker.BrokerLeg> brokerLegs = new ArrayList<>();
+                    BigDecimal maxSlippage = new BigDecimal(request.getMaxSlippagePct());
+                    ExecutionMode mode = EnvironmentConfig.isDryRun() ? ExecutionMode.PAPER : ExecutionMode.LIVE;
 
-            } catch (VwapCalculator.InsufficientMarketDepthException e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_DEPTH, e.getMessage(), startTime, responseObserver);
-            } catch (SlippageGuard.SlippageViolationException e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_SLIPPAGE, e.getMessage(), startTime, responseObserver);
-            } catch (LatencyTimeoutException e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_REJECTED_LATENCY, e.getMessage(), startTime, responseObserver);
-            } catch (Exception e) {
-                handleError(signalId, request, ExecutionStatus.STATUS_BROKER_ERROR, e.getMessage(), startTime, responseObserver);
-            }
-        });
+                    for (ExecutionRequest.ExecutionLeg protoLeg : request.getLegsList()) {
+                        ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
+                        BigDecimal requestedQty = new BigDecimal(protoLeg.getQuantity());
+                        BigDecimal targetPrice = new BigDecimal(protoLeg.getTargetPrice());
+
+                        L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
+                        BigDecimal actualVwap = vwapCalculator.calculateVwap(book, side, requestedQty);
+
+                        // 4. Slippage Guard (All-or-Nothing)
+                        slippageGuard.validateSlippage(side, actualVwap, targetPrice, maxSlippage);
+                        
+                        actualVwaps.add(actualVwap);
+                        brokerLegs.add(new Broker.BrokerLeg(protoLeg.getTicker(), side, requestedQty, actualVwap));
+                        
+                        String l2SnapshotJson = book.toJson(); 
+                        
+                        audits.add(new TradeLedgerRepository.TradeAudit(
+                                protoLeg.getTicker(),
+                                side.name(),
+                                requestedQty,
+                                targetPrice,
+                                actualVwap,
+                                mode,
+                                "{\"strategy\": \"VWAP\", \"l2_snapshot\": " + l2SnapshotJson + "}"
+                        ));
+                    }
+
+                    // 5. Successful Logic (Execute with Broker)
+                    logger.info("Atomic Trade Approved for {} legs. Sending to broker...", request.getLegsCount());
+                    
+                    Broker.BrokerExecutionRequest brokerRequest = new Broker.BrokerExecutionRequest(
+                            signalId,
+                            request.getPairId(),
+                            brokerLegs
+                    );
+
+                    return broker.execute(brokerRequest)
+                        .flatMap(brokerResponse -> {
+                            ExecutionResponse.Builder responseBuilder = ExecutionResponse.newBuilder()
+                                    .setSignalId(request.getSignalId());
+
+                            String finalStatus;
+                            if (brokerResponse.success()) {
+                                responseBuilder.setStatus(ExecutionStatus.STATUS_SUCCESS);
+                                if (!actualVwaps.isEmpty()) {
+                                    responseBuilder.setActualVwap(actualVwaps.get(0).toPlainString());
+                                }
+                                finalStatus = "SUCCESS";
+                            } else {
+                                responseBuilder.setStatus(ExecutionStatus.STATUS_BROKER_ERROR)
+                                        .setMessage(brokerResponse.message());
+                                finalStatus = "BROKER_ERROR";
+                            }
+
+                            responseBuilder.setProcessingTimeNs(System.nanoTime() - startTime);
+                            ExecutionResponse finalResponse = responseBuilder.build();
+
+                            return repository.saveAudits(signalId, request.getPairId(), audits, finalStatus, 
+                                    (System.nanoTime() - startTime) / 1_000_000L)
+                                .then(Mono.fromRunnable(() -> {
+                                    responseObserver.onNext(finalResponse);
+                                    responseObserver.onCompleted();
+                                }));
+                        });
+
+                } catch (Exception e) {
+                    ExecutionStatus failedStatus = ExecutionStatus.STATUS_BROKER_ERROR;
+                    if (e instanceof VwapCalculator.InsufficientMarketDepthException) failedStatus = ExecutionStatus.STATUS_REJECTED_DEPTH;
+                    else if (e instanceof SlippageGuard.SlippageViolationException) failedStatus = ExecutionStatus.STATUS_REJECTED_SLIPPAGE;
+                    else if (e instanceof LatencyTimeoutException) failedStatus = ExecutionStatus.STATUS_REJECTED_LATENCY;
+
+                    final ExecutionStatus statusForAudit = failedStatus;
+                    handleError(signalId, request, failedStatus, e.getMessage(), startTime, responseObserver);
+                    return Mono.empty();
+                }
+            })
+            .doOnError(error -> handleError(signalId, request, ExecutionStatus.STATUS_BROKER_ERROR, error.getMessage(), startTime, responseObserver))
+            .subscribe();
     }
 
     @Override

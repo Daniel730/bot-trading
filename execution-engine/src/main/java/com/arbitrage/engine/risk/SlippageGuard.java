@@ -13,6 +13,10 @@ public class SlippageGuard {
     }
 
     public void validateSlippage(ExecutionLeg.Side side, BigDecimal actualVwap, BigDecimal targetPrice, BigDecimal maxSlippagePct) {
+        if (actualVwap == null || targetPrice == null || maxSlippagePct == null) {
+            throw new SlippageViolationException("Slippage validation failed: Missing required pricing data (null)");
+        }
+        
         if (side == ExecutionLeg.Side.BUY) {
             BigDecimal ceiling = targetPrice.multiply(BigDecimal.ONE.add(maxSlippagePct));
             if (actualVwap.compareTo(ceiling) > 0) {
