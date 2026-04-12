@@ -205,6 +205,9 @@ class PersistenceService:
 
     async def log_trade(self, trade_data: dict):
         """Logs a trade execution to the ledger."""
+        if 'signal_id' in trade_data and isinstance(trade_data['signal_id'], str):
+            trade_data['signal_id'] = uuid.UUID(trade_data['signal_id'])
+            
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 trade = TradeLedger(**trade_data)

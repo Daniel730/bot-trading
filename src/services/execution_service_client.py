@@ -13,13 +13,12 @@ logger = logging.getLogger(__name__)
 
 # Hard deadline for all RPC calls (feature 033).
 # Exceeding this triggers immediate cancellation and fallback logic.
-_RPC_DEADLINE_SECONDS = 0.050
-
+# Bug M-11: Increased from 50ms to 500ms to avoid premature timeouts.
+_RPC_DEADLINE_SECONDS = 0.500
 
 def _to_decimal_str(value) -> str:
     """Serialise a numeric value to an exact decimal string, avoiding float repr."""
     return str(Decimal(str(value)))
-
 
 class ExecutionServiceClient:
     def __init__(self, host: str = None, port: int = None):
@@ -52,8 +51,7 @@ class ExecutionServiceClient:
 
         All price/quantity/slippage fields are transmitted as exact decimal
         strings (feature 033) to prevent IEEE-754 precision loss across the
-        gRPC boundary. The call is subject to a strict 50 ms deadline;
-        DEADLINE_EXCEEDED triggers immediate cancellation with no retry.
+        gRPC boundary. The call is subject to a 500ms deadline.
         """
         from src.services.redis_service import redis_service
         from src.services.risk_service import risk_service
@@ -97,7 +95,10 @@ class ExecutionServiceClient:
                 for leg in legs
             ]
 
-            client_order_id = str(uuid.uuid4())
+            # Bug H-01: Derive client_order_id deterministically from signal_id
+            # This ensures that retries carry the same ID for Redis deduplication.
+            client_order_id = f"order-{signal_id}"
+            
             request = execution_pb2.ExecutionRequest(
                 signal_id=signal_id,
                 pair_id=pair_id,

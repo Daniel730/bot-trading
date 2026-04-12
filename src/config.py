@@ -68,7 +68,8 @@ class Settings(BaseSettings):
     # gRPC & Latency (Feature 027)
     EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
     EXECUTION_ENGINE_PORT: int = Field(default=50051, validation_alias="EXECUTION_ENGINE_PORT")
-    LATENCY_ALARM_THRESHOLD_MS: float = Field(default=1.0, validation_alias="LATENCY_ALARM_THRESHOLD_MS")
+    # Bug M-11: Increased threshold to 10ms for reliability
+    LATENCY_ALARM_THRESHOLD_MS: float = Field(default=10.0, validation_alias="LATENCY_ALARM_THRESHOLD_MS")
 
     # Kalman Filter Parameters (Feature 007)
     KALMAN_DELTA: float = 1e-5 # Adaptation rate
@@ -98,6 +99,14 @@ class Settings(BaseSettings):
         'COF_SYF': 'Financials',
         'GS_MS': 'Financials',
         'BTCE.DE_ZETH.DE': 'Crypto ETNs'
+    }
+    
+    # Bug L-08: EU Hedge Mappings for DEFCON-1 (Feature 015/017)
+    EU_HEDGE_MAPPINGS: dict = {
+        "SPY": "XSPS.L", # Invesco S&P 500 Inverse UCITS
+        "QQQ": "SQQQ.L", # WisdomTree NASDAQ 100 3x Daily Short
+        "IWM": "R2SC.L", # SPDR Russell 2000 US Small Cap UCITS
+        "DIA": "DOG"     # Default fallback
     }
     
     # Arbitrage Pairs

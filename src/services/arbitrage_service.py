@@ -5,7 +5,10 @@ import statsmodels.api as sm
 from typing import Tuple, Dict
 from src.services.kalman_service import KalmanFilter
 from src.services.agent_log_service import agent_trace
+import logging
 from src.services.redis_service import redis_service
+
+logger = logging.getLogger(__name__)
 
 class ArbitrageService:
     def __init__(self):
@@ -24,7 +27,7 @@ class ArbitrageService:
             if saved_state:
                 initial_state = saved_state['x']
                 initial_covariance = saved_state['P']
-                print(f"DEBUG: [ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
+                logger.info(f"[ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
             else:
                 kf = KalmanFilter(delta=delta, r=r)
                 # D.1 Kalman Pre-Warming
@@ -32,7 +35,7 @@ class ArbitrageService:
                     from src.services.data_service import DataService
                     t_a, t_b = pair_id.split('_')
                     ds = DataService()
-                    print(f"DEBUG: [ArbitrageService] No Redis state for {pair_id}. Initiating 30d historical pre-warming...")
+                    logger.info(f"[ArbitrageService] No Redis state for {pair_id}. Initiating 30d historical pre-warming...")
                     df = await asyncio.to_thread(ds.get_historical_data, [t_a, t_b], "30d", "1h")
                     for i in range(len(df)):
                         price_a = float(df[t_a].iloc[i])
@@ -41,10 +44,10 @@ class ArbitrageService:
                         kf.update(price_a, price_b)
                     
                     self.filters[pair_id] = kf
-                    print(f"DEBUG: [ArbitrageService] Pre-warming complete for {pair_id}. Filter matrices converged.")
+                    logger.info(f"[ArbitrageService] Pre-warming complete for {pair_id}. Filter matrices converged.")
                     return kf
                 except Exception as e:
-                    print(f"DEBUG: [ArbitrageService] Pre-warming failed for {pair_id}, falling back to cold start: {e}")
+                    logger.warning(f"[ArbitrageService] Pre-warming failed for {pair_id}, falling back to cold start: {e}")
 
         self.filters[pair_id] = KalmanFilter(
             delta=delta, 
@@ -120,11 +123,13 @@ class ArbitrageService:
             intercept = float(rolling_mean.iloc[-1])
             std = float(rolling_std.iloc[-1])
         else:
-            intercept = float(full_spread_raw.mean())
-            std = float(full_spread_raw.std())
+            # Bug M-01: Look-ahead bias elimination
+            # Exclude the final observation to prevent causality violation
+            intercept = float(full_spread_raw.iloc[:-1].mean())
+            std = float(full_spread_raw.iloc[:-1].std())
         
         return {
-            "mean": 0.0,
+            "mean": intercept, # Bug C-01: Fix hardcoded 0.0
             "std": std,
             "intercept": intercept
         }
