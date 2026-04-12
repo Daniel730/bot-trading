@@ -123,7 +123,7 @@ class NotificationService:
             await update.message.reply_text(f"⏳ Processing investment: ${amount:.2f} of {ticker}...")
             
             # Execute value-based order
-            result = brokerage.place_value_order(ticker, amount, "BUY")
+            result = await brokerage.place_value_order(ticker, amount, "BUY")
             
             if result.get("status") == "error":
                 await update.message.reply_text(f"❌ Failed: {result.get('message')}")
@@ -145,7 +145,7 @@ class NotificationService:
             cash = brokerage.get_account_cash()
             sweep_ticker = cash_management_service.sweep_ticker
             
-            portfolio = brokerage.get_portfolio()
+            portfolio = await brokerage.get_portfolio()
             sweep_pos = next((p for p in portfolio if p['ticker'] == brokerage._format_ticker(sweep_ticker)), None)
             
             sweep_value = 0.0

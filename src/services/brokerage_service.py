@@ -96,28 +96,28 @@ class BrokerageService:
             
         return f"{ticker}_US_EQ"
 
-    def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None) -> Dict[str, Any]:
+    def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         t212_ticker = self._format_ticker(ticker)
-        
+
         # Bug M-13: Tick Size & Increment Validation using Decimal
         metadata = self.get_symbol_metadata(ticker)
         qty_incr = Decimal(str(metadata.get("quantityIncrement", "0.000001")))
         tick_size = Decimal(str(metadata.get("tickSize", "0.01")))
-        
+
         # T212 v0 Market Order: Positive quantity for BUY, Negative for SELL
         decimal_qty = Decimal(str(quantity))
         final_qty_dec = (decimal_qty / qty_incr).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * qty_incr
         final_qty = float(final_qty_dec)
-        
+
         if side.upper() == "SELL":
             final_qty = -abs(final_qty)
         else:
             final_qty = abs(final_qty)
 
-        # Bug 2.2: Idempotency Keys (Stable across retries if possible)
-        # Note: In this method, we generate a NEW UUID. 
-        # H-01 fix should be in the caller (ExecutionServiceClient) which passes the same client_order_id.
-        client_order_id = str(uuid.uuid4())
+        # H-01: Accept caller-provided idempotency key so retries reuse the same ID.
+        # Callers must generate the UUID once before any retry loop and pass it here.
+        if not client_order_id:
+            client_order_id = str(uuid.uuid4())
 
         payload = {
             "ticker": t212_ticker,
@@ -148,7 +148,7 @@ class BrokerageService:
         except requests.exceptions.Timeout:
             # Bug 2.2: Recovery logic for Timeout
             logger.error(f"T212: Timeout placing order {client_order_id}. Checking status...")
-            return self._recover_timeout_order(client_order_id, ticker)
+            return await self._recover_timeout_order(client_order_id, ticker)
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
@@ -191,7 +191,7 @@ class BrokerageService:
             for tx in transactions:
                 if tx.get('type') == 'DIVIDEND' and tx.get('amount', 0) > 0:
                     # Bug H-03: Re-fetch available cash fresh before each leg
-                    available_cash = self.get_account_cash()
+                    available_cash = await asyncio.to_thread(self.get_account_cash)
                     if available_cash is None:
                         logger.warning("DRIP: Account cash unavailable. Skipping leg.")
                         continue
