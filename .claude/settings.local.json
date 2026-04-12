@@ -4,7 +4,13 @@
       "Bash(./gradlew compileJava test --no-daemon)",
       "Bash(gradle --version)",
       "Bash(docker info:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(wc -l /mnt/c/Users/Danie/Desktop/bot-trading/src/**/*.py)",
+      "Bash(python -c \"from src.monitor import ArbitrageMonitor; print\\('C-01 OK: import succeeded'\\)\")",
+      "Bash(python3 -c \"from src.monitor import ArbitrageMonitor; print\\('C-01 OK: import succeeded'\\)\")",
+      "Bash(python3:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)"
     ]
   }
 }
