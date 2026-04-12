@@ -11,7 +11,9 @@ class PersistenceManager:
     def __init__(self, db_path: Optional[str] = None):
         # Fallback to a default if settings doesn't have it or passed as None
         self.db_path = db_path or getattr(settings, "DB_PATH", "logs/trading_bot.db")
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
         self._init_db()
 
     def _init_db(self):
@@ -24,6 +26,7 @@ class PersistenceManager:
             conn.execute("CREATE TABLE IF NOT EXISTS dca_schedules (id TEXT PRIMARY KEY, amount REAL, frequency TEXT, strategy_id TEXT, next_run TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS portfolio_strategies (strategy_id TEXT, ticker TEXT, weight REAL, risk_profile TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS system_state (key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("CREATE TABLE IF NOT EXISTS cash_sweeps (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, amount REAL, ticker TEXT, balance_after REAL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
             conn.commit()
             conn.close()
         except Exception as e:
@@ -80,6 +83,13 @@ class PersistenceManager:
         conn = sqlite3.connect(self.db_path)
         conn.execute("INSERT INTO dca_schedules (id, amount, frequency, strategy_id, next_run) VALUES (?, ?, ?, ?, ?)", 
                      (str(uuid.uuid4()), amount, frequency, strategy_id, next_run.isoformat() if hasattr(next_run, 'isoformat') else str(next_run)))
+        conn.commit()
+        conn.close()
+
+    def save_cash_sweep(self, sweep_type: str, amount: float, ticker: str, balance_after: float):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("INSERT INTO cash_sweeps (type, amount, ticker, balance_after) VALUES (?, ?, ?, ?)", 
+                     (sweep_type, amount, ticker, balance_after))
         conn.commit()
         conn.close()
 

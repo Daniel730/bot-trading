@@ -75,7 +75,7 @@ services:
       execution-engine:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-s", "-I", "http://localhost:8000/sse"]
+      test: ["CMD", "curl", "-s", "-I", "http://localhost:8000/"]
       interval: 10s
       timeout: 5s
       retries: 5
