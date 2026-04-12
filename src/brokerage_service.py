@@ -1,14 +1,12 @@
 import logging
-from typing import Dict, Optional
+from typing import Dict
 from src.models.trading_models import TradingOrder
 
 class BrokerageError(Exception):
     """Base exception for brokerage operations."""
-    pass
 
 class FractionalOrderError(BrokerageError):
     """Exception raised for errors in fractional order execution."""
-    pass
 
 class BrokerageService:
     def __init__(self, api_key: str):
@@ -39,6 +37,11 @@ class BrokerageService:
             current_price = await self.get_current_price(order.ticker)
             order.quantity = order.fiat_value / current_price
             self.logger.info(f"Calculated fractional quantity for {order.ticker}: {order.quantity} (at ${current_price})")
+
+        # US4: Zero-quantity rounding trap
+        if order.quantity and order.quantity < 0.000001:
+            self.logger.error(f"Order rejected: quantity {order.quantity} rounds to zero or below threshold.")
+            raise FractionalOrderError(f"Quantity {order.quantity} is too small for execution (MIN: 0.000001)")
 
         # Placeholder for actual API call to Trading 212 or other broker
         self.logger.info(f"Executing fractional {order.direction} for {order.ticker} with value/qty: {order.fiat_value or order.quantity}")

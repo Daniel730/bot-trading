@@ -8,6 +8,7 @@ env/
 .env
 .env.local
 .env*
+!.env.template
 .git/
 .gitignore
 .pytest_cache/

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 
 export interface PortfolioMetrics {
-  daily_budget: number;
-  total_invested: number;
-  daily_profit: number;
-  daily_usage_pct: number;
+  daily_budget: number | null;
+  total_invested: number | null;
+  daily_profit: number | null;
+  daily_usage_pct: number | null;
 }
 
 export interface Signal {
@@ -21,10 +21,36 @@ export interface TerminalMessage {
   metadata?: any;
 }
 
+export interface TelemetryMessage {
+  type: 'risk' | 'thought' | 'bot_state';
+  timestamp: string;
+  data: any;
+}
+
+export interface RiskTelemetry {
+  risk_multiplier: number;
+  max_drawdown_pct: number;
+  volatility_status: 'NORMAL' | 'HIGH_VOLATILITY';
+  l2_entropy: number;
+}
+
+export interface ThoughtTelemetry {
+  agent_name: string;
+  signal_id?: string;
+  thought: string;
+  verdict: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'VETO';
+}
+
 export interface DashboardData {
   stage: string;
   details?: string;
   metrics?: PortfolioMetrics;
+  market_regime?: {
+    regime: string;
+    confidence: number;
+    features?: any;
+  };
+  global_accuracy?: number;
   active_signals?: Signal[];
   terminal_messages?: TerminalMessage[];
   timestamp: string;

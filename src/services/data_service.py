@@ -1,3 +1,4 @@
+import logging
 import yfinance as yf
 import pandas as pd
 from polygon import RESTClient
@@ -5,6 +6,8 @@ from typing import List, Optional
 from src.config import settings
 import asyncio
 from src.services.agent_log_service import agent_trace
+
+logger = logging.getLogger(__name__)
 
 from src.services.redis_service import redis_service
 from polygon.websocket import WebSocketClient
@@ -37,13 +40,13 @@ class DataService:
                     return df[cols]
                 raise KeyError(f"Adjusted 'Close' not found in columns: {df.columns}")
         except Exception as e:
-            print(f"DEBUG: yfinance error for {tickers}: {e}")
+            logger.error(f"DataService: yfinance error for {tickers}: {e}")
             raise
 
     @agent_trace("DataService.get_latest_price")
-    def get_latest_price(self, tickers: List[str]) -> dict:
+    async def get_latest_price(self, tickers: List[str]) -> dict:
         """
-        Fetches the latest prices for given tickers. 
+        Fetches the latest prices for given tickers.
         Tries Redis shadow book first, falls back to yfinance with retries.
         Decision 1: Uses tenacity for 3-attempt exponential backoff.
         """
@@ -52,7 +55,7 @@ class DataService:
 
         # 1. Try Redis Shadow Book
         for ticker in tickers:
-            price = redis_service.get_price(ticker)
+            price = await redis_service.get_price(ticker)
             if price:
                 latest[ticker] = price
             else:
@@ -63,10 +66,12 @@ class DataService:
 
         # 2. Fallback to yfinance for remaining with retry logic
         try:
-            yfinance_prices = self._get_latest_price_yfinance_with_retry(remaining_tickers)
+            yfinance_prices = await asyncio.to_thread(self._get_latest_price_yfinance_with_retry, remaining_tickers)
+            for ticker, price in yfinance_prices.items():
+                await redis_service.set_price(ticker, price)
             latest.update(yfinance_prices)
         except Exception as e:
-            print(f"AGENT_LOGGER: DataService retry failed after 3 attempts for {remaining_tickers}: {e}")
+            logger.error(f"DataService: retry failed after 3 attempts for {remaining_tickers}: {e}")
             
         return latest
 
@@ -79,7 +84,8 @@ class DataService:
     def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
         """Internal helper to fetch prices from yfinance with tenacity retries."""
         results = {}
-        df = yf.download(tickers, period="1d", interval="1m", progress=False)
+        # Bug L-09: Enforce auto_adjust=True
+        df = yf.download(tickers, period="1d", interval="1m", progress=False, auto_adjust=True)
         if df.empty:
             raise ValueError(f"yfinance returned empty dataframe for {tickers}")
         
@@ -93,36 +99,60 @@ class DataService:
                         if settings.DEV_MODE:
                             val = float(val) * (1 + random.uniform(-0.015, 0.015))
                         results[ticker] = float(val)
-                        redis_service.set_price(ticker, float(val))
         else:
             ticker = tickers[0]
             if 'Close' in df.columns:
-                val = df['Close'].iloc[-1]
+                close = df['Close']
+                # yfinance >=0.2 returns MultiIndex even for a single ticker
+                if isinstance(close, pd.DataFrame):
+                    val = close[ticker].iloc[-1] if ticker in close.columns else float('nan')
+                else:
+                    val = close.iloc[-1]
                 if not pd.isna(val):
                     if settings.DEV_MODE:
                         val = float(val) * (1 + random.uniform(-0.015, 0.015))
                     results[ticker] = float(val)
-                    redis_service.set_price(ticker, float(val))
                     
         if not results:
             raise ValueError(f"No valid prices found in yfinance response for {tickers}")
             
         return results
 
+    @agent_trace("DataService.get_bid_ask")
+    async def get_bid_ask(self, ticker: str) -> tuple[float, float]:
+        """Fetches the actual real-time bid and ask for slippage calculation via yfinance."""
+        try:
+            def fetch():
+                info = yf.Ticker(ticker).info
+                bid = info.get('bid', 0.0)
+                ask = info.get('ask', 0.0)
+                # Fallback to currentPrice if bid/ask is missing (e.g. after hours)
+                if bid == 0.0 or ask == 0.0:
+                    current = info.get('currentPrice', info.get('previousClose', 1.0))
+                    return current, current 
+                return bid, ask
+            return await asyncio.to_thread(fetch)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to fetch Bid/Ask for {ticker}: {e}")
+            return 0.0, 0.0
+
     @agent_trace("DataService.stream_realtime_data")
     async def stream_realtime_data(self, tickers: List[str]):
         """
         Connects to Polygon WebSocket to stream real-time prices into Redis.
         """
+        loop = asyncio.get_running_loop()
         def handle_msg(msgs):
             for m in msgs:
                 # Trade event (T) or Quote event (Q)
                 if hasattr(m, 'price'):
-                    redis_service.set_price(m.symbol, m.price)
+                    # Bug M-04: Ensure async Redis write is scheduled
+                    asyncio.run_coroutine_threadsafe(redis_service.set_price(m.symbol, m.price), loop)
                 elif hasattr(m, 'bid_price'):
                     # Mid-price approximation
                     mid = (m.bid_price + m.ask_price) / 2
-                    redis_service.set_price(m.symbol, mid)
+                    asyncio.run_coroutine_threadsafe(redis_service.set_price(m.symbol, mid), loop)
 
         # Polygon WebSocket implementation
         self._ws_client = WebSocketClient(

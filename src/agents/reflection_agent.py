@@ -1,82 +1,112 @@
 import json
-from src.models.persistence import PersistenceManager
-from src.services.agent_log_service import agent_trace
 import logging
+import uuid
+import asyncio
+from datetime import datetime
+from src.services.persistence_service import persistence_service, OrderStatus
+from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
 
 class ReflectionAgent:
-    def __init__(self, db_path: str = "trading_bot.db"):
-        self.persistence = PersistenceManager(db_path)
+    def __init__(self):
+        pass
 
     @agent_trace("ReflectionAgent.reflect_on_trade")
-    async def reflect_on_trade(self, trade_id: str):
+    async def reflect_on_trade(self, signal_id_str: str):
         """
-        Conducts a post-mortem on a closed trade to identify lessons learned.
+        Conducts a post-mortem on a closed trade using PostgreSQL data.
+        Triggered asynchronously by persistence_service.close_trade.
         """
-        # 1. Fetch trade data
-        with self.persistence._get_connection() as conn:
-            row = conn.execute("SELECT * FROM trade_records WHERE id = ?", (trade_id,)).fetchone()
-            if not row:
-                logger.error(f"ReflectionAgent: Trade {trade_id} not found.")
-                return
+        try:
+            # 1. Wait a bit for all legs to be processed if necessary (though close_trade should be enough)
+            await asyncio.sleep(2) 
             
-            trade = dict(row)
-            pnl = trade.get('pnl', 0.0)
+            signal_id = uuid.UUID(signal_id_str)
             
-            # 2. Analyze factors (Simplified)
-            # In a real system, we'd fetch agent weights and SHAP values
-            is_success = pnl > 0
-            
-            reflection_note = "✅ SUCCESS: " if is_success else "❌ FAILED: "
-            if is_success:
-                reflection_note += "Signal validation from news agents was key to catching the reversal."
-            else:
-                reflection_note += "Slippage during entry exceeded 0.5%, eroding projected alpha."
-            
-            # 3. Update agent weights based on performance
-            await self._update_agent_weights(trade_id, is_success)
-            
-            # 4. Save reflection to database
-            # We use TradeThesis table for this
-            conn.execute(
-                "UPDATE trade_theses SET risk_veto_status = ? WHERE trade_id = ?",
-                ("REFLECTED", trade_id)
-            )
-            conn.commit()
-            
-            logger.info(f"ReflectionAgent: Completed reflection for trade {trade_id}: {reflection_note}")
+            # 2. Fetch all trade data for this signal
+            async with persistence_service.AsyncSessionLocal() as session:
+                from sqlalchemy import select
+                from src.services.persistence_service import TradeLedger, TradeJournal, AgentReasoning
+                
+                # Fetch TradeLedger entries
+                stmt_l = select(TradeLedger).where(TradeLedger.signal_id == signal_id)
+                res_l = await session.execute(stmt_l)
+                trades = res_l.scalars().all()
+                
+                if not trades:
+                    logger.error(f"ReflectionAgent: No trades found for signal {signal_id_str}")
+                    return
 
-    async def _update_agent_weights(self, trade_id: str, is_success: bool):
-        """
-        Updates agent weights (Simplified implementation of SHAP/LIME logic).
-        """
-        # Constitution III: SHAP/LIME explainability metrics
-        # For each agent that contributed to the signal, increment/decrement its weight
-        with self.persistence._get_connection() as conn:
-            # Placeholder for agent weight adjustment logic
-            cursor = conn.cursor()
-            cursor.execute("SELECT agent_name FROM agent_performance")
-            agents = cursor.fetchall()
-            
-            for agent in agents:
-                name = agent[0]
-                adjustment = 0.01 if is_success else -0.01
-                conn.execute(
-                    "UPDATE agent_performance SET current_weight = current_weight + ?, last_updated = ? WHERE agent_name = ?",
-                    (adjustment, datetime.now(), name)
-                )
-            conn.commit()
+                # Fetch Journal entry
+                stmt_j = select(TradeJournal).where(TradeJournal.signal_id == signal_id)
+                res_j = await session.execute(stmt_j)
+                journal = res_j.scalar_one_or_none()
+                
+                if not journal:
+                    logger.warning(f"ReflectionAgent: No journal entry found for {signal_id_str}. Creating one.")
+                    # Entry context might be lost, but we can still reflect
+                
+                # 3. Analyze Performance
+                total_pnl = 0.0
+                total_slippage_bps = 0
+                trade_count = 0
+                
+                for t in trades:
+                    if t.metadata_json and "pnl" in t.metadata_json:
+                        total_pnl += float(t.metadata_json["pnl"])
+                    trade_count += 1
+                
+                is_success = total_pnl > 0
+                
+                # 4. Generate Reflection Tone
+                reflection_note = ""
+                efficiency = 1.0
+                
+                if is_success:
+                    reflection_note = "✅ SUCCESS: Mean reversion captured within expected timeframe."
+                    efficiency = 0.95 
+                else:
+                    exit_reason = journal.exit_reason.value if journal and journal.exit_reason else "UNKNOWN"
+                    if exit_reason == "STOP_LOSS":
+                        reflection_note = "❌ FAILED: Statistical stop hit. Hedge ratio might have drifted or cointegration broke."
+                    elif exit_reason == "KILL_SWITCH":
+                        reflection_note = "⚠️ CAUTION: Financial kill switch triggered. Extreme downside volatility detected."
+                    else:
+                        reflection_note = "❌ FAILED: Performance below expectations."
+                    efficiency = 0.2
+                
+                # 5. Update Journal
+                journal_data = {
+                    "signal_id": signal_id,
+                    "reflection_text": reflection_note,
+                    "efficiency_score": efficiency,
+                }
+                
+                await persistence_service.log_trade_journal(journal_data)
+                
+                # 6. Adjust Agent Weights (Conceptual update to a summary table)
+                # In a real system, we'd update a Redis key or a weighted table
+                # that the Orchestrator reads to adjust confidence.
+                await self._update_global_agent_performance(is_success)
+                
+                logger.info(f"ReflectionAgent: Completed reflection for trade {signal_id_str}: {reflection_note}")
 
-    def get_explainability_scores(self, trade_id: str) -> dict:
+        except Exception as e:
+            logger.error(f"Error in ReflectionAgent.reflect_on_trade: {e}")
+
+    async def _update_global_agent_performance(self, is_success: bool):
         """
-        Generates SHAP-like values for which agents influenced the trade decision.
+        Updates a global performance score that influences future trade confidence.
         """
-        return {
-            "bull_agent": 0.45,
-            "bear_agent": -0.12,
-            "news_agent": 0.67,
-            "fundamental_analyst": 0.23
-        }
+        current_perf_str = await persistence_service.get_system_state("global_strategy_accuracy", "0.5")
+        current_perf = float(current_perf_str)
+        
+        # Simple moving average / EMA approach
+        alpha = 0.1
+        target = 1.0 if is_success else 0.0
+        new_perf = (alpha * target) + (1 - alpha) * current_perf
+        
+        await persistence_service.set_system_state("global_strategy_accuracy", f"{new_perf:.4f}")
 
 reflection_agent = ReflectionAgent()
