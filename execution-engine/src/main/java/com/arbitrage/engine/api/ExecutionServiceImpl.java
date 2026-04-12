@@ -263,8 +263,14 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             ));
         }
 
-        repository.saveAudits(signalId, request.getPairId(), audits, status.name(), 
-                (System.nanoTime() - startTime) / 1_000_000L).subscribe();
+        // J-04: Add error handler and backpressure buffer — bare subscribe() silently drops exceptions
+        repository.saveAudits(signalId, request.getPairId(), audits, status.name(),
+                (System.nanoTime() - startTime) / 1_000_000L)
+            .onBackpressureBuffer(100)
+            .subscribe(
+                null,
+                err -> log.error("Audit persist failed for signal {}: {}", signalId, err.getMessage())
+            );
 
         responseObserver.onNext(response);
         responseObserver.onCompleted();

@@ -5,7 +5,12 @@ import uuid
 
 class ShadowService:
     def __init__(self):
-        pass
+        # A-04: Pre-build ticker→sector reverse lookup once at startup.
+        # PAIR_SECTORS keys are "TICKER_A_TICKER_B" strings; we invert them for O(1) lookup.
+        self._sector_map: dict = {}
+        for pair_key, sector in settings.PAIR_SECTORS.items():
+            for ticker in pair_key.split('_'):
+                self._sector_map[ticker] = sector
 
     async def execute_simulated_trade(self, pair_id: str, direction: str, size_a: float, size_b: float, price_a: float, price_b: float):
         """
@@ -79,20 +84,13 @@ class ShadowService:
             trades = result.scalars().all()
             
             portfolio = []
-            # Map sectors by searching in PAIR_SECTORS
+            # A-04: O(1) lookup using pre-built reverse map instead of O(N×M) nested loop
             for trade in trades:
-                sector = "General"
-                # Search pair_sectors based on ticker 
-                for pair_key, pair_sector in settings.PAIR_SECTORS.items():
-                    tickers_in_pair = pair_key.split('_')
-                    if trade.ticker in tickers_in_pair:
-                        sector = pair_sector
-                        break
-                        
+                sector = self._sector_map.get(trade.ticker, "General")
                 portfolio.append({
                     "ticker": trade.ticker,
-                    "size": float(trade.quantity * trade.price), # Cast to float
-                    "sector": sector 
+                    "size": float(trade.quantity * trade.price),
+                    "sector": sector
                 })
             return portfolio
 

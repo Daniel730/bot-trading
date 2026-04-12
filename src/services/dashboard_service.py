@@ -23,10 +23,10 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket):
         if len(self.active_connections) >= self.max_connections:
-            # Reject new connection
-            logger.warning("WebSocket: Max connections reached. Rejecting client.")
-            await websocket.accept() # Must accept before closing with custom code if needed
-            await websocket.close(code=1008) # 1008 Policy Violation
+            # L-12: Close without accept() — avoids allocating a full WebSocket session per rejected attacker
+            # Starlette will send a TCP RST rather than completing the HTTP upgrade handshake.
+            logger.warning("WebSocket: Max connections reached. Rejecting client without accept.")
+            await websocket.close(code=1008)  # 1008 Policy Violation
             return
 
         await websocket.accept()

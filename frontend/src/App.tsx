@@ -19,7 +19,7 @@ import { useTelemetry } from './hooks/useTelemetry';
 
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token') || 'arbi-elite-2026';
+  const token = urlParams.get('token') || '';
   const { data, error } = useDashboardStream(token);
   const { isConnected, risk, thoughts, botState } = useTelemetry(token);
   
@@ -76,6 +76,15 @@ const App: React.FC = () => {
     daily_budget: null,
     daily_usage_pct: null
   };
+
+  // S-04: Deny access if no token is provided — never fall back to a default key
+  if (!token) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0f', color: '#f87171', fontFamily: 'monospace', fontSize: '1.2rem' }}>
+        Access denied: no <code style={{ margin: '0 0.4em', color: '#fbbf24' }}>?token=</code> parameter provided.
+      </div>
+    );
+  }
 
   return (
     <div className="dashboard-container">
