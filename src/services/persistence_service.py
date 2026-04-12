@@ -231,6 +231,21 @@ class PersistenceService:
                 entry = MarketRegimeHistory(**regime_data)
                 session.add(entry)
 
+    async def get_latest_market_regime(self) -> Optional[dict]:
+        """Retrieves the most recent market regime classification."""
+        from sqlalchemy import select, desc
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(MarketRegimeHistory).order_by(desc(MarketRegimeHistory.timestamp)).limit(1)
+            result = await session.execute(stmt)
+            regime = result.scalar_one_or_none()
+            if regime:
+                return {
+                    "regime": regime.regime.value,
+                    "confidence": float(regime.confidence),
+                    "features": regime.features
+                }
+            return None
+
     async def log_trade_journal(self, journal_data: dict):
         """Logs or updates a trade journal entry."""
         from sqlalchemy.dialects.postgresql import insert
