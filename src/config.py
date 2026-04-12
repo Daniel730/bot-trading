@@ -1,3 +1,4 @@
+from typing import Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -39,7 +40,7 @@ class Settings(BaseSettings):
     
     # Dashboard Security
     DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
-    REGION: str = Field(default="US", validation_alias="REGION")
+    REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")  # L-10: reject typos/invalid regions at startup
     
     # Infrastructure (SQLite - Legacy/Fallback)
     DB_PATH: str = Field(default="logs/trading_bot.db", validation_alias="DB_PATH")
