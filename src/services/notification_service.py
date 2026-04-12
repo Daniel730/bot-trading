@@ -257,7 +257,8 @@ class NotificationService:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        future = asyncio.get_event_loop().create_future()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
         self.pending_approvals[correlation_id] = future
         
         try:

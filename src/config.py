@@ -34,8 +34,13 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, validation_alias="POSTGRES_PORT")
     POSTGRES_USER: str = Field(default="bot_admin", validation_alias="POSTGRES_USER")
-    POSTGRES_PASSWORD: str = Field(default="bot_pass", validation_alias="POSTGRES_PASSWORD")
+    POSTGRES_PASSWORD: str = Field(validation_alias="POSTGRES_PASSWORD")
     POSTGRES_DB: str = Field(default="trading_bot", validation_alias="POSTGRES_DB")
+    
+    # Dashboard Security
+    DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
+    REGION: str = Field(default="US", validation_alias="REGION")
+    
     # Infrastructure (SQLite - Legacy/Fallback)
     DB_PATH: str = Field(default="logs/trading_bot.db", validation_alias="DB_PATH")
 

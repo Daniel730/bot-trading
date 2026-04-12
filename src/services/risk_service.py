@@ -143,7 +143,7 @@ class RiskService:
         
         current_map = hedge_map.get(region, hedge_map["US"])
         from src.services.brokerage_service import brokerage_service
-        portfolio = brokerage_service.get_portfolio()
+        portfolio = await brokerage_service.get_portfolio()
         
         suggested_hedges = []
         for pos in portfolio:

@@ -30,11 +30,20 @@ Para adicionar um novo par:
 2.  Associa o par a um **setor** para que o filtro macro funcione.
 3.  Reinicia o bot para inicializar o Filtro de Kalman do novo par.
 
-## 4. Troubleshooting nos Logs
+## 5. Configurações de Segurança e Infraestrutura
 
-Vais ver logs estruturados no terminal:
-- `[SCAN]`: A matemática pura (Z-Score).
-- `[ORCHESTRATOR]`: O pensamento da IA e possíveis vetos macro.
-- `[DECISION]`: O veredito final e alocação Sortino.
+O bot agora exige a configuração de variáveis de ambiente obrigatórias para garantir a segurança e o roteamento correto.
 
-Se vires muitos vetos de `Sector Leader`, não te preocupes: é o bot a proteger o teu capital de uma queda sistémica!
+### Variáveis de Ambiente Obrigatórias
+
+| Variável | Descrição | Importância |
+| :--- | :--- | :--- |
+| `POSTGRES_PASSWORD` | Senha para a base de dados PostgreSQL. | **Crítica**: O bot não inicia sem esta variável (removido default hardcoded). |
+| `DASHBOARD_TOKEN` | Token de autenticação para o Dashboard. | **Crítica**: Exigido mesmo em `DEV_MODE=True`. |
+| `REGION` | Região de execução (`US` ou `EU`). | Garante que os endpoints de hedge corretos são utilizados. |
+
+### Verificação de Saúde (Docker)
+
+O Docker Healthcheck agora monitoriza o endpoint `/` do `mcp-server` para garantir que o motor de execução está pronto para receber sinais.
+
+## 6. Troubleshooting nos Logs

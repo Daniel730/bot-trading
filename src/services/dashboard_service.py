@@ -17,10 +17,18 @@ from src.services.brokerage_service import brokerage_service
 logger = logging.getLogger(__name__)
 
 class ConnectionManager:
-    def __init__(self):
+    def __init__(self, max_connections: int = 50):
         self.active_connections: List[WebSocket] = []
+        self.max_connections = max_connections
 
     async def connect(self, websocket: WebSocket):
+        if len(self.active_connections) >= self.max_connections:
+            # Reject new connection
+            logger.warning("WebSocket: Max connections reached. Rejecting client.")
+            await websocket.accept() # Must accept before closing with custom code if needed
+            await websocket.close(code=1008) # 1008 Policy Violation
+            return
+
         await websocket.accept()
         self.active_connections.append(websocket)
         logger.info(f"New WebSocket client connected. Total: {len(self.active_connections)}")
@@ -111,12 +119,7 @@ class DashboardState:
 dashboard_state = DashboardState()
 
 def verify_token(token: str = Query(None)):
-    # Bypassing token check in DEV_MODE for a seamless developer experience
-    if settings.DEV_MODE:
-        return token
-        
-    raw_secret = os.getenv("DASHBOARD_TOKEN", "arbi-elite-2026")
-    secret = raw_secret.strip().strip('"').strip("'")
+    secret = settings.DASHBOARD_TOKEN.strip().strip('"').strip("'")
     
     if token != secret:
         logger.warning(f"DASHBOARD: Auth failed. Expected Len: {len(secret)}, Received Len: {len(token) if token else 0}")

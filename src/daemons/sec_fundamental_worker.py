@@ -36,9 +36,10 @@ class SECFundamentalWorker:
     async def start(self):
         print("AGENT_LOGGER: SEC Fundamental Worker starting...")
         
+        loop = asyncio.get_running_loop()
         # Handle shutdown signals
         for sig in (signal.SIGINT, signal.SIGTERM):
-            asyncio.get_event_loop().add_signal_handler(sig, self.stop)
+            loop.add_signal_handler(sig, self.stop)
 
         while self.is_running:
             try:
@@ -86,8 +87,9 @@ class SECFundamentalWorker:
     )
     async def process_ticker(self, ticker: str):
         """Processes a single ticker with exponential backoff for resilience."""
+        loop = asyncio.get_running_loop()
         # Use a dummy signal_id for background analysis
-        signal_id = f"bg-worker-{ticker}-{int(asyncio.get_event_loop().time())}"
+        signal_id = f"bg-worker-{ticker}-{int(loop.time())}"
         
         try:
             signal = await self.analyst.analyze_ticker(signal_id, ticker)
@@ -98,7 +100,7 @@ class SECFundamentalWorker:
                 "prosecutor_argument": signal.prosecutor_argument,
                 "defender_argument": signal.defender_argument,
                 "final_reasoning": signal.final_reasoning,
-                "last_updated": asyncio.get_event_loop().time()
+                "last_updated": loop.time()
             }
             
             await redis_service.set_fundamental_score(ticker, score_data)

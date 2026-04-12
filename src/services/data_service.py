@@ -142,8 +142,8 @@ class DataService:
         """
         Connects to Polygon WebSocket to stream real-time prices into Redis.
         """
+        loop = asyncio.get_running_loop()
         def handle_msg(msgs):
-            loop = asyncio.get_event_loop()
             for m in msgs:
                 # Trade event (T) or Quote event (Q)
                 if hasattr(m, 'price'):

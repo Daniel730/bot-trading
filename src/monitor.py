@@ -44,6 +44,7 @@ class ArbitrageMonitor:
         self.mode = mode
         self.active_pairs = []
         self.active_signals = []
+        self._signals_lock = asyncio.Lock()
         self.last_dev_warning = datetime.min
         self.current_day = None
         self.daily_start_cash = 0.0
@@ -181,10 +182,11 @@ class ArbitrageMonitor:
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
                 # Update Active Signals for Dashboard
-                signal_entry = next((s for s in self.active_signals if s['ticker_a'] == t_a and s['ticker_b'] == t_b), None)
-                if not signal_entry:
-                    signal_entry = {"ticker_a": t_a, "ticker_b": t_b, "z_score": z_score, "status": "Analyzing"}
-                    self.active_signals.append(signal_entry)
+                async with self._signals_lock:
+                    signal_entry = next((s for s in self.active_signals if s['ticker_a'] == t_a and s['ticker_b'] == t_b), None)
+                    if not signal_entry:
+                        signal_entry = {"ticker_a": t_a, "ticker_b": t_b, "z_score": z_score, "status": "Analyzing"}
+                        self.active_signals.append(signal_entry)
 
                 # AI Validation
                 signal_context = {
@@ -210,7 +212,8 @@ class ArbitrageMonitor:
                 diagnostic["confidence"] = decision_state['final_confidence']
             else:
                 # Cleanup inactive signals
-                self.active_signals = [s for s in self.active_signals if not (s['ticker_a'] == t_a and s['ticker_b'] == t_b)]
+                async with self._signals_lock:
+                    self.active_signals = [s for s in self.active_signals if not (s['ticker_a'] == t_a and s['ticker_b'] == t_b)]
             
             return diagnostic
 
