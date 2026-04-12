@@ -1,4 +1,3 @@
-import os
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -24,9 +23,34 @@ class Settings(BaseSettings):
     T212_API_SECRET: str = Field(default="", validation_alias="T212_API_SECRET")
     TRADING_212_API_KEY: str = Field(default="", validation_alias="TRADING_212_API_KEY")
     
+    # Infrastructure (Redis)
+    REDIS_HOST: str = Field(default="localhost", validation_alias="REDIS_HOST")
+    REDIS_PORT: int = Field(default=6379, validation_alias="REDIS_PORT")
+    REDIS_DB: int = Field(default=0, validation_alias="REDIS_DB")
+    REDIS_PASSWORD: str = Field(default="", validation_alias="REDIS_PASSWORD")
+    REDIS_APPENDONLY: bool = Field(default=True, validation_alias="REDIS_APPENDONLY")
+
+    # Infrastructure (PostgreSQL)
+    POSTGRES_HOST: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
+    POSTGRES_PORT: int = Field(default=5432, validation_alias="POSTGRES_PORT")
+    POSTGRES_USER: str = Field(default="bot_admin", validation_alias="POSTGRES_USER")
+    POSTGRES_PASSWORD: str = Field(validation_alias="POSTGRES_PASSWORD")
+    POSTGRES_DB: str = Field(default="trading_bot", validation_alias="POSTGRES_DB")
+    
+    # Dashboard Security
+    DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
+    REGION: str = Field(default="US", validation_alias="REGION")
+    
+    # Infrastructure (SQLite - Legacy/Fallback)
+    DB_PATH: str = Field(default="logs/trading_bot.db", validation_alias="DB_PATH")
+
     TRADING_212_MODE: str = "demo"
-    DB_PATH: str = "trading_bot.db"
     DEV_MODE: bool = False
+    PAPER_TRADING: bool = True
+    MAX_ALLOCATION_PERCENTAGE: float = 10.0
+    SGOV_SWEEP_TICKER: str = "SGOV"
+    MIN_SWEEP_THRESHOLD: float = 10.0
+    LIVE_CAPITAL_DANGER: bool = Field(default=False, validation_alias="LIVE_CAPITAL_DANGER")
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     
     # Operation Hours (America/New_York)
@@ -46,6 +70,12 @@ class Settings(BaseSettings):
     MAX_FRICTION_PCT: float = 0.015 # 1.5% default
     MIN_TRADE_VALUE: float = 1.00 # Minimum $1 per fractional leg
     
+    # gRPC & Latency (Feature 027)
+    EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
+    EXECUTION_ENGINE_PORT: int = Field(default=50051, validation_alias="EXECUTION_ENGINE_PORT")
+    # Bug M-11: Increased threshold to 10ms for reliability
+    LATENCY_ALARM_THRESHOLD_MS: float = Field(default=10.0, validation_alias="LATENCY_ALARM_THRESHOLD_MS")
+
     # Kalman Filter Parameters (Feature 007)
     KALMAN_DELTA: float = 1e-5 # Adaptation rate
     KALMAN_R: float = 0.001     # Measurement noise
@@ -74,6 +104,14 @@ class Settings(BaseSettings):
         'COF_SYF': 'Financials',
         'GS_MS': 'Financials',
         'BTCE.DE_ZETH.DE': 'Crypto ETNs'
+    }
+    
+    # Bug L-08: EU Hedge Mappings for DEFCON-1 (Feature 015/017)
+    EU_HEDGE_MAPPINGS: dict = {
+        "SPY": "XSPS.L", # Invesco S&P 500 Inverse UCITS
+        "QQQ": "SQQQ.L", # WisdomTree NASDAQ 100 3x Daily Short
+        "IWM": "R2SC.L", # SPDR Russell 2000 US Small Cap UCITS
+        "DIA": "DOG"     # Default fallback
     }
     
     # Arbitrage Pairs

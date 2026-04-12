@@ -53,11 +53,22 @@ const thoughts = {
     executing: ["TRADE AUTHORIZED!", "Capturing delta.", "Spread locked.", "Transaction confirmed."]
 };
 
-function addLog(text) {
+function addLog(text, agent = null, verdict = null) {
     const line = document.createElement('div');
     line.className = 'log-line';
+    if (agent) line.classList.add(`agent-${agent.toLowerCase()}`);
+    
     const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    line.innerHTML = `<span style="color:rgba(0,242,255,0.4)">[${time}]</span> > ${text}`;
+    
+    let agentTag = '';
+    if (agent) {
+        let color = 'var(--neon-cyan)';
+        if (verdict === 'BULLISH' || verdict === 'EXECUTE') color = 'var(--neon-lime)';
+        if (verdict === 'BEARISH' || verdict === 'REJECT') color = '#ff4d4d';
+        agentTag = `<span class="agent-tag" style="color:${color}">[${agent}]</span> `;
+    }
+
+    line.innerHTML = `<span style="color:rgba(0,242,255,0.4)">[${time}]</span> > ${agentTag}${text}`;
     journalLog.prepend(line);
     // Keep only last 50 lines
     if (journalLog.children.length > 50) journalLog.removeChild(journalLog.lastChild);
@@ -275,6 +286,92 @@ eventSource.addEventListener('message', (e) => {
         console.error("Dashboard Stream Parse Error:", err);
     }
 });
+
+// --- TELEMETRY WEBSOCKET (US1 & US2) ---
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+const telemetryWS = new WebSocket(`${wsProtocol}//${window.location.host}/ws/telemetry?token=${token || ''}`);
+
+function updateWSStatus(status) {
+    const modeEl = document.getElementById('val-mode');
+    if (modeEl) {
+        const dot = status === 'connected' ? '●' : '○';
+        const color = status === 'connected' ? 'var(--neon-lime)' : '#ff4d4d';
+        modeEl.innerHTML = `<span style="color:${color}; margin-right:5px;">${dot}</span> ${status.toUpperCase()}`;
+    }
+}
+
+telemetryWS.onopen = () => {
+    console.log("Telemetry WebSocket connected.");
+    addLog("TELEMETRY_LINK_ESTABLISHED");
+    updateWSStatus('connected');
+};
+
+telemetryWS.onmessage = (event) => {
+    try {
+        const payload = JSON.parse(event.data);
+        handleTelemetryUpdate(payload);
+    } catch (err) {
+        console.error("Telemetry Parse Error:", err);
+    }
+};
+
+telemetryWS.onclose = () => {
+    console.warn("Telemetry WebSocket disconnected.");
+    addLog("TELEMETRY_LINK_LOST");
+    updateWSStatus('disconnected');
+};
+
+// Throttling for high-frequency updates
+let lastRiskUpdate = 0;
+function handleTelemetryUpdate(payload) {
+    const { type, data } = payload;
+    
+    if (type === 'risk') {
+        const now = Date.now();
+        if (now - lastRiskUpdate > 100) { // Max 10 updates per second
+            updateRiskHUD(data);
+            lastRiskUpdate = now;
+        }
+    } else if (type === 'thought') {
+        updateThoughtJournal(data);
+    } else if (type === 'status') {
+        // Redundant with SSE but kept for future migration
+        if (data.stage) valState.textContent = data.stage.toUpperCase();
+        if (data.details) addLog(data.details);
+    }
+}
+
+function updateRiskHUD(data) {
+    const { risk_multiplier, max_drawdown_pct, volatility_status, l2_entropy } = data;
+    
+    const multEl = document.getElementById('risk-multiplier');
+    const ddEl = document.getElementById('risk-drawdown');
+    const volEl = document.getElementById('risk-vol-status');
+    const entropyEl = document.getElementById('risk-entropy');
+
+    if (multEl) {
+        multEl.textContent = risk_multiplier.toFixed(2);
+        multEl.style.color = risk_multiplier < 0.5 ? 'var(--neon-magenta)' : 'var(--neon-cyan)';
+    }
+    if (ddEl) {
+        ddEl.textContent = `${(max_drawdown_pct * 100).toFixed(1)}%`;
+        ddEl.style.color = max_drawdown_pct > 0.05 ? '#ff4d4d' : 'var(--neon-cyan)';
+    }
+    if (volEl) {
+        volEl.textContent = volatility_status;
+        volEl.style.color = volatility_status === 'HIGH_VOLATILITY' ? '#ff4d4d' : 'var(--neon-lime)';
+    }
+    if (entropyEl) {
+        entropyEl.textContent = l2_entropy.toFixed(2);
+        entropyEl.style.color = l2_entropy > 0.7 ? '#ff4d4d' : 'var(--neon-cyan)';
+    }
+}
+
+function updateThoughtJournal(data) {
+    const { agent_name, thought, verdict, ticker_pair } = data;
+    const msg = ticker_pair ? `(${ticker_pair}) ${thought}` : thought;
+    addLog(msg, agent_name, verdict);
+}
 
 // UI Noise for ambiance (latency only)
 setInterval(() => {

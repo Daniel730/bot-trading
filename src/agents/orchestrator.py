@@ -1,25 +1,47 @@
-from typing import TypedDict, Annotated, List, Dict
+from typing import TypedDict
 import asyncio
-from unittest.mock import MagicMock
+import numpy as np
+import logging
 from src.agents.bull_agent import bull_agent
 from src.agents.bear_agent import bear_agent
-from src.agents.fundamental_analyst import FundamentalAnalyst
-from src.services.sec_service import SECService
+from src.agents.portfolio_manager_agent import portfolio_manager_agent
+from src.agents.macro_economic_agent import macro_economic_agent
+from src.services.redis_service import redis_service
+from src.services.telemetry_service import telemetry_service
+from src.services.persistence_service import persistence_service
+
+logger = logging.getLogger(__name__)
+
+# Sprint J: Map of Leaders for Sector Panic Detection
+BEACON_ASSETS = {
+    "Technology": "NVDA",  # Sector Leader for Tech
+    "Finance": "JPM",       # Sector Leader for Banking
+    "Energy": "XOM",        # Sector Leader for Energy
+    "Consumer": "KO"        # Sector Leader for Consumer Staples/Growth
+}
+
+class AgentState(TypedDict):
+    signal_context: dict
+    bull_verdict: dict
+    bear_verdict: dict
+    fundamental_verdict: dict
+    final_confidence: float
+    final_verdict: str
 
 class Orchestrator:
     """
     Refactored Orchestrator that executes the multi-agent debate 
     without requiring the langgraph library.
+    Now uses cached fundamental scores to avoid high latency RAG calls.
     """
     def __init__(self):
-        self.fundamental_analyst = FundamentalAnalyst()
+        pass
 
     async def ainvoke(self, input_data: dict) -> dict:
-        from src.models.persistence import PersistenceManager
-        db = PersistenceManager()
+        from src.services.persistence_service import persistence_service
         
         # FR-004: Block new entries if in DEGRADED_MODE
-        operational_status = db.get_system_state("operational_status", "NORMAL")
+        operational_status = await persistence_service.get_system_state("operational_status", "NORMAL")
         
         state: AgentState = {
             "signal_context": input_data["signal_context"],
@@ -35,18 +57,60 @@ class Orchestrator:
             state["final_verdict"] = "VETO: DEGRADED_MODE active due to consecutive API failures. Entry blocked."
             return state
 
-        # 1. Parallel execution of Bull and Bear agents with resilience
+        ticker_a = state['signal_context']['ticker_a']
+        ticker_b = state['signal_context']['ticker_b']
+        pair_id = f"{ticker_a}_{ticker_b}"
+        
+        # --- PHASE 0: MACRO REGIME CHECK (FAIL-FAST) ---
+        # If the Sector Leader is in a panic state, we abort before firing up the LLM Agents
+        sector = state['signal_context'].get('sector', 'Technology')
+        beacon = BEACON_ASSETS.get(sector, "SPY")
+        
+        regime_data = await macro_economic_agent.get_ticker_regime(beacon)
+        regime = regime_data.get("regime", "NEUTRAL")
+        
+        if regime in ["BEARISH", "EXTREME_VOLATILITY"]:
+            msg = f"VETO: Sector Leader {beacon} is {regime}. Aborting analysis to protect capital."
+            logger.warning(f"[ORCHESTRATOR] {pair_id} - {msg}")
+            telemetry_service.broadcast("orchestrator_veto", {"pair": pair_id, "reason": msg})
+            return {"final_confidence": 0.0, "final_verdict": msg, "signal_context": state['signal_context']}
+
+        logger.info(f"[ORCHESTRATOR] {pair_id} - Macro Regime OK ({regime}). Starting Agent Swarm...")
+        
+        # --- PHASE 1: AGENT SWARM ---
+        # Evaluate bull/bear themes and fetch fundamental health scores
+        
         results = await asyncio.gather(
             bull_agent.evaluate(state['signal_context']),
             bear_agent.evaluate(state['signal_context']),
+            redis_service.get_fundamental_score(ticker_a),
+            redis_service.get_fundamental_score(ticker_b),
             return_exceptions=True
         )
         
-        bull_results, bear_results = results
+        bull_results, bear_results, score_data_a, score_data_b = results
         
-        # Track if any major API timeout occurred for circuit breaker (FR-003)
+        # Broadcast intermediate agent thoughts
+        sig_id = state['signal_context'].get('signal_id', 'N/A')
+        
+        telemetry_service.broadcast("thought", {
+            "agent_name": "BULL_AGENT",
+            "signal_id": sig_id,
+            "thought": str(bull_results.get("reasoning", "Analysis complete")) if not isinstance(bull_results, Exception) else f"Error: {bull_results}",
+            "verdict": "BULLISH" if not isinstance(bull_results, Exception) and bull_results.get("confidence", 0) > 0.5 else "NEUTRAL"
+        })
+        
+        telemetry_service.broadcast("thought", {
+            "agent_name": "BEAR_AGENT",
+            "signal_id": sig_id,
+            "thought": str(bear_results.get("reasoning", "Analysis complete")) if not isinstance(bear_results, Exception) else f"Error: {bear_results}",
+            "verdict": "BEARISH" if not isinstance(bear_results, Exception) and bear_results.get("confidence", 0) > 0.5 else "NEUTRAL"
+        })
+
+        # Track if any major API timeout occurred for circuit breaker
         timeout_occurred = False
         
+        # Handle Bull Agent results
         if isinstance(bull_results, Exception):
             print(f"AGENT_LOGGER: Orchestrator Bull Agent failed: {bull_results}")
             if isinstance(bull_results, asyncio.TimeoutError): timeout_occurred = True
@@ -54,6 +118,7 @@ class Orchestrator:
         else:
             state['bull_verdict'] = bull_results
             
+        # Handle Bear Agent results
         if isinstance(bear_results, Exception):
             print(f"AGENT_LOGGER: Orchestrator Bear Agent failed: {bear_results}")
             if isinstance(bear_results, asyncio.TimeoutError): timeout_occurred = True
@@ -61,53 +126,62 @@ class Orchestrator:
         else:
             state['bear_verdict'] = bear_results
 
-        # 2. Fundamental Analysis (SEC with News Fallback)
-        ticker_a = state['signal_context']['ticker_a']
-        ticker_b = state['signal_context']['ticker_b']
-        signal_id = state['signal_context'].get('signal_id')
-
-        # Analyze both tickers in the pair with resilience
-        fundamental_results = await asyncio.gather(
-            self.fundamental_analyst.analyze_ticker(signal_id, ticker_a),
-            self.fundamental_analyst.analyze_ticker(signal_id, ticker_b),
-            return_exceptions=True
-        )
+        # Handle Fundamental Score A (Redis)
+        score_a = 50
+        if isinstance(score_data_a, Exception):
+            print(f"AGENT_LOGGER: Orchestrator Redis read failed for {ticker_a}: {score_data_a}")
+        elif score_data_a:
+            score_a = score_data_a.get("score", 50)
+        else:
+            print(f"AGENT_LOGGER: CRITICAL - Fundamental cache miss for {ticker_a}. Defaulting to 50.")
+            telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
+            
+        # Handle Fundamental Score B (Redis)
+        score_b = 50
+        if isinstance(score_data_b, Exception):
+            print(f"AGENT_LOGGER: Orchestrator Redis read failed for {ticker_b}: {score_data_b}")
+        elif score_data_b:
+            score_b = score_data_b.get("score", 50)
+        else:
+            print(f"AGENT_LOGGER: CRITICAL - Fundamental cache miss for {ticker_b}. Defaulting to 50.")
+            telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
         
-        # Filter out exceptions from fundamental results for scoring
-        valid_fundamental_results = []
-        for i, res in enumerate(fundamental_results):
-            ticker = ticker_a if i == 0 else ticker_b
-            if isinstance(res, Exception):
-                print(f"AGENT_LOGGER: Orchestrator Fundamental analysis failed for {ticker}: {res}")
-                if isinstance(res, asyncio.TimeoutError): timeout_occurred = True
-                # Create a fallback signal with neutral score
-                class MockSignal:
-                    def __init__(self, score): self.structural_integrity_score = score
-                valid_fundamental_results.append(MockSignal(50))
-            else:
-                valid_fundamental_results.append(res)
-        
-        f_signal_a, f_signal_b = valid_fundamental_results
+        telemetry_service.broadcast("thought", {
+            "agent_name": "SEC_AGENT",
+            "signal_id": sig_id,
+            "thought": f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}",
+            "verdict": "VETO" if score_a < 40 or score_b < 40 else "NEUTRAL"
+        })
         
         # FR-003: Circuit Breaker Logic (Persistent)
-        consecutive_timeouts = int(db.get_system_state("consecutive_api_timeouts", "0"))
+        consecutive_timeouts_str = await persistence_service.get_system_state("consecutive_api_timeouts", "0")
+        consecutive_timeouts = int(consecutive_timeouts_str)
         
         if timeout_occurred:
             consecutive_timeouts += 1
-            db.set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
+            await persistence_service.set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
             if consecutive_timeouts >= 3:
-                db.set_system_state("operational_status", "DEGRADED_MODE")
+                await persistence_service.set_system_state("operational_status", "DEGRADED_MODE")
                 print("AGENT_LOGGER: CRITICAL - Circuit Breaker Tripped! Entering DEGRADED_MODE.")
         else:
             # Reset on full successful loop
-            db.set_system_state("consecutive_api_timeouts", "0")
+            await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         
+        # FR-010: Feedback Loop Integration
+        # Scale confidence based on recent historical performance (Global Strategy Accuracy)
+        accuracy_str = await persistence_service.get_system_state("global_strategy_accuracy", "0.5")
+        global_accuracy = float(accuracy_str)
+        
+        # Accuracy penalty: if global accuracy < 0.4, we scale down everything
+        performance_multiplier = 1.0
+        if global_accuracy < 0.4:
+            performance_multiplier = 0.7 # 30% penalty
+        elif global_accuracy > 0.7:
+            performance_multiplier = 1.1 # 10% boost for high-performing periods
+
         # 3. Aggregation Logic with VETO
         bull_conf = state['bull_verdict']['confidence']
         bear_conf = state['bear_verdict']['confidence']
-        
-        score_a = f_signal_a.structural_integrity_score
-        score_b = f_signal_b.structural_integrity_score
         
         # Absolute VETO if structural integrity score < 40 for either ticker
         if score_a < 40 or score_b < 40:
@@ -115,12 +189,87 @@ class Orchestrator:
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason
         else:
-            # Combined score: average of structural integrity and bull/bear sentiment
+            # --- PHASE 2: MULTI-ARMED BANDIT (ADAPTIVE LEARNING) ---
+            # The MAB weighs the Bull and Bear agents based on their recent track record.
+            # This allows the bot to "learn" which agent type is performing better in the current market.
+            bull_s, bull_f = await persistence_service.get_agent_metrics("BULL_AGENT")
+            bear_s, bear_f = await persistence_service.get_agent_metrics("BEAR_AGENT")
+            sec_s, sec_f = await persistence_service.get_agent_metrics("SEC_AGENT")
+            
+            bull_weight = np.random.beta(max(1, bull_s), max(1, bull_f))
+            bear_weight = np.random.beta(max(1, bear_s), max(1, bear_f))
+            sec_weight = np.random.beta(max(1, sec_s), max(1, sec_f))
+            total_w = bull_weight + bear_weight + sec_weight
+            
+            # Normalize Thompson Weights
+            w_bull = bull_weight / total_w
+            w_bear = bear_weight / total_w
+            w_sec = sec_weight / total_w
+            
+            logger.info(f"[ORCHESTRATOR] {pair_id} - MAB adaptive weights: Bull={w_bull:.2f}, Bear={w_bear:.2f}")
+            
             avg_integrity = (score_a + score_b) / 200.0
-            final_conf = (bull_conf + (1 - bear_conf) + avg_integrity) / 3
+            
+            # --- PHASE 3: PORTFOLIO SORTINO OPTIMIZATION ---
+            # We don't just trade on signals; we trade if it IMPROVES our risk-adjusted return.
+            # Sortino ratio is used because it only penalizes negative volatility (downside risk).
+            # If adding these tickers degrades our portfolio health, we penalize confidence.
+            p_advice_a = await portfolio_manager_agent.get_optimization_advice(ticker_a)
+            p_advice_b = await portfolio_manager_agent.get_optimization_advice(ticker_b)
+            
+            # Final confidence uses AI ensemble weights instead of equal 33% splits
+            base_conf = (bull_conf * w_bull) + ((1 - bear_conf) * w_bear) + (avg_integrity * w_sec)
+            final_conf = base_conf * performance_multiplier
+            
+            # If any of the new tickers significantly degrade Sortino, we penalize confidence
+            if not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]:
+                final_conf *= 0.8  # 20% Penalty for non-optimal allocation
+                state["final_verdict"] = f"MAB: Bull({w_bull:.2f}), Bear({w_bear:.2f}) | SORTINO WARNING: Non-Optimal (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
+                logger.info(f"[ORCHESTRATOR] {pair_id} - Portfolio Penalty Applied: Potential Sortino degradation.")
+            else:
+                state["final_verdict"] = f"MAB: Bull({w_bull:.2f}), Bear({w_bear:.2f}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
+                logger.info(f"[ORCHESTRATOR] {pair_id} - Portfolio Logic: Optimal addition identified.")
+
             state["final_confidence"] = final_conf
-            state["final_verdict"] = f"Aggregated: Bull({bull_conf:.2f}), Bear({bear_conf:.2f}), SEC-Avg-Integrity({avg_integrity:.2f})"
         
+        # FR-004, US2: Broadcast final verdict to Telemetry
+        mood = "IDLE"
+        if timeout_occurred:
+            mood = "GLITCH"
+        elif state["final_confidence"] > 0.8:
+            mood = "HAPPY"
+        elif state["final_confidence"] < 0.3:
+            mood = "DOUBT"
+            
+        telemetry_service.broadcast("bot_state", {"state": mood})
+        
+        telemetry_service.broadcast("thought", {
+            "agent_name": "ORCHESTRATOR",
+            "signal_id": state['signal_context'].get('signal_id', 'N/A'),
+            "ticker_pair": f"{ticker_a}_{ticker_b}",
+            "thought": state["final_verdict"],
+            "verdict": "EXECUTE" if state["final_confidence"] > 0.5 else "REJECT"
+        })
+
+        # Sprint H: Sector Gravity Check (Beacon Asset)
+        # We identify the beacon for each ticker and verify if it's in panic
+        BEACON_ASSETS = {
+            "AAPL": "NVDA", "MSFT": "NVDA", "AMD": "NVDA", "TSMC": "NVDA", "SMCI": "NVDA", # Tech
+            "BAC": "JPM", "GS": "JPM", "MS": "JPM", "C": "JPM", # Financials
+            "CVX": "XOM", "BP": "XOM", # Energy
+            "PEP": "KO", "PG": "KO", # Consumer
+        }
+        
+        for ticker in [ticker_a, ticker_b]:
+            beacon = BEACON_ASSETS.get(ticker)
+            if beacon:
+                regime_data = await macro_economic_agent.get_ticker_regime(beacon)
+                regime = regime_data.get("regime", "NEUTRAL")
+                if regime == "EXTREME_VOLATILITY":
+                    state["final_confidence"] = 0.0
+                    state["final_verdict"] = f"CRITICAL VETO: Sector Leader {beacon} in Flash Crash! Aborting trade for {ticker}."
+                    break
+
         return state
 
 orchestrator = Orchestrator()

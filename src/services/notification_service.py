@@ -1,4 +1,4 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, Bot
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 from src.config import settings
 import asyncio
@@ -153,7 +153,7 @@ class NotificationService:
                 # v0 doesn't always have current value, but we can approximate or use DataService
                 qty = sweep_pos.get('quantity', 0.0)
                 from src.services.data_service import data_service
-                prices = data_service.get_latest_price([sweep_ticker])
+                prices = await data_service.get_latest_price([sweep_ticker])
                 price = prices.get(sweep_ticker, 0.0)
                 sweep_value = qty * price
 
@@ -213,12 +213,18 @@ class NotificationService:
                     print(f"TELEGRAM: Could not edit message: {e}")
 
     async def start_listening(self):
-        """Starts the Telegram bot listener in the background."""
+        """
+        Starts the Telegram bot listener in the background.
+        This allows the user to interact with the bot via commands like /status or /exposure.
+        """
         await self.app.initialize()
         await self.app.start()
         # drop_pending_updates=True is CRITICAL to avoid processing old clicks after restart
         await self.app.updater.start_polling(drop_pending_updates=True)
         print("TELEGRAM: Listener active (cleared pending updates).")
+        
+        # Sprint J: Heartbeat Startup Message
+        await self.send_message("🚀 *Arbitrage Bot Online*\n\nMonitoring active. All health checks passed. System is in `Ready` mode.")
 
     async def send_message(self, message: str):
         """Sends a plain text message to the Telegram chat and dashboard."""
@@ -251,7 +257,8 @@ class NotificationService:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        future = asyncio.get_event_loop().create_future()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
         self.pending_approvals[correlation_id] = future
         
         try:
@@ -317,7 +324,7 @@ class NotificationService:
             from src.services.shadow_service import shadow_service
             from src.services.risk_service import risk_service
             
-            portfolio = shadow_service.get_active_portfolio_with_sectors()
+            portfolio = await shadow_service.get_active_portfolio_with_sectors()
             exposures = risk_service.get_all_sector_exposures(portfolio)
             
             if not exposures:

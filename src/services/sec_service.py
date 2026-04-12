@@ -1,7 +1,4 @@
-import os
-import asyncio
 from typing import Optional, Dict
-from datetime import datetime, date
 from edgar import set_identity, Company
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.models.persistence import PersistenceManager
@@ -9,7 +6,6 @@ from src.config import settings
 
 class SECRateLimitException(Exception):
     """Custom exception for SEC rate limit (429)."""
-    pass
 
 class SECService:
     _instance = None

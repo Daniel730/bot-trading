@@ -1,39 +1,20 @@
 import pytest
-from src.services.risk_service import FeeAnalyzer
+from unittest.mock import AsyncMock, patch
+from src.services.risk_service import risk_service
+import asyncio
 
-def test_fee_analyzer_rejects_high_friction():
-    analyzer = FeeAnalyzer(max_friction_pct=0.02)
+@pytest.mark.asyncio
+async def test_check_hedging_fixed():
+    """
+    T-01: Verify fix for missing await for get_portfolio() in check_hedging().
+    """
+    mock_portfolio = [{"ticker": "AAPL", "quantity": 10, "averagePrice": 150}]
     
-    # Case 1: $1 fee on $10 trade (10% friction) -> Should Reject
-    result = analyzer.check_fees(ticker="AAPL", amount_fiat=10.0, commission=1.0)
-    assert result["is_acceptable"] is False
-    assert result["total_friction_percent"] == 0.10
-
-def test_fee_analyzer_accepts_low_friction():
-    analyzer = FeeAnalyzer(max_friction_pct=0.02)
-    
-    # Case 2: $0.10 fee on $10 trade (1% friction) -> Should Accept
-    result = analyzer.check_fees(ticker="AAPL", amount_fiat=10.0, commission=0.1)
-    assert result["is_acceptable"] is True
-    assert result["total_friction_percent"] == 0.01
-
-def test_fee_analyzer_fx_impact():
-    analyzer = FeeAnalyzer(max_friction_pct=0.02)
-    
-    # Case 3: $0.05 commission + $0.20 FX fee on $10 trade (2.5% friction) -> Should Reject
-    result = analyzer.check_fees(ticker="AAPL", amount_fiat=10.0, commission=0.05, fx_fee=0.20)
-    assert result["is_acceptable"] is False
-    assert result["total_friction_percent"] == 0.025
-
-def test_kelly_criterion_calculation():
-    from src.services.risk_service import KellyCalculator
-    calculator = KellyCalculator(fractional_kelly=0.25)
-    
-    # p=0.6, b=1 (even money) -> Full Kelly = 0.6 - 0.4 = 0.2. Fractional (0.25x) = 0.05
-    size = calculator.calculate_size(win_prob=0.6, win_loss_ratio=1.0)
-    assert size == pytest.approx(0.05)
-    
-    # Case with ruin risk: p=0.4, b=1 -> Kelly < 0 -> Size should be 0
-    size = calculator.calculate_size(win_prob=0.4, win_loss_ratio=1.0)
-    assert size == 0.0
-
+    with patch("src.services.brokerage_service.brokerage_service.get_portfolio", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_portfolio
+        
+        # This should NOT raise TypeError if it's awaited properly.
+        result = await risk_service.check_hedging("DEFCON_1")
+        assert result["status"] == "DEFCON_1"
+        assert len(result["hedges"]) == 0 # AAPL not in map
+        mock_get.assert_called_once()

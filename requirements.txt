@@ -24,7 +24,11 @@ uvicorn
 edgartools
 sqlite-vec
 redis
+sqlalchemy
+asyncpg
 websockets
 openai
 matplotlib
 prefect
+grpcio
+grpcio-tools

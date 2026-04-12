@@ -1,39 +1,63 @@
+import asyncio
+import time
+import uuid
+from typing import List, Dict, Any
+from src.config import settings
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 import requests
 import logging
 import base64
-import time
-import uuid
-import threading
-from typing import List, Dict, Any
-from src.config import settings
+from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
 class BrokerageService:
-    def __init__(self):
-        self.api_key = settings.effective_t212_key.strip()
-        self.api_secret = settings.T212_API_SECRET.strip()
+    def __init__(self, api_key: str = None, api_secret: str = None):
+        self.api_key = api_key or settings.effective_t212_key.strip()
+        self.api_secret = api_secret or settings.T212_API_SECRET.strip()
         self._cache = {}
         self._cache_ttl = 5 # 5 seconds
-        self._cache_lock = threading.Lock() # FR-014: Single-Flight prevention
+        self._cache_lock = asyncio.Lock() # FR-014: Single-Flight prevention (Async)
+        
+        # In-memory cache for API endpoints
+        self._metadata_cache = {}
+        self._metadata_last_fetch = 0
+        self._METADATA_TTL_SECONDS = 86400  # 24 hours
         
         # V0 is the standard for the current public beta API
         self.base_url = "https://demo.trading212.com/api/v0" if settings.is_t212_demo else "https://live.trading212.com/api/v0"
         
-        # Feature 004: T212 v0 requires Basic Auth (Key:Secret base64 encoded)
-        if self.api_key and self.api_secret:
-            auth_str = f"{self.api_key}:{self.api_secret}"
-            encoded_auth = base64.b64encode(auth_str.encode()).decode()
-            self.headers = {
-                "Authorization": f"Basic {encoded_auth}",
-                "Content-Type": "application/json"
-            }
+        self.session = requests.Session()
+        
+        # FR-016: Key Sanitization & Verification
+        if self.api_key:
+            auth_key_len = len(self.api_key)
+            secret_len = len(self.api_secret) if self.api_secret else 0
+            
+            # Update session headers
+            self.session.headers.update(self.headers)
+            
+            masked_key = f"{self.api_key[:4]}...{self.api_key[-4:]}" if auth_key_len > 8 else "****"
+            logger.info(f"T212 Service Initialized. Auth: {'BASIC (Key+Secret)' if secret_len > 0 else 'DIRECT (Key Only)'} | KeyLen: {auth_key_len} | SecretLen: {secret_len} | Mode: {'DEMO' if settings.is_t212_demo else 'LIVE'}")
         else:
-            # Fallback for v1 or key-only if secret is missing (likely to 401 on v0)
-            self.headers = {
-                "Authorization": self.api_key,
-                "Content-Type": "application/json"
-            }
+            logger.error("T212 ERROR: No API Key found in settings.")
+            self.session.headers.update({"Content-Type": "application/json"})
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        """Constructs the correct header based on available credentials."""
+        headers = {"Content-Type": "application/json"}
+        
+        if self.api_key and self.api_secret:
+            # Standard Basic Auth for T212
+            creds = f"{self.api_key}:{self.api_secret}"
+            encoded = base64.b64encode(creds.encode()).decode()
+            headers["Authorization"] = f"Basic {encoded}"
+        elif self.api_key:
+            # Fallback to direct key if no secret
+            headers["Authorization"] = self.api_key
+            
+        return headers
 
     def test_connection(self) -> bool:
         """Tests v0 endpoints with direct authorization."""
@@ -75,37 +99,41 @@ class BrokerageService:
     def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None) -> Dict[str, Any]:
         t212_ticker = self._format_ticker(ticker)
         
-        # Bug 2.3: Tick Size & Increment Validation
+        # Bug M-13: Tick Size & Increment Validation using Decimal
         metadata = self.get_symbol_metadata(ticker)
-        qty_incr = float(metadata.get("quantityIncrement", 0.000001))
+        qty_incr = Decimal(str(metadata.get("quantityIncrement", "0.000001")))
+        tick_size = Decimal(str(metadata.get("tickSize", "0.01")))
         
         # T212 v0 Market Order: Positive quantity for BUY, Negative for SELL
-        final_qty = float(round(quantity / qty_incr) * qty_incr)
-        final_qty = float(round(final_qty, 6))
+        decimal_qty = Decimal(str(quantity))
+        final_qty_dec = (decimal_qty / qty_incr).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * qty_incr
+        final_qty = float(final_qty_dec)
         
         if side.upper() == "SELL":
             final_qty = -abs(final_qty)
         else:
             final_qty = abs(final_qty)
 
-        # Bug 2.2: Idempotency Keys
+        # Bug 2.2: Idempotency Keys (Stable across retries if possible)
+        # Note: In this method, we generate a NEW UUID. 
+        # H-01 fix should be in the caller (ExecutionServiceClient) which passes the same client_order_id.
         client_order_id = str(uuid.uuid4())
 
         payload = {
             "ticker": t212_ticker,
             "quantity": final_qty,
-            "clientOrderId": client_order_id # Standard idempotency field
+            "clientOrderId": client_order_id
         }
         
         # Feature 018: Add slippage guard (limitPrice) if provided
         if limit_price:
-            # Bug 2.3: Limit Price Tick Size
-            # We round to 2 decimals for US stocks as a sane default if metadata missing.
-            payload["limitPrice"] = float(round(limit_price, 2))
+            # Bug M-13: Limit Price Tick Size
+            decimal_limit = Decimal(str(limit_price))
+            rounded_limit = (decimal_limit / tick_size).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * tick_size
+            payload["limitPrice"] = float(rounded_limit)
             url = f"{self.base_url}/equity/orders/limit"
             logger.info(f"T212: Executing LIMIT {side} for {t212_ticker} (Qty: {final_qty}, Limit: {payload['limitPrice']}, ID: {client_order_id[:8]})")
         else:
-            # v1 market order endpoint
             url = f"{self.base_url}/equity/orders/market"
             logger.info(f"T212: Executing MARKET {side} for {t212_ticker} (Qty: {final_qty}, ID: {client_order_id[:8]})")
         
@@ -124,10 +152,10 @@ class BrokerageService:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
-    def _recover_timeout_order(self, client_order_id: str, ticker: str) -> Dict[str, Any]:
+    async def _recover_timeout_order(self, client_order_id: str, ticker: str) -> Dict[str, Any]:
         """Polls for the order status after a timeout to prevent duplicates."""
-        time.sleep(2) # Give broker a moment to process
-        orders = self.get_pending_orders()
+        await asyncio.sleep(2) # Give broker a moment to process
+        orders = await self.get_pending_orders()
         for o in orders:
             if o.get('clientOrderId') == client_order_id:
                 logger.info(f"T212: Recovered timed-out order {client_order_id[:8]} - Found in PENDING.")
@@ -141,30 +169,33 @@ class BrokerageService:
         """
         Executes a value-based order, primarily for DCA and goal-oriented investing.
         """
-        return self.place_value_order(ticker, amount_fiat, side)
+        return await self.place_value_order(ticker, amount_fiat, side)
 
-    def check_dividends_and_reinvest(self):
+    async def check_dividends_and_reinvest(self):
         """
         Feature 015 (FR-004) / Feature 018 (FR-005): Fetches account activity to identify dividends and reinvests them.
         Safety: Execution value capped at min(gross_dividend, available_free_cash).
         """
         logger.info("T212: Checking for new dividends to reinvest (DRIP)...")
         
-        # In a real T212 API, we poll transactions
         url = f"{self.base_url}/history/transactions"
         try:
-            # We look for dividends in the last 48 hours to be safe
             start_timestamp = int((time.time() - (48 * 3600)) * 1000)
-            response = requests.get(url, headers=self.headers, params={"from": start_timestamp})
+            response = self.session.get(url, headers=self.session.headers, params={"from": start_timestamp})
             
             if response.status_code != 200:
                 return False
                 
             transactions = response.json()
-            available_cash = self.get_account_cash()
             
             for tx in transactions:
                 if tx.get('type') == 'DIVIDEND' and tx.get('amount', 0) > 0:
+                    # Bug H-03: Re-fetch available cash fresh before each leg
+                    available_cash = self.get_account_cash()
+                    if available_cash is None:
+                        logger.warning("DRIP: Account cash unavailable. Skipping leg.")
+                        continue
+
                     ticker = tx.get('ticker')
                     dividend_amount = float(tx.get('amount'))
                     
@@ -176,17 +207,14 @@ class BrokerageService:
                         continue
                         
                     logger.info(f"DRIP: Reinvesting ${execution_value:.2f} into {ticker} (Dividend: ${dividend_amount:.2f}, Cash: ${available_cash:.2f})")
-                    res = self.place_value_order(ticker, execution_value, "BUY")
-                    
-                    if res.get("status") != "error":
-                        available_cash -= execution_value # Deduct for next reinvestment in loop
+                    res = await self.place_value_order(ticker, execution_value, "BUY")
         except Exception as e:
             logger.error(f"DRIP: Error during reinvestment sweep: {e}")
             return False
             
         return True
 
-    def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+    async def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
         """
         Feature 014/016: Executes a value-based order by calculating required quantity.
         Enforces minTradeQuantity and quantityIncrement from brokerage metadata.
@@ -195,24 +223,25 @@ class BrokerageService:
         from src.services.risk_service import risk_service
         from src.services.agent_log_service import agent_logger
         
-        # 1. Friction analysis before execution (Architecture Rule 3)
+        # 1. Friction analysis before execution
         friction_res = risk_service.calculate_friction(amount, ticker=ticker)
         if not friction_res["is_acceptable"]:
             return {"status": "error", "message": friction_res["rejection_reason"]}
         friction = friction_res["friction_pct"]
 
         # 2. Price and Quantity calculation
-        prices = data_service.get_latest_price([ticker])
+        # Bug M-05: Added await to async price fetch
+        prices = await data_service.get_latest_price([ticker])
         if ticker not in prices:
             return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
         
         price = prices[ticker]
         raw_quantity = amount / price
         
-        # 3. Metadata validation (Architecture Rule 4)
+        # 3. Metadata validation
         metadata = self.get_symbol_metadata(ticker)
         min_qty = float(metadata.get("minTradeQuantity", 0.0))
-        qty_incr = float(metadata.get("quantityIncrement", 0.0))
+        qty_incr = float(metadata.get("quantityIncrement", 1e-6))
         
         if min_qty > 0 and raw_quantity < min_qty:
             return {
@@ -222,14 +251,12 @@ class BrokerageService:
             
         final_quantity = raw_quantity
         if qty_incr > 0:
-            # Round to nearest increment: round(qty / incr) * incr
             final_quantity = round(raw_quantity / qty_incr) * qty_incr
-            final_quantity = float(round(final_quantity, 6)) # Float precision cleanup
+            final_quantity = float(round(final_quantity, 6))
             
-        logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares (Metadata: min={min_qty}, incr={qty_incr})")
+        logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares")
         
         # Feature 018: Calculate 1% slippage-capped limitPrice
-        # BUY: price * 1.01, SELL: price * 0.99
         limit_price = price * 1.01 if side.upper() == "BUY" else price * 0.99
         
         result = self.place_market_order(ticker, final_quantity, side, limit_price=limit_price)
@@ -239,24 +266,49 @@ class BrokerageService:
             
         return result
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
-        """Retrieves metadata for a specific symbol, including precision and min quantity."""
+        """Retrieves metadata for a specific symbol, using an internal 24-hour cache to avoid 429 errors."""
         t212_ticker = self._format_ticker(ticker)
-        url = f"{self.base_url}/instruments" # Hypothetical based on standard T212 metadata endpoints
-        # Note: v0 metadata is often bulky; in practice we might fetch all and filter
+        
+        now = time.time()
+        # Se cache for válido e existir o ticker
+        if (now - self._metadata_last_fetch) < self._METADATA_TTL_SECONDS and t212_ticker in self._metadata_cache:
+            return self._metadata_cache[t212_ticker]
+
+        url = f"{self.base_url}/instruments"
         try:
-            response = requests.get(url, headers=self.headers)
+            response = self.session.get(url)
             if response.status_code == 200:
                 instruments = response.json()
-                for inst in instruments:
-                    if inst.get('ticker') == t212_ticker:
-                        return inst
-        except: pass
-        return {}
+                # Atualizar todo o cache
+                self._metadata_cache = {inst.get('ticker'): inst for inst in instruments}
+                self._metadata_last_fetch = now
+                
+                return self._metadata_cache.get(t212_ticker, {})
+            elif response.status_code == 401:
+                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                raise requests.exceptions.HTTPError("401 Unauthorized")
+            else:
+                logger.error(f"T212 Metadata Error: {response.status_code} - {response.text}")
+                return {}
+        except Exception as e:
+            if isinstance(e, requests.exceptions.HTTPError): raise
+            logger.error(f"Error fetching metadata for {ticker}: {e}")
+            return {}
 
-    def get_portfolio(self) -> List[Dict[str, Any]]:
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
+    async def get_portfolio(self) -> List[Dict[str, Any]]:
         cache_key = "portfolio"
-        with self._cache_lock:
+        async with self._cache_lock:
             now = time.time()
             if cache_key in self._cache:
                 data, timestamp = self._cache[cache_key]
@@ -265,18 +317,27 @@ class BrokerageService:
 
             url = f"{self.base_url}/equity/portfolio"
             try:
-                response = requests.get(url, headers=self.headers, timeout=10)
+                # M-11: offload blocking HTTP call so the event loop stays free while lock is held
+                response = await asyncio.to_thread(self.session.get, url, headers=self.headers, timeout=10)
                 if response.status_code == 200:
                     data = response.json()
                     self._cache[cache_key] = (data, now)
                     return data
-            except: pass
+                elif response.status_code == 401:
+                    logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                    raise requests.exceptions.HTTPError("401 Unauthorized")
+            except: raise
             return []
 
-    def get_pending_orders(self) -> List[Dict[str, Any]]:
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
+    async def get_pending_orders(self) -> List[Dict[str, Any]]:
         """Retrieves a list of all active/pending orders."""
         cache_key = "orders"
-        with self._cache_lock:
+        async with self._cache_lock:
             now = time.time()
             if cache_key in self._cache:
                 data, timestamp = self._cache[cache_key]
@@ -285,57 +346,54 @@ class BrokerageService:
 
             url = f"{self.base_url}/equity/orders"
             try:
-                response = requests.get(url, headers=self.headers, timeout=10)
-                if response.status_code == 200: 
+                # M-11: offload blocking HTTP call so the event loop stays free while lock is held
+                response = await asyncio.to_thread(self.session.get, url, headers=self.headers, timeout=10)
+                if response.status_code == 200:
                     orders = response.json()
                     self._cache[cache_key] = (orders, now)
                     if orders:
                         logger.info(f"T212: Found {len(orders)} pending orders.")
                     return orders
+                elif response.status_code == 401:
+                    logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                    raise requests.exceptions.HTTPError("401 Unauthorized")
                 else:
                     logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
             except Exception as e:
+                if isinstance(e, requests.exceptions.HTTPError): raise
                 logger.error(f"T212: Error fetching orders: {e}")
             return []
 
-    def has_pending_order(self, ticker: str) -> bool:
+    async def has_pending_order(self, ticker: str) -> bool:
         """Checks if there is already a pending order for the given ticker."""
-        orders = self.get_pending_orders()
+        orders = await self.get_pending_orders()
         t212_ticker = self._format_ticker(ticker)
         return any(o.get('ticker') == t212_ticker for o in orders)
 
-    def is_ticker_owned(self, ticker: str) -> bool:
+    async def is_ticker_owned(self, ticker: str) -> bool:
         """Checks if the account currently holds the given ticker."""
-        portfolio = self.get_portfolio()
+        portfolio = await self.get_portfolio()
         t212_ticker = self._format_ticker(ticker)
         return any(pos.get('ticker') == t212_ticker for pos in portfolio)
 
-    def get_pending_orders_value(self) -> float:
+    async def get_pending_orders_value(self) -> float:
         """Calculates the total cash currently committed to pending BUY orders."""
-        orders = self.get_pending_orders()
+        orders = await self.get_pending_orders()
         total_value = 0.0
         for order in orders:
-            # For BUY orders, quantity is positive
             qty = order.get('quantity', 0.0)
             if qty > 0:
-                # Value = quantity * limit price (or estimated current price)
-                # T212 v0 order object usually has 'limitPrice' or 'stopPrice'
-                # Also checking for 'price' or 'fillPrice' (though fillPrice is for executed)
                 price = order.get('limitPrice') or order.get('stopPrice') or order.get('price', 0.0)
                 
                 if price == 0 and 'ticker' in order:
                     logger.warning(f"T212: Pending order for {order['ticker']} has 0 price. Attempting fallback...")
                     from src.services.data_service import data_service
-                    fallback_prices = data_service.get_latest_price([order['ticker']])
-                    # Try both original and potentially formatted ticker from data_service response
+                    fallback_prices = await data_service.get_latest_price([order['ticker']])
                     price = fallback_prices.get(order['ticker'], 0.0)
                     if price > 0:
                         logger.info(f"T212: Fallback price for {order['ticker']} found: ${price:.2f}")
                     else:
-                        # Decision 1 / FR-002: If fallback also 0.0, we cannot calculate value safely
                         logger.error(f"T212: Critical failure - fallback price also 0.0 for {order['ticker']}")
-                        # We skip this order's value to avoid underestimating commitment, 
-                        # but log it as a critical failure.
                 
                 total_value += (qty * price)
         
@@ -343,14 +401,32 @@ class BrokerageService:
             logger.info(f"T212: Total commitment calculated: ${total_value:.2f}")
         return total_value
 
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
     def get_account_cash(self) -> float:
-        """Retrieves free funds from the account."""
-        url = f"{self.base_url}/equity/account/cash"
-        try:
-            response = requests.get(url, headers=self.headers)
-            if response.status_code == 200:
-                return float(response.json().get('free', 0.0))
-        except: pass
-        return 0.0
+        """Retrieves free funds from the account. Tries v0, fallbacks to v1 on 401."""
+        endpoints = [f"{self.base_url}/equity/account/cash", self.base_url.replace("/v0", "/v1") + "/equity/account/cash"]
+        
+        last_error = "Unknown"
+        for url in endpoints:
+            try:
+                response = self.session.get(url, timeout=10)
+                if response.status_code == 200:
+                    return float(response.json().get('free', 0.0))
+                elif response.status_code == 401:
+                    last_error = f"401 Unauthorized on {url}"
+                    logger.warning(f"T212 Auth Failure on {url}. Data: {response.text}")
+                else:
+                    logger.warning(f"T212 Endpoint {url} returned {response.status_code}")
+            except Exception as e:
+                logger.error(f"T212 Request error on {url}: {e}")
+        
+        # If all failed with 401, raise to trigger external error handling
+        if "401" in last_error:
+            raise requests.exceptions.HTTPError(last_error)
+        return None
 
 brokerage_service = BrokerageService()

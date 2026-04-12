@@ -1,4 +1,7 @@
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class KalmanFilter:
     """
@@ -69,16 +72,17 @@ class KalmanFilter:
             if np.isnan(new_state).any() or np.isinf(new_state).any() or np.isnan(new_P).any() or np.isinf(new_P).any():
                 raise ValueError("NaN or Inf detected in Kalman update. Resetting filter.")
 
+            # Reasonableness Guard: Prevent exploding beta
+            # beta is state[1]. We allow up to 1000 for high-price-diff pairs (BTC/ETH).
+            # We clip the new_state before assignment.
+            new_state[1] = np.clip(new_state[1], 0.001, 1000.0)
+
             self.state = new_state
             self.P = new_P
             
-            # Reasonableness Guard: Prevent exploding beta
-            # beta is state[1]
-            self.state[1] = np.clip(self.state[1], 0.1, 10.0)
-            
         except (ValueError, np.linalg.LinAlgError) as e:
+            logger.error(f"Kalman update failed: {e}. Resetting filter to initial state.")
             # Log error and reset to initial known sane state
-            # Note: In a real system, we'd use a logger here, but we'll rely on the caller to handle/log
             self.state = self.initial_state.copy()
             self.P = self.initial_covariance.copy()
             self.innovation_variance = 1.0 # High variance to prevent immediate trades
@@ -106,8 +110,7 @@ class KalmanFilter:
     def get_state_dict(self):
         """Return state for persistence."""
         return {
-            "alpha": float(self.state[0]),
-            "beta": float(self.state[1]),
+            "alpha_beta": self.state.tolist(), # [alpha, beta]
             "p_matrix": self.P.tolist(),
             "q_matrix": self.Q.tolist(),
             "r_value": float(self.R)

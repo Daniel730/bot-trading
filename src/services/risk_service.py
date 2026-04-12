@@ -1,5 +1,4 @@
-from typing import Dict, Optional, Any, List
-import numpy as np
+from typing import Dict, Any, List
 from src.services.agent_log_service import agent_trace
 
 class FeeAnalyzer:
@@ -60,6 +59,55 @@ class RiskService:
             "DIA": "DOG"     # ProShares Short Dow30
         }
 
+    async def get_execution_params(self, ticker: str) -> Dict[str, float]:
+        """
+        Calculates dynamic risk parameters for the Java Execution Engine.
+        FR-002: RiskScale = f(Sharpe, MaxDrawdown)
+        FR-004: ExecutionServiceClient accepts dynamic max_slippage derived from VolatilitySwitch.
+        """
+        from src.services.performance_service import performance_service
+        from src.services.volatility_service import volatility_service
+        
+        perf_metrics = await performance_service.get_portfolio_metrics()
+        sharpe = perf_metrics.get("sharpe_ratio", 1.0)
+        drawdown = perf_metrics.get("max_drawdown", 0.0)
+        
+        # SC-001: Position size scales linearly with drawdown: 0% at 15% drawdown
+        risk_multiplier = 1.0
+        if drawdown >= 0.15:
+            risk_multiplier = 0.0
+        elif drawdown > 0:
+            risk_multiplier = max(0.0, 1.0 - (drawdown / 0.15))
+            
+        # User Story 1 Acceptance 2: Sharpe ratio < 0.5 => Kelly fraction capped at 0.1
+        if sharpe < 0.5:
+            risk_multiplier = min(risk_multiplier, 0.1)
+
+        # User Story 3: Tighten maxSlippage if Volatility Switch is HIGH
+        vol_status = await volatility_service.get_volatility_status(ticker)
+        l2_entropy = await volatility_service.get_l2_entropy(ticker)
+        
+        # Default slippage 0.1% (0.001)
+        # Acceptance Scenario: Reduce from 0.001 to 0.0005 in high vol
+        max_slippage = 0.001
+        if vol_status == "HIGH_VOLATILITY":
+            max_slippage = 0.0005
+            
+        # FR-003, US1: Broadcast risk parameters for Dashboard
+        from src.services.telemetry_service import telemetry_service
+        telemetry_service.broadcast("risk", {
+            "risk_multiplier": risk_multiplier,
+            "max_drawdown_pct": drawdown,
+            "volatility_status": vol_status,
+            "l2_entropy": l2_entropy
+        })
+            
+        return {
+            "risk_multiplier": risk_multiplier,
+            "max_slippage_pct": max_slippage,
+            "volatility_status": vol_status
+        }
+
     @agent_trace("RiskService.check_hedging")
     async def check_hedging(self, hedging_state: str = "NORMAL") -> Dict[str, Any]:
         """
@@ -95,7 +143,7 @@ class RiskService:
         
         current_map = hedge_map.get(region, hedge_map["US"])
         from src.services.brokerage_service import brokerage_service
-        portfolio = brokerage_service.get_portfolio()
+        portfolio = await brokerage_service.get_portfolio()
         
         suggested_hedges = []
         for pos in portfolio:
@@ -138,9 +186,10 @@ class RiskService:
             "rejection_reason": res["rejection_reason"]
         }
 
-    def validate_trade(self, ticker: str, amount_fiat: float, win_prob: float, win_loss_ratio: float, hedging_state: str = "NORMAL") -> Dict:
+    def validate_trade(self, ticker: str, total_portfolio_cash: float, amount_fiat: float, win_prob: float = 0.55, win_loss_ratio: float = 1.0, hedging_state: str = "NORMAL") -> Dict:
         """
         Performs full risk validation for a proposed trade.
+        Uses Half-Kelly and enforces max 5% absolute portfolio exposure per trade.
         """
         # DEFCON 1 Veto: Reject high-volatility long trades if market risk is extreme
         if hedging_state == "DEFCON_1" and ticker not in self.inverse_etfs.values():
@@ -151,17 +200,66 @@ class RiskService:
             }
 
         fee_check = self.fee_analyzer.check_fees(ticker, amount_fiat)
+        
+        # User defined overrides for Kelly calculation: 0.55 win probability by default
         kelly_fraction = self.kelly_calculator.calculate_size(win_prob, win_loss_ratio)
         
-        is_acceptable = fee_check["is_acceptable"] and kelly_fraction > 0
+        # HALF-KELLY constraint
+        half_kelly_fraction = kelly_fraction / 2.0
+        
+        # Max 5% of portfolio total value per position
+        max_allowed_fiat = total_portfolio_cash * 0.05
+        
+        # Proposed value using the adjusted Kelly multiplied by the configured standard allocation or the entire portfolio (scaled). We fallback to minimum of calculated ones.
+        proposed_fiat = amount_fiat * half_kelly_fraction
+        final_amount = min(proposed_fiat, max_allowed_fiat)
+        
+        # Ensure minimum friction limits are kept
+        is_acceptable = fee_check["is_acceptable"] and final_amount > 1.0 # At least $1 to execute
         
         return {
             "ticker": ticker,
             "is_acceptable": is_acceptable,
             "fee_status": fee_check,
-            "kelly_fraction": kelly_fraction,
-            "final_amount": amount_fiat * kelly_fraction if is_acceptable else 0.0
+            "kelly_fraction": half_kelly_fraction,
+            "final_amount": final_amount if is_acceptable else 0.0,
+            "rejection_reason": fee_check["rejection_reason"] if not is_acceptable else ""
         }
+
+    def check_financial_kill_switch(self, position_current_value: float, position_cost_basis: float, max_loss_pct: float = 0.02) -> bool:
+        """
+        Hard financial stop-loss guard. If position loses more than maximum loss percentage (2% default).
+        Returns True if Kill switch triggered (abort position).
+        """
+        if position_cost_basis <= 0: return False
+        
+        loss_pct = (position_cost_basis - position_current_value) / position_cost_basis
+        if loss_pct >= max_loss_pct:
+            return True
+        return False
+
+    def get_all_sector_exposures(self, portfolio: List[Dict]) -> Dict[str, float]:
+        """
+        Calculates the sector exposure of the active portfolio as a percentage.
+        portfolio format expected: [{"ticker": str, "size": float, "sector": str}]
+        """
+        if not portfolio:
+            return {}
+            
+        total_size = sum(p.get("size", 0.0) for p in portfolio)
+        if total_size == 0.0:
+            return {}
+            
+        exposures = {}
+        for p in portfolio:
+            sector = p.get("sector", "General")
+            size = p.get("size", 0.0)
+            exposures[sector] = exposures.get(sector, 0.0) + size
+            
+        for sector in exposures:
+            exposures[sector] = exposures[sector] / total_size
+            
+        return exposures
 
 risk_service = RiskService()
 

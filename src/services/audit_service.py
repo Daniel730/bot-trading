@@ -1,15 +1,11 @@
-import json
 import logging
-from datetime import datetime
-from src.models.persistence import PersistenceManager
-from src.config import settings
-import quantstats as qs
+from src.services.persistence_service import persistence_service, DecisionType
+import uuid
 
 logger = logging.getLogger(__name__)
 
 class AuditService:
     def __init__(self):
-        self.persistence = PersistenceManager(settings.DB_PATH)
         self.total_cycles = 0
         self.successful_cycles = 0
 
@@ -25,80 +21,53 @@ class AuditService:
             return 100.0
         return (self.successful_cycles / self.total_cycles) * 100.0
 
-    def log_thought_process(self, signal_id: str, agent_state: dict):
+    async def log_thought_process(self, signal_id: str, agent_state: dict):
         """
-        Persists the reasoning behind a decision with SHAP/LIME-style attribution (Principle III).
+        Persists the reasoning behind a decision with SHAP/LIME-style attribution.
+        Uses the new PostgreSQL AgentReasoning model.
         """
         signal_ctx = agent_state.get('signal_context', {})
-        sector = signal_ctx.get('sector', 'Unknown')
+        ticker_a = signal_ctx.get('ticker_a', 'N/A')
+        ticker_b = signal_ctx.get('ticker_b', 'N/A')
+        pair_name = f"{ticker_a}_{ticker_b}"
+        
         exposure = signal_ctx.get('sector_exposure', 0.0)
         beta = signal_ctx.get('dynamic_beta', 1.0)
-        z_score = signal_ctx.get('z_score', 0.0)
         
-        # Feature 009: Adversarial Fundamental Analysis
         f_verdict = agent_state.get('fundamental_verdict', {})
-        f_rationale = f_verdict.get('rationale', 'No Fundamental analysis available')
         f_score = f_verdict.get('integrity_score', 50)
         
-        # 1. Agent Baseline Attribution (SHAP-lite)
         b_conf = agent_state.get('bull_verdict', {}).get('confidence', 0.5)
         r_conf = 1.0 - agent_state.get('bear_verdict', {}).get('confidence', 0.5)
         f_conf = f_score / 100.0
         
         avg_base = (b_conf + r_conf + f_conf) / 3
         
-        # 2. LIME-style Feature Influence (Fundamental specifics)
-        # We attribute the score deviation to specific "Prosecutor" or "Defender" findings
-        risks = f_verdict.get('risk_factors', [])
-        strengths = f_verdict.get('strengths', [])
-        
-        # Weights for fundamental features (LIME approximation)
-        feature_importance = {
-            "prosecutor_risks": -len(risks) * 0.25,
-            "defender_strengths": len(strengths) * 0.30,
-            "sector_contagion": -0.1 if exposure > 0.05 else 0.0
-        }
-
         shap = {
             "bull_contribution": round(b_conf - avg_base, 3),
             "bear_contribution": round(r_conf - avg_base, 3),
             "fundamental_contribution": round(f_conf - avg_base, 3),
-            "feature_influence": feature_importance,
             "sector_impact": exposure,
             "dynamic_beta": beta
         }
 
-        self.persistence.log_thought(
-            signal_id=signal_id,
-            bull=agent_state.get('bull_verdict', {}).get('argument', 'N/A'),
-            bear=agent_state.get('bear_verdict', {}).get('argument', 'N/A'),
-            news=f_rationale,
-            verdict=f"[{sector} Exp: {exposure:.1%}] [Beta: {beta:.2f}] [Score: {f_score}] " + agent_state.get('final_verdict', ''),
-            shap=shap,
-            fundamental_impact=round(f_conf - 0.5, 3),
-            sec_ref=risks[0] if risks else (strengths[0] if strengths else "N/A")
-        )
-        logger.info(f"AUDIT: Adversarial thought Journal persisted for signal {signal_id} (Score: {f_score})")
+        # Map decision to Enum
+        final_verdict_str = agent_state.get('final_verdict', '').upper()
+        decision = DecisionType.HOLD
+        if "BUY" in final_verdict_str: decision = DecisionType.BUY
+        elif "SELL" in final_verdict_str: decision = DecisionType.SELL
+        elif "VETO" in final_verdict_str: decision = DecisionType.VETO
 
-    def generate_daily_report(self):
-        """
-        Generates QuantStats HTML report and includes sector analysis.
-        """
-        from src.services.shadow_service import shadow_service
-        from src.services.risk_service import risk_service
+        reasoning_data = {
+            "trace_id": uuid.UUID(signal_id) if isinstance(signal_id, str) and len(signal_id) == 36 else uuid.uuid4(),
+            "agent_name": "Orchestrator",
+            "ticker_pair": pair_name,
+            "thought_journal": agent_state.get('final_verdict', 'No journal provided'),
+            "risk_metrics": shap,
+            "decision": decision
+        }
 
-        # 1. Fetch current sector exposures
-        portfolio = shadow_service.get_active_portfolio_with_sectors()
-        exposures = risk_service.get_all_sector_exposures(portfolio)
-
-        print("AUDIT: Generating daily report with sector analysis...")
-        if exposures:
-            print(f"AUDIT: Sector Concentration: {json.dumps(exposures)}")
-
-        # Mocking QuantStats report generation
-        # In production, we'd query historical returns from trade_records
-        # qs.reports.html(returns_series, output="reports/tearsheet.html")
-        print("AUDIT: QuantStats tearsheet created (mocked).")
+        await persistence_service.log_reasoning(reasoning_data)
+        logger.info(f"AUDIT: Agent reasoning persisted for {pair_name} (Decision: {decision.name})")
 
 audit_service = AuditService()
-

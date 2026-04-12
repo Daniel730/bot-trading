@@ -1,0 +1,81 @@
+syntax = "proto3";
+
+package com.arbitrage.engine;
+
+option java_multiple_files = true;
+option java_package = "com.arbitrage.engine.grpc";
+option java_outer_classname = "ExecutionProto";
+
+service ExecutionService {
+  // Submit an atomic arbitrage trade request.
+  rpc ExecuteTrade(ExecutionRequest) returns (ExecutionResponse) {}
+
+  // Check the status of a previously submitted trade (Reconciliation).
+  rpc GetTradeStatus(TradeStatusRequest) returns (ExecutionResponse) {}
+
+  // T007: Emergency Kill Switch to immediately halt trading and liquidate.
+  rpc TriggerKillSwitch(KillSwitchRequest) returns (KillSwitchResponse) {}
+}
+
+message KillSwitchRequest {
+  string reason = 1;         // Why the kill switch was triggered
+  bool liquidate = 2;        // Whether to liquidate all open positions
+}
+
+message KillSwitchResponse {
+  bool success = 1;
+  string status_message = 2;
+  int32 orders_cancelled = 3;
+  int32 positions_liquidated = 4;
+}
+
+message ExecutionRequest {
+  string signal_id = 1;      // UUID from Python agent_reasoning
+  string pair_id = 2;        // e.g., "KO_PEP"
+  int64 timestamp_ns = 3;    // Current time in nanoseconds for TTL check
+  string max_slippage_pct = 4; // Max allowed slippage as exact decimal string (e.g., "0.001")
+  string risk_multiplier = 5;  // Position size scaler as exact decimal string (e.g., "0.5")
+
+  message ExecutionLeg {
+    string ticker = 1;        // Ticker symbol (e.g., "KO")
+    Side side = 2;            // BUY or SELL
+    string quantity = 3;      // Total quantity as exact decimal string
+    string target_price = 4;  // Expected entry price as exact decimal string
+  }
+
+  repeated ExecutionLeg legs = 6;
+
+  // Idempotency key: a client-generated UUID stamped before each gRPC call.
+  // The server uses this to deduplicate retried requests at the wire level,
+  // independent of the upstream signal_id lifecycle.
+  string client_order_id = 7;
+}
+
+message TradeStatusRequest {
+  string signal_id = 1; // UUID of the original signal
+}
+
+enum Side {
+  SIDE_UNSPECIFIED = 0;
+  SIDE_BUY = 1;
+  SIDE_SELL = 2;
+}
+
+message ExecutionResponse {
+  string signal_id = 1;
+  ExecutionStatus status = 2;
+  string message = 3;
+  string actual_vwap = 4;       // Filled VWAP as exact decimal string
+  int64 processing_time_ns = 5; // Internal latency for auditing
+}
+
+enum ExecutionStatus {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_SUCCESS = 1;
+  STATUS_REJECTED_SLIPPAGE = 2;
+  STATUS_REJECTED_DEPTH = 3;
+  STATUS_REJECTED_LATENCY = 4;
+  STATUS_BROKER_ERROR = 5;
+  STATUS_NOT_FOUND = 6; // Used for reconciliation
+  STATUS_HALTED = 7;    // Rejection due to Kill Switch activation
+}

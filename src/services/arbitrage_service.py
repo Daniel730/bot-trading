@@ -1,31 +1,53 @@
 import pandas as pd
-import numpy as np
-from statsmodels.tsa.stattools import coint, adfuller
+from statsmodels.tsa.stattools import adfuller
+import asyncio
 import statsmodels.api as sm
-from typing import Tuple, Dict, Optional
+from typing import Tuple, Dict
 from src.services.kalman_service import KalmanFilter
 from src.services.agent_log_service import agent_trace
-from src.models.persistence import PersistenceManager
-from src.config import settings
+import logging
+from src.services.redis_service import redis_service
+
+logger = logging.getLogger(__name__)
 
 class ArbitrageService:
-    def __init__(self, persistence: Optional[PersistenceManager] = None):
+    def __init__(self):
         self.filters: Dict[str, KalmanFilter] = {}
-        self.persistence = persistence or PersistenceManager(settings.DB_PATH)
 
     @agent_trace("ArbitrageService.get_or_create_filter")
-    def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01, 
+    async def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01, 
                              initial_state: list = None, initial_covariance: list = None) -> KalmanFilter:
-        """Retrieves or initializes a Kalman filter for a specific pair, reloading from DB if possible."""
+        """Retrieves or initializes a Kalman filter for a specific pair, reloading from Redis if possible."""
         if pair_id in self.filters:
             return self.filters[pair_id]
 
-        # Attempt to reload from persistence if no initial state provided
+        # Attempt to reload from Redis (Warm Start)
         if initial_state is None and initial_covariance is None:
-            saved_state = self.persistence.load_kalman_state(pair_id)
+            saved_state = await redis_service.get_kalman_state(pair_id)
             if saved_state:
-                initial_state = [saved_state['alpha'], saved_state['beta']]
-                initial_covariance = saved_state['p_matrix']
+                initial_state = saved_state['x']
+                initial_covariance = saved_state['P']
+                logger.info(f"[ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
+            else:
+                kf = KalmanFilter(delta=delta, r=r)
+                # D.1 Kalman Pre-Warming
+                try:
+                    from src.services.data_service import DataService
+                    t_a, t_b = pair_id.split('_')
+                    ds = DataService()
+                    logger.info(f"[ArbitrageService] No Redis state for {pair_id}. Initiating 30d historical pre-warming...")
+                    df = await asyncio.to_thread(ds.get_historical_data, [t_a, t_b], "30d", "1h")
+                    for i in range(len(df)):
+                        price_a = float(df[t_a].iloc[i])
+                        price_b = float(df[t_b].iloc[i])
+                        if pd.isna(price_a) or pd.isna(price_b): continue
+                        kf.update(price_a, price_b)
+                    
+                    self.filters[pair_id] = kf
+                    logger.info(f"[ArbitrageService] Pre-warming complete for {pair_id}. Filter matrices converged.")
+                    return kf
+                except Exception as e:
+                    logger.warning(f"[ArbitrageService] Pre-warming failed for {pair_id}, falling back to cold start: {e}")
 
         self.filters[pair_id] = KalmanFilter(
             delta=delta, 
@@ -36,17 +58,14 @@ class ArbitrageService:
         return self.filters[pair_id]
 
     @agent_trace("ArbitrageService.save_filter_state")
-    def save_filter_state(self, pair_id: str, kf: KalmanFilter, innovation_var: float = None):
-        """Persists the current state of a Kalman filter to the database."""
+    async def save_filter_state(self, pair_id: str, kf: KalmanFilter, z_score: float):
+        """Persists the current state of a Kalman filter to Redis."""
         state_dict = kf.get_state_dict()
-        self.persistence.save_kalman_state(
-            pair_id=pair_id,
-            alpha=state_dict['alpha'],
-            beta=state_dict['beta'],
-            p_matrix=state_dict['p_matrix'],
-            q_matrix=state_dict['q_matrix'],
-            r_value=state_dict['r_value'],
-            ve=innovation_var
+        await redis_service.save_kalman_state(
+            ticker_pair=pair_id,
+            x=state_dict['alpha_beta'], # [alpha, beta]
+            P=state_dict['p_matrix'],
+            z_score=z_score
         )
 
     @staticmethod
@@ -55,9 +74,7 @@ class ArbitrageService:
         """
         Performs ADF test on the spread of two series.
         Returns: (is_cointegrated, p_value, hedge_ratio)
-        Decision 5: Explicitly use sm.add_constant() for mathematical intercept.
         """
-        # Align data and drop NaNs
         df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
         if df.empty or len(df) < 20:
             return False, 1.0, 0.0
@@ -65,16 +82,13 @@ class ArbitrageService:
         s1 = df.iloc[:, 0]
         s2 = df.iloc[:, 1]
 
-        # Decision 5: Linear regression with intercept (constant)
         s2_with_const = sm.add_constant(s2)
         model = sm.OLS(s1, s2_with_const)
         results = model.fit()
         
-        # results.params[0] is the constant (intercept), results.params[1] is the hedge_ratio
-        intercept = float(results.params.iloc[0])
         hedge_ratio = float(results.params.iloc[1])
+        intercept = float(results.params.iloc[0])
         
-        # Decision 5: Subtract intercept to center the spread at zero for ADF/Z-score
         spread = s1 - (hedge_ratio * s2) - intercept
         adf_result = adfuller(spread)
         p_value = float(adf_result[1])
@@ -86,7 +100,6 @@ class ArbitrageService:
                          mean_spread: float, std_spread: float, intercept: float = 0.0) -> float:
         """
         Calculates the current Z-score of the spread using static metrics.
-        Includes intercept adjustment for statistical rigor.
         """
         current_spread = ticker_a_price - (hedge_ratio * ticker_b_price) - intercept
         if std_spread == 0: return 0.0
@@ -96,33 +109,27 @@ class ArbitrageService:
     @staticmethod
     def get_spread_metrics(ticker_a_series: pd.Series, ticker_b_series: pd.Series, hedge_ratio: float, window: int = None) -> Dict:
         """
-        Calculates spread metrics. If window is provided, uses trailing metrics to avoid look-ahead bias.
-        Decision 5: Now recalculates intercept to ensure zero-mean spread metrics.
+        Calculates spread metrics.
         """
         df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
         s1 = df.iloc[:, 0]
         s2 = df.iloc[:, 1]
         
-        # Bug 1.3: Prevent Look-Ahead Bias
-        # If we are calculating a baseline for immediate use, we use the tail.
-        # If we are calculating historical series, we MUST shift.
-        
-        # Re-estimate intercept for the provided hedge_ratio
-        # spread = s1 - beta*s2 - alpha -> alpha = mean(s1 - beta*s2)
         full_spread_raw = s1 - hedge_ratio * s2
         
         if window:
-            # Trailing window calculation (Shifted by 1 to exclude current point from the mean/std)
             rolling_mean = full_spread_raw.rolling(window=window).mean().shift(1)
             rolling_std = full_spread_raw.rolling(window=window).std().shift(1)
             intercept = float(rolling_mean.iloc[-1])
             std = float(rolling_std.iloc[-1])
         else:
-            intercept = float(full_spread_raw.mean())
-            std = float(full_spread_raw.std())
+            # Bug M-01: Look-ahead bias elimination
+            # Exclude the final observation to prevent causality violation
+            intercept = float(full_spread_raw.iloc[:-1].mean())
+            std = float(full_spread_raw.iloc[:-1].std())
         
         return {
-            "mean": 0.0, # Centered by definition of intercept
+            "mean": intercept, # Bug C-01: Fix hardcoded 0.0
             "std": std,
             "intercept": intercept
         }
