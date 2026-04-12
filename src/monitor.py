@@ -268,6 +268,9 @@ class ArbitrageMonitor:
 
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
+        if not regime_info:
+            logger.warning("Regime classification unavailable for %s; defaulting to STABLE", t_a)
+            regime_info = {"regime": "STABLE", "confidence": 0.5, "features": {}}
 
         # Determina a direção (Side) para cada perna
         side_a = "SELL" if direction == "Short-Long" else "BUY"
