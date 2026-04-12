@@ -1,3 +1,4 @@
+import logging
 import yfinance as yf
 import pandas as pd
 from polygon import RESTClient
@@ -5,6 +6,8 @@ from typing import List, Optional
 from src.config import settings
 import asyncio
 from src.services.agent_log_service import agent_trace
+
+logger = logging.getLogger(__name__)
 
 from src.services.redis_service import redis_service
 from polygon.websocket import WebSocketClient
@@ -37,7 +40,7 @@ class DataService:
                     return df[cols]
                 raise KeyError(f"Adjusted 'Close' not found in columns: {df.columns}")
         except Exception as e:
-            print(f"DEBUG: yfinance error for {tickers}: {e}")
+            logger.error(f"DataService: yfinance error for {tickers}: {e}")
             raise
 
     @agent_trace("DataService.get_latest_price")
@@ -68,7 +71,7 @@ class DataService:
                 await redis_service.set_price(ticker, price)
             latest.update(yfinance_prices)
         except Exception as e:
-            print(f"AGENT_LOGGER: DataService retry failed after 3 attempts for {remaining_tickers}: {e}")
+            logger.error(f"DataService: retry failed after 3 attempts for {remaining_tickers}: {e}")
             
         return latest
 
@@ -81,7 +84,8 @@ class DataService:
     def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
         """Internal helper to fetch prices from yfinance with tenacity retries."""
         results = {}
-        df = yf.download(tickers, period="1d", interval="1m", progress=False)
+        # Bug L-09: Enforce auto_adjust=True
+        df = yf.download(tickers, period="1d", interval="1m", progress=False, auto_adjust=True)
         if df.empty:
             raise ValueError(f"yfinance returned empty dataframe for {tickers}")
         
@@ -139,14 +143,16 @@ class DataService:
         Connects to Polygon WebSocket to stream real-time prices into Redis.
         """
         def handle_msg(msgs):
+            loop = asyncio.get_event_loop()
             for m in msgs:
                 # Trade event (T) or Quote event (Q)
                 if hasattr(m, 'price'):
-                    redis_service.set_price(m.symbol, m.price)
+                    # Bug M-04: Ensure async Redis write is scheduled
+                    asyncio.run_coroutine_threadsafe(redis_service.set_price(m.symbol, m.price), loop)
                 elif hasattr(m, 'bid_price'):
                     # Mid-price approximation
                     mid = (m.bid_price + m.ask_price) / 2
-                    redis_service.set_price(m.symbol, mid)
+                    asyncio.run_coroutine_threadsafe(redis_service.set_price(m.symbol, mid), loop)
 
         # Polygon WebSocket implementation
         self._ws_client = WebSocketClient(
