@@ -44,8 +44,7 @@ public class TradeLedgerRepository {
                             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"
                         );
 
-                        for (int i = 0; i < audits.size(); i++) {
-                            TradeAudit audit = audits.get(i);
+                        for (TradeAudit audit : audits) {
                             statement.bind(0, signalId);
                             statement.bind(1, pairId);
                             statement.bind(2, audit.ticker());
@@ -57,9 +56,7 @@ public class TradeLedgerRepository {
                             statement.bind(8, latencyMs);
                             statement.bind(9, audit.executionMode().name());
                             statement.bind(10, audit.reasoningMetadata());
-                            if (i < audits.size() - 1) {
-                                statement.add();
-                            }
+                            statement.add();
                         }
 
                         return Flux.from(statement.execute())
