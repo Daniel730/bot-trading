@@ -243,11 +243,40 @@ class NotificationService:
         except Exception as e:
             print(f"TELEGRAM ERROR (send_message): {e}")
 
+    async def _paper_notify(self, trade_summary: str) -> None:
+        """Fire-and-forget notification for paper-mode auto-approvals.
+
+        Failures here must never propagate to the caller -- paper trades
+        must simulate regardless of Telegram or dashboard health (FR-002).
+        """
+        text = "Paper trade auto-approved\n" + trade_summary
+        try:
+            await self.app.bot.send_message(chat_id=self.chat_id, text=text)
+        except Exception as e:
+            print(f"TELEGRAM (paper-notify): send failed, non-fatal: {e}")
+        try:
+            from src.services.dashboard_service import dashboard_state
+            await dashboard_state.add_message(
+                "BOT", text, metadata={"type": "paper_auto_approved"}
+            )
+        except Exception as e:
+            print(f"DASHBOARD (paper-notify): add_message failed, non-fatal: {e}")
+
     async def request_approval(self, trade_summary: str) -> bool:
+        """Gate a trade on operator approval.
+
+        In live mode: sends inline-button Telegram message and waits for
+        the operator to click Approve/Reject (5 min timeout -> False).
+
+        In paper mode (settings.PAPER_TRADING=True): returns True in
+        under 100ms and dispatches a fire-and-forget notification so the
+        operator still has visibility (spec FR-001..FR-003).
         """
-        Sends message and WAITS for the user to click a button.
-        Also sends to the dashboard terminal.
-        """
+        # Paper-mode fast path.
+        if settings.PAPER_TRADING:
+            asyncio.create_task(self._paper_notify(trade_summary))
+            return True
+
         correlation_id = str(uuid.uuid4())[:8]
         keyboard = [
             [
