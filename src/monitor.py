@@ -57,18 +57,60 @@ class ArbitrageMonitor:
         """
         if settings.DEV_MODE:
             return True
-            
+
         tz = pytz.timezone(settings.MARKET_TIMEZONE)
         now = datetime.now(tz)
-        
+
         # Weekend check
         if now.weekday() >= 5:
             return False
-            
+
         start_time = now.replace(hour=settings.START_HOUR, minute=settings.START_MINUTE, second=0, microsecond=0)
         end_time = now.replace(hour=settings.END_HOUR, minute=settings.END_MINUTE, second=0, microsecond=0)
-        
+
         return start_time <= now <= end_time
+
+    def next_market_open(self) -> datetime:
+        """
+        FR-006: Returns the next NYSE open in MARKET_TIMEZONE.
+        If called while the market is currently open, returns today's open timestamp.
+        """
+        tz = pytz.timezone(settings.MARKET_TIMEZONE)
+        now = datetime.now(tz)
+        candidate = now.replace(
+            hour=settings.START_HOUR, minute=settings.START_MINUTE,
+            second=0, microsecond=0
+        )
+        # If today's open has already passed, roll forward one day.
+        if now > candidate:
+            from datetime import timedelta
+            candidate = candidate + timedelta(days=1)
+        # Skip Saturday (5) and Sunday (6).
+        while candidate.weekday() >= 5:
+            from datetime import timedelta
+            candidate = candidate + timedelta(days=1)
+        return candidate
+
+    def log_preflight(self) -> None:
+        """
+        FR-006: Single informative startup line so the operator immediately
+        knows mode, pair universe size, and when the next trading window opens.
+        """
+        mode = "PAPER" if settings.PAPER_TRADING else "LIVE"
+        if settings.DEV_MODE:
+            pair_count = len(settings.CRYPTO_TEST_PAIRS)
+            logger.info(
+                f"MODE: {mode} | DEV_MODE=true (crypto test pairs, 24/7 scan, "
+                f"randomised prices) | Pair universe: {pair_count} crypto pairs"
+            )
+        else:
+            pair_count = len(settings.ARBITRAGE_PAIRS)
+            next_open = self.next_market_open()
+            logger.info(
+                f"MODE: {mode} | DEV_MODE=false | Pair universe: {pair_count} "
+                f"equity pairs | Next NYSE open: "
+                f"{next_open.strftime('%Y-%m-%d %H:%M %Z')}"
+            )
 
     async def verify_entropy_baselines(self):
         """
@@ -277,9 +319,16 @@ class ArbitrageMonitor:
         side_b = "BUY" if direction == "Short-Long" else "SELL"
 
         if settings.PAPER_TRADING:
-            # Em paper trading, simplesmente simulamos o trade usando o shadow_service
+            # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
+            # R4 fix (2026-04-19): propagate signal_id so the shadow TradeLedger row
+            # can be joined with the AgentReasoning / TradeJournal rows logged for
+            # this signal. Previously shadow_service generated its own UUID and
+            # decorrelated the paper-trade audit trail.
             logger.info(f"PAPER TRADING: Executing shadow trade {direction} for {t_a}/{t_b}")
-            await shadow_service.execute_simulated_trade(pair['id'], direction, size_a, size_b, price_a, price_b)
+            await shadow_service.execute_simulated_trade(
+                pair['id'], direction, size_a, size_b, price_a, price_b,
+                signal_id=signal_id,
+            )
             return
 
         # Chamada ao broker (T212 via Fractional Engine)
@@ -359,6 +408,10 @@ class ArbitrageMonitor:
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
 
     async def run(self):
+        # FR-006: Pre-flight line — operator must know mode/universe/window
+        # before a single log line about infra appears.
+        self.log_preflight()
+
         # Initial Setup
         logger.info("Initializing Databases...")
         await asyncio.gather(
