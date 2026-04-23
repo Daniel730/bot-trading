@@ -13,10 +13,9 @@ dist/
 # Node
 node_modules/
 
-# Logs
-*.log
-
 # Persistence
+data/*
+!data/.gitkeep
 *.sqlite
 *.db
 
@@ -41,6 +40,6 @@ out/
 *.iml
 *.log
 
-# Agent Logs
+# Logs
 logs/
 AGENT_ERROR.md

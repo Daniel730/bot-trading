@@ -56,13 +56,13 @@ COPY --from=builder /app/src/generated /app/src/generated
 # Copy the rest of the application code
 COPY src/ /app/src/
 COPY scripts/ /app/scripts/
-COPY dashboard/ /app/dashboard/
+COPY legacy/dashboard/ /app/dashboard/
 COPY .env.template /app/.env.template
-COPY entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY infra/entrypoint.sh /app/infra/entrypoint.sh
+RUN chmod +x /app/infra/entrypoint.sh
 
-# Create Gemini CLI config directory and registry file
-RUN mkdir -p /root/.gemini && echo '{"projects": {}}' > /root/.gemini/projects.json
+# Create Gemini CLI config directory and data directory
+RUN mkdir -p /root/.gemini /app/data && echo '{"projects": {}}' > /root/.gemini/projects.json
 
 # Default command to run the monitor via the entrypoint script
-CMD ["/app/entrypoint.sh"]
+CMD ["/app/infra/entrypoint.sh"]
