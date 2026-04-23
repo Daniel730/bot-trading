@@ -15,18 +15,9 @@ jobs:
 
       - name: Stop running services
         run: docker compose -f docker-compose.backend.yml down || true
-        working-directory: ~/apps/bot-trading
-
-      - name: Pull latest code
-        run: |
-          git fetch origin master
-          git reset --hard origin/master
-        working-directory: ~/apps/bot-trading
 
       - name: Build and start services
         run: docker compose -f docker-compose.backend.yml up -d --build
-        working-directory: ~/apps/bot-trading
 
       - name: Verify deployment
         run: docker compose -f docker-compose.backend.yml ps
-        working-directory: ~/apps/bot-trading
