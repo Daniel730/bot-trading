@@ -13,6 +13,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Link persistent .env
+        run: ln -sf /home/danrasp3/.env.trading .env
+
       - name: Stop running services
         run: docker compose -f docker-compose.backend.yml down || true
 
