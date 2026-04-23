@@ -36,6 +36,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: trading-bot-base:latest
     container_name: trading-bot
     ports:
       - "8080:8080"
@@ -55,6 +56,7 @@ services:
         condition: service_healthy
 
   mcp-server:
+    image: trading-bot-base:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -101,10 +103,12 @@ services:
       start_period: 30s
 
   sec-worker:
+    image: trading-bot-base:latest
     build:
       context: .
-      dockerfile: Dockerfile.daemon
+      dockerfile: Dockerfile
     container_name: sec-fundamental-worker
+    command: python src/daemons/sec_fundamental_worker.py
     env_file:
       - .env
     volumes:

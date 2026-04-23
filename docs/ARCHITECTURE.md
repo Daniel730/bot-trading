@@ -1,57 +1,69 @@
-# 🏗️ Arquitetura Técnica: Alpha Arbitrage
+# 🏛️ Architecture: Alpha Arbitrage Elite
 
-O Alpha Arbitrage utiliza uma arquitetura de microatendimento orientada a eventos, desenhada para baixa latência no processamento de sinais e alta resiliência na execução.
+This document describes the high-fidelity interaction between the various components of the Alpha Arbitrage system.
 
-## 1. Fluxo de Vida de um Sinal
+## 1. System Overview
 
-O diagrama abaixo descreve como um par de ativos é processado desde a ingestão de dados até à execução da ordem.
+The project is structured as a **Multi-Service Containerized Ecosystem** managed by Docker Compose.
 
 ```mermaid
 graph TD
-    A[Market Data Ingestion] --> B[Arbitrage Service]
-    B --> C{Z-Score > Threshold?}
-    C -- Sim --> D[Orchestrator]
-    C -- Não --> E[Sleep/Continue]
-    
-    subgraph AI Swarm
-        D --> F[Bull Agent]
-        D --> G[Bear Agent]
-        D --> H[SEC RAG Cache]
-    end
-    
-    F --> I[MAB Weighter]
-    G --> I
-    H --> I
-    
-    I --> J{Final Confidence > 0.5?}
-    J -- Sim --> K[Portfolio Optimizer]
-    J -- Não --> L[Veto Log]
-    
-    K --> M{Sortino Improvement?}
-    M -- Sim --> N[Execution Engine]
-    M -- Não --> O[Veto/Penalty]
-    
-    N --> P[Trading 212 / Shadow Mode]
+    User([User/Telegram]) <--> Notification[Notification Service]
+    Notification <--> Bot[Alpha Bot - Python]
+    Dashboard[Intelligence Dashboard - React] <--> Bot
+    Bot -- gRPC --> Exec[Execution Engine - Java]
+    Bot <--> PG[(PostgreSQL - Ledger)]
+    Bot <--> Redis[(Redis - Telemetry)]
+    Bot -- API --> T212[Trading 212]
+    Bot -- API --> Data[Polygon/Yahoo Finance]
 ```
 
-## 2. Componentes Críticos
+## 2. Component Roles
 
-### 🧵 Orchestrator (O Cérebro)
-Localizado em `src/agents/orchestrator.py`, este componente gere o debate entre agentes. Ele utiliza `asyncio.gather` para disparar análises paralelas, garantindo que a decisão final seja tomada em menos de 2 segundos.
+### 🐍 Alpha Bot (Python 3.11)
+The "Brain" of the operation.
+- **Core Orchestration**: Manages the Kalman Filter engine and the AI Agent Swarm.
+- **Portfolio Management**: Tracks allocations, targets, and DCA schedules.
+- **SSE Server**: Streams real-time telemetry to the dashboard via FastAPI.
 
-### 🛡️ Risk Service (A Rede de Segurança)
-Gere os limites de exposição setorial e o **Financial Kill Switch**. Antes de qualquer ordem ser enviada para o broker, o Risk Service valida se o capital está dentro dos parâmetros de sobrevivência extrema definidos no `.env`.
+### ☕ Execution Engine (Java)
+The "Hands" of the operation.
+- **gRPC Server**: Receives high-speed execution requests from the Python bot.
+- **Latency Monitoring**: Uses nanosecond interceptors to audit Round-Trip Time (RTT).
+- **Hardened Execution**: Implements idempotency keys and shadow-mode fill realism.
 
-### 🗄️ Camada de Persistência
-- **SQLite**: Utilizado para estados de curta duração e configurações locais (ex: calendários DCA).
-- **PostgreSQL**: O livro-razão (Ledger) oficial de trades e performance.
-- **Redis**: Ponto de troca de mensagens de alta velocidade, cache para métricas fundamentais da SEC e controlo de idempotência (evitando ordens duplicadas em caso de queda de rede).
+### ⚛️ Intelligence Dashboard (React/Vite)
+The "Face" of the operation.
+- **Adaptive UI**: Displays the `PixelBot` emotional state.
+- **Telemetry Loop**: Subscribes to SSE events for real-time Z-Score and Market Regime visualization.
+- **Terminal Hub**: Allows direct command execution via a secure authenticated bridge.
 
-## 📡 Comunicação gRPC
-Para o motor de execução, utilizamos gRPC com interceptores de nanosegundos. Isto permite monitorizar a latência interna do sistema com precisão microscópica, disparando alarmes se o RTT exceder 1ms.
+## 3. Data Flow & Communication
 
-## 🔄 Shadow Mode Realista
-O sistema de simulação não é apenas um "paper trading" básico. Ele:
-1.  **Audita o Livro de Ordens**: Simula fill baseado na liquidez real do L2.
-2.  **Aplica Slippage**: Penaliza o trade em 0.5bps por cada 10% de profundidade consumida.
-3.  **Simula Latência**: Adiciona o delay real medido pelos interceptores gRPC.
+### Real-Time Telemetry (SSE/WebSocket)
+1. **Bot** pushes state updates to **Redis**.
+2. **Dashboard Service** (FastAPI) polls metrics or detects events.
+3. **EventSource (SSE)** broadcasts updates to the **React Frontend**.
+4. **WebSocket** handles low-latency telemetry like nanosecond gRPC RTT spikes.
+
+### Authentication (Basic Auth)
+The bot uses a **Key:Secret** pair for Trading 212.
+- **Header**: `Authorization: Basic Base64(KEY:SECRET)`
+- **Fallback**: Automatically falls back to `/api/v1` endpoints if `/api/v0` returns a 401 Unauthorized error.
+
+## 4. Adaptive Intelligence Logic
+
+The `PixelBot` emotional state is derived from system telemetry:
+- **IDLE**: No active signals, market is horizontal.
+- **ANALYZING**: AI Agents (Bull/Bear) are currently debating a signal.
+- **EXECUTING**: Orders are being sent to the Execution Engine.
+- **GLITCH**: L2 Entropy is high or Volatility Switch is triggered (High Danger).
+- **DOUBT**: Strategy accuracy is low (< 40%) or Risk Multiplier is heavily capped.
+
+---
+
+## 5. Security & Risk Guards
+
+- **Cluster Guard**: Prevents over-exposure to single sectors (e.g., tech-heavy portfolios).
+- **Spread Guard**: Ensures execution only happens when the bid-ask spread is tight (<1.5%).
+- **Financial Kill Switch**: Immediately closes positions if a strategy drawdown exceeds 15%.

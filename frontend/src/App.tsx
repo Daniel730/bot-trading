@@ -1,60 +1,107 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  Activity, 
-  Terminal as TerminalIcon, 
-  ShieldCheck, 
-  Zap, 
-  Radar, 
+import {
+  Activity,
+  Terminal as TerminalIcon,
+  Shield,
+  Zap,
+  Radio,
   X,
-  Send
+  Send,
+  TrendingUp,
+  TrendingDown,
+  RefreshCw,
+  Brain,
+  AlertTriangle,
+  CheckCircle,
 } from 'lucide-react';
 import './App.css';
-import PixelBot from './components/PixelBot';
-import ThoughtJournal from './components/ThoughtJournal';
-import IntelligenceHub from './components/IntelligenceHub';
 import { useDashboardStream, sendTerminalCommand } from './services/api';
-import type { DashboardData, Signal, TerminalMessage } from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function fmtCurrency(val: number | null | undefined): string {
+  if (val === null || val === undefined) return '—';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(val);
+}
+
+function fmtPct(val: number | null | undefined, decimals = 1): string {
+  if (val === null || val === undefined) return '—';
+  return `${(val * 100).toFixed(decimals)}%`;
+}
+
+function getRegimeStyle(regime: string): { color: string; bg: string } {
+  switch (regime) {
+    case 'TRENDING_UP':   return { color: 'var(--green)',  bg: 'var(--green-muted)' };
+    case 'TRENDING_DOWN': return { color: 'var(--red)',    bg: 'var(--red-muted)'   };
+    case 'VOLATILE':      return { color: 'var(--yellow)', bg: 'var(--yellow-muted)' };
+    default:              return { color: 'var(--accent)', bg: 'var(--accent-muted)' };
+  }
+}
+
+function getRegimeIcon(regime: string) {
+  switch (regime) {
+    case 'TRENDING_UP':   return <TrendingUp size={16} />;
+    case 'TRENDING_DOWN': return <TrendingDown size={16} />;
+    case 'VOLATILE':      return <AlertTriangle size={16} />;
+    default:              return <RefreshCw size={16} />;
+  }
+}
+
+function getVerdictColor(verdict: string): string {
+  switch (verdict) {
+    case 'BULLISH': return 'var(--green)';
+    case 'BEARISH': return 'var(--red)';
+    case 'VETO':    return 'var(--yellow)';
+    default:        return 'var(--accent)';
+  }
+}
+
+function getSignalBadge(status: string): string {
+  const s = status.toUpperCase();
+  if (s.includes('EXECUTING'))           return 'badge-yellow';
+  if (s.includes('APPROVED') || s.includes('FILLED')) return 'badge-green';
+  if (s.includes('VETO') || s.includes('REJECTED'))   return 'badge-red';
+  return 'badge-blue';
+}
+
+function getStageDotColor(stage: string | undefined): string {
+  if (!stage) return 'blue';
+  const s = stage.toLowerCase();
+  if (s.includes('execut')) return 'yellow';
+  if (s.includes('error') || s.includes('fail')) return 'red';
+  return 'green';
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
 
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token') || '';
+  const token = urlParams.get('token') ?? '';
+
   const { data, error } = useDashboardStream(token);
   const { isConnected, risk, thoughts, botState } = useTelemetry(token);
-  
-  const [isTerminalOpen, setIsTerminalOpen] = useState(false);
+
+  const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalInput, setTerminalInput] = useState('');
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
-  // Derive mood from botState (telemetry) or stage (SSE)
-  let derivedMood: 'idle' | 'analyzing' | 'executing' | 'doubt' | 'glitch' | 'happy' = 
-    (botState?.toLowerCase() as any) || 'idle';
-
-  if (derivedMood === 'idle' && data?.stage) {
-    derivedMood = (data.stage.toLowerCase().includes('analyz') ? 'analyzing' : 
-                   data.stage.toLowerCase().includes('execut') ? 'executing' : 'idle') as any;
-  }
-
-  // Override based on risk telemetry (Research Decision 3)
-  if (risk?.volatility_status === 'HIGH_VOLATILITY' || (risk?.l2_entropy || 0) > 0.8 || data?.market_regime?.regime === 'VOLATILE') {
-    derivedMood = 'glitch';
-  } else if ((risk?.risk_multiplier || 1) < 0.5 || (data?.global_accuracy || 1) < 0.4) {
-    derivedMood = 'doubt';
-  } else if (thoughts.length > 0 && thoughts[thoughts.length - 1].verdict === 'BULLISH' && botState === 'EXECUTING') {
-    derivedMood = 'happy';
-  }
-
+  // Auto-scroll terminal
   useEffect(() => {
-    if (terminalEndRef.current) {
+    if (terminalEndRef.current && terminalOpen) {
       terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [data?.terminal_messages, isTerminalOpen]);
+  }, [data?.terminal_messages, terminalOpen]);
 
-  const handleSendCommand = async (e?: React.FormEvent) => {
+  const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!terminalInput.trim()) return;
-    
     try {
       await sendTerminalCommand(terminalInput, token);
       setTerminalInput('');
@@ -63,311 +110,409 @@ const App: React.FC = () => {
     }
   };
 
-  const formatCurrency = (val: number | null | undefined) => {
-    if (val === null || val === undefined) {
-      return <span style={{ color: '#f87171', fontWeight: 'bold' }}>ERR</span>;
-    }
-    return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
-  };
-
-  const metrics = data?.metrics || {
-    total_invested: null,
-    daily_profit: null,
-    daily_budget: null,
-    daily_usage_pct: null
-  };
-
-  // S-04: Deny access if no token is provided — never fall back to a default key
+  // ── Guards ────────────────────────────────────────────────────────────────
   if (!token) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#0a0a0f', color: '#f87171', fontFamily: 'monospace', fontSize: '1.2rem' }}>
-        Access denied: no <code style={{ margin: '0 0.4em', color: '#fbbf24' }}>?token=</code> parameter provided.
+      <div className="access-denied">
+        <Shield size={32} style={{ color: 'var(--text-subtle)' }} />
+        <span>Access denied — no <code>?token=</code> parameter provided.</span>
       </div>
     );
   }
 
+  // ── Derived values ────────────────────────────────────────────────────────
+  const stage           = data?.stage ?? botState ?? 'Initializing';
+  const usagePct        = data?.metrics?.daily_usage_pct ?? 0;
+  const dailyProfit     = data?.metrics?.daily_profit;
+  const accuracy        = data?.global_accuracy ?? 0;
+  const regime          = data?.market_regime?.regime ?? 'STABLE';
+  const regimeConf      = data?.market_regime?.confidence ?? 0;
+  const regimeStyle     = getRegimeStyle(regime);
+  const accuracyColor   = accuracy > 0.6 ? 'var(--green)' : accuracy < 0.4 ? 'var(--red)' : 'var(--yellow)';
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="dashboard-container">
-      <header>
-        <motion.div 
-          className="logo"
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
-        >
-          <Activity size={24} />
-          QUANTUM_ARBI_v7.0
-        </motion.div>
-        
-        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
-          <motion.button 
-            className="neon-button"
-            onClick={() => setIsTerminalOpen(true)}
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-          >
-            <TerminalIcon size={14} style={{ marginRight: '8px' }} />
-            Open Terminal
-          </motion.button>
-          
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-            DASHBOARD: <span style={{ color: 'var(--success)' }}>ONLINE</span>
+    <div className="app">
+
+      {/* ── HEADER ──────────────────────────────────────────────────────── */}
+      <header className="header">
+        <div className="header-left">
+          <div className="logo">
+            <div className="logo-mark">
+              <Activity size={14} color="white" />
+            </div>
+            Alpha Arbitrage Elite
           </div>
-          <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-            TELEMETRY: <span style={{ color: isConnected ? 'var(--success)' : 'var(--secondary)' }}>
-              {isConnected ? 'LIVE' : 'RECONNECTING...'}
-            </span>
+
+          <div className="stage-badge">
+            <span className={`pulse-dot ${getStageDotColor(stage)}`} />
+            {stage.toUpperCase()}
           </div>
+        </div>
+
+        <div className="header-right">
+          <div className="status-pill">
+            <span className={`pulse-dot ${isConnected ? 'green' : 'yellow'}`} />
+            {isConnected ? 'Live' : 'Reconnecting'}
+          </div>
+
+          <div className="divider" />
+
+          <div className="status-pill">
+            <span className="pulse-dot green" />
+            Dashboard online
+          </div>
+
+          <div className="divider" />
+
+          <button className="btn btn-default" onClick={() => setTerminalOpen(true)}>
+            <TerminalIcon size={12} />
+            Terminal
+          </button>
         </div>
       </header>
 
-      <main className="main-layout">
-        {/* Left Panel: Risk & Metrics */}
-        <aside className="panel">
-          <div className="panel-header">
-            <ShieldCheck size={16} />
-            Risk & Allocation
-          </div>
-          <div className="panel-content">
-            <div style={{ marginBottom: '20px' }}>
-              <button 
-                className="neon-button" 
-                style={{ width: '100%', justifyContent: 'center', borderColor: 'var(--success)', color: 'var(--success)' }}
-                onClick={() => setIsTerminalOpen(true)}
-              >
-                <Zap size={14} style={{ marginRight: '8px' }} />
-                Set Invest Goal
-              </button>
-            </div>
-
-            <div className="metric-grid">
-              <motion.div 
-                className="metric-card"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 }}
-              >
-                <div className="metric-label">Daily Budget</div>
-                <div className="metric-value">{formatCurrency(data?.metrics?.daily_budget)}</div>
-              </motion.div>
-              
-              <motion.div 
-                className="metric-card"
-                style={{ borderLeftColor: 'var(--secondary)' }}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.2 }}
-              >
-                <div className="metric-label">Capital Deployed</div>
-                <div className="metric-value">{formatCurrency(data?.metrics?.total_invested)}</div>
-              </motion.div>
-
-              <motion.div 
-                className="metric-card"
-                style={{ borderLeftColor: 'var(--success)' }}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-              >
-                <div className="metric-label">Daily Profit</div>
-                <div className="metric-value" style={{ color: 'var(--success)' }}>
-                  {formatCurrency(data?.metrics?.daily_profit)}
-                </div>
-              </motion.div>
-            </div>
-
-            <div className="risk-hud" style={{ marginTop: '20px', padding: '15px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.05)' }}>
-              <div style={{ fontSize: '0.65rem', color: 'var(--text-dim)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <Radar size={12} /> RISK_TELEMETRY
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-                <div>
-                  <div style={{ fontSize: '0.55rem', color: 'var(--text-dim)' }}>RISK_MULT</div>
-                  <div className="hud-value" style={{ fontSize: '0.9rem', color: (risk?.risk_multiplier || 1) < 0.5 ? 'var(--secondary)' : 'var(--primary)' }}>
-                    {(risk?.risk_multiplier ?? 1).toFixed(2)}x
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.55rem', color: 'var(--text-dim)' }}>MAX_DRAWDOWN</div>
-                  <div className="hud-value" style={{ fontSize: '0.9rem', color: (risk?.max_drawdown_pct || 0) > 0.1 ? 'var(--secondary)' : 'var(--text-main)' }}>
-                    {((risk?.max_drawdown_pct ?? 0) * 100).toFixed(1)}%
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.55rem', color: 'var(--text-dim)' }}>L2_ENTROPY</div>
-                  <div className="hud-value" style={{ fontSize: '0.9rem', color: (risk?.l2_entropy || 0) > 0.7 ? 'var(--secondary)' : 'var(--text-main)' }}>
-                    {(risk?.l2_entropy ?? 0).toFixed(3)}
-                  </div>
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.55rem', color: 'var(--text-dim)' }}>VOL_STATUS</div>
-                  <div className="hud-value" style={{ fontSize: '0.7rem', color: risk?.volatility_status === 'HIGH_VOLATILITY' ? 'var(--secondary)' : 'var(--success)' }}>
-                    {risk?.volatility_status || 'NORMAL'}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div style={{ marginTop: '30px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', marginBottom: '8px', color: 'var(--text-dim)' }}>
-                <span>BUDGET_UTILIZATION</span>
-                <span>{data?.metrics?.daily_usage_pct?.toFixed(1)}%</span>
-              </div>
-              <div style={{ height: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '2px', overflow: 'hidden' }}>
-                <motion.div 
-                  style={{ height: '100%', background: 'var(--primary)' }}
-                  animate={{ width: `${Math.min(data?.metrics?.daily_usage_pct || 0, 100)}%` }}
-                />
-              </div>
-            </div>
-
-            {/* INTEGRATED INTELLIGENCE HUB */}
-            <IntelligenceHub 
-              regime={data?.market_regime?.regime || 'STABLE'} 
-              confidence={data?.market_regime?.confidence || 0.0} 
-              accuracy={data?.global_accuracy || 0.5} 
+      {/* ── KPI STRIP ───────────────────────────────────────────────────── */}
+      <div className="kpi-strip">
+        <div className="kpi-item">
+          <div className="kpi-label">Daily Budget</div>
+          <div className="kpi-value">{fmtCurrency(data?.metrics?.daily_budget)}</div>
+          <div className="progress-bar">
+            <div
+              className="progress-fill"
+              style={{
+                width: `${Math.min(usagePct, 100)}%`,
+                background: usagePct > 90 ? 'var(--red)' : usagePct > 70 ? 'var(--yellow)' : 'var(--accent)',
+              }}
             />
-
-            {/* Intelligence Hub already contains a button if needed, but we keep the top one as primary */}
           </div>
-        </aside>
+          <div className="kpi-sub">{usagePct.toFixed(1)}% utilized</div>
+        </div>
 
-        {/* Center Stage: The Bot */}
-        <section className="center-stage">
-          <div className="bot-aura" />
-          
-          <div className="bot-container">
-            <PixelBot mood={derivedMood} />
-          </div>
+        <div className="kpi-item">
+          <div className="kpi-label">Capital Deployed</div>
+          <div className="kpi-value">{fmtCurrency(data?.metrics?.total_invested)}</div>
+        </div>
 
-
-          <motion.div 
-            style={{ marginTop: '20px', display: 'flex', alignItems: 'center', gap: '10px' }}
-            animate={{ opacity: [0.5, 1, 0.5] }}
-            transition={{ duration: 2, repeat: Infinity }}
+        <div className="kpi-item">
+          <div className="kpi-label">Daily P&L</div>
+          <div
+            className={`kpi-value ${
+              dailyProfit == null ? 'muted' : dailyProfit >= 0 ? 'positive' : 'negative'
+            }`}
           >
-            <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--success)', boxShadow: '0 0 10px var(--success)' }} />
-            <span style={{ fontSize: '0.8rem', letterSpacing: '2px', fontWeight: 'bold', color: 'var(--primary)' }}>
-              {data?.stage?.toUpperCase() || 'INITIALIZING'}
-            </span>
-          </motion.div>
-        </section>
+            {fmtCurrency(dailyProfit)}
+          </div>
+        </div>
 
-        {/* Right Panel: Signals & Thoughts */}
-        <aside className="panel">
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div className="panel-header">
-              <Zap size={16} />
-              Live Signals Feed
-            </div>
-            <div className="panel-content" style={{ flex: '0 0 40%' }}>
-              <AnimatePresence>
-                {data?.active_signals && data.active_signals.length > 0 ? (
-                  data.active_signals.map((sig, idx) => (
-                    <motion.div 
-                      key={`${sig.ticker_a}-${sig.ticker_b}-${idx}`}
-                      className="signal-item"
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      layout
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontWeight: '600', fontSize: '0.9rem' }}>{sig.ticker_a} / {sig.ticker_b}</span>
-                        <span className="signal-status" style={{ 
-                          color: sig.status.includes('EXECUTING') ? 'var(--secondary)' : 'var(--primary)',
-                          border: `1px solid ${sig.status.includes('EXECUTING') ? 'var(--secondary)' : 'var(--primary)'}`
-                        }}>
-                          {sig.status}
-                        </span>
-                      </div>
-                      <div style={{ marginTop: '8px', fontSize: '0.7rem', color: 'var(--text-dim)', fontFamily: 'var(--font-mono)' }}>
-                        Z-SCORE: <span style={{ color: 'var(--primary)' }}>{sig.z_score.toFixed(3)}</span>
-                      </div>
-                    </motion.div>
-                  ))
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px', marginTop: '50px', opacity: 0.3 }}>
-                    <Radar size={40} />
-                    <span style={{ fontSize: '0.7rem', letterSpacing: '2px' }}>SCANNING_MARKET...</span>
-                  </div>
-                )}
-              </AnimatePresence>
-            </div>
+        <div className="kpi-item">
+          <div className="kpi-label">Strategy Accuracy</div>
+          <div
+            className={`kpi-value ${
+              accuracy > 0.6 ? 'positive' : accuracy < 0.4 ? 'negative' : ''
+            }`}
+          >
+            {(accuracy * 100).toFixed(1)}%
+          </div>
+          <div className="kpi-sub">
+            {accuracy > 0.6 ? 'Optimal' : accuracy < 0.4 ? 'Caution active' : 'Nominal'}
+          </div>
+        </div>
+      </div>
 
-            <div className="panel-header" style={{ borderTop: '1px solid var(--border)' }}>
-              <TerminalIcon size={16} />
-              Agent Thought Journal
+      {/* ── MAIN ────────────────────────────────────────────────────────── */}
+      <div className="main">
+
+        {/* ── SIDEBAR ─────────────────────────────────────────────────── */}
+        <aside className="sidebar">
+
+          {/* Risk Telemetry */}
+          <div className="section">
+            <div className="section-title">
+              <Shield size={12} />
+              Risk Telemetry
             </div>
-            <div className="panel-content">
-              <ThoughtJournal thoughts={thoughts} />
+            <div className="risk-grid">
+              <div className="risk-item">
+                <div className="risk-label">Risk Mult.</div>
+                <div
+                  className="risk-value"
+                  style={{ color: (risk?.risk_multiplier ?? 1) < 0.5 ? 'var(--yellow)' : 'var(--text)' }}
+                >
+                  {(risk?.risk_multiplier ?? 1).toFixed(2)}×
+                </div>
+              </div>
+              <div className="risk-item">
+                <div className="risk-label">Max Drawdown</div>
+                <div
+                  className="risk-value"
+                  style={{ color: (risk?.max_drawdown_pct ?? 0) > 0.1 ? 'var(--red)' : 'var(--text)' }}
+                >
+                  {((risk?.max_drawdown_pct ?? 0) * 100).toFixed(1)}%
+                </div>
+              </div>
+              <div className="risk-item">
+                <div className="risk-label">L2 Entropy</div>
+                <div
+                  className="risk-value"
+                  style={{ color: (risk?.l2_entropy ?? 0) > 0.7 ? 'var(--yellow)' : 'var(--text)' }}
+                >
+                  {(risk?.l2_entropy ?? 0).toFixed(3)}
+                </div>
+              </div>
+              <div className="risk-item">
+                <div className="risk-label">Volatility</div>
+                <div
+                  className="risk-value"
+                  style={{
+                    fontSize: '13px',
+                    color: risk?.volatility_status === 'HIGH_VOLATILITY' ? 'var(--red)' : 'var(--green)',
+                  }}
+                >
+                  {risk?.volatility_status === 'HIGH_VOLATILITY' ? 'High' : 'Normal'}
+                </div>
+              </div>
             </div>
           </div>
+
+          {/* Market Regime */}
+          <div className="section">
+            <div className="section-title">
+              <Radio size={12} />
+              Market Regime
+            </div>
+            <div className="regime-card">
+              <div
+                className="regime-icon"
+                style={{ background: regimeStyle.bg, color: regimeStyle.color }}
+              >
+                {getRegimeIcon(regime)}
+              </div>
+              <div>
+                <div className="regime-name">
+                  {regime.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                </div>
+                <div className="regime-confidence">
+                  Confidence: {(regimeConf * 100).toFixed(1)}%
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Model Intelligence */}
+          <div className="section">
+            <div className="section-title">
+              <Brain size={12} />
+              Model Intelligence
+            </div>
+            <div className="accuracy-row">
+              <span>Historical accuracy</span>
+              <span className="accuracy-value" style={{ color: accuracyColor }}>
+                {(accuracy * 100).toFixed(1)}%
+              </span>
+            </div>
+            <div className="progress-bar" style={{ height: '6px' }}>
+              <div
+                className="progress-fill"
+                style={{ width: `${accuracy * 100}%`, background: accuracyColor }}
+              />
+            </div>
+            <div className="kpi-sub" style={{ marginTop: '8px' }}>
+              {accuracy > 0.6
+                ? '✓ Optimal — full Kelly sizing active'
+                : accuracy < 0.4
+                ? '⚠ Caution — penalty multiplier engaged'
+                : 'Nominal operating range'}
+            </div>
+          </div>
+
         </aside>
-      </main>
+
+        {/* ── CONTENT ─────────────────────────────────────────────────── */}
+        <div className="content">
+          <div className="split">
+
+            {/* Active Signals */}
+            <div className="panel">
+              <div className="panel-header">
+                <Zap size={12} />
+                Active Signals
+                <span className="panel-count">{data?.active_signals?.length ?? 0}</span>
+              </div>
+              <div className="panel-body">
+                <AnimatePresence>
+                  {data?.active_signals && data.active_signals.length > 0 ? (
+                    data.active_signals.map((sig, idx) => (
+                      <motion.div
+                        key={`${sig.ticker_a}-${sig.ticker_b}-${idx}`}
+                        className="signal-card"
+                        initial={{ opacity: 0, y: -6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        layout
+                      >
+                        <div className="signal-top">
+                          <span className="signal-pair">
+                            {sig.ticker_a} / {sig.ticker_b}
+                          </span>
+                          <span className={`badge ${getSignalBadge(sig.status)}`}>
+                            {sig.status}
+                          </span>
+                        </div>
+                        <div className="signal-meta">
+                          <span>
+                            Z-score:{' '}
+                            <span className="z-score-value">{sig.z_score.toFixed(3)}</span>
+                          </span>
+                        </div>
+                      </motion.div>
+                    ))
+                  ) : (
+                    <div className="empty-state">
+                      <Radio size={28} style={{ opacity: 0.3 }} />
+                      <span>Scanning market for signals…</span>
+                    </div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+
+            {/* Agent Reasoning Log */}
+            <div className="panel">
+              <div className="panel-header">
+                <Brain size={12} />
+                Agent Reasoning Log
+                <span className="panel-count">{thoughts.length}</span>
+              </div>
+              <div className="panel-body">
+                <AnimatePresence initial={false}>
+                  {thoughts.length > 0 ? (
+                    [...thoughts]
+                      .reverse()
+                      .slice(0, 60)
+                      .map((t, idx) => (
+                        <motion.div
+                          key={`${t.signal_id ?? 'x'}-${idx}`}
+                          className="thought-item"
+                          style={{ borderLeftColor: getVerdictColor(t.verdict) }}
+                          initial={{ opacity: 0, x: -6 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          exit={{ opacity: 0 }}
+                        >
+                          <div className="thought-header">
+                            <span
+                              className="thought-agent"
+                              style={{ color: getVerdictColor(t.verdict) }}
+                            >
+                              {t.agent_name}
+                            </span>
+                            <span
+                              className="thought-verdict"
+                              style={{
+                                background: `${getVerdictColor(t.verdict)}20`,
+                                color: getVerdictColor(t.verdict),
+                              }}
+                            >
+                              {t.verdict}
+                            </span>
+                            {t.signal_id && (
+                              <span className="thought-id">
+                                {t.signal_id.slice(0, 8)}
+                              </span>
+                            )}
+                          </div>
+                          <div className="thought-text">{t.thought}</div>
+                        </motion.div>
+                      ))
+                  ) : (
+                    <div className="empty-state">
+                      <Brain size={28} style={{ opacity: 0.3 }} />
+                      <span>No agent activity yet</span>
+                    </div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
 
       {/* Terminal Modal */}
       <AnimatePresence>
-        {isTerminalOpen && (
-          <motion.div 
-            className="terminal-modal-overlay"
+        {terminalOpen && (
+          <motion.div
+            className="overlay"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            onClick={(e) => e.target === e.currentTarget && setTerminalOpen(false)}
           >
-            <motion.div 
+            <motion.div
               className="terminal-window"
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              initial={{ scale: 0.96, opacity: 0, y: 10 }}
               animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              exit={{ scale: 0.96, opacity: 0, y: 10 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 32 }}
             >
-              <div className="panel-header" style={{ justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <TerminalIcon size={16} />
-                  ARBI_ELITE_TERMINAL_v1.0
+              <div className="terminal-header">
+                <div className="terminal-dots">
+                  <span className="td-red" onClick={() => setTerminalOpen(false)} />
+                  <span className="td-yellow" />
+                  <span className="td-green" />
                 </div>
-                <X 
-                  size={18} 
-                  style={{ cursor: 'pointer' }} 
-                  onClick={() => setIsTerminalOpen(false)} 
-                />
+                <span className="terminal-title">arbi_elite — terminal</span>
+                <button className="terminal-close-btn" onClick={() => setTerminalOpen(false)}>
+                  <X size={14} />
+                </button>
               </div>
-              
-              <div className="terminal-messages">
+
+              <div className="terminal-body">
                 {data?.terminal_messages?.map((msg, idx) => (
-                  <div key={idx} style={{ marginBottom: '12px', borderLeft: `2px solid ${msg.type === 'BOT' ? 'var(--primary)' : 'var(--secondary)'}`, paddingLeft: '12px' }}>
-                    <span style={{ fontSize: '0.75rem', color: msg.type === 'BOT' ? 'var(--primary)' : 'var(--secondary)', fontWeight: 'bold', marginRight: '8px' }}>
-                      [{msg.type}]
-                    </span>
-                    <span style={{ color: 'var(--text-main)' }}>{msg.text}</span>
-                    
+                  <React.Fragment key={idx}>
+                    <div className="terminal-line">
+                      <span
+                        className="terminal-line-type"
+                        style={{
+                          color:
+                            msg.type === 'BOT'
+                              ? 'var(--accent)'
+                              : msg.type === 'USER'
+                              ? 'var(--green)'
+                              : 'var(--text-muted)',
+                        }}
+                      >
+                        [{msg.type}]
+                      </span>
+                      <span className="terminal-line-text">{msg.text}</span>
+                    </div>
                     {msg.metadata?.type === 'approval' && (
-                      <div style={{ marginTop: '10px' }}>
-                        <button 
-                          className="neon-button" 
-                          style={{ borderColor: 'var(--success)', color: 'var(--success)', fontSize: '0.6rem' }}
-                          onClick={() => sendTerminalCommand(`/approve ${msg.metadata.correlation_id}`, token)}
-                        >
-                          Approve Transaction {msg.metadata.correlation_id}
-                        </button>
-                      </div>
+                      <button
+                        className="approval-btn"
+                        onClick={() =>
+                          sendTerminalCommand(`/approve ${msg.metadata.correlation_id}`, token)
+                        }
+                      >
+                        <CheckCircle size={12} />
+                        Approve {msg.metadata.correlation_id}
+                      </button>
                     )}
-                  </div>
+                  </React.Fragment>
                 ))}
                 <div ref={terminalEndRef} />
               </div>
 
-              <form className="terminal-input-area" onSubmit={handleSendCommand}>
-                <span style={{ color: 'var(--success)', fontFamily: 'var(--font-mono)' }}>{'>'}</span>
-                <input 
-                  type="text" 
+              <form className="terminal-footer" onSubmit={handleSend}>
+                <span className="terminal-prompt">$</span>
+                <input
                   className="terminal-input"
                   value={terminalInput}
                   onChange={(e) => setTerminalInput(e.target.value)}
                   placeholder="Enter command..."
                   autoFocus
                 />
-                <button type="submit" style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer' }}>
-                  <Send size={16} />
+                <button type="submit" className="terminal-send-btn">
+                  <Send size={14} />
                 </button>
               </form>
             </motion.div>
@@ -375,15 +520,20 @@ const App: React.FC = () => {
         )}
       </AnimatePresence>
 
-      {error && (
-        <motion.div 
-          style={{ position: 'fixed', bottom: '20px', right: '20px', background: '#f87171', color: 'white', padding: '10px 20px', borderRadius: '8px', fontSize: '0.8rem', zIndex: 1000 }}
-          initial={{ x: 100 }}
-          animate={{ x: 0 }}
-        >
-          {error}
-        </motion.div>
-      )}
+      {/* Error Toast */}
+      <AnimatePresence>
+        {error && (
+          <motion.div
+            className="toast-error"
+            initial={{ x: 80, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: 80, opacity: 0 }}
+          >
+            <AlertTriangle size={14} />
+            {error}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

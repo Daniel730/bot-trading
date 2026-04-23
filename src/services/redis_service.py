@@ -19,8 +19,10 @@ class RedisService:
         return cls._instance
 
     async def set_price(self, ticker: str, price: float):
-        """Sets the current price for a ticker in the shadow book."""
-        await self.client.set(f"price:{ticker}", price)
+        """Sets the current price for a ticker in the shadow book.
+        TTL of 20 s ensures the cache expires between scan cycles (every 15 s)
+        so yfinance is called again and the Kalman filter receives fresh prices."""
+        await self.client.set(f"price:{ticker}", price, ex=20)
 
     async def get_price(self, ticker: str) -> Optional[float]:
         """Gets the current price for a ticker from the shadow book."""

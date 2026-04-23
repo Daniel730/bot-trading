@@ -175,12 +175,19 @@ class ArbitrageMonitor:
                 
                 pair_id = f"{ticker_a}_{ticker_b}"
                 
-                # Initialize Kalman filter (Warm Start from Redis)
+                # Initialize Kalman filter.
+                # Do NOT pass initial_state here — that would bypass both Redis
+                # warm-start and 30-day historical pre-warming, leaving P=eye(2)*10
+                # so large that the filter absorbs all price variation on tick-1
+                # and every z-score collapses to 0.00 indefinitely.
+                # get_or_create_filter will:
+                #   1. Warm-start from Redis if a saved state exists, OR
+                #   2. Pre-warm with 30d of hourly data so P has converged before
+                #      the first live tick.
                 kf = await arbitrage_service.get_or_create_filter(
-                    pair_id, 
-                    delta=settings.KALMAN_DELTA, 
-                    r=settings.KALMAN_R,
-                    initial_state=[0.0, hedge]
+                    pair_id,
+                    delta=settings.KALMAN_DELTA,
+                    r=settings.KALMAN_R
                 )
 
                 metrics = arbitrage_service.get_spread_metrics(hist_data[col_a], hist_data[col_b], hedge)
@@ -759,4 +766,9 @@ class ArbitrageMonitor:
             )
 
         await persistence_service.close_trade(uuid.UUID(sig_id), exit_prices, pnl, exit_reason=reason)
+
+
+if __name__ == "__main__":
+    monitor = ArbitrageMonitor()
+    asyncio.run(monitor.run())
 
