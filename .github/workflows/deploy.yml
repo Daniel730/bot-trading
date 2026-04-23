@@ -1,23 +1,43 @@
-name: Deploy to Koyeb
+name: Deploy to Raspberry Pi
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - master
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Koyeb CLI
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/koyeb/koyeb-cli/master/install.sh | sh
-          echo "$HOME/.koyeb/bin" >> $GITHUB_PATH
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PI_SSH_PRIVATE_KEY }}
 
-      - name: Deploy to Koyeb
-        env:
-          KOYEB_TOKEN: ${{ secrets.KOYEB_TOKEN }}
+      - name: Add Pi to known hosts
         run: |
-          koyeb service update trading-bot/bot --image docker.io/${{ secrets.DOCKER_USERNAME }}/bot-trading:latest
+          ssh-keyscan -H ${{ secrets.PI_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to Pi
+        run: |
+          ssh pi@${{ secrets.PI_HOST }} << 'EOF'
+            set -e
+            cd ~/apps/bot-trading
+
+            echo "--- Pulling latest code ---"
+            git fetch origin master
+            git reset --hard origin/master
+
+            echo "--- Stopping running services ---"
+            docker compose -f docker-compose.backend.yml down || true
+
+            echo "--- Rebuilding and starting services ---"
+            docker compose -f docker-compose.backend.yml up -d --build
+
+            echo "--- Deployment complete ---"
+            docker compose -f docker-compose.backend.yml ps
+          EOF
