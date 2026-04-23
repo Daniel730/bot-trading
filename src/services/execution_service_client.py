@@ -118,8 +118,9 @@ class ExecutionServiceClient:
         except grpc.aio.AioRpcError as e:
             if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
                 logger.error(
-                    "gRPC DEADLINE_EXCEEDED for %s — 50 ms budget exhausted, cancelling.",
+                    "gRPC DEADLINE_EXCEEDED for %s — %.0f ms budget exhausted, cancelling.",
                     signal_id,
+                    _RPC_DEADLINE_SECONDS * 1000,
                 )
             else:
                 logger.error(

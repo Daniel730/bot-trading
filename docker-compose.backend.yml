@@ -33,7 +33,7 @@ services:
       retries: 5
 
   bot:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     container_name: trading-bot
@@ -52,7 +52,7 @@ services:
       mcp-server:
         condition: service_healthy
       execution-engine:
-        condition: service_started
+        condition: service_healthy
 
   mcp-server:
     build:
@@ -73,7 +73,7 @@ services:
       postgres:
         condition: service_healthy
       execution-engine:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-s", "-I", "http://localhost:8000/"]
       interval: 10s
@@ -91,6 +91,14 @@ services:
     env_file:
       - .env
     restart: always
+    # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
+    # dependent services (bot, mcp-server) start sending gRPC calls.
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   sec-worker:
     build:

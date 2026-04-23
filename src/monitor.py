@@ -49,6 +49,9 @@ class ArbitrageMonitor:
         self.current_day = None
         self.daily_start_cash = 0.0
         self.daily_halted = False
+        # Tracks the calendar date on which each pair's cointegration was last
+        # re-validated. Keyed by pair_id; value is a datetime.date object.
+        self.last_cointegration_check: dict = {}
 
     def is_market_open(self) -> bool:
         """
@@ -186,6 +189,9 @@ class ArbitrageMonitor:
                     "hedge_ratio": hedge, "mean": metrics['mean'], "std": metrics['std'],
                     "is_cointegrated": is_coint
                 })
+                # Mark the pair as already validated today so the daily re-check
+                # in the scan loop doesn't immediately fire again 15 s after boot.
+                self.last_cointegration_check[pair_id] = datetime.now().date()
                 logger.info(f"Pair {ticker_a}/{ticker_b} initialized (Coint: {is_coint}).")
             except Exception as e:
                 logger.error(f"Error initializing {ticker_a}/{ticker_b}: {e}")
@@ -200,7 +206,11 @@ class ArbitrageMonitor:
             is_crypto = "-USD" in t_a or "-USD" in t_b
             if not is_crypto and not self.is_market_open():
                 return diagnostic
-                
+
+            # Skip pairs whose cointegration has broken (detected by daily re-check).
+            if not pair.get('is_cointegrated', True):
+                return diagnostic
+
             if t_a not in latest_prices or t_b not in latest_prices:
                 return diagnostic
             
@@ -209,6 +219,10 @@ class ArbitrageMonitor:
 
             # Feature 007: Kalman Filter Update
             kf = await arbitrage_service.get_or_create_filter(pair['id'])
+            # O2 fix: guard against None return when Redis is unavailable or pair data missing
+            if kf is None:
+                logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
+                return diagnostic
             state_vec, innovation_var = kf.update(price_a, price_b)
             spread, z_score = kf.calculate_spread_and_zscore(price_a, price_b)
             
@@ -231,13 +245,32 @@ class ArbitrageMonitor:
                         self.active_signals.append(signal_entry)
 
                 # AI Validation
+                # Look up this pair's sector so the orchestrator uses the right beacon asset.
+                pair_sector = settings.PAIR_SECTORS.get(
+                    pair['id'],
+                    settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "Technology")
+                )
                 signal_context = {
                     "ticker_a": t_a, "ticker_b": t_b,
                     "z_score": z_score, "dynamic_beta": state_vec[1],
-                    "signal_id": signal_id
+                    "signal_id": signal_id,
+                    "sector": pair_sector,
                 }
 
-                decision_state = await orchestrator.ainvoke({"signal_context": signal_context})
+                # Wrap orchestrator in a hard 8 s deadline.
+                # If any LLM call or Redis read hangs, we veto the signal rather
+                # than stalling the entire scan loop for all other pairs.
+                try:
+                    decision_state = await asyncio.wait_for(
+                        orchestrator.ainvoke({"signal_context": signal_context}),
+                        timeout=8.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        f"ORCHESTRATOR [{t_a}/{t_b}] timed out after 8 s. "
+                        f"Vetoing signal to protect scan loop."
+                    )
+                    return diagnostic
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
 
@@ -308,6 +341,28 @@ class ArbitrageMonitor:
         size_a = round(target_cash / price_a, 6)
         size_b = round(target_cash / price_b, 6)
 
+        # Feature 008 – Sector Cluster Guard (prospective, race-condition-safe).
+        # Both legs are counted as new exposure (target_cash each) so the check
+        # is evaluated BEFORE the trade is placed, not after.  This prevents two
+        # signals in the same scan window from independently passing the 30 % cap
+        # and then together pushing the sector to 60 %.
+        pair_sector = settings.PAIR_SECTORS.get(
+            pair['id'], settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "General")
+        )
+        current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
+        if current_portfolio:
+            total_size = sum(p['size'] for p in current_portfolio)
+            sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
+            new_trade_size = target_cash * 2  # two legs of equal value
+            projected_exposure = (sector_size + new_trade_size) / (total_size + new_trade_size)
+            if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
+                logger.warning(
+                    f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
+                    f"'{pair_sector}' exposure to {projected_exposure:.1%}, "
+                    f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
+                )
+                return
+
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
         if not regime_info:
@@ -361,10 +416,32 @@ class ArbitrageMonitor:
             close_side_a = "BUY" if side_a == "SELL" else "SELL"
             close_res = await self.brokerage.place_value_order(exec_t_a, target_cash, close_side_a)
             if close_res.get("status") == "error":
-                logger.critical(
-                    f"EMERGENCY CLOSE FAILED on {exec_t_a}! Position is orphaned. "
-                    f"Manual intervention required. Response: {close_res}"
+                orphan_msg = (
+                    f"🚨 CRITICAL — EMERGENCY CLOSE FAILED\n"
+                    f"Signal: {signal_id}\n"
+                    f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                    f"The position is now ORPHANED. Manual intervention required.\n"
+                    f"Broker response: {close_res}"
                 )
+                logger.critical(orphan_msg)
+                # Alert operator immediately via Telegram / console
+                await notification_service.send_message(orphan_msg)
+                # Persist the orphan so it appears in the audit trail and
+                # dashboard queries don't silently miss it.
+                await persistence_service.log_trade({
+                    "order_id": f"ORPHAN_{signal_id}",
+                    "signal_id": uuid.UUID(signal_id),
+                    "ticker": exec_t_a,
+                    "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                    "quantity": size_a,
+                    "price": price_a,
+                    "status": OrderStatus.FAILED,
+                    "metadata": {
+                        "orphaned": True,
+                        "reason": "emergency_close_failed",
+                        "broker_response": close_res,
+                    },
+                })
             else:
                 logger.info(f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed.")
             return
@@ -406,6 +483,68 @@ class ArbitrageMonitor:
         })
         
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
+
+    async def _recheck_cointegration(self, pair: dict):
+        """
+        Re-validates the ADF cointegration test for a single pair using the
+        last 30 days of hourly data.  Called once per calendar day per pair.
+
+        If the p-value rises above 0.10 the pair is marked is_cointegrated=False
+        and trading is suspended until the next re-check restores it.
+        A Telegram/console alert is fired on both break and restore events.
+        """
+        t_a, t_b = pair['ticker_a'], pair['ticker_b']
+        try:
+            hist_data = await asyncio.to_thread(
+                data_service.get_historical_data, [t_a, t_b]
+            )
+            if hist_data is None or hist_data.empty:
+                return
+
+            col_a = next((c for c in hist_data.columns if t_a in c), None)
+            col_b = next((c for c in hist_data.columns if t_b in c), None)
+            if not col_a or not col_b:
+                return
+
+            is_coint, p_val, _ = arbitrage_service.check_cointegration(
+                hist_data[col_a], hist_data[col_b]
+            )
+
+            previously_coint = pair.get('is_cointegrated', True)
+
+            if not is_coint:
+                pair['is_cointegrated'] = False
+                if previously_coint:
+                    # Only alert on a real break (True → False transition).
+                    # If the pair was already non-cointegrated at startup, stay quiet.
+                    msg = (
+                        f"⚠️ COINTEGRATION BREAK: {t_a}/{t_b} — "
+                        f"ADF p-value={p_val:.4f} > 0.05. "
+                        f"Pair suspended until cointegration is restored."
+                    )
+                    logger.warning(msg)
+                    await notification_service.send_message(msg)
+                else:
+                    logger.debug(
+                        f"[{t_a}/{t_b}] Still non-cointegrated (p={p_val:.4f}). "
+                        f"Staying suspended."
+                    )
+            else:
+                pair['is_cointegrated'] = True
+                if not previously_coint:
+                    # Alert only on a real restore (False → True transition).
+                    msg = (
+                        f"✅ COINTEGRATION RESTORED: {t_a}/{t_b} — "
+                        f"ADF p-value={p_val:.4f}. Pair re-activated."
+                    )
+                    logger.info(msg)
+                    await notification_service.send_message(msg)
+                else:
+                    logger.debug(
+                        f"[{t_a}/{t_b}] Cointegration confirmed (p={p_val:.4f})."
+                    )
+        except Exception as e:
+            logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
     async def run(self):
         # FR-006: Pre-flight line — operator must know mode/universe/window
@@ -504,6 +643,14 @@ class ArbitrageMonitor:
 
                 latest_prices = await data_service.get_latest_price(list(set(all_tickers)))
 
+                # Daily cointegration re-validation — fire background tasks so
+                # historical data fetches don't block the current scan cycle.
+                today = datetime.now().date()
+                for pair in self.active_pairs:
+                    if self.last_cointegration_check.get(pair['id']) != today:
+                        asyncio.create_task(self._recheck_cointegration(pair))
+                        self.last_cointegration_check[pair['id']] = today
+
                 tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
                 results = await asyncio.gather(*tasks)
 
@@ -571,29 +718,45 @@ class ArbitrageMonitor:
     async def _close_position(self, signal: dict, price_a: float, price_b: float, reason: ExitReason):
         sig_id = signal["signal_id"]
         logger.info(f"Closing position {sig_id} Reason: {reason.value}")
-        
+
         for leg in signal["legs"]:
             ticker = leg["ticker"]
             qty = leg["quantity"]
-            # Close order side is opposite of open
+            # Close order side is the opposite of the open side
             side = "SELL" if leg["side"] == "BUY" else "BUY"
-            
+
             exec_t = settings.DEV_EXECUTION_TICKERS.get(ticker, ticker) if settings.DEV_MODE else ticker
             if not settings.PAPER_TRADING:
                 p = price_a if ticker == signal["legs"][0]["ticker"] else price_b
                 await self.brokerage.place_value_order(exec_t, float(qty * p), side)
-                
+
         # M-04: Compute realized PnL from entry vs exit price per leg
-        exit_prices = {signal["legs"][0]["ticker"]: price_a, signal["legs"][1]["ticker"]: price_b}
+        leg_a, leg_b = signal["legs"][0], signal["legs"][1]
+        exit_prices = {leg_a["ticker"]: price_a, leg_b["ticker"]: price_b}
         pnl = 0.0
         for leg in signal["legs"]:
             qty = leg["quantity"]
             entry = leg["price"]
             exit_p = exit_prices[leg["ticker"]]
             pnl += (exit_p - entry) * qty if leg["side"] == "BUY" else (entry - exit_p) * qty
+
+        # N2 fix: in paper mode, route through shadow_service so the shadow ledger
+        # gets a proper close log with directional PnL breakdown.
+        # shadow_service.close_simulated_trade does NOT call persistence — we handle
+        # DB writes once here for both live and paper paths to preserve exit_reason.
+        if settings.PAPER_TRADING:
+            direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
+            await shadow_service.close_simulated_trade(
+                pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
+                signal_id=uuid.UUID(sig_id) if isinstance(sig_id, str) else sig_id,
+                direction=direction,
+                size_a=leg_a["quantity"],
+                size_b=leg_b["quantity"],
+                entry_price_a=leg_a["price"],
+                entry_price_b=leg_b["price"],
+                exit_price_a=price_a,
+                exit_price_b=price_b,
+            )
+
         await persistence_service.close_trade(uuid.UUID(sig_id), exit_prices, pnl, exit_reason=reason)
 
-
-if __name__ == "__main__":
-    monitor = ArbitrageMonitor(mode="live")
-    asyncio.run(monitor.run())
