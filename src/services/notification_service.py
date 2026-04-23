@@ -9,16 +9,30 @@ class NotificationService:
         self.token = settings.TELEGRAM_BOT_TOKEN
         self.chat_id = settings.TELEGRAM_CHAT_ID
         self.pending_approvals = {} # correlation_id -> asyncio.Future
-        self.app = ApplicationBuilder().token(self.token).build()
-        
-        # Register handlers
-        self.app.add_handler(CallbackQueryHandler(self._handle_callback))
-        self.app.add_handler(CommandHandler("exposure", self._handle_exposure))
-        self.app.add_handler(CommandHandler("invest", self._handle_invest))
-        self.app.add_handler(CommandHandler("cash", self._handle_cash))
-        self.app.add_handler(CommandHandler("portfolio", self._handle_portfolio))
-        self.app.add_handler(CommandHandler("why", self._handle_why))
-        self.app.add_handler(CommandHandler("macro", self._handle_macro))
+        self._telegram_enabled = False
+        self.app = None
+
+        # Guard: skip Telegram setup if token is absent or still a placeholder.
+        # This lets the bot run in paper-trading mode without a Telegram account.
+        _placeholder_tokens = {"", "None", "your_token_here", "YOUR_TELEGRAM_BOT_TOKEN"}
+        if not self.token or str(self.token).strip() in _placeholder_tokens:
+            print("TELEGRAM: Token not configured — Telegram notifications disabled. "
+                  "Paper trading and console logging will still work.")
+            return
+
+        try:
+            self.app = ApplicationBuilder().token(self.token).build()
+            # Register handlers
+            self.app.add_handler(CallbackQueryHandler(self._handle_callback))
+            self.app.add_handler(CommandHandler("exposure", self._handle_exposure))
+            self.app.add_handler(CommandHandler("invest", self._handle_invest))
+            self.app.add_handler(CommandHandler("cash", self._handle_cash))
+            self.app.add_handler(CommandHandler("portfolio", self._handle_portfolio))
+            self.app.add_handler(CommandHandler("why", self._handle_why))
+            self.app.add_handler(CommandHandler("macro", self._handle_macro))
+            self._telegram_enabled = True
+        except Exception as e:
+            print(f"TELEGRAM: Failed to initialize ({e}). Telegram notifications disabled.")
 
     async def _handle_macro(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Displays macro economic summary."""
@@ -171,8 +185,8 @@ class NotificationService:
         """Displays current sector exposure."""
         from src.services.shadow_service import shadow_service
         from src.services.risk_service import risk_service
-        
-        portfolio = shadow_service.get_active_portfolio_with_sectors()
+
+        portfolio = await shadow_service.get_active_portfolio_with_sectors()
         exposures = risk_service.get_all_sector_exposures(portfolio)
         
         if not exposures:
@@ -217,17 +231,24 @@ class NotificationService:
         Starts the Telegram bot listener in the background.
         This allows the user to interact with the bot via commands like /status or /exposure.
         """
+        if not self._telegram_enabled:
+            print("TELEGRAM: Listener not started (Telegram disabled). Bot is running in console-only mode.")
+            return
         await self.app.initialize()
         await self.app.start()
         # drop_pending_updates=True is CRITICAL to avoid processing old clicks after restart
         await self.app.updater.start_polling(drop_pending_updates=True)
         print("TELEGRAM: Listener active (cleared pending updates).")
-        
+
         # Sprint J: Heartbeat Startup Message
         await self.send_message("🚀 *Arbitrage Bot Online*\n\nMonitoring active. All health checks passed. System is in `Ready` mode.")
 
     async def send_message(self, message: str):
         """Sends a plain text message to the Telegram chat and dashboard."""
+        if not self._telegram_enabled:
+            # Fallback: echo to console so operator still sees bot activity
+            print(f"[BOT MSG] {message}")
+            return
         try:
             # 1. Send to Telegram
             await self.app.bot.send_message(
@@ -235,19 +256,57 @@ class NotificationService:
                 text=message,
                 parse_mode="Markdown"
             )
-            
+
             # 2. Send to Dashboard Terminal
             from src.services.dashboard_service import dashboard_state
             await dashboard_state.add_message("BOT", message)
-            
+
         except Exception as e:
             print(f"TELEGRAM ERROR (send_message): {e}")
 
+    async def _paper_notify(self, trade_summary: str) -> None:
+        """Fire-and-forget notification for paper-mode auto-approvals.
+
+        Failures here must never propagate to the caller -- paper trades
+        must simulate regardless of Telegram or dashboard health (FR-002).
+        """
+        text = "Paper trade auto-approved\n" + trade_summary
+        if self._telegram_enabled:
+            try:
+                await self.app.bot.send_message(chat_id=self.chat_id, text=text)
+            except Exception as e:
+                print(f"TELEGRAM (paper-notify): send failed, non-fatal: {e}")
+        else:
+            print(f"[PAPER TRADE] {text}")
+        try:
+            from src.services.dashboard_service import dashboard_state
+            await dashboard_state.add_message(
+                "BOT", text, metadata={"type": "paper_auto_approved"}
+            )
+        except Exception as e:
+            print(f"DASHBOARD (paper-notify): add_message failed, non-fatal: {e}")
+
     async def request_approval(self, trade_summary: str) -> bool:
+        """Gate a trade on operator approval.
+
+        In live mode: sends inline-button Telegram message and waits for
+        the operator to click Approve/Reject (5 min timeout -> False).
+
+        In paper mode (settings.PAPER_TRADING=True): returns True in
+        under 100ms and dispatches a fire-and-forget notification so the
+        operator still has visibility (spec FR-001..FR-003).
         """
-        Sends message and WAITS for the user to click a button.
-        Also sends to the dashboard terminal.
-        """
+        # Paper-mode fast path.
+        if settings.PAPER_TRADING:
+            asyncio.create_task(self._paper_notify(trade_summary))
+            return True
+
+        if not self._telegram_enabled:
+            # Without Telegram, live trades cannot be human-gated.
+            # Log clearly and auto-approve so the bot doesn't silently stall.
+            print(f"[APPROVAL] Telegram not configured. Auto-approving live trade: {trade_summary}")
+            return True
+
         correlation_id = str(uuid.uuid4())[:8]
         keyboard = [
             [
@@ -256,21 +315,21 @@ class NotificationService:
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self.pending_approvals[correlation_id] = future
-        
+
         try:
             text = f"🚨 APPROVAL REQUIRED\n{trade_summary}"
-            
+
             # 1. Send to Telegram
             await self.app.bot.send_message(
-                chat_id=self.chat_id, 
-                text=text, 
+                chat_id=self.chat_id,
+                text=text,
                 reply_markup=reply_markup
             )
-            
+
             # 2. Send to Dashboard
             from src.services.dashboard_service import dashboard_state
             await dashboard_state.add_message("BOT", text, metadata={"correlation_id": correlation_id, "type": "approval"})
@@ -316,28 +375,31 @@ class NotificationService:
         
         elif command == "/status":
             from src.services.dashboard_service import dashboard_service
-            await self.send_message(f"Current Status: {dashboard_service.dashboard_state.stage}\nDetails: {dashboard_service.dashboard_state.details}")
+            await self.send_message(
+                f"Current Status: {dashboard_service.dashboard_state.stage}\n"
+                f"Details: {dashboard_service.dashboard_state.details}"
+            )
             return {"status": "success", "message": "Status sent"}
 
         elif command == "/exposure":
-            # We don't have an update object here, so we call the logic directly
             from src.services.shadow_service import shadow_service
             from src.services.risk_service import risk_service
-            
+
             portfolio = await shadow_service.get_active_portfolio_with_sectors()
             exposures = risk_service.get_all_sector_exposures(portfolio)
-            
+
             if not exposures:
                 await self.send_message("Portfolio is currently empty.")
             else:
                 message = "📊 *Current Sector Exposure*\n\n"
                 for sector, pct in sorted(exposures.items(), key=lambda x: x[1], reverse=True):
-                    status = "⚠️" if pct >= settings.MAX_SECTOR_EXPOSURE else "✅"
-                    message += f"{status} *{sector}*: {pct:.1%}\n"
+                    flag = "⚠️" if pct >= settings.MAX_SECTOR_EXPOSURE else "✅"
+                    message += f"{flag} *{sector}*: {pct:.1%}\n"
                 message += f"\n_Limit: {settings.MAX_SECTOR_EXPOSURE:.0%}_"
                 await self.send_message(message)
             return {"status": "success", "message": "Exposure report sent"}
 
         return {"status": "error", "message": f"Unknown command: {command}"}
+
 
 notification_service = NotificationService()

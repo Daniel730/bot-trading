@@ -24,8 +24,20 @@ public class Application {
         // Use Java 21 Virtual Threads for the gRPC server executor
         var executor = Executors.newVirtualThreadPerTaskExecutor();
 
+        // R1 fix (2026-04-19): Register a gRPC service so calls don't return
+        // UNIMPLEMENTED. The full ExecutionServiceImpl requires a TradeLedgerRepository
+        // (Postgres R2DBC), RedisOrderSync (Lettuce), L2FeedService, and a Broker —
+        // none of which are wired yet. Until a DI layer exists we register a safe
+        // StubExecutionService that returns typed STATUS_BROKER_ERROR responses and
+        // logs every invocation. Paper trading uses Python-side shadow_service and
+        // does not depend on this path, so the stub is adequate for the Monday
+        // go-live test. Swap to ExecutionServiceImpl once dependencies are wired.
+        io.grpc.BindableService grpcService = new com.arbitrage.engine.api.StubExecutionService();
+        logger.warn("Registering StubExecutionService — real execution dependencies not wired. "
+                + "This is SAFE for paper trading; DO NOT use for live capital.");
+
         Server server = ServerBuilder.forPort(PORT)
-                // .addService(...) // Will add services in Phase 2
+                .addService(grpcService)
                 .intercept(new com.arbitrage.engine.api.LatencyInterceptor())
                 .executor(executor)
                 .build();

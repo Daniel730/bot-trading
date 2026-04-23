@@ -259,8 +259,8 @@ class DashboardService:
                 # Fetch cash if not paper trading OR if we are in DEMO mode with a valid key
                 if not settings.PAPER_TRADING or settings.is_t212_demo:
                     try:
-                        total_cash = brokerage_service.get_account_cash()
-                        pending_value = brokerage_service.get_pending_orders_value()
+                        total_cash = await asyncio.to_thread(brokerage_service.get_account_cash)
+                        pending_value = await brokerage_service.get_pending_orders_value()
                         
                         # US-032: Remove hardcoded fallback. If API is down, send None to trigger 'ERR' in UI.
                         if total_cash == 0 and settings.is_t212_demo and not settings.PAPER_TRADING:
