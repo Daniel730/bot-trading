@@ -34,16 +34,16 @@ services:
 
   bot:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/Dockerfile
     image: trading-bot-base:latest
     container_name: trading-bot
     ports:
       - "8080:8080"
     env_file:
-      - .env
+      - ../.env
     volumes:
-      - .env:/app/.env
+      - ../.env:/app/.env
     restart: always
     depends_on:
       redis:
@@ -58,16 +58,16 @@ services:
   mcp-server:
     image: trading-bot-base:latest
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/Dockerfile
     container_name: mcp-server
     command: python src/mcp_server.py
     ports:
       - "8000:8000"
     env_file:
-      - .env
+      - ../.env
     volumes:
-      - .env:/app/.env
+      - ../.env:/app/.env
     restart: always
     depends_on:
       redis:
@@ -85,13 +85,13 @@ services:
 
   execution-engine:
     build:
-      context: ./execution-engine
+      context: ../execution-engine
       dockerfile: Dockerfile
     container_name: execution-engine
     ports:
       - "50051:50051"
     env_file:
-      - .env
+      - ../.env
     restart: always
     # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
     # dependent services (bot, mcp-server) start sending gRPC calls.
@@ -105,14 +105,14 @@ services:
   sec-worker:
     image: trading-bot-base:latest
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: infra/Dockerfile
     container_name: sec-fundamental-worker
     command: python src/daemons/sec_fundamental_worker.py
     env_file:
-      - .env
+      - ../.env
     volumes:
-      - .env:/app/.env
+      - ../.env:/app/.env
     restart: always
     depends_on:
       redis:

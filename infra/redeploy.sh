@@ -3,8 +3,8 @@
 # Configuration
 BACKEND_COMPOSE="docker-compose.backend.yml"
 FRONTEND_COMPOSE="docker-compose.frontend.yml"
-BACKEND_DEPS="requirements.txt"
-FRONTEND_DEPS="frontend/package.json"
+BACKEND_DEPS="../requirements.txt"
+FRONTEND_DEPS="../frontend/package.json"
 HASH_STORE=".redeploy_hashes"
 
 # Create hash store if it doesn't exist
@@ -77,21 +77,21 @@ case "$1" in
         echo "Watching src/, scripts/, frontend/src/, execution-engine/src/, execution-engine/build.gradle.kts for changes..."
 
         # Initial hashes — O8 fix: include Java source so engine changes trigger a rebuild
-        PREV_BACKEND_HASH=$(find src/ scripts/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
-        PREV_JAVA_HASH=$(find execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
-        PREV_FRONTEND_HASH=$(find frontend/src/ -type f -exec md5sum {} + | md5sum)
-        SRC_HASH=$(find src/ scripts/ frontend/src/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+        PREV_BACKEND_HASH=$(find ../src/ ../scripts/ ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+        PREV_JAVA_HASH=$(find ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+        PREV_FRONTEND_HASH=$(find ../frontend/src/ -type f -exec md5sum {} + | md5sum)
+        SRC_HASH=$(find ../src/ ../scripts/ ../frontend/src/ ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
 
         while true; do
             sleep 5
-            CURRENT_SRC_HASH=$(find src/ scripts/ frontend/src/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+            CURRENT_SRC_HASH=$(find ../src/ ../scripts/ ../frontend/src/ ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
 
             if [ "$SRC_HASH" != "$CURRENT_SRC_HASH" ]; then
                 echo "Change detected! Analyzing..."
 
-                BACKEND_HASH=$(find src/ scripts/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
-                JAVA_HASH=$(find execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
-                FRONTEND_HASH=$(find frontend/src/ -type f -exec md5sum {} + | md5sum)
+                BACKEND_HASH=$(find ../src/ ../scripts/ ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+                JAVA_HASH=$(find ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+                FRONTEND_HASH=$(find ../frontend/src/ -type f -exec md5sum {} + | md5sum)
 
                 # Check if Java engine changed — rebuild execution-engine image specifically
                 if [ "$PREV_JAVA_HASH" != "$JAVA_HASH" ]; then

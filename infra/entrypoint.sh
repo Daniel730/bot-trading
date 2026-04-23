@@ -15,7 +15,7 @@ elif [ -n "$PREFECT_API_KEY" ]; then
     prefect config set PREFECT_API_URL="$PREFECT_API_URL"
     
     echo "Applying Prefect deployment..."
-    python deployment.py
+    python infra/deployment.py
     
     echo "Starting Prefect worker 'koyeb-runner'..."
     prefect worker start --pool "default-agent-pool" --work-queue "koyeb-runner"

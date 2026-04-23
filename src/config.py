@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")  # L-10: reject typos/invalid regions at startup
     
     # Infrastructure (SQLite - Legacy/Fallback)
-    DB_PATH: str = Field(default="logs/trading_bot.db", validation_alias="DB_PATH")
+    DB_PATH: str = Field(default="data/trading_bot.db", validation_alias="DB_PATH")
 
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
