@@ -263,13 +263,15 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             ));
         }
 
-        // J-04: Add error handler and backpressure buffer — bare subscribe() silently drops exceptions
+        // J-04: Add error handler — bare subscribe() silently drops exceptions.
+        // Note: saveAudits returns Mono<Void>; onBackpressureBuffer is a Flux-only operator
+        // and would not compile here (a Mono emits at most one item, so there is no
+        // backpressure to buffer). The onErrorResume guard is what we actually need.
         repository.saveAudits(signalId, request.getPairId(), audits, status.name(),
                 (System.nanoTime() - startTime) / 1_000_000L)
-            .onBackpressureBuffer(100)
             .subscribe(
                 null,
-                err -> log.error("Audit persist failed for signal {}: {}", signalId, err.getMessage())
+                err -> logger.error("Audit persist failed for signal {}: {}", signalId, err.getMessage())
             );
 
         responseObserver.onNext(response);

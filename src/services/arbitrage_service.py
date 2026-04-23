@@ -28,6 +28,11 @@ class ArbitrageService:
                 initial_state = saved_state['x']
                 initial_covariance = saved_state['P']
                 logger.info(f"[ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
+                kf = KalmanFilter(delta=delta, r=r, initial_state=initial_state, initial_covariance=initial_covariance)
+                # Restore innovation_variance so z-scores are valid immediately on first scan
+                kf.innovation_variance = saved_state.get('innovation_variance', 0.0)
+                self.filters[pair_id] = kf
+                return kf
             else:
                 kf = KalmanFilter(delta=delta, r=r)
                 # D.1 Kalman Pre-Warming
@@ -65,7 +70,8 @@ class ArbitrageService:
             ticker_pair=pair_id,
             x=state_dict['alpha_beta'], # [alpha, beta]
             P=state_dict['p_matrix'],
-            z_score=z_score
+            z_score=z_score,
+            innovation_variance=kf.innovation_variance
         )
 
     @staticmethod
@@ -123,13 +129,13 @@ class ArbitrageService:
             intercept = float(rolling_mean.iloc[-1])
             std = float(rolling_std.iloc[-1])
         else:
-            # Bug M-01: Look-ahead bias elimination
-            # Exclude the final observation to prevent causality violation
+            # Bug M-01: Look-ahead bias elimination.
+            # Exclude the final observation to prevent causality violation.
             intercept = float(full_spread_raw.iloc[:-1].mean())
             std = float(full_spread_raw.iloc[:-1].std())
-        
+
         return {
-            "mean": intercept, # Bug C-01: Fix hardcoded 0.0
+            "mean": intercept,  # Bug C-01: Fixed — was hardcoded 0.0
             "std": std,
             "intercept": intercept
         }

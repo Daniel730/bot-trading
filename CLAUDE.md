@@ -143,3 +143,89 @@ The `.proto` file lives in `execution-engine/src/main/proto/`. Python stubs are 
 ### Frontend Authentication
 
 Dashboard access requires `DASHBOARD_TOKEN` passed as a URL query param. The React app (`frontend/src/`) connects to the MCP server via SSE at `/api/sse` and WebSocket for risk alerts.
+
+---
+
+## Claude Workspace (`.claude/`, `.mcp.json`)
+
+The project's AI-assistant configuration was migrated from Gemini CLI (`.gemini/`) into Claude Code on 2026-04-19. The `.gemini/` tree is kept in place for backward compatibility, but `.claude/` is now the source of truth when working through Claude.
+
+### Slash commands (`.claude/commands/*.md`)
+
+Twelve commands are installed, preserving their original dotted names so existing muscle memory still works:
+
+**Speckit workflow** (ported from the GitHub `spec-kit` Gemini templates):
+- `/speckit.constitution` — Create or update the project constitution in `.specify/memory/constitution.md`.
+- `/speckit.specify` — Turn a natural-language feature description into `specs/NNN-feature/spec.md` (creates the feature branch via `.specify/scripts/bash/create-new-feature.sh`).
+- `/speckit.clarify` — Ask up to 5 targeted questions and encode the answers back into the spec.
+- `/speckit.plan` — Generate design artifacts (plan, data-model, research, quickstart) from the spec.
+- `/speckit.tasks` — Produce a dependency-ordered `tasks.md`.
+- `/speckit.implement` — Execute the tasks against the plan.
+- `/speckit.analyze` — Non-destructive cross-artifact consistency/quality audit of spec + plan + tasks.
+- `/speckit.checklist` — Generate a tailored requirement-quality checklist for the active feature.
+- `/speckit.taskstoissues` — Convert the generated tasks into GitHub Issues on the active remote.
+- `/speckit.research [ticker_a] [ticker_b]` — Create `specs/{branch}/research-A-B.md` using the `research-pair` template.
+
+**Project-specific commands:**
+- `/dev.audit` — Runs `scripts/cli_audit.py` and explains architectural improvements against the Senior Developer guidelines.
+- `/invest.analyze [ticker_a] [ticker_b]` — Runs `scripts/cli_analyze.py` and evaluates the pair against the Senior Investor guidelines (cointegration, correlation, liquidity).
+
+Argument placeholders in every command were rewritten to Claude's conventions: `{{args}}` → `$ARGUMENTS`, `{{arg1}}` → `$1`, `{{arg2}}` → `$2`.
+
+### Skills (`.claude/skills/`)
+
+- **`financial-investor`** — Senior Quantitative Investor persona for new-pair research, risk audits, and alpha identification. Enforces the 5%-per-pair risk cap, >0.85 correlation requirement, and SEC-filing scrutiny (`src/services/sec_service.py`).
+- **`senior-developer`** — Elite Software Engineer persona enforcing strict typing, async-first I/O (`asyncio` + `FastMCP`), `tenacity` retries, `pydantic` input validation, and `src/services/` singleton pattern.
+
+Claude auto-discovers skills by name — mention a relevant trigger in the prompt (e.g. "audit this new pair") and the skill can be invoked explicitly with the Skill tool.
+
+### MCP server (`.mcp.json`)
+
+The project-level `.mcp.json` exposes the local `src/mcp_server.py` (FastMCP/SSE telemetry) to Claude Code. It is launched via `uv run --with fastmcp fastmcp run src/mcp_server.py` from the project root, matching the original `.gemini/settings.json` wiring but with a portable relative path.
+
+### Speckit framework
+
+The agent-agnostic `.specify/` directory (templates, scripts, `extensions.yml`, `memory/constitution.md`) is used verbatim by both the Speckit slash commands and any ad-hoc prompts — no migration needed.
+
+---
+
+## Claude Workspace (`.claude/`, `.mcp.json`)
+
+The project's AI-assistant configuration was migrated from Gemini CLI (`.gemini/`) into Claude Code on 2026-04-19. The `.gemini/` tree is kept in place for backward compatibility, but `.claude/` is now the source of truth when working through Claude.
+
+### Slash commands (`.claude/commands/*.md`)
+
+Twelve commands are installed, preserving their original dotted names so existing muscle memory still works:
+
+**Speckit workflow** (ported from the GitHub `spec-kit` Gemini templates):
+- `/speckit.constitution` — Create or update the project constitution in `.specify/memory/constitution.md`.
+- `/speckit.specify` — Turn a natural-language feature description into `specs/NNN-feature/spec.md` (creates the feature branch via `.specify/scripts/bash/create-new-feature.sh`).
+- `/speckit.clarify` — Ask up to 5 targeted questions and encode the answers back into the spec.
+- `/speckit.plan` — Generate design artifacts (plan, data-model, research, quickstart) from the spec.
+- `/speckit.tasks` — Produce a dependency-ordered `tasks.md`.
+- `/speckit.implement` — Execute the tasks against the plan.
+- `/speckit.analyze` — Non-destructive cross-artifact consistency/quality audit of spec + plan + tasks.
+- `/speckit.checklist` — Generate a tailored requirement-quality checklist for the active feature.
+- `/speckit.taskstoissues` — Convert the generated tasks into GitHub Issues on the active remote.
+- `/speckit.research [ticker_a] [ticker_b]` — Create `specs/{branch}/research-A-B.md` using the `research-pair` template.
+
+**Project-specific commands:**
+- `/dev.audit` — Runs `scripts/cli_audit.py` and explains architectural improvements against the Senior Developer guidelines.
+- `/invest.analyze [ticker_a] [ticker_b]` — Runs `scripts/cli_analyze.py` and evaluates the pair against the Senior Investor guidelines (cointegration, correlation, liquidity).
+
+Argument placeholders in every command were rewritten to Claude's conventions: `{{args}}` → `$ARGUMENTS`, `{{arg1}}` → `$1`, `{{arg2}}` → `$2`.
+
+### Skills (`.claude/skills/`)
+
+- **`financial-investor`** — Senior Quantitative Investor persona for new-pair research, risk audits, and alpha identification. Enforces the 5%-per-pair risk cap, >0.85 correlation requirement, and SEC-filing scrutiny (`src/services/sec_service.py`).
+- **`senior-developer`** — Elite Software Engineer persona enforcing strict typing, async-first I/O (`asyncio` + `FastMCP`), `tenacity` retries, `pydantic` input validation, and `src/services/` singleton pattern.
+
+Claude auto-discovers skills by name — mention a relevant trigger in the prompt (e.g. "audit this new pair") and the skill can be invoked explicitly with the Skill tool.
+
+### MCP server (`.mcp.json`)
+
+The project-level `.mcp.json` exposes the local `src/mcp_server.py` (FastMCP/SSE telemetry) to Claude Code. It is launched via `uv run --with fastmcp fastmcp run src/mcp_server.py` from the project root, matching the original `.gemini/settings.json` wiring but with a portable relative path.
+
+### Speckit framework
+
+The agent-agnostic `.specify/` directory (templates, scripts, `extensions.yml`, `memory/constitution.md`) is used verbatim by both the Speckit slash commands and any ad-hoc prompts — no migration needed.
