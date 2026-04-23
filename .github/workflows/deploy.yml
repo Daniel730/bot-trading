@@ -17,10 +17,13 @@ jobs:
         run: ln -sf /home/danrasp3/.env.trading .env
 
       - name: Stop running services
-        run: docker compose -f docker-compose.backend.yml down || true
+        run: docker compose down || true
 
       - name: Build and start services
-        run: docker compose -f docker-compose.backend.yml up -d --build
+        run: docker compose up -d --build --parallel
+
+      - name: Cleanup unused images
+        run: docker image prune -f
 
       - name: Verify deployment
-        run: docker compose -f docker-compose.backend.yml ps
+        run: docker compose ps

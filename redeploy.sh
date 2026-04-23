@@ -43,29 +43,20 @@ update_hash() {
 # Redeploy Backend
 redeploy_backend() {
     echo "--- Redeploying Backend ---"
-    if needs_package_update "$BACKEND_DEPS"; then
-        echo "Detected changes in $BACKEND_DEPS. Rebuilding backend with package updates..."
-        docker-compose -f "$BACKEND_COMPOSE" build --no-cache bot mcp-server
-        update_hash "$BACKEND_DEPS"
-    else
-        echo "No package changes detected for backend."
-    fi
+    # O8: Removed --no-cache. Docker handles layer caching natively; 
+    # if requirements.txt hasn't changed, it will skip the heavy pip install stage.
+    docker-compose -f "$BACKEND_COMPOSE" build bot mcp-server sec-worker
     docker-compose -f "$BACKEND_COMPOSE" up -d
 }
 
 # Redeploy Frontend
 redeploy_frontend() {
     echo "--- Redeploying Frontend ---"
-    if needs_package_update "$FRONTEND_DEPS"; then
-        echo "Detected changes in $FRONTEND_DEPS. Rebuilding frontend..."
-        docker-compose -f "$FRONTEND_COMPOSE" build --no-cache || {
-            echo "Build failed! Tip: If you see IPv6 network errors (dial tcp [2606...]), try disabling IPv6 for Docker or ensure your DNS is working correctly."
-            return 1
-        }
-        update_hash "$FRONTEND_DEPS"
-    else
-        echo "No package changes detected for frontend."
-    fi
+    # O8: Removed --no-cache to speed up frontend rebuilds.
+    docker-compose -f "$FRONTEND_COMPOSE" build || {
+        echo "Build failed! Tip: If you see IPv6 network errors (dial tcp [2606...]), try disabling IPv6 for Docker or ensure your DNS is working correctly."
+        return 1
+    }
     docker-compose -f "$FRONTEND_COMPOSE" up -d
 }
 
@@ -105,7 +96,8 @@ case "$1" in
                 # Check if Java engine changed — rebuild execution-engine image specifically
                 if [ "$PREV_JAVA_HASH" != "$JAVA_HASH" ]; then
                     echo "Java execution-engine change detected. Rebuilding..."
-                    docker-compose -f "$BACKEND_COMPOSE" build --no-cache execution-engine
+                    # O8: Removed --no-cache. 
+                    docker-compose -f "$BACKEND_COMPOSE" build execution-engine
                     docker-compose -f "$BACKEND_COMPOSE" up -d execution-engine
                     PREV_JAVA_HASH="$JAVA_HASH"
                 fi

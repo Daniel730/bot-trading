@@ -1,7 +1,15 @@
 # Stage 1: Build
 FROM gradle:8.7-jdk21 AS builder
 WORKDIR /app
+
+# O8: Optimization - Copy only dependency files first to cache them
+COPY build.gradle.kts settings.gradle.kts ./
+# Download dependencies (this will be cached unless build files change)
+RUN gradle dependencies --no-daemon || true
+
+# Now copy the rest of the code
 COPY . .
+
 RUN gradle generateProto --no-daemon; \
     find /home/gradle/.gradle -name "*.exe" -exec chmod +x {} \; && \
     gradle shadowJar --no-daemon
