@@ -40,16 +40,17 @@ class RedisService:
         """Publishes a message to a Redis channel."""
         await self.client.publish(channel, json.dumps(message))
 
-    async def save_kalman_state(self, ticker_pair: str, x: list, P: list, z_score: float):
+    async def save_kalman_state(self, ticker_pair: str, x: list, P: list, z_score: float, innovation_variance: float = 0.0):
         """
         Saves the current Kalman filter state (vector x and matrix P) to a Redis Hash.
-        Also stores the z_score for monitoring.
+        Also stores the z_score and innovation_variance for monitoring and warm-start restoration.
         """
         key = f"kalman:{ticker_pair}"
         state = {
             "x": json.dumps(x),
             "P": json.dumps(P),
-            "z_score": str(z_score)
+            "z_score": str(z_score),
+            "innovation_variance": str(innovation_variance)
         }
         await self.client.hset(key, mapping=state)
 
@@ -59,11 +60,12 @@ class RedisService:
         state = await self.client.hgetall(key)
         if not state:
             return None
-        
+
         return {
             "x": json.loads(state["x"]),
             "P": json.loads(state["P"]),
-            "z_score": float(state["z_score"])
+            "z_score": float(state["z_score"]),
+            "innovation_variance": float(state.get("innovation_variance", 0.0))
         }
 
     async def check_rate_limit(self, api_name: str, limit: int, window: int = 3600) -> bool:

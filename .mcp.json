@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "mcp_server": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--with",
+        "fastmcp",
+        "fastmcp",
+        "run",
+        "src/mcp_server.py"
+      ]
+    }
+  }
+}

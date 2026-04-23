@@ -83,37 +83,47 @@ case "$1" in
         ;;
     watch)
         echo "Starting auto-redeploy watcher..."
-        echo "Watching src/, scripts/, frontend/src/ for changes..."
-        
-        # Initial hashes
-        PREV_BACKEND_HASH=$(find src/ scripts/ -type f -exec md5sum {} + | md5sum)
+        echo "Watching src/, scripts/, frontend/src/, execution-engine/src/, execution-engine/build.gradle.kts for changes..."
+
+        # Initial hashes — O8 fix: include Java source so engine changes trigger a rebuild
+        PREV_BACKEND_HASH=$(find src/ scripts/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+        PREV_JAVA_HASH=$(find execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
         PREV_FRONTEND_HASH=$(find frontend/src/ -type f -exec md5sum {} + | md5sum)
-        SRC_HASH=$(find src/ scripts/ frontend/src/ -type f -exec md5sum {} + | md5sum)
-        
+        SRC_HASH=$(find src/ scripts/ frontend/src/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+
         while true; do
             sleep 5
-            CURRENT_SRC_HASH=$(find src/ scripts/ frontend/src/ -type f -exec md5sum {} + | md5sum)
-            
+            CURRENT_SRC_HASH=$(find src/ scripts/ frontend/src/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+
             if [ "$SRC_HASH" != "$CURRENT_SRC_HASH" ]; then
                 echo "Change detected! Analyzing..."
-                
-                BACKEND_HASH=$(find src/ scripts/ -type f -exec md5sum {} + | md5sum)
+
+                BACKEND_HASH=$(find src/ scripts/ execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
+                JAVA_HASH=$(find execution-engine/src/ execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
                 FRONTEND_HASH=$(find frontend/src/ -type f -exec md5sum {} + | md5sum)
-                
-                # Check if backend changed
+
+                # Check if Java engine changed — rebuild execution-engine image specifically
+                if [ "$PREV_JAVA_HASH" != "$JAVA_HASH" ]; then
+                    echo "Java execution-engine change detected. Rebuilding..."
+                    docker-compose -f "$BACKEND_COMPOSE" build --no-cache execution-engine
+                    docker-compose -f "$BACKEND_COMPOSE" up -d execution-engine
+                    PREV_JAVA_HASH="$JAVA_HASH"
+                fi
+
+                # Check if Python backend changed
                 if [ "$PREV_BACKEND_HASH" != "$BACKEND_HASH" ]; then
                     echo "Backend change detected."
                     redeploy_backend
                     PREV_BACKEND_HASH="$BACKEND_HASH"
                 fi
-                
+
                 # Check if frontend changed
                 if [ "$PREV_FRONTEND_HASH" != "$FRONTEND_HASH" ]; then
                     echo "Frontend change detected."
                     redeploy_frontend
                     PREV_FRONTEND_HASH="$FRONTEND_HASH"
                 fi
-                
+
                 SRC_HASH="$CURRENT_SRC_HASH"
             fi
         done
