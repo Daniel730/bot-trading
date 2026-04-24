@@ -56,10 +56,9 @@ services:
         condition: service_healthy
 
   mcp-server:
+    # Shares the trading-bot-base image built by the `bot` service above.
+    # No `build:` block here so Compose doesn't redundantly re-run the build.
     image: trading-bot-base:latest
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
     container_name: mcp-server
     command: python src/mcp_server.py
     ports:
@@ -103,10 +102,8 @@ services:
       start_period: 30s
 
   sec-worker:
+    # Shares the trading-bot-base image built by the `bot` service above.
     image: trading-bot-base:latest
-    build:
-      context: ..
-      dockerfile: infra/Dockerfile
     container_name: sec-fundamental-worker
     command: python src/daemons/sec_fundamental_worker.py
     env_file:
