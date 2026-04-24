@@ -1,18 +1,23 @@
+# syntax=docker/dockerfile:1.6
 # Stage 1: Builder
 FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
-# Install build-time dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libpq-dev \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Install build-time dependencies. Use BuildKit apt caches so packages don't
+# re-download on every rebuild.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        libpq-dev \
+        curl
 
-# Install Python dependencies into a virtualenv or just the user site to easily copy
+# Install Python dependencies with a pip cache mount so wheels (numpy, pandas,
+# scipy, grpcio, etc.) aren't recompiled every time unrelated files change.
 COPY requirements.txt .
-RUN pip install --user --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user -r requirements.txt
 
 # Copy proto and generate gRPC stubs
 COPY execution-engine/src/main/proto/ /app/proto/
@@ -37,23 +42,28 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
 ENV PATH="/root/.local/bin:${PATH}"
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libpq-dev \
-    curl \
-    gnupg \
+# Install runtime dependencies, Node.js 20, and Gemini CLI.
+# Placed BEFORE any application code COPYs so this expensive layer stays cached
+# across Python code changes. apt caches are BuildKit-mounted.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    --mount=type=cache,target=/root/.npm \
+    apt-get update && apt-get install -y --no-install-recommends \
+        libpq-dev \
+        curl \
+        gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && npm install -g @google/gemini-cli \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends nodejs \
+    && npm install -g @google/gemini-cli
 
-# Copy installed packages from builder
+# Copy installed Python packages from builder
 COPY --from=builder /root/.local /root/.local
 
-# Copy generated stubs
+# Copy generated gRPC stubs
 COPY --from=builder /app/src/generated /app/src/generated
 
-# Copy the rest of the application code
+# Copy the rest of the application code (this is the layer that invalidates
+# most often; everything above is kept stable).
 COPY src/ /app/src/
 COPY scripts/ /app/scripts/
 COPY legacy/dashboard/ /app/dashboard/

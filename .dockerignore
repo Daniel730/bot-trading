@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -5,25 +6,53 @@ __pycache__/
 venv/
 ENV/
 env/
+*.egg-info/
+.pytest_cache/
+coverage/
+
+# Env files (keep .env.template only)
 .env
 .env.local
 .env*
 !.env.template
+
+# VCS / editors
 .git/
 .gitignore
-.pytest_cache/
 .vscode/
 .idea/
-*.log
-*.log*
-*.sqlite
+
+# Build / cache artifacts
 dist/
 build/
 node_modules/
 frontend/node_modules/
 frontend/dist/
-*.egg-info/
+
+# Sibling projects not needed by the Python bot image
+# (infra/Dockerfile uses the repo root as build context, and only needs src/,
+# scripts/, legacy/dashboard/, requirements.txt, and the proto file.)
+frontend/
+execution-engine/build/
+execution-engine/.gradle/
+!execution-engine/src/main/proto/
+
+# Runtime data / logs / docs — never needed inside images
+data/
+logs/
+docs/
+specs/
+.specify/
+.redeploy_hashes/
+.gemini/
+tests/
+
+# Logs / DBs
+*.log
+*.log*
+*.sqlite
+
+# Docker itself
 docker-compose.yml
 Dockerfile*
 .dockerignore
-coverage/

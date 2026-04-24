@@ -1,17 +1,19 @@
+# syntax=docker/dockerfile:1.6
 # Stage 1: Build
 FROM gradle:8.7-jdk21 AS builder
 WORKDIR /app
 
-# O8: Optimization - Copy only dependency files first to cache them
-COPY build.gradle.kts settings.gradle.kts ./
-# Download dependencies (this will be cached unless build files change)
-RUN gradle dependencies --no-daemon || true
-
-# Now copy the rest of the code
 COPY . .
 
-RUN gradle generateProto --no-daemon; \
-    find /home/gradle/.gradle -name "*.exe" -exec chmod +x {} \; && \
+# Single layer, BuildKit Gradle cache mount keeps ~/.gradle (downloaded deps,
+# wrapper, compilation cache, protoc binary) warm across rebuilds.
+# `shadowJar` transitively runs generateProto + compileJava, so we don't need
+# to invoke gradle three times. The chmod fixes exec bits on protoc binaries
+# that can occasionally come out non-executable on some filesystems.
+RUN --mount=type=cache,target=/home/gradle/.gradle,sharing=locked \
+    set -eux; \
+    gradle generateProto --no-daemon; \
+    find /home/gradle/.gradle -name "*.exe" -exec chmod +x {} + 2>/dev/null || true; \
     gradle shadowJar --no-daemon
 
 # Stage 2: Runtime

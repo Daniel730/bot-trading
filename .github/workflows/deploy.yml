@@ -4,25 +4,82 @@ on:
   push:
     branches:
       - master
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'specs/**'
+      - '.gemini/**'
+      - '.vscode/**'
+      - '.specify/**'
+
+# Cancel any in-flight deploy when a newer commit lands. Without this, a
+# second push during a 90-min build queues behind the first.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Enable BuildKit + compose CLI build so `--mount=type=cache` directives
+  # and `# syntax=docker/dockerfile:1.6` actually work.
+  DOCKER_BUILDKIT: "1"
+  COMPOSE_DOCKER_CLI_BUILD: "1"
 
 jobs:
   deploy:
-    runs-on: self-hosted   # Runs directly on your Raspberry Pi runner
+    runs-on: self-hosted   # Runs directly on the Raspberry Pi runner
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Figure out which parts of the repo changed so we only rebuild the
+      # images that actually need rebuilding. On a typical one-file Python
+      # edit this skips the gradle + npm builds entirely.
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            python:
+              - 'src/**'
+              - 'scripts/**'
+              - 'legacy/dashboard/**'
+              - 'requirements.txt'
+              - 'infra/Dockerfile'
+              - 'infra/entrypoint.sh'
+              - '.dockerignore'
+              - 'execution-engine/src/main/proto/**'
+            java:
+              - 'execution-engine/**'
+            frontend:
+              - 'frontend/**'
+
       - name: Link persistent .env
         run: ln -sf /home/danrasp3/.env.trading .env
 
-      - name: Stop running services
-        run: docker compose -f infra/docker-compose.yml down || true
+      # Build only the images whose sources changed. Using `compose build`
+      # keeps BuildKit cache mounts active and honours the Dockerfile syntax
+      # directive. No --no-cache so layer + mount caches are reused.
 
-      - name: Build and start services
-        run: docker compose -f infra/docker-compose.yml up -d --build
+      - name: Build python-based image (bot / mcp-server / sec-worker)
+        if: steps.changes.outputs.python == 'true'
+        run: docker compose -f infra/docker-compose.yml build bot
 
-      - name: Cleanup unused images
+      - name: Build execution-engine image
+        if: steps.changes.outputs.java == 'true'
+        run: docker compose -f infra/docker-compose.yml build execution-engine
+
+      - name: Build frontend image
+        if: steps.changes.outputs.frontend == 'true'
+        run: docker compose -f infra/docker-compose.yml build frontend
+
+      # `up -d` recreates only the containers whose image changed and leaves
+      # the rest running. No separate `down` step → no gratuitous downtime
+      # during the build.
+      - name: Apply / restart services
+        run: docker compose -f infra/docker-compose.yml up -d --remove-orphans
+
+      - name: Cleanup dangling images
         run: docker image prune -f
 
       - name: Verify deployment
