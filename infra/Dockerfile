@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 # Stage 1: Builder
-FROM ghcr.io/astral-sh/uv:python3.11-trixie AS builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
