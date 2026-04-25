@@ -19,7 +19,9 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_OWNER: ${{ github.repository_owner }}
+  # GHCR requires the owner segment to be lowercase. github.repository_owner
+  # preserves the original case (e.g. "Daniel730"), so each job lowercases it
+  # into IMAGE_OWNER via a setup step before any docker command runs.
   # Stable tag the Pi pulls. Also tagged with the commit SHA for traceability.
   IMAGE_TAG: latest
 
@@ -45,6 +47,9 @@ jobs:
         with:
           # paths-filter needs history to diff against the previous commit.
           fetch-depth: 0
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
       - name: Detect changed paths
         uses: dorny/paths-filter@v3
@@ -147,6 +152,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
       - name: Link persistent .env
         run: ln -sf /home/danrasp3/.env.trading .env
