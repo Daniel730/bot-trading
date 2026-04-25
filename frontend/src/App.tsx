@@ -388,9 +388,9 @@ const App: React.FC = () => {
 
         {/* ── CONTENT ─────────────────────────────────────────────────── */}
         <div className="content">
-          <div className="split">
+          <div className="content-grid">
 
-            {/* Active Signals */}
+            {/* Top-left: Active Signals */}
             <div className="panel">
               <div className="panel-header">
                 <Zap size={12} />
@@ -435,17 +435,45 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Agent Reasoning Log */}
-            <div className="panel">
+            {/* Top-right: Open Positions */}
+            <PositionsPanel token={token} />
+
+            {/* Middle (full width): Trading Pairs */}
+            <div className="grid-span-2">
+              <PairsPanel token={token} />
+            </div>
+
+            {/* Bottom (full width): Agent Reasoning Log */}
+            <div className="panel grid-span-2">
               <div className="panel-header">
                 <Brain size={12} />
                 Agent Reasoning Log
-                <span className="panel-count">{thoughts.length}</span>
+                <span className="panel-count">{filteredThoughts.length}</span>
+                <div className="verdict-filter">
+                  <Filter size={11} />
+                  {VERDICT_FILTERS.map((v) => (
+                    <button
+                      key={v}
+                      className={`verdict-chip ${verdictFilter === v ? 'active' : ''}`}
+                      style={
+                        verdictFilter === v && v !== 'ALL'
+                          ? {
+                              color: getVerdictColor(v),
+                              borderColor: getVerdictColor(v),
+                            }
+                          : undefined
+                      }
+                      onClick={() => setVerdictFilter(v)}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="panel-body">
                 <AnimatePresence initial={false}>
-                  {thoughts.length > 0 ? (
-                    [...thoughts]
+                  {filteredThoughts.length > 0 ? (
+                    [...filteredThoughts]
                       .reverse()
                       .slice(0, 60)
                       .map((t, idx) => (
@@ -485,7 +513,11 @@ const App: React.FC = () => {
                   ) : (
                     <div className="empty-state">
                       <Brain size={28} style={{ opacity: 0.3 }} />
-                      <span>No agent activity yet</span>
+                      <span>
+                        {thoughts.length > 0
+                          ? `No thoughts match filter "${verdictFilter}"`
+                          : 'No agent activity yet'}
+                      </span>
                     </div>
                   )}
                 </AnimatePresence>
