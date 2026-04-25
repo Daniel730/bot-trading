@@ -5,12 +5,12 @@ on:
     branches:
       - master
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'specs/**'
-      - '.gemini/**'
-      - '.vscode/**'
-      - '.specify/**'
+      - "**.md"
+      - "docs/**"
+      - "specs/**"
+      - ".gemini/**"
+      - ".vscode/**"
+      - ".specify/**"
 
 # Cancel any in-flight deploy when a newer commit lands.
 concurrency:
@@ -147,7 +147,7 @@ jobs:
   # -----------------------------------------------------------------------
   deploy:
     needs: build
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout code
