@@ -11,6 +11,15 @@ on:
       - ".gemini/**"
       - ".vscode/**"
       - ".specify/**"
+  # Manual trigger. Use `force_all: true` once after switching to the registry-
+  # based deploy so every image is pushed at least once. After that, normal
+  # pushes run paths-filter and only rebuild what actually changed.
+  workflow_dispatch:
+    inputs:
+      force_all:
+        description: "Rebuild & push all images (bootstrap / disaster-recover)"
+        type: boolean
+        default: false
 
 # Cancel any in-flight deploy when a newer commit lands.
 concurrency:
@@ -38,9 +47,9 @@ jobs:
       contents: read
       packages: write
     outputs:
-      python_changed: ${{ steps.changes.outputs.python }}
-      java_changed: ${{ steps.changes.outputs.java }}
-      frontend_changed: ${{ steps.changes.outputs.frontend }}
+      python_changed: ${{ steps.flags.outputs.python }}
+      java_changed: ${{ steps.flags.outputs.java }}
+      frontend_changed: ${{ steps.flags.outputs.frontend }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -70,27 +79,47 @@ jobs:
             frontend:
               - 'frontend/**'
 
+      # Effective build flags = paths-filter result OR the manual force_all input.
+      # The deploy job reads these, so a force_all run rebuilds AND re-pulls
+      # every service even if nothing in source actually changed.
+      - name: Compute build flags
+        id: flags
+        run: |
+          force='${{ inputs.force_all }}'
+          for f in python java frontend; do
+            case "$f" in
+              python)   changed='${{ steps.changes.outputs.python }}'   ;;
+              java)     changed='${{ steps.changes.outputs.java }}'     ;;
+              frontend) changed='${{ steps.changes.outputs.frontend }}' ;;
+            esac
+            if [ "$force" = "true" ] || [ "$changed" = "true" ]; then
+              echo "$f=true"  >> "$GITHUB_OUTPUT"
+            else
+              echo "$f=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
       - name: Set up QEMU (arm64 emulation)
         if: |
-          steps.changes.outputs.python == 'true' ||
-          steps.changes.outputs.java == 'true' ||
-          steps.changes.outputs.frontend == 'true'
+          steps.flags.outputs.python == 'true' ||
+          steps.flags.outputs.java == 'true' ||
+          steps.flags.outputs.frontend == 'true'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
       - name: Set up Docker Buildx
         if: |
-          steps.changes.outputs.python == 'true' ||
-          steps.changes.outputs.java == 'true' ||
-          steps.changes.outputs.frontend == 'true'
+          steps.flags.outputs.python == 'true' ||
+          steps.flags.outputs.java == 'true' ||
+          steps.flags.outputs.frontend == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         if: |
-          steps.changes.outputs.python == 'true' ||
-          steps.changes.outputs.java == 'true' ||
-          steps.changes.outputs.frontend == 'true'
+          steps.flags.outputs.python == 'true' ||
+          steps.flags.outputs.java == 'true' ||
+          steps.flags.outputs.frontend == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -99,7 +128,7 @@ jobs:
 
       # ---- Python image (bot / mcp-server / sec-worker share this) ----
       - name: Build & push python image
-        if: steps.changes.outputs.python == 'true'
+        if: steps.flags.outputs.python == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -113,7 +142,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache,mode=max
 
       - name: Build & push execution-engine image
-        if: steps.changes.outputs.java == 'true'
+        if: steps.flags.outputs.java == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./execution-engine
@@ -127,7 +156,7 @@ jobs:
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache,mode=max
 
       - name: Build & push frontend image
-        if: steps.changes.outputs.frontend == 'true'
+        if: steps.flags.outputs.frontend == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -147,7 +176,7 @@ jobs:
   # -----------------------------------------------------------------------
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 15
     steps:
       - name: Checkout code
@@ -167,8 +196,26 @@ jobs:
       - name: Reset stale BuildKit state
         run: docker builder prune -af || true
 
-      - name: Pull updated images
-        run: docker compose -f infra/docker-compose.yml pull
+      # Always pull the public base images (redis, postgres). They're cheap,
+      # and `up -d` would otherwise pull them on first run anyway.
+      - name: Pull base images (redis, postgres)
+        run: docker compose -f infra/docker-compose.yml pull redis postgres
+
+      # Pull each app image ONLY if the build job rebuilt it. Skipping a pull
+      # leaves the previous local image in place, which `up -d` will reuse.
+      # This is what keeps incremental deploys from failing on `manifest unknown`
+      # for services whose source didn't change this run.
+      - name: Pull python image (bot, mcp-server, sec-worker)
+        if: needs.build.outputs.python_changed == 'true'
+        run: docker compose -f infra/docker-compose.yml pull bot mcp-server sec-worker
+
+      - name: Pull execution-engine image
+        if: needs.build.outputs.java_changed == 'true'
+        run: docker compose -f infra/docker-compose.yml pull execution-engine
+
+      - name: Pull frontend image
+        if: needs.build.outputs.frontend_changed == 'true'
+        run: docker compose -f infra/docker-compose.yml pull frontend
 
       - name: Apply / restart services
         run: docker compose -f infra/docker-compose.yml up -d --remove-orphans
