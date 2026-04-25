@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Activity,
@@ -14,10 +14,14 @@ import {
   Brain,
   AlertTriangle,
   CheckCircle,
+  Clock,
+  Filter,
 } from 'lucide-react';
 import './App.css';
 import { useDashboardStream, sendTerminalCommand } from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
+import PairsPanel from './components/PairsPanel';
+import PositionsPanel from './components/PositionsPanel';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -79,6 +83,31 @@ function getStageDotColor(stage: string | undefined): string {
   return 'green';
 }
 
+function formatUptime(startIso: string | undefined): string {
+  if (!startIso) return '—';
+  const start = new Date(startIso).getTime();
+  if (Number.isNaN(start)) return '—';
+  const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function getModeBadgeClass(mode: string | undefined): string {
+  switch (mode) {
+    case 'LIVE':  return 'mode-badge mode-live';
+    case 'PAPER': return 'mode-badge mode-paper';
+    case 'DEV':   return 'mode-badge mode-dev';
+    default:      return 'mode-badge';
+  }
+}
+
+type VerdictFilter = 'ALL' | 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'VETO';
+const VERDICT_FILTERS: VerdictFilter[] = ['ALL', 'BULLISH', 'BEARISH', 'NEUTRAL', 'VETO'];
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 const App: React.FC = () => {
@@ -90,6 +119,8 @@ const App: React.FC = () => {
 
   const [terminalOpen, setTerminalOpen] = useState(false);
   const [terminalInput, setTerminalInput] = useState('');
+  const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('ALL');
+  const [, setNowTick] = useState(0); // forces uptime re-render every 30s
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll terminal
@@ -98,6 +129,17 @@ const App: React.FC = () => {
       terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [data?.terminal_messages, terminalOpen]);
+
+  // Re-render uptime every 30s
+  useEffect(() => {
+    const id = setInterval(() => setNowTick((n) => n + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const filteredThoughts = useMemo(() => {
+    if (verdictFilter === 'ALL') return thoughts;
+    return thoughts.filter((t) => t.verdict === verdictFilter);
+  }, [thoughts, verdictFilter]);
 
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -129,6 +171,9 @@ const App: React.FC = () => {
   const regimeConf      = data?.market_regime?.confidence ?? 0;
   const regimeStyle     = getRegimeStyle(regime);
   const accuracyColor   = accuracy > 0.6 ? 'var(--green)' : accuracy < 0.4 ? 'var(--red)' : 'var(--yellow)';
+  const mode            = data?.runtime?.mode;
+  const botStartTime    = data?.runtime?.bot_start_time ?? data?.bot_start_time;
+  const uptime          = formatUptime(botStartTime);
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -148,19 +193,32 @@ const App: React.FC = () => {
             <span className={`pulse-dot ${getStageDotColor(stage)}`} />
             {stage.toUpperCase()}
           </div>
+
+          {mode && (
+            <span
+              className={getModeBadgeClass(mode)}
+              title={
+                data?.runtime?.live_capital_danger
+                  ? 'LIVE CAPITAL DANGER is enabled'
+                  : `${mode} mode`
+              }
+            >
+              {mode}
+            </span>
+          )}
         </div>
 
         <div className="header-right">
-          <div className="status-pill">
-            <span className={`pulse-dot ${isConnected ? 'green' : 'yellow'}`} />
-            {isConnected ? 'Live' : 'Reconnecting'}
+          <div className="status-pill" title={botStartTime ?? ''}>
+            <Clock size={11} />
+            {uptime}
           </div>
 
           <div className="divider" />
 
           <div className="status-pill">
-            <span className="pulse-dot green" />
-            Dashboard online
+            <span className={`pulse-dot ${isConnected ? 'green' : 'yellow'}`} />
+            {isConnected ? 'Live' : 'Reconnecting'}
           </div>
 
           <div className="divider" />
@@ -330,9 +388,9 @@ const App: React.FC = () => {
 
         {/* ── CONTENT ─────────────────────────────────────────────────── */}
         <div className="content">
-          <div className="split">
+          <div className="content-grid">
 
-            {/* Active Signals */}
+            {/* Top-left: Active Signals */}
             <div className="panel">
               <div className="panel-header">
                 <Zap size={12} />
@@ -377,17 +435,45 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Agent Reasoning Log */}
-            <div className="panel">
+            {/* Top-right: Open Positions */}
+            <PositionsPanel token={token} />
+
+            {/* Middle (full width): Trading Pairs */}
+            <div className="grid-span-2">
+              <PairsPanel token={token} />
+            </div>
+
+            {/* Bottom (full width): Agent Reasoning Log */}
+            <div className="panel grid-span-2">
               <div className="panel-header">
                 <Brain size={12} />
                 Agent Reasoning Log
-                <span className="panel-count">{thoughts.length}</span>
+                <span className="panel-count">{filteredThoughts.length}</span>
+                <div className="verdict-filter">
+                  <Filter size={11} />
+                  {VERDICT_FILTERS.map((v) => (
+                    <button
+                      key={v}
+                      className={`verdict-chip ${verdictFilter === v ? 'active' : ''}`}
+                      style={
+                        verdictFilter === v && v !== 'ALL'
+                          ? {
+                              color: getVerdictColor(v),
+                              borderColor: getVerdictColor(v),
+                            }
+                          : undefined
+                      }
+                      onClick={() => setVerdictFilter(v)}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="panel-body">
                 <AnimatePresence initial={false}>
-                  {thoughts.length > 0 ? (
-                    [...thoughts]
+                  {filteredThoughts.length > 0 ? (
+                    [...filteredThoughts]
                       .reverse()
                       .slice(0, 60)
                       .map((t, idx) => (
@@ -427,7 +513,11 @@ const App: React.FC = () => {
                   ) : (
                     <div className="empty-state">
                       <Brain size={28} style={{ opacity: 0.3 }} />
-                      <span>No agent activity yet</span>
+                      <span>
+                        {thoughts.length > 0
+                          ? `No thoughts match filter "${verdictFilter}"`
+                          : 'No agent activity yet'}
+                      </span>
                     </div>
                   )}
                 </AnimatePresence>

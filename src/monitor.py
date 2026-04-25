@@ -203,6 +203,34 @@ class ArbitrageMonitor:
             except Exception as e:
                 logger.error(f"Error initializing {ticker_a}/{ticker_b}: {e}")
 
+    async def reload_pairs(self):
+        """Hot-reload the active pair universe from the (possibly updated)
+        settings. Re-uses the same logic as initialize_pairs but is safe to call
+        from a running scan loop: we swap self.active_pairs only after the new
+        list is built, then clear filters that no longer correspond to a live
+        pair so memory doesn't leak.
+        """
+        async with self._signals_lock:
+            old_ids = {p['id'] for p in self.active_pairs}
+            # Reset and rebuild via the existing initializer.
+            self.active_pairs = []
+            self.last_cointegration_check = {}
+            await self.initialize_pairs()
+            new_ids = {p['id'] for p in self.active_pairs}
+
+            # Forget Kalman filters for pairs that were removed so memory
+            # doesn't accumulate across reloads.
+            removed = old_ids - new_ids
+            if removed:
+                from src.services.arbitrage_service import arbitrage_service
+                for pid in removed:
+                    arbitrage_service.filters.pop(pid, None)
+                logger.info(f"reload_pairs: dropped {len(removed)} pairs ({sorted(removed)})")
+            logger.info(
+                f"reload_pairs complete: {len(new_ids)} active pairs "
+                f"(+{len(new_ids - old_ids)} new, -{len(removed)} removed)"
+            )
+
     async def process_pair(self, pair: dict, latest_prices: dict) -> dict:
         """Processes a single pair for signals and validation."""
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
@@ -564,6 +592,9 @@ class ArbitrageMonitor:
             persistence_service.init_db(),
             self.initialize_pairs()
         )
+        # Make this monitor instance discoverable by dashboard endpoints
+        # (so /api/pairs can hot-reload, etc).
+        dashboard_service.attach_monitor(self)
         await dashboard_service.start()
         
         # Sprint J: Start Telegram Listener (Async)
