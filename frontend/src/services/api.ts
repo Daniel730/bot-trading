@@ -41,9 +41,20 @@ export interface ThoughtTelemetry {
   verdict: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'VETO';
 }
 
+export interface RuntimeInfo {
+  mode: 'LIVE' | 'PAPER' | 'DEV';
+  paper_trading: boolean;
+  dev_mode: boolean;
+  live_capital_danger: boolean;
+  region: string;
+  bot_start_time: string;
+}
+
 export interface DashboardData {
   stage: string;
   details?: string;
+  bot_start_time?: string;
+  runtime?: RuntimeInfo;
   metrics?: PortfolioMetrics;
   market_regime?: {
     regime: string;
@@ -54,6 +65,49 @@ export interface DashboardData {
   active_signals?: Signal[];
   terminal_messages?: TerminalMessage[];
   timestamp: string;
+}
+
+export interface PairInfo {
+  id: string;
+  ticker_a: string;
+  ticker_b: string;
+  hedge_ratio: number | null;
+  mean: number | null;
+  std: number | null;
+  is_cointegrated: boolean | null;
+  sector: string;
+  last_cointegration_check: string | null;
+  last_z_score: number | null;
+}
+
+export interface PairConfigEntry {
+  ticker_a: string;
+  ticker_b: string;
+}
+
+export interface PairsResponse {
+  active_pairs: PairInfo[];
+  configured_pairs: PairConfigEntry[];
+  crypto_test_pairs: PairConfigEntry[];
+  dev_mode: boolean;
+}
+
+export interface OpenPosition {
+  signal_id: string;
+  ticker_a: string;
+  ticker_b: string;
+  side_a: 'BUY' | 'SELL';
+  side_b: 'BUY' | 'SELL';
+  qty_a: number;
+  qty_b: number;
+  entry_a: number;
+  entry_b: number;
+  current_a: number | null;
+  current_b: number | null;
+  cost_basis: number;
+  current_value: number;
+  pnl: number;
+  opened_at: string | null;
 }
 
 const API_BASE = (window.location.port === '5173' || window.location.port === '3000')
@@ -108,5 +162,44 @@ export const sendTerminalCommand = async (command: string, token: string | null,
     throw new Error(errorData.detail || 'Failed to send command');
   }
 
+  return response.json();
+};
+
+export const fetchPairs = async (token: string | null): Promise<PairsResponse> => {
+  const url = new URL('/api/pairs', API_BASE);
+  if (token) url.searchParams.set('token', token);
+  const response = await fetch(url.toString());
+  if (!response.ok) throw new Error(`Failed to fetch pairs (${response.status})`);
+  return response.json();
+};
+
+export const updatePairs = async (
+  token: string | null,
+  pairs: PairConfigEntry[],
+  options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[] } = {},
+): Promise<{ status: string; saved_pairs: number; reloaded: boolean; reload_error: string | null }> => {
+  const url = new URL('/api/pairs', API_BASE);
+  if (token) url.searchParams.set('token', token);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pairs,
+      crypto_pairs: options.cryptoPairs,
+      apply_now: options.applyNow ?? true,
+    }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to update pairs (${response.status})`);
+  }
+  return response.json();
+};
+
+export const fetchOpenPositions = async (token: string | null): Promise<{ positions: OpenPosition[] }> => {
+  const url = new URL('/api/positions', API_BASE);
+  if (token) url.searchParams.set('token', token);
+  const response = await fetch(url.toString());
+  if (!response.ok) throw new Error(`Failed to fetch positions (${response.status})`);
   return response.json();
 };
