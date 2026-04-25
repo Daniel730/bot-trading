@@ -1,9 +1,47 @@
+import json
+import os
+from pathlib import Path
 from typing import Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
 load_dotenv()
+
+# Path to user-editable pairs override file (created/edited by the dashboard).
+PAIRS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "pairs.json"
+
+
+def _load_pairs_override() -> dict | None:
+    """Load runtime-editable pair overrides from data/pairs.json if present.
+
+    Schema:
+        {
+            "ARBITRAGE_PAIRS":   [{"ticker_a": "...", "ticker_b": "..."}],
+            "CRYPTO_TEST_PAIRS": [{"ticker_a": "...", "ticker_b": "..."}]
+        }
+    Either key is optional. Returns None if no file (or invalid file) exists.
+    """
+    try:
+        if not PAIRS_OVERRIDE_PATH.exists():
+            return None
+        with PAIRS_OVERRIDE_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def save_pairs_override(arbitrage_pairs: list, crypto_test_pairs: list | None = None) -> None:
+    """Persist a new pair universe to data/pairs.json. Creates dir if needed."""
+    PAIRS_OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload: dict = {"ARBITRAGE_PAIRS": arbitrage_pairs}
+    if crypto_test_pairs is not None:
+        payload["CRYPTO_TEST_PAIRS"] = crypto_test_pairs
+    with PAIRS_OVERRIDE_PATH.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -167,3 +205,13 @@ class Settings(BaseSettings):
         return self.TRADING_212_MODE.lower() == "demo"
 
 settings = Settings()
+
+# Apply runtime overrides for the trading-pair universe (dashboard-editable).
+# This runs once at process start; the dashboard hot-reload endpoint mutates
+# settings.ARBITRAGE_PAIRS in place when the user saves changes from the UI.
+_override = _load_pairs_override()
+if _override:
+    if isinstance(_override.get("ARBITRAGE_PAIRS"), list):
+        settings.ARBITRAGE_PAIRS = _override["ARBITRAGE_PAIRS"]
+    if isinstance(_override.get("CRYPTO_TEST_PAIRS"), list):
+        settings.CRYPTO_TEST_PAIRS = _override["CRYPTO_TEST_PAIRS"]
