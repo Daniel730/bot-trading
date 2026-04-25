@@ -1,8 +1,6 @@
 services:
   frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-frontend:${IMAGE_TAG:-latest}
     container_name: trading-frontend
     ports:
       - "3000:80"
