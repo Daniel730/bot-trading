@@ -6,6 +6,7 @@ from datetime import datetime
 from src.config import settings
 from src.services.data_service import data_service
 from src.services.arbitrage_service import arbitrage_service
+from src.services.budget_service import budget_service
 from src.services.persistence_service import persistence_service, OrderSide, OrderStatus
 from src.services.redis_service import redis_service
 from src.agents.orchestrator import orchestrator
@@ -365,35 +366,64 @@ class ArbitrageMonitor:
         else:
             logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
 
-        is_crypto_pair = "-USD" in t_a or "-USD" in t_b
+        # Feature 037.B & BudgetService: Use isolated budget caps per venue
+        venue = self.brokerage.get_venue(t_a)
+        is_crypto_pair = venue == "WEB3"
+        venue_budget_cap = settings.WEB3_BUDGET_USD if venue == "WEB3" else settings.T212_BUDGET_USD
+        
         total_cash = None
+        pending_value = 0.0
+        budget_source = "unknown"
 
-        # Feature 037: for live crypto, prefer Web3 base-token balance for sizing.
+        # Feature 037.C: Keep venue budgeting logic consistent.
+        # - T212: free cash minus pending BUY commitments (sync → to_thread).
+        # - WEB3: wallet base-token balance converted to USD (async native).
+        # Both paths return a raw balance; budget_service.get_effective_cash()
+        # below applies the venue cap uniformly for both venues.
         if is_crypto_pair and not settings.PAPER_TRADING:
-            web3_service = getattr(self.brokerage, "web3", None)
-            probe = getattr(web3_service, "test_connection", None) if web3_service else None
-            if getattr(web3_service, "enabled", False) and callable(probe):
-                try:
-                    probe_result = probe()
-                    if asyncio.iscoroutine(probe_result):
-                        probe_result = await probe_result
-                    if isinstance(probe_result, dict) and probe_result.get("status") == "success":
-                        total_cash = float(probe_result.get("base_token_balance") or 0.0)
-                except Exception as e:
-                    logger.warning(f"Web3 balance probe failed for {t_a}/{t_b}: {e}")
-
-        # Bug H-02: Wrap sync brokerage calls in asyncio.to_thread
-        if total_cash is None:
+            try:
+                total_cash = await self.brokerage.get_web3_account_cash()
+                budget_source = "web3_wallet_usd"
+            except Exception as e:
+                logger.warning(f"WEB3 account cash fetch failed for {t_a}/{t_b}: {e}")
+                total_cash = None
+        else:
+            # Bug H-02: Wrap sync brokerage call in asyncio.to_thread
             total_cash = await asyncio.to_thread(self.brokerage.get_account_cash)
+            budget_source = "t212_free_cash"
+            if total_cash is not None:
+                try:
+                    pending_value = max(0.0, float(await self.brokerage.get_pending_orders_value()))
+                except Exception as e:
+                    logger.warning(f"T212 pending-orders budget read failed for {t_a}/{t_b}: {e}")
+
+        # If balance probes are unavailable, allow operator-defined cap-only mode.
         if total_cash is None:
-            total_cash = 2000.0  # Fallback
+            venue_budget_info = budget_service.get_venue_budget_info(venue)
+            total_cash = venue_budget_info["total"] if venue_budget_info["total"] > 0 else 0.0
+            budget_source = "venue_cap_only" if total_cash > 0 else "unavailable"
+
+        # Integrate BudgetService for tracking across sessions
+        actual_available = max(0.0, float(total_cash) - pending_value)
+        effective_cash = budget_service.get_effective_cash(venue, actual_available)
+        budget_info = budget_service.get_venue_budget_info(venue)
+
+        if effective_cash <= 0:
+            logger.warning(
+                "Venue budget exhausted/unavailable for %s (%s/%s). "
+                "source=%s total=%.2f pending=%.2f used=%.2f/%.2f. "
+                "Replenish budget or account balance.",
+                venue, t_a, t_b, budget_source, float(total_cash), pending_value, 
+                budget_info["used"], budget_info["total"]
+            )
+            return
 
         # Sprint B: Risk Service validation with Half-Kelly and Max 5% Port limit
         # Bug L-03: Pass per-pair allocation (5% max) instead of full portfolio
-        per_pair_alloc = total_cash * 0.05
+        per_pair_alloc = effective_cash * 0.05
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
-            total_portfolio_cash=total_cash,
+            total_portfolio_cash=effective_cash,
             amount_fiat=per_pair_alloc,
             win_prob=0.55,
             win_loss_ratio=1.0
@@ -403,8 +433,11 @@ class ArbitrageMonitor:
             logger.warning(f"Live execute rejected by RiskService: {risk_res.get('rejection_reason', 'Insufficient Kelly Fraction')}")
             return
 
-        target_cash = risk_res["final_amount"]
-        logger.info(f"RISK APPROVED SIZE: {target_cash:.2f} per leg for {t_a}/{t_b} (Kelly: {risk_res['kelly_fraction']:.4f})")
+        target_cash = min(float(risk_res["final_amount"]), effective_cash)
+        logger.info(
+            "RISK APPROVED SIZE: %.2f per leg for %s/%s (Kelly: %.4f, venue=%s, cash=%.2f, cap=%.2f)",
+            target_cash, t_a, t_b, risk_res["kelly_fraction"], venue, effective_cash, float(venue_budget_cap)
+        )
 
         size_a = round(target_cash / price_a, 6)
         size_b = round(target_cash / price_b, 6)
@@ -488,8 +521,10 @@ class ArbitrageMonitor:
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
         if status_b == OrderStatus.FAILED:
+            broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
             logger.critical(
                 f"ATOMIC FAILURE: Leg A ({exec_t_a}) succeeded but Leg B ({exec_t_b}) failed. "
+                f"Broker response: {broker_msg_b}. "
                 f"Placing emergency close on Leg A to prevent orphaned directional exposure."
             )
             close_side_a = "BUY" if side_a == "SELL" else "SELL"

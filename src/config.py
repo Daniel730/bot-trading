@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
     PAPER_TRADING: bool = True
+    T212_BUDGET_USD: float = Field(default=0.0, validation_alias="T212_BUDGET_USD")
+    WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 10.0
     SGOV_SWEEP_TICKER: str = "SGOV"
     MIN_SWEEP_THRESHOLD: float = 10.0
@@ -90,6 +92,11 @@ class Settings(BaseSettings):
     APPROVAL_THRESHOLD: float = 100.0
 
     MAX_FRICTION_PCT: float = 0.015
+    # WEB3 / DEX trades carry percentage-based gas + slippage instead of a
+    # fixed equity spread, so they need a wider friction tolerance.
+    # 3 % covers Uniswap pool fee (0.3%) + max configured slippage (1.5 %) +
+    # gas headroom on testnet. Raise toward 0.05 for high-gas mainnet use.
+    WEB3_MAX_FRICTION_PCT: float = Field(default=0.03, validation_alias="WEB3_MAX_FRICTION_PCT")
     MIN_TRADE_VALUE: float = 1.00
 
     EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
@@ -122,9 +129,22 @@ class Settings(BaseSettings):
             "ALGO": {"address": "", "decimals": 6},
             "LTC": {"address": "", "decimals": 8},
             "BCH": {"address": "", "decimals": 8},
+            "ETC": {"address": "", "decimals": 18},
             "XRP": {"address": "", "decimals": 6},
+            "XLM": {"address": "", "decimals": 7},
+            "HBAR": {"address": "", "decimals": 8},
+            "TRX": {"address": "", "decimals": 6},
+            "EOS": {"address": "", "decimals": 4},
             "LINK": {"address": "", "decimals": 18},
             "AAVE": {"address": "", "decimals": 18},
+            "CRV": {"address": "", "decimals": 18},
+            "INJ": {"address": "", "decimals": 18},
+            "FIL": {"address": "", "decimals": 18},
+            "TIA": {"address": "", "decimals": 6},
+            "DOGE": {"address": "", "decimals": 8},
+            "SHIB": {"address": "", "decimals": 18},
+            "WIF": {"address": "", "decimals": 6},
+            "BONK": {"address": "", "decimals": 5},
         },
         validation_alias="CRYPTO_TOKEN_MAPPING",
     )
