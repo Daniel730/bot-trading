@@ -140,9 +140,44 @@ class Settings(BaseSettings):
         {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'}
     ]
 
+    # Crypto pairs traded 24/7 — including weekends and outside US equity
+    # hours. The monitor loads these alongside ARBITRAGE_PAIRS in production
+    # mode; process_pair's `is_crypto` guard makes sure equity pairs pause
+    # off-hours while crypto pairs keep scanning.
     CRYPTO_TEST_PAIRS: list = [
-        {'ticker_a': 'BTC-USD', 'ticker_b': 'ETH-USD'},
-        {'ticker_a': 'BNB-USD', 'ticker_b': 'SOL-USD'}
+        # Layer 1 / smart-contract platforms
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
+        {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
+        # Stores of value / Bitcoin forks
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
+        {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
+        {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
+        # Payments / xRP-style
+        {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
+        {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
+        # DeFi
+        {'ticker_a': 'UNI-USD',   'ticker_b': 'AAVE-USD'},
+        {'ticker_a': 'UNI-USD',   'ticker_b': 'LINK-USD'},
+        {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
+        # Storage / utility
+        {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
+        # Layer 2 / scaling
+        {'ticker_a': 'MATIC-USD', 'ticker_b': 'SOL-USD'},
+        # Memes
+        {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
+        # Newer L1s (Move-based, etc.)
+        {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
     ]
 
     DEV_EXECUTION_TICKERS: dict = {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Layers,
@@ -10,6 +10,9 @@ import {
   CheckCircle2,
   AlertTriangle,
   Settings,
+  Bitcoin,
+  TrendingUp,
+  ChevronDown,
 } from 'lucide-react';
 import {
   fetchPairs,
@@ -21,6 +24,9 @@ import {
 interface PairsPanelProps {
   token: string;
 }
+
+type EditorTab = 'stocks' | 'crypto';
+type ListFilter = 'all' | 'stocks' | 'crypto';
 
 const formatNum = (val: number | null | undefined, decimals = 3): string => {
   if (val === null || val === undefined || Number.isNaN(val)) return '—';
@@ -40,12 +46,119 @@ const formatRelative = (iso: string | null | undefined): string => {
   }
 };
 
+const isCryptoTicker = (t: string) => /-USD$/i.test(t);
+
+// ─── PairRow ─────────────────────────────────────────────────────────────────
+
+interface PairRowProps {
+  p: PairInfo;
+}
+
+const PairRow: React.FC<PairRowProps> = ({ p }) => {
+  const [expanded, setExpanded] = useState(false);
+
+  const z = p.last_z_score;
+  const zColor =
+    z === null || z === undefined
+      ? 'var(--text-muted)'
+      : Math.abs(z) > 2
+      ? 'var(--yellow)'
+      : Math.abs(z) > 1
+      ? 'var(--accent)'
+      : 'var(--text-muted)';
+
+  return (
+    <div className={`pair-row ${p.is_crypto ? 'pair-crypto' : ''}`}>
+      <div
+        className="pair-row-main"
+        onClick={() => setExpanded((v) => !v)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === 'Enter' && setExpanded((v) => !v)}
+      >
+        <span className="pair-row-name">
+          {p.is_crypto ? (
+            <Bitcoin size={11} style={{ opacity: 0.6, flexShrink: 0 }} />
+          ) : null}
+          {p.ticker_a}
+          <span className="pair-row-slash"> / </span>
+          {p.ticker_b}
+        </span>
+
+        <span className="pair-col-z" style={{ color: zColor }}>
+          {z === null || z === undefined ? '—' : z.toFixed(2)}
+        </span>
+
+        <div className="pair-col-badge">
+          <span
+            className={`badge ${
+              p.is_cointegrated ? 'badge-green' : 'badge-red'
+            }`}
+          >
+            {p.is_cointegrated ? 'COINT' : 'BROKEN'}
+          </span>
+        </div>
+
+        <ChevronDown
+          size={13}
+          className={`pair-expand-icon ${expanded ? 'expanded' : ''}`}
+        />
+      </div>
+
+      <AnimatePresence initial={false}>
+        {expanded && (
+          <motion.div
+            className="pair-row-details"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.18, ease: 'easeInOut' }}
+            style={{ overflow: 'hidden' }}
+          >
+            <div className="pair-detail-inner">
+              <div className="pair-detail-cell">
+                <span className="pair-detail-label">Hedge Ratio (β)</span>
+                <span className="pair-detail-value">
+                  {formatNum(p.hedge_ratio, 3)}
+                </span>
+              </div>
+              <div className="pair-detail-cell">
+                <span className="pair-detail-label">Std Dev (σ)</span>
+                <span className="pair-detail-value">
+                  {formatNum(p.std, 3)}
+                </span>
+              </div>
+              <div className="pair-detail-cell">
+                <span className="pair-detail-label">Sector</span>
+                <span className="pair-detail-value">{p.sector || '—'}</span>
+              </div>
+              <div className="pair-detail-cell">
+                <span className="pair-detail-label">Last Check</span>
+                <span className="pair-detail-value">
+                  {formatRelative(p.last_cointegration_check)}
+                </span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
+// ─── PairsPanel ───────────────────────────────────────────────────────────────
+
 const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
   const [activePairs, setActivePairs] = useState<PairInfo[]>([]);
-  const [configuredPairs, setConfiguredPairs] = useState<PairConfigEntry[]>([]);
+  const [configuredStocks, setConfiguredStocks] = useState<PairConfigEntry[]>([]);
+  const [configuredCrypto, setConfiguredCrypto] = useState<PairConfigEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState<ListFilter>('all');
+
   const [editorOpen, setEditorOpen] = useState(false);
-  const [draft, setDraft] = useState<PairConfigEntry[]>([]);
+  const [editorTab, setEditorTab] = useState<EditorTab>('stocks');
+  const [draftStocks, setDraftStocks] = useState<PairConfigEntry[]>([]);
+  const [draftCrypto, setDraftCrypto] = useState<PairConfigEntry[]>([]);
   const [newA, setNewA] = useState('');
   const [newB, setNewB] = useState('');
   const [saving, setSaving] = useState(false);
@@ -58,7 +171,8 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
     try {
       const data = await fetchPairs(token);
       setActivePairs(data.active_pairs || []);
-      setConfiguredPairs(data.configured_pairs || []);
+      setConfiguredStocks(data.configured_pairs || []);
+      setConfiguredCrypto(data.crypto_test_pairs || []);
     } catch (err) {
       console.error('Failed to fetch pairs:', err);
     } finally {
@@ -72,26 +186,39 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
     return () => clearInterval(id);
   }, [refresh]);
 
+  const filteredActive = useMemo(() => {
+    if (filter === 'all') return activePairs;
+    if (filter === 'crypto') return activePairs.filter((p) => p.is_crypto);
+    return activePairs.filter((p) => !p.is_crypto);
+  }, [activePairs, filter]);
+
+  const stockCount = activePairs.filter((p) => !p.is_crypto).length;
+  const cryptoCount = activePairs.filter((p) => p.is_crypto).length;
+
   const openEditor = () => {
-    setDraft(configuredPairs.map((p) => ({ ...p })));
+    setDraftStocks(configuredStocks.map((p) => ({ ...p })));
+    setDraftCrypto(configuredCrypto.map((p) => ({ ...p })));
     setSaveError(null);
     setSaveOk(null);
     setEditorOpen(true);
   };
+
+  const currentDraft = editorTab === 'stocks' ? draftStocks : draftCrypto;
+  const setCurrentDraft = editorTab === 'stocks' ? setDraftStocks : setDraftCrypto;
 
   const addPair = (e?: React.FormEvent) => {
     e?.preventDefault();
     const a = newA.trim().toUpperCase();
     const b = newB.trim().toUpperCase();
     if (!a || !b || a === b) return;
-    if (draft.some((p) => p.ticker_a === a && p.ticker_b === b)) return;
-    setDraft([...draft, { ticker_a: a, ticker_b: b }]);
+    if (currentDraft.some((p) => p.ticker_a === a && p.ticker_b === b)) return;
+    setCurrentDraft([...currentDraft, { ticker_a: a, ticker_b: b }]);
     setNewA('');
     setNewB('');
   };
 
   const removePair = (idx: number) => {
-    setDraft(draft.filter((_, i) => i !== idx));
+    setCurrentDraft(currentDraft.filter((_, i) => i !== idx));
   };
 
   const handleSave = async () => {
@@ -99,11 +226,15 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
     setSaveError(null);
     setSaveOk(null);
     try {
-      const result = await updatePairs(token, draft, { applyNow });
+      const result = await updatePairs(token, draftStocks, {
+        applyNow,
+        cryptoPairs: draftCrypto,
+      });
+      const total = draftStocks.length + draftCrypto.length;
       setSaveOk(
         result.reloaded
-          ? `Saved ${result.saved_pairs} pairs — hot-reload applied.`
-          : `Saved ${result.saved_pairs} pairs — restart required to apply.`,
+          ? `Saved ${draftStocks.length} stocks + ${draftCrypto.length} crypto = ${total} pairs — hot-reload applied.`
+          : `Saved ${total} pairs — restart required to apply.`,
       );
       await refresh();
     } catch (err) {
@@ -114,6 +245,9 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
     }
   };
 
+  const placeholderA = editorTab === 'crypto' ? 'BTC-USD' : 'KO';
+  const placeholderB = editorTab === 'crypto' ? 'ETH-USD' : 'PEP';
+
   return (
     <>
       <div className="panel">
@@ -121,6 +255,26 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
           <Layers size={12} />
           Trading Pairs
           <span className="panel-count">{activePairs.length}</span>
+          <div className="pair-filter">
+            <button
+              className={`pair-filter-chip ${filter === 'all' ? 'active' : ''}`}
+              onClick={() => setFilter('all')}
+            >
+              All ({activePairs.length})
+            </button>
+            <button
+              className={`pair-filter-chip ${filter === 'stocks' ? 'active' : ''}`}
+              onClick={() => setFilter('stocks')}
+            >
+              <TrendingUp size={10} /> Stocks ({stockCount})
+            </button>
+            <button
+              className={`pair-filter-chip ${filter === 'crypto' ? 'active' : ''}`}
+              onClick={() => setFilter('crypto')}
+            >
+              <Bitcoin size={10} /> Crypto ({cryptoCount})
+            </button>
+          </div>
           <button
             className="panel-action-btn"
             title="Refresh"
@@ -138,67 +292,22 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
           </button>
         </div>
         <div className="panel-body">
-          {activePairs.length === 0 ? (
+          {filteredActive.length === 0 ? (
             <div className="empty-state">
               <Layers size={28} style={{ opacity: 0.3 }} />
-              <span>{loading ? 'Loading pairs…' : 'No active pairs'}</span>
+              <span>{loading ? 'Loading pairs…' : 'No pairs in this view'}</span>
             </div>
           ) : (
-            <div className="pair-grid">
-              {activePairs.map((p) => {
-                const z = p.last_z_score;
-                const zColor =
-                  z === null || z === undefined
-                    ? 'var(--text-muted)'
-                    : Math.abs(z) > 2
-                    ? 'var(--yellow)'
-                    : Math.abs(z) > 1
-                    ? 'var(--accent)'
-                    : 'var(--text-muted)';
-                return (
-                  <div className="pair-card" key={p.id}>
-                    <div className="pair-card-top">
-                      <span className="pair-name">
-                        {p.ticker_a} / {p.ticker_b}
-                      </span>
-                      <span
-                        className={`badge ${
-                          p.is_cointegrated ? 'badge-green' : 'badge-red'
-                        }`}
-                      >
-                        {p.is_cointegrated ? 'COINT' : 'BROKEN'}
-                      </span>
-                    </div>
-                    <div className="pair-meta">
-                      <div className="pair-meta-cell">
-                        <span className="pair-meta-label">Z</span>
-                        <span
-                          className="pair-meta-value"
-                          style={{ color: zColor }}
-                        >
-                          {z === null || z === undefined ? '—' : z.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="pair-meta-cell">
-                        <span className="pair-meta-label">β</span>
-                        <span className="pair-meta-value">
-                          {formatNum(p.hedge_ratio, 3)}
-                        </span>
-                      </div>
-                      <div className="pair-meta-cell">
-                        <span className="pair-meta-label">σ</span>
-                        <span className="pair-meta-value">
-                          {formatNum(p.std, 3)}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="pair-foot">
-                      <span>{p.sector}</span>
-                      <span>checked {formatRelative(p.last_cointegration_check)}</span>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="pair-table">
+              <div className="pair-table-header">
+                <span>Pair</span>
+                <span>Z-score</span>
+                <span>Status</span>
+                <span />
+              </div>
+              {filteredActive.map((p) => (
+                <PairRow key={p.id} p={p} />
+              ))}
             </div>
           )}
         </div>
@@ -235,16 +344,42 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
                 </button>
               </div>
 
+              <div className="editor-tabs">
+                <button
+                  className={`editor-tab ${editorTab === 'stocks' ? 'active' : ''}`}
+                  onClick={() => setEditorTab('stocks')}
+                >
+                  <TrendingUp size={11} />
+                  Stocks
+                  <span className="editor-tab-count">{draftStocks.length}</span>
+                </button>
+                <button
+                  className={`editor-tab ${editorTab === 'crypto' ? 'active' : ''}`}
+                  onClick={() => setEditorTab('crypto')}
+                >
+                  <Bitcoin size={11} />
+                  Crypto (24/7)
+                  <span className="editor-tab-count">{draftCrypto.length}</span>
+                </button>
+              </div>
+
               <div className="editor-body">
                 <div className="editor-section-title">
-                  Configured pairs ({draft.length})
+                  {editorTab === 'stocks'
+                    ? 'Equity pairs (NYSE hours only)'
+                    : 'Crypto pairs (run 24/7, including weekends)'}
                 </div>
                 <div className="editor-list">
-                  {draft.length === 0 && (
-                    <div className="editor-empty">No pairs configured.</div>
+                  {currentDraft.length === 0 && (
+                    <div className="editor-empty">
+                      No {editorTab} pairs configured.
+                    </div>
                   )}
-                  {draft.map((p, idx) => (
-                    <div className="editor-row" key={`${p.ticker_a}_${p.ticker_b}_${idx}`}>
+                  {currentDraft.map((p, idx) => (
+                    <div
+                      className="editor-row"
+                      key={`${p.ticker_a}_${p.ticker_b}_${idx}`}
+                    >
                       <span className="editor-row-pair">
                         {p.ticker_a} / {p.ticker_b}
                       </span>
@@ -262,7 +397,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
                 <form className="editor-add-row" onSubmit={addPair}>
                   <input
                     className="editor-input"
-                    placeholder="Ticker A"
+                    placeholder={placeholderA}
                     value={newA}
                     onChange={(e) => setNewA(e.target.value)}
                     autoFocus
@@ -270,7 +405,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
                   <span className="editor-slash">/</span>
                   <input
                     className="editor-input"
-                    placeholder="Ticker B"
+                    placeholder={placeholderB}
                     value={newB}
                     onChange={(e) => setNewB(e.target.value)}
                   />
@@ -278,6 +413,17 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
                     <Plus size={12} /> Add
                   </button>
                 </form>
+
+                {editorTab === 'crypto' && (newA || newB) && (
+                  <div className="editor-hint">
+                    Tip: crypto tickers usually end in <code>-USD</code> (e.g.{' '}
+                    <code>BTC-USD</code>, <code>ETH-USD</code>).
+                    {(newA && !isCryptoTicker(newA)) ||
+                    (newB && !isCryptoTicker(newB))
+                      ? ' One of your tickers is missing the suffix.'
+                      : ''}
+                  </div>
+                )}
 
                 {saveError && (
                   <div className="editor-msg error">
@@ -311,10 +457,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
                 <button
                   className="btn btn-primary"
                   onClick={handleSave}
-                  disabled={saving || draft.length === 0}
+                  disabled={
+                    saving || (draftStocks.length === 0 && draftCrypto.length === 0)
+                  }
                 >
                   <Save size={12} />
-                  {saving ? 'Saving…' : 'Save'}
+                  {saving ? 'Saving…' : 'Save both lists'}
                 </button>
               </div>
             </motion.div>

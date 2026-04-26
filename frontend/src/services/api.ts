@@ -75,6 +75,7 @@ export interface PairInfo {
   mean: number | null;
   std: number | null;
   is_cointegrated: boolean | null;
+  is_crypto: boolean;
   sector: string;
   last_cointegration_check: string | null;
   last_z_score: number | null;
