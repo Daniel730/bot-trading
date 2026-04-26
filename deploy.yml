@@ -1,0 +1,232 @@
+name: Deploy to Raspberry Pi
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on tags like v1.0.0, v1.2.3, etc.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "specs/**"
+      - ".gemini/**"
+      - ".vscode/**"
+      - ".specify/**"
+  # Manual trigger. Use `force_all: true` once after switching to the registry-
+  # based deploy so every image is pushed at least once. After that, normal
+  # pushes run paths-filter and only rebuild what actually changed.
+  workflow_dispatch:
+    inputs:
+      force_all:
+        description: "Rebuild & push all images (bootstrap / disaster-recover)"
+        type: boolean
+        default: false
+
+# Cancel any in-flight deploy when a newer commit lands.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  # GHCR requires the owner segment to be lowercase. github.repository_owner
+  # preserves the original case (e.g. "Daniel730"), so each job lowercases it
+  # into IMAGE_OWNER via a setup step before any docker command runs.
+  # Use the tag name (v1.0.0) as the image tag, fallback to 'latest' for manual runs
+  IMAGE_TAG: ${{ github.ref_name }}
+
+jobs:
+  # -----------------------------------------------------------------------
+  # 1. BUILD on a GitHub-hosted x86 runner with buildx + QEMU, push linux/arm64
+  #    images to GHCR. This replaces the 30-90 minute native Pi build with a
+  #    ~3-5 minute cross-build that benefits from a real CPU and registry cache.
+  # -----------------------------------------------------------------------
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      python_changed: ${{ steps.flags.outputs.python }}
+      java_changed: ${{ steps.flags.outputs.java }}
+      frontend_changed: ${{ steps.flags.outputs.frontend }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # paths-filter needs history to diff against the previous commit.
+          fetch-depth: 0
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            python:
+              - 'src/**'
+              - 'scripts/**'
+              - 'legacy/dashboard/**'
+              - 'requirements.txt'
+              - 'infra/Dockerfile'
+              - 'infra/entrypoint.sh'
+              - '.dockerignore'
+              - 'execution-engine/src/main/proto/**'
+            java:
+              - 'execution-engine/**'
+            frontend:
+              - 'frontend/**'
+
+      # Effective build flags = paths-filter result OR the manual force_all input.
+      # The deploy job reads these, so a force_all run rebuilds AND re-pulls
+      # every service even if nothing in source actually changed.
+      - name: Compute build flags
+        id: flags
+        run: |
+          force='${{ inputs.force_all }}'
+          for f in python java frontend; do
+            case "$f" in
+              python)   changed='${{ steps.changes.outputs.python }}'   ;;
+              java)     changed='${{ steps.changes.outputs.java }}'     ;;
+              frontend) changed='${{ steps.changes.outputs.frontend }}' ;;
+            esac
+            if [ "$force" = "true" ] || [ "$changed" = "true" ]; then
+              echo "$f=true"  >> "$GITHUB_OUTPUT"
+            else
+              echo "$f=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - name: Set up QEMU (arm64 emulation)
+        if: |
+          steps.flags.outputs.python == 'true' ||
+          steps.flags.outputs.java == 'true' ||
+          steps.flags.outputs.frontend == 'true'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        if: |
+          steps.flags.outputs.python == 'true' ||
+          steps.flags.outputs.java == 'true' ||
+          steps.flags.outputs.frontend == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: |
+          steps.flags.outputs.python == 'true' ||
+          steps.flags.outputs.java == 'true' ||
+          steps.flags.outputs.frontend == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ---- Python image (bot / mcp-server / sec-worker share this) ----
+      - name: Build & push python image
+        if: steps.flags.outputs.python == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache,mode=max
+
+      - name: Build & push execution-engine image
+        if: steps.flags.outputs.java == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./execution-engine
+          file: ./execution-engine/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache,mode=max
+
+      - name: Build & push frontend image
+        if: steps.flags.outputs.frontend == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:${{ github.sha }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache,mode=max
+
+  # -----------------------------------------------------------------------
+  # 2. DEPLOY on the Pi: pull the freshly-built arm64 images and `up -d`.
+  #    No compilation happens here. Capped at 15 minutes so a stuck pull
+  #    or restart fails fast instead of hanging for 6 hours.
+  # -----------------------------------------------------------------------
+  deploy:
+    needs: build
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Link persistent .env
+        run: ln -sf /home/danrasp3/.env.trading .env
+
+      - name: Log in to GHCR (for private image pulls)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Reset any leftover BuildKit state from previously-cancelled runs.
+      # Cheap insurance against the `sharing=locked` cache hangs we saw before.
+      - name: Reset stale BuildKit state
+        run: docker builder prune -af || true
+
+      # Always pull the public base images (redis, postgres). They're cheap,
+      # and `up -d` would otherwise pull them on first run anyway.
+      - name: Pull base images (redis, postgres)
+        run: docker compose -f infra/docker-compose.yml pull redis postgres
+
+      # Pull each app image ONLY if the build job rebuilt it. Skipping a pull
+      # leaves the previous local image in place, which `up -d` will reuse.
+      # This is what keeps incremental deploys from failing on `manifest unknown`
+      # for services whose source didn't change this run.
+      - name: Pull python image (bot, mcp-server, sec-worker)
+        if: needs.build.outputs.python_changed == 'true'
+        run: docker compose -f infra/docker-compose.yml pull bot mcp-server sec-worker
+
+      - name: Pull execution-engine image
+        if: needs.build.outputs.java_changed == 'true'
+        run: docker compose -f infra/docker-compose.yml pull execution-engine
+
+      - name: Pull frontend image
+        if: needs.build.outputs.frontend_changed == 'true'
+        run: docker compose -f infra/docker-compose.yml pull frontend
+
+      - name: Apply / restart services
+        run: docker compose -f infra/docker-compose.yml up -d --remove-orphans
+
+      - name: Cleanup dangling images
+        run: docker image prune -f
+
+      - name: Verify deployment
+        run: docker compose -f infra/docker-compose.yml ps
