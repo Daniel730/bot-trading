@@ -246,15 +246,45 @@ class PairsUpdateRequest(BaseModel):
     apply_now: bool = True  # If True, hot-reload the monitor's universe.
 
 
+def _safe_float(val) -> Optional[float]:
+    """Convert NaN/inf/None to None so json.dumps doesn't blow up.
+    FastAPI/starlette refuses non-finite floats per the JSON spec."""
+    import math
+    if val is None:
+        return None
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+def _scrub_non_finite(obj):
+    """Recursively walk a payload and replace any NaN/inf floats with None.
+    Defensive net for endpoints whose data is stitched from multiple sources
+    (Redis, numpy arrays, SQLAlchemy decimals) — one stray nan otherwise
+    raises ValueError deep inside starlette and produces a 500."""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _scrub_non_finite(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_scrub_non_finite(v) for v in obj]
+    return obj
+
+
 def _serialize_pair(active_pair: dict) -> dict:
     """Convert monitor.active_pairs entry into a JSON-friendly payload."""
     return {
         "id": active_pair.get("id"),
         "ticker_a": active_pair.get("ticker_a"),
         "ticker_b": active_pair.get("ticker_b"),
-        "hedge_ratio": active_pair.get("hedge_ratio"),
-        "mean": active_pair.get("mean"),
-        "std": active_pair.get("std"),
+        "hedge_ratio": _safe_float(active_pair.get("hedge_ratio")),
+        "mean": _safe_float(active_pair.get("mean")),
+        "std": _safe_float(active_pair.get("std")),
         "is_cointegrated": active_pair.get("is_cointegrated"),
         "sector": settings.PAIR_SECTORS.get(
             active_pair.get("id", ""),
@@ -292,7 +322,9 @@ async def list_pairs(token: str = Query(None)):
             try:
                 state = await redis_service.get_kalman_state(pair_id)
                 if state and "z_score" in state:
-                    z_score_map[pair_id] = float(state["z_score"])
+                    z = _safe_float(state["z_score"])
+                    if z is not None:
+                        z_score_map[pair_id] = z
             except Exception:
                 # Per-pair failures shouldn't poison the entire response.
                 pass
@@ -305,12 +337,12 @@ async def list_pairs(token: str = Query(None)):
         entry["last_cointegration_check"] = last_check_map.get(pid)
         entry["last_z_score"] = z_score_map.get(pid)
 
-    return {
+    return _scrub_non_finite({
         "active_pairs": active_serialized,
         "configured_pairs": settings.ARBITRAGE_PAIRS,
         "crypto_test_pairs": settings.CRYPTO_TEST_PAIRS,
         "dev_mode": settings.DEV_MODE,
-    }
+    })
 
 
 @app.post("/api/pairs")
@@ -442,19 +474,19 @@ async def list_open_positions(token: str = Query(None)):
             "ticker_b": leg_b["ticker"],
             "side_a": leg_a["side"],
             "side_b": leg_b["side"],
-            "qty_a": float(leg_a["quantity"]),
-            "qty_b": float(leg_b["quantity"]),
-            "entry_a": float(leg_a["price"]),
-            "entry_b": float(leg_b["price"]),
-            "current_a": latest_prices.get(leg_a["ticker"]),
-            "current_b": latest_prices.get(leg_b["ticker"]),
-            "cost_basis": float(sig.get("total_cost_basis", 0.0)),
-            "current_value": current_value,
-            "pnl": pnl,
+            "qty_a": _safe_float(leg_a["quantity"]),
+            "qty_b": _safe_float(leg_b["quantity"]),
+            "entry_a": _safe_float(leg_a["price"]),
+            "entry_b": _safe_float(leg_b["price"]),
+            "current_a": _safe_float(latest_prices.get(leg_a["ticker"])),
+            "current_b": _safe_float(latest_prices.get(leg_b["ticker"])),
+            "cost_basis": _safe_float(sig.get("total_cost_basis", 0.0)),
+            "current_value": _safe_float(current_value),
+            "pnl": _safe_float(pnl),
             "opened_at": opened_at,
         })
 
-    return {"positions": positions}
+    return _scrub_non_finite({"positions": positions})
 
 
 # ROOT DASHBOARD ROUTE (Authenticated)
