@@ -63,6 +63,38 @@ async def test_close_position_success(monitor):
         mock_close.assert_called_once()
 
 @pytest.mark.asyncio
+async def test_execute_trade_crypto_live_uses_broker(monitor):
+    pair = {"ticker_a": "ETH-USD", "ticker_b": "BTC-USD", "id": "ETH-USD_BTC-USD"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
+         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock) as mock_shadow_portfolio, \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (100.0, 100.05)
+        mock_shadow_portfolio.return_value = []
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        monitor.brokerage.get_account_cash.return_value = 10000.0
+        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "0xtx"})
+
+        await monitor.execute_trade(pair, "Short-Long", 2000.0, 50000.0, signal_id)
+
+        assert monitor.brokerage.place_value_order.call_count == 2
+        mock_shadow_exec.assert_not_called()
+        assert mock_log_trade.call_count == 2
+        mock_log_journal.assert_called_once()
+
+@pytest.mark.asyncio
 async def test_orchestrator_veto(monitor):
     """
     S-07: Test orchestrator veto path in process_pair.

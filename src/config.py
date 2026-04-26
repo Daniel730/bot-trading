@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -95,6 +95,39 @@ class Settings(BaseSettings):
     EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
     EXECUTION_ENGINE_PORT: int = Field(default=50051, validation_alias="EXECUTION_ENGINE_PORT")
     LATENCY_ALARM_THRESHOLD_MS: float = Field(default=10.0, validation_alias="LATENCY_ALARM_THRESHOLD_MS")
+
+    WEB3_RPC_URL: str = Field(default="", validation_alias="WEB3_RPC_URL")
+    WEB3_PRIVATE_KEY: str = Field(default="", validation_alias="WEB3_PRIVATE_KEY")
+    WEB3_CHAIN_ID: int = Field(default=1, validation_alias="WEB3_CHAIN_ID")
+    WEB3_ROUTER_ADDRESS: str = Field(default="", validation_alias="WEB3_ROUTER_ADDRESS")
+    WEB3_WETH_ADDRESS: str = Field(default="", validation_alias="WEB3_WETH_ADDRESS")
+    WEB3_BASE_TOKEN_SYMBOL: str = Field(default="USDC", validation_alias="WEB3_BASE_TOKEN_SYMBOL")
+    WEB3_MAX_SLIPPAGE_BPS: int = Field(default=150, validation_alias="WEB3_MAX_SLIPPAGE_BPS")
+    WEB3_MAX_GAS_GWEI: float = Field(default=150.0, validation_alias="WEB3_MAX_GAS_GWEI")
+    WEB3_TX_TIMEOUT_SECONDS: int = Field(default=180, validation_alias="WEB3_TX_TIMEOUT_SECONDS")
+    CRYPTO_TOKEN_MAPPING: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "USDC": {"address": "", "decimals": 6},
+            "WETH": {"address": "", "decimals": 18},
+            "ETH": {"address": "", "decimals": 18, "is_native": True},
+            "BTC": {"address": "", "decimals": 8},
+            "WBTC": {"address": "", "decimals": 8},
+            "SOL": {"address": "", "decimals": 9},
+            "AVAX": {"address": "", "decimals": 18},
+            "BNB": {"address": "", "decimals": 18},
+            "ADA": {"address": "", "decimals": 18},
+            "DOT": {"address": "", "decimals": 10},
+            "NEAR": {"address": "", "decimals": 24},
+            "ATOM": {"address": "", "decimals": 6},
+            "ALGO": {"address": "", "decimals": 6},
+            "LTC": {"address": "", "decimals": 8},
+            "BCH": {"address": "", "decimals": 8},
+            "XRP": {"address": "", "decimals": 6},
+            "LINK": {"address": "", "decimals": 18},
+            "AAVE": {"address": "", "decimals": 18},
+        },
+        validation_alias="CRYPTO_TOKEN_MAPPING",
+    )
 
     KALMAN_DELTA: float = 1e-5
     KALMAN_R: float = 0.001
@@ -234,6 +267,14 @@ class Settings(BaseSettings):
     @property
     def is_t212_demo(self) -> bool:
         return self.TRADING_212_MODE.lower() == "demo"
+
+    @property
+    def web3_enabled(self) -> bool:
+        return bool(
+            self.WEB3_RPC_URL.strip()
+            and self.WEB3_PRIVATE_KEY.strip()
+            and self.WEB3_ROUTER_ADDRESS.strip()
+        )
 
 settings = Settings()
 

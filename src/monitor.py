@@ -365,8 +365,26 @@ class ArbitrageMonitor:
         else:
             logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
 
+        is_crypto_pair = "-USD" in t_a or "-USD" in t_b
+        total_cash = None
+
+        # Feature 037: for live crypto, prefer Web3 base-token balance for sizing.
+        if is_crypto_pair and not settings.PAPER_TRADING:
+            web3_service = getattr(self.brokerage, "web3", None)
+            probe = getattr(web3_service, "test_connection", None) if web3_service else None
+            if getattr(web3_service, "enabled", False) and callable(probe):
+                try:
+                    probe_result = probe()
+                    if asyncio.iscoroutine(probe_result):
+                        probe_result = await probe_result
+                    if isinstance(probe_result, dict) and probe_result.get("status") == "success":
+                        total_cash = float(probe_result.get("base_token_balance") or 0.0)
+                except Exception as e:
+                    logger.warning(f"Web3 balance probe failed for {t_a}/{t_b}: {e}")
+
         # Bug H-02: Wrap sync brokerage calls in asyncio.to_thread
-        total_cash = await asyncio.to_thread(self.brokerage.get_account_cash)
+        if total_cash is None:
+            total_cash = await asyncio.to_thread(self.brokerage.get_account_cash)
         if total_cash is None:
             total_cash = 2000.0  # Fallback
 
@@ -423,22 +441,15 @@ class ArbitrageMonitor:
         side_a = "SELL" if direction == "Short-Long" else "BUY"
         side_b = "BUY" if direction == "Short-Long" else "SELL"
 
-        # P-07 (2026-04-26): Crypto pairs (Yahoo "-USD" symbols) cannot be
-        # traded on Trading 212 - T212 has no spot crypto, only the EU-listed
-        # crypto ETNs (BTCE.DE, ZETH.DE, etc.). Sending BTC-USD/SOL-USD/etc.
-        # to the broker just produces malformed instrument IDs (BTC-USD_US_EQ)
-        # that T212 always rejects. Force shadow execution for crypto pairs
-        # regardless of PAPER_TRADING so the strategy can still be evaluated
-        # without flooding the log with broker rejections.
-        is_crypto_pair = "-USD" in t_a or "-USD" in t_b
-
-        if settings.PAPER_TRADING or is_crypto_pair:
+        # Feature 037: only paper mode is forced to shadow execution.
+        # In live mode, crypto routes through the brokerage dispatcher to Web3.
+        if settings.PAPER_TRADING:
             # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
             # R4 fix (2026-04-19): propagate signal_id so the shadow TradeLedger row
             # can be joined with the AgentReasoning / TradeJournal rows logged for
             # this signal. Previously shadow_service generated its own UUID and
             # decorrelated the paper-trade audit trail.
-            mode_tag = "PAPER TRADING" if settings.PAPER_TRADING else "SHADOW (crypto, T212-unsupported)"
+            mode_tag = "PAPER TRADING"
             logger.info(f"{mode_tag}: Executing shadow trade {direction} for {t_a}/{t_b}")
             await shadow_service.execute_simulated_trade(
                 pair['id'], direction, size_a, size_b, price_a, price_b,
