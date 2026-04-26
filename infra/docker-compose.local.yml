@@ -1,0 +1,51 @@
+# Local-dev override for docker-compose.yml.
+#
+# The default infra/docker-compose.yml pulls images from GHCR
+# (ghcr.io/daniel730/...) which are published only for linux/arm64 (the
+# Raspberry Pi production target). On a linux/amd64 host (WSL2, Mac, x86 Linux)
+# the pull fails with:
+#   "no matching manifest for linux/amd64 in the manifest list entries"
+#
+# This file adds `build:` directives so Compose builds the same images
+# locally for the host's architecture instead of pulling.
+#
+# Usage:
+#   cd <repo root>
+#   docker compose \
+#     -f infra/docker-compose.yml \
+#     -f infra/docker-compose.local.yml \
+#     up -d --build --remove-orphans
+#
+# The image tags stay the same (ghcr.io/daniel730/...:latest) so swapping
+# back to the prod compose file requires no other changes.
+
+services:
+  bot:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    pull_policy: build
+
+  mcp-server:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    pull_policy: build
+
+  sec-worker:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    pull_policy: build
+
+  execution-engine:
+    build:
+      context: ../execution-engine
+      dockerfile: Dockerfile
+    pull_policy: build
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    pull_policy: build
