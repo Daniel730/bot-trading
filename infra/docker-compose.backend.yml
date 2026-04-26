@@ -35,7 +35,7 @@ services:
   bot:
     # Image is built & pushed by the GitHub Actions `build` job; the Pi only pulls.
     # Override IMAGE_OWNER / IMAGE_TAG via env if you ever need a different tag.
-    image: ghcr.io/${IMAGE_OWNER:-Daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     container_name: trading-bot
     ports:
       - "8080:8080"
@@ -57,7 +57,7 @@ services:
   mcp-server:
     # Shares the trading-bot-base image built by the `bot` service above.
     # No `build:` block here so Compose doesn't redundantly re-run the build.
-    image: ghcr.io/${IMAGE_OWNER:-Daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     container_name: mcp-server
     command: python src/mcp_server.py
     ports:
@@ -82,7 +82,7 @@ services:
       start_period: 15s
 
   execution-engine:
-    image: ghcr.io/${IMAGE_OWNER:-Daniel730}/execution-engine:${IMAGE_TAG:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-daniel730}/execution-engine:${IMAGE_TAG:-latest}
     container_name: execution-engine
     ports:
       - "50051:50051"
@@ -100,7 +100,7 @@ services:
 
   sec-worker:
     # Shares the trading-bot-base image built by the `bot` service above.
-    image: ghcr.io/${IMAGE_OWNER:-Daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
+    image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     container_name: sec-fundamental-worker
     command: python src/daemons/sec_fundamental_worker.py
     env_file:
