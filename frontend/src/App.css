@@ -813,8 +813,14 @@ button {
   cursor: pointer;
   transition: background 0.12s;
 }
-.approval-btn:hover {
+.approval-btn:hover:not(:disabled) {
   background: rgba(63, 185, 80, 0.2);
+}
+.approval-btn:disabled,
+.approval-btn.approved {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.4);
 }
 
 /* ============================================================

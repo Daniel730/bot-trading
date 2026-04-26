@@ -1,11 +1,12 @@
 import numpy as np
 import logging
 from src.services.redis_service import redis_service
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
 class VolatilityService:
-    def __init__(self, entropy_threshold: float = 0.8):
+    def __init__(self, entropy_threshold: float = settings.VOLATILITY_ENTROPY_THRESHOLD):
         self.entropy_threshold = entropy_threshold
 
     async def get_l2_entropy(self, ticker: str) -> float:
@@ -17,7 +18,7 @@ class VolatilityService:
             snapshot = await redis_service.get_json(f"l2:snapshot:{ticker}")
             if not snapshot:
                 # Fallback to current price if no L2 snapshot is available (neutral entropy)
-                return 0.5
+                return settings.VOLATILITY_FALLBACK_ENTROPY
 
             bids = snapshot.get('bids', [])
             asks = snapshot.get('asks', [])
@@ -25,11 +26,11 @@ class VolatilityService:
             # Combine sizes of all levels
             sizes = [float(b[1]) for b in bids] + [float(a[1]) for a in asks]
             if not sizes:
-                return 0.5
+                return settings.VOLATILITY_FALLBACK_ENTROPY
                 
             total_size = sum(sizes)
             if total_size == 0:
-                return 0.5
+                return settings.VOLATILITY_FALLBACK_ENTROPY
                 
             # V-02: A single-level book means log2(1)=0, which would return 0.0 (misread as "stable").
             # A 1-level book is the MOST illiquid state — treat it as maximum entropy (1.0).
@@ -49,7 +50,7 @@ class VolatilityService:
             return normalized_entropy
         except Exception as e:
             logger.error(f"Error calculating L2 entropy for {ticker}: {e}")
-            return 0.5
+            return settings.VOLATILITY_FALLBACK_ENTROPY
 
     async def get_volatility_status(self, ticker: str) -> str:
         """
