@@ -15,6 +15,8 @@ graph TD
     Bot <--> PG[(PostgreSQL - Ledger)]
     Bot <--> Redis[(Redis - Telemetry)]
     Bot -- API --> T212[Trading 212]
+    Bot -- API --> Web3[MetaMask/Web3]
+    Bot <--> Budget[Budget Service]
     Bot -- API --> Data[Polygon/Yahoo Finance]
 ```
 
@@ -24,6 +26,7 @@ graph TD
 The "Brain" of the operation.
 - **Core Orchestration**: Manages the Kalman Filter engine and the AI Agent Swarm.
 - **Portfolio Management**: Tracks allocations, targets, and DCA schedules.
+- **Budget Management**: Enforces persistent caps across venues (T212, WEB3) via `BudgetService`.
 - **SSE Server**: Streams real-time telemetry to the dashboard via FastAPI.
 
 ### ☕ Execution Engine (Java)
