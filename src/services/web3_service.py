@@ -46,6 +46,11 @@ class Web3BrokerageService:
             try:
                 self.account = self.w3.eth.account.from_key(settings.WEB3_PRIVATE_KEY)
                 logger.info(f"Web3 Account Initialized: {self.account.address}")
+                if not settings.WEB3_METAMASK_ADDRESS.strip():
+                    logger.warning(
+                        "WEB3_METAMASK_ADDRESS is empty. Broadcasts may not appear in your personal "
+                        "MetaMask unless this signer wallet is imported there."
+                    )
             except Exception as e:
                 logger.error(f"Failed to initialize Web3 account: {e}")
 
@@ -101,9 +106,9 @@ class Web3BrokerageService:
 
     def _broadcast_trade_signal(self, ticker: str, amount_fiat: float, side: str) -> Dict[str, Any]:
         """
-        Broadcasts a zero-value ETH self-transfer to Sepolia encoding the trade
-        signal in the transaction data field.  Visible in MetaMask activity and
-        on Alchemy / Sepolia Etherscan.
+        Broadcasts a zero-value ETH transfer on Sepolia encoding the trade
+        signal in the transaction data field. Recipient is WEB3_METAMASK_ADDRESS
+        when configured, otherwise the signer wallet (self-transfer).
 
         Memo format (UTF-8, hex-encoded in tx.data):
             ARBOT|BUY|BTC|USD123.45
@@ -125,11 +130,25 @@ class Web3BrokerageService:
 
         nonce = self.w3.eth.get_transaction_count(self.account.address, "pending")
 
+        # If the user configured WEB3_METAMASK_ADDRESS, send the signal tx TO
+        # that address so it appears in MetaMask activity.  Fall back to a
+        # self-transfer (only visible in the bot's own wallet on Etherscan).
+        metamask_addr = settings.WEB3_METAMASK_ADDRESS.strip()
+        recipient = self.account.address
+        if metamask_addr:
+            try:
+                recipient = Web3.to_checksum_address(metamask_addr)
+            except Exception:
+                logger.warning(
+                    "WEB3_METAMASK_ADDRESS is invalid (%s). Falling back to signer wallet %s.",
+                    metamask_addr, self.account.address
+                )
+
         txn = {
             "chainId": settings.WEB3_CHAIN_ID,
-            "to": self.account.address,   # self-transfer: zero ETH, just the memo
-            "value": 0,
-            "gas": 30_000,               # well above 21k + data overhead
+            "to": recipient,
+            "value": int(settings.WEB3_SIGNAL_VALUE_WEI),
+            "gas": settings.WEB3_TX_GAS_LIMIT,
             "gasPrice": gas_price,
             "nonce": nonce,
             "data": data_bytes,
@@ -148,20 +167,27 @@ class Web3BrokerageService:
             tx_hash_hex = "0x" + tx_hash_hex
 
         explorer_url = f"{self._explorer_base_url()}/tx/{tx_hash_hex}"
+        logger.info(
+            f"WEB3 TX ROUTING: from={self.account.address} to={recipient} "
+            f"chain={settings.WEB3_CHAIN_ID}"
+        )
         logger.info(f"WEB3: Trade signal broadcast — {memo} | tx={tx_hash_hex} | {explorer_url}")
         return {
             "status": "success",
             "order_id": tx_hash_hex,
             "tx_hash": tx_hash_hex,
             "memo": memo,
+            "from_address": self.account.address,
+            "to_address": recipient,
             "explorer_url": explorer_url,
         }
 
     async def place_value_order(self, ticker: str, amount_fiat: float, side: str) -> Dict[str, Any]:
         """
-        Executes a trade signal on-chain via a zero-value Sepolia self-transfer.
+        Executes a trade signal on-chain via a zero-value Sepolia transfer.
         The trade metadata is encoded in the transaction data field so it appears
-        in MetaMask activity and on Alchemy / Sepolia Etherscan.
+        on Alchemy / Sepolia Etherscan (and in MetaMask if the receiving wallet
+        is configured or imported there).
         """
         if not self.w3:
             return {"status": "error", "message": "web3 package is not installed."}

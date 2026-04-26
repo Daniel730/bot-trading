@@ -121,6 +121,8 @@ const App: React.FC = () => {
   const [terminalInput, setTerminalInput] = useState('');
   const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('ALL');
   const [, setNowTick] = useState(0); // forces uptime re-render every 30s
+  const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
+  const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   // Auto-scroll terminal
@@ -164,7 +166,7 @@ const App: React.FC = () => {
 
   // ── Derived values ────────────────────────────────────────────────────────
   const stage           = data?.stage ?? botState ?? 'Initializing';
-  const usagePct        = data?.metrics?.daily_usage_pct ?? 0;
+  const usagePct        = data?.metrics?.daily_usage_pct;
   const dailyProfit     = data?.metrics?.daily_profit;
   const accuracy        = data?.global_accuracy ?? 0;
   const regime          = data?.market_regime?.regime ?? 'STABLE';
@@ -239,12 +241,19 @@ const App: React.FC = () => {
             <div
               className="progress-fill"
               style={{
-                width: `${Math.min(usagePct, 100)}%`,
-                background: usagePct > 90 ? 'var(--red)' : usagePct > 70 ? 'var(--yellow)' : 'var(--accent)',
+                width: `${Math.min(usagePct ?? 0, 100)}%`,
+                background:
+                  (usagePct ?? 0) > 90
+                    ? 'var(--red)'
+                    : (usagePct ?? 0) > 70
+                    ? 'var(--yellow)'
+                    : 'var(--accent)',
               }}
             />
           </div>
-          <div className="kpi-sub">{usagePct.toFixed(1)}% utilized</div>
+          <div className="kpi-sub">
+            {usagePct == null ? 'Usage unavailable' : `${usagePct.toFixed(1)}% utilized`}
+          </div>
         </div>
 
         <div className="kpi-item">
@@ -576,17 +585,34 @@ const App: React.FC = () => {
                       </span>
                       <span className="terminal-line-text">{msg.text}</span>
                     </div>
-                    {msg.metadata?.type === 'approval' && (
-                      <button
-                        className="approval-btn"
-                        onClick={() =>
-                          sendTerminalCommand(`/approve ${msg.metadata.correlation_id}`, token)
-                        }
-                      >
-                        <CheckCircle size={12} />
-                        Approve {msg.metadata.correlation_id}
-                      </button>
-                    )}
+                    {msg.metadata?.type === 'approval' && (() => {
+                      const cid: string = msg.metadata.correlation_id;
+                      const isApproved = approvedIds.has(cid);
+                      const isPending = pendingApprovalId === cid;
+                      return (
+                        <button
+                          className={`approval-btn${isApproved ? ' approved' : ''}`}
+                          disabled={isApproved || isPending}
+                          onClick={async () => {
+                            if (isApproved || isPending) return;
+                            setPendingApprovalId(cid);
+                            try {
+                              await sendTerminalCommand(`/approve ${cid}`, token);
+                              setApprovedIds((prev) => new Set(prev).add(cid));
+                            } catch {
+                              // Expired / already used — mark it consumed so it
+                              // stops showing as clickable.
+                              setApprovedIds((prev) => new Set(prev).add(cid));
+                            } finally {
+                              setPendingApprovalId(null);
+                            }
+                          }}
+                        >
+                          <CheckCircle size={12} />
+                          {isApproved ? `Approved ${cid}` : isPending ? 'Approving…' : `Approve ${cid}`}
+                        </button>
+                      );
+                    })()}
                   </React.Fragment>
                 ))}
                 <div ref={terminalEndRef} />

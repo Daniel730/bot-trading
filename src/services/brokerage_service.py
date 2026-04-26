@@ -359,8 +359,9 @@ class BrokerageService:
 
         logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares")
 
-        # Feature 018: Calculate 1% slippage-capped limitPrice
-        limit_price = price * 1.01 if side.upper() == "BUY" else price * 0.99
+        # Feature 018: Slippage-capped limitPrice driven by configuration.
+        slip = settings.T212_LIMIT_SLIPPAGE_PCT
+        limit_price = price * (1 + slip) if side.upper() == "BUY" else price * (1 - slip)
 
         # P-04 (2026-04-26): place_market_order is async — must be awaited.
         # Previously this created an un-awaited coroutine, so live orders were

@@ -253,6 +253,17 @@ class PersistenceService:
     async def log_trade_journal(self, journal_data: dict):
         """Logs or updates a trade journal entry."""
         from sqlalchemy.dialects.postgresql import insert
+        # Safety net: TradeJournal.entry_regime is NOT NULL.
+        # Some callers may submit partial payloads (reflection updates).
+        if "entry_regime" not in journal_data or journal_data.get("entry_regime") is None:
+            fallback_regime = MarketRegime.STABLE
+            try:
+                latest = await self.get_latest_market_regime()
+                if latest and latest.get("regime"):
+                    fallback_regime = MarketRegime(latest["regime"])
+            except Exception:
+                pass
+            journal_data["entry_regime"] = fallback_regime
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 stmt = insert(TradeJournal).values(**journal_data)
@@ -378,20 +389,38 @@ class PersistenceService:
             result = await session.execute(stmt)
             trades = result.scalars().all()
             
-            daily_pnl = {}
+            # Deduplicate by signal_id because close_trade writes the same
+            # signal-level pnl into each closed leg metadata row.
+            signal_day_pnl: Dict[tuple[str, str], float] = {}
             for t in trades:
                 if not t.metadata_json or "pnl" not in t.metadata_json:
                     continue
                 day_str = t.execution_timestamp.strftime("%Y-%m-%d")
-                pnl = float(t.metadata_json["pnl"])
+                sig = str(t.signal_id) if t.signal_id is not None else str(t.id)
+                key = (day_str, sig)
+                if key not in signal_day_pnl:
+                    signal_day_pnl[key] = float(t.metadata_json["pnl"])
+
+            daily_pnl: Dict[str, float] = {}
+            for (day_str, _sig), pnl in signal_day_pnl.items():
                 daily_pnl[day_str] = daily_pnl.get(day_str, 0.0) + pnl
-                
+
             return daily_pnl
 
     async def get_total_pnl(self) -> float:
         """Returns the absolute sum of all closed trade PnL."""
         daily_returns = await self.get_daily_returns()
         return sum(daily_returns.values())
+
+    async def get_daily_pnl_for_date(self, date_str: str) -> float:
+        """Returns realized PnL for one UTC date (YYYY-MM-DD)."""
+        daily_returns = await self.get_daily_returns()
+        return float(daily_returns.get(date_str, 0.0))
+
+    async def get_current_investment(self) -> float:
+        """Returns open-position cost basis across all active signals."""
+        open_signals = await self.get_open_signals()
+        return float(sum(float(sig.get("total_cost_basis", 0.0)) for sig in open_signals))
 
     async def get_agent_metrics(self, agent_name: str) -> tuple[int, int]:
         """Returns (successes, failures) for Thompson Sampling."""
