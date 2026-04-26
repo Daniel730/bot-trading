@@ -187,9 +187,20 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
   }, [refresh]);
 
   const filteredActive = useMemo(() => {
-    if (filter === 'all') return activePairs;
-    if (filter === 'crypto') return activePairs.filter((p) => p.is_crypto);
-    return activePairs.filter((p) => !p.is_crypto);
+    let list = activePairs;
+    if (filter === 'crypto') list = list.filter((p) => p.is_crypto);
+    else if (filter === 'stocks') list = list.filter((p) => !p.is_crypto);
+    // Sort: cointegrated pairs first, then by |z-score| descending so the
+    // most actionable signals bubble to the top. Pairs without a z-score
+    // (Kalman still warming up) sort to the bottom of their group.
+    return [...list].sort((a, b) => {
+      const cointDelta = (b.is_cointegrated ? 1 : 0) - (a.is_cointegrated ? 1 : 0);
+      if (cointDelta !== 0) return cointDelta;
+      const za = a.last_z_score == null ? -Infinity : Math.abs(a.last_z_score);
+      const zb = b.last_z_score == null ? -Infinity : Math.abs(b.last_z_score);
+      if (zb !== za) return zb - za;
+      return a.id.localeCompare(b.id);
+    });
   }, [activePairs, filter]);
 
   const stockCount = activePairs.filter((p) => !p.is_crypto).length;
@@ -257,18 +268,21 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
           <span className="panel-count">{activePairs.length}</span>
           <div className="pair-filter">
             <button
+              data-kind="all"
               className={`pair-filter-chip ${filter === 'all' ? 'active' : ''}`}
               onClick={() => setFilter('all')}
             >
               All ({activePairs.length})
             </button>
             <button
+              data-kind="stocks"
               className={`pair-filter-chip ${filter === 'stocks' ? 'active' : ''}`}
               onClick={() => setFilter('stocks')}
             >
               <TrendingUp size={10} /> Stocks ({stockCount})
             </button>
             <button
+              data-kind="crypto"
               className={`pair-filter-chip ${filter === 'crypto' ? 'active' : ''}`}
               onClick={() => setFilter('crypto')}
             >

@@ -438,11 +438,6 @@ const App: React.FC = () => {
             {/* Top-right: Open Positions */}
             <PositionsPanel token={token} />
 
-            {/* Middle (full width): Trading Pairs */}
-            <div className="grid-span-2">
-              <PairsPanel token={token} />
-            </div>
-
             {/* Bottom (full width): Agent Reasoning Log */}
             <div className="panel grid-span-2">
               <div className="panel-header">
@@ -526,6 +521,11 @@ const App: React.FC = () => {
 
           </div>
         </div>
+
+        {/* ── PAIRS RAIL (right) ──────────────────────────────────────── */}
+        <aside className="pairs-rail">
+          <PairsPanel token={token} />
+        </aside>
       </div>
 
       {/* Terminal Modal */}
