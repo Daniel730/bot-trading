@@ -3,6 +3,7 @@ import time
 import uuid
 from typing import List, Dict, Any
 from src.config import settings
+from src.services.web3_service import web3_service
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 import requests
 import logging
@@ -15,6 +16,7 @@ class BrokerageService:
     def __init__(self, api_key: str = None, api_secret: str = None):
         self.api_key = api_key or settings.effective_t212_key.strip()
         self.api_secret = api_secret or settings.T212_API_SECRET.strip()
+        self.web3 = web3_service
         self._cache = {}
         self._cache_ttl = 5  # 5 seconds
         self._cache_lock = asyncio.Lock()  # FR-014: Single-Flight prevention (Async)
@@ -96,6 +98,10 @@ class BrokerageService:
             return ticker.replace(".L", "_L_EQ")
 
         return f"{ticker}_US_EQ"
+
+    @staticmethod
+    def _is_crypto_ticker(ticker: str) -> bool:
+        return "-USD" in ticker.upper()
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         # P-03: Method is now async so _recover_timeout_order can be awaited correctly
@@ -224,6 +230,14 @@ class BrokerageService:
         return True
 
     async def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+        # Feature 037: route crypto spot orders to on-chain Web3 execution
+        # while keeping all non-crypto tickers on Trading212.
+        if self._is_crypto_ticker(ticker) and not settings.PAPER_TRADING:
+            logger.info("BrokerageDispatcher: routing %s to Web3 service", ticker)
+            return await self.web3.place_value_order(ticker=ticker, amount=amount, side=side)
+        return await self._place_value_order_t212(ticker=ticker, amount=amount, side=side)
+
+    async def _place_value_order_t212(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
         """
         Feature 014/016: Executes a value-based order by calculating required quantity.
         Enforces minTradeQuantity and quantityIncrement from brokerage metadata.
