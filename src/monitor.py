@@ -28,7 +28,7 @@ def setup_logging():
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
-    
+
     handler = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
@@ -130,17 +130,17 @@ class ArbitrageMonitor:
             # Entropy service stores baselines as 'entropy_baseline:{ticker}'
             baseline_a = await redis_service.client.get(f"entropy_baseline:{ticker_a}")
             baseline_b = await redis_service.client.get(f"entropy_baseline:{ticker_b}")
-            
+
             if not baseline_a: missing_baselines.append(ticker_a)
             if not baseline_b: missing_baselines.append(ticker_b)
-            
+
         if missing_baselines:
             error_msg = f"CRITICAL: Missing L2 Entropy Baselines for: {list(set(missing_baselines))}. Refusing to boot in LIVE mode."
             logger.critical(error_msg)
             # Send alert before exiting
             await notification_service.send_message(error_msg)
             raise SystemExit(error_msg)
-            
+
         logger.info("L2 ENTROPY BASELINES VALIDATED. Proceeding with Live Startup.")
 
     async def initialize_pairs(self):
@@ -165,7 +165,7 @@ class ArbitrageMonitor:
             f"(stocks={len(settings.ARBITRAGE_PAIRS) if not settings.DEV_MODE else 0}, "
             f"crypto={len(settings.CRYPTO_TEST_PAIRS)})..."
         )
-        
+
         for pair_config in pairs_to_init:
             ticker_a, ticker_b = pair_config['ticker_a'], pair_config['ticker_b']
             try:
@@ -177,19 +177,19 @@ class ArbitrageMonitor:
 
                 col_a = next((c for c in hist_data.columns if ticker_a in c), None)
                 col_b = next((c for c in hist_data.columns if ticker_b in c), None)
-                
+
                 if not col_a or not col_b: continue
 
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(hist_data[col_a], hist_data[col_b])
-                
+
                 # Bug L-01: Guard against NaN/Inf hedge ratio
                 import numpy as np
                 if pd.isna(hedge) or np.isinf(hedge):
                     logger.warning(f"Invalid hedge ratio for {ticker_a}/{ticker_b}: {hedge}. Using 1.0.")
                     hedge = 1.0
-                
+
                 pair_id = f"{ticker_a}_{ticker_b}"
-                
+
                 # Initialize Kalman filter.
                 # Do NOT pass initial_state here — that would bypass both Redis
                 # warm-start and 30-day historical pre-warming, leaving P=eye(2)*10
@@ -251,7 +251,7 @@ class ArbitrageMonitor:
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
         try:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
-            
+
             # Bug M-10: Market hours enforcement
             is_crypto = "-USD" in t_a or "-USD" in t_b
             if not is_crypto and not self.is_market_open():
@@ -263,7 +263,7 @@ class ArbitrageMonitor:
 
             if t_a not in latest_prices or t_b not in latest_prices:
                 return diagnostic
-            
+
             price_a = latest_prices[t_a]
             price_b = latest_prices[t_b]
 
@@ -275,10 +275,10 @@ class ArbitrageMonitor:
                 return diagnostic
             state_vec, innovation_var = kf.update(price_a, price_b)
             spread, z_score = kf.calculate_spread_and_zscore(price_a, price_b)
-            
+
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
-            
+
             # Sprint J: Heartbeat log for pair health
             logger.info(f"SCAN [{t_a}/{t_b}] Current Z-Score: {z_score:.2f} | Beta: {state_vec[1]:.4f}")
 
@@ -333,13 +333,13 @@ class ArbitrageMonitor:
                 else:
                     logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
                     diagnostic["verdict"] = "VETOED"
-                
+
                 diagnostic["confidence"] = decision_state['final_confidence']
             else:
                 # Cleanup inactive signals
                 async with self._signals_lock:
                     self.active_signals = [s for s in self.active_signals if not (s['ticker_a'] == t_a and s['ticker_b'] == t_b)]
-            
+
             return diagnostic
 
         except Exception as e:
@@ -349,11 +349,11 @@ class ArbitrageMonitor:
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id):
         """Executes a trade and logs to PostgreSQL."""
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
-        
+
         # Sprint D.2: Bid-Ask Slippage Protection
         bid_a, ask_a = await data_service.get_bid_ask(t_a)
         bid_b, ask_b = await data_service.get_bid_ask(t_b)
-        
+
         if bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0:
             spread_a = (ask_a - bid_a) / bid_a if bid_a > 0 else 0
             spread_b = (ask_b - bid_b) / bid_b if bid_b > 0 else 0
@@ -364,34 +364,34 @@ class ArbitrageMonitor:
                 return
         else:
             logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
-        
+
         # Bug H-02: Wrap sync brokerage calls in asyncio.to_thread
         total_cash = await asyncio.to_thread(self.brokerage.get_account_cash)
         if total_cash is None:
-            total_cash = 2000.0 # Fallback
-        
+            total_cash = 2000.0  # Fallback
+
         # Sprint B: Risk Service validation with Half-Kelly and Max 5% Port limit
         # Bug L-03: Pass per-pair allocation (5% max) instead of full portfolio
         per_pair_alloc = total_cash * 0.05
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
             total_portfolio_cash=total_cash,
-            amount_fiat=per_pair_alloc, 
+            amount_fiat=per_pair_alloc,
             win_prob=0.55,
             win_loss_ratio=1.0
         )
-        
+
         if not risk_res["is_acceptable"]:
             logger.warning(f"Live execute rejected by RiskService: {risk_res.get('rejection_reason', 'Insufficient Kelly Fraction')}")
             return
-            
+
         target_cash = risk_res["final_amount"]
         logger.info(f"RISK APPROVED SIZE: {target_cash:.2f} per leg for {t_a}/{t_b} (Kelly: {risk_res['kelly_fraction']:.4f})")
-        
+
         size_a = round(target_cash / price_a, 6)
         size_b = round(target_cash / price_b, 6)
 
-        # Feature 008 – Sector Cluster Guard (prospective, race-condition-safe).
+        # Feature 008 - Sector Cluster Guard (prospective, race-condition-safe).
         # Both legs are counted as new exposure (target_cash each) so the check
         # is evaluated BEFORE the trade is placed, not after.  This prevents two
         # signals in the same scan window from independently passing the 30 % cap
@@ -419,17 +419,27 @@ class ArbitrageMonitor:
             logger.warning("Regime classification unavailable for %s; defaulting to STABLE", t_a)
             regime_info = {"regime": "STABLE", "confidence": 0.5, "features": {}}
 
-        # Determina a direção (Side) para cada perna
+        # Determina a direcao (Side) para cada perna
         side_a = "SELL" if direction == "Short-Long" else "BUY"
         side_b = "BUY" if direction == "Short-Long" else "SELL"
 
-        if settings.PAPER_TRADING:
+        # P-07 (2026-04-26): Crypto pairs (Yahoo "-USD" symbols) cannot be
+        # traded on Trading 212 - T212 has no spot crypto, only the EU-listed
+        # crypto ETNs (BTCE.DE, ZETH.DE, etc.). Sending BTC-USD/SOL-USD/etc.
+        # to the broker just produces malformed instrument IDs (BTC-USD_US_EQ)
+        # that T212 always rejects. Force shadow execution for crypto pairs
+        # regardless of PAPER_TRADING so the strategy can still be evaluated
+        # without flooding the log with broker rejections.
+        is_crypto_pair = "-USD" in t_a or "-USD" in t_b
+
+        if settings.PAPER_TRADING or is_crypto_pair:
             # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
             # R4 fix (2026-04-19): propagate signal_id so the shadow TradeLedger row
             # can be joined with the AgentReasoning / TradeJournal rows logged for
             # this signal. Previously shadow_service generated its own UUID and
             # decorrelated the paper-trade audit trail.
-            logger.info(f"PAPER TRADING: Executing shadow trade {direction} for {t_a}/{t_b}")
+            mode_tag = "PAPER TRADING" if settings.PAPER_TRADING else "SHADOW (crypto, T212-unsupported)"
+            logger.info(f"{mode_tag}: Executing shadow trade {direction} for {t_a}/{t_b}")
             await shadow_service.execute_simulated_trade(
                 pair['id'], direction, size_a, size_b, price_a, price_b,
                 signal_id=signal_id,
@@ -437,20 +447,28 @@ class ArbitrageMonitor:
             return
 
         # Chamada ao broker (T212 via Fractional Engine)
-        
+
         exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
-        
+
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
 
-        # T-02: Atomic execution guard — abort if Leg A fails; emergency-close if Leg B fails
+        # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
         res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
         status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
 
         if status_a == OrderStatus.FAILED:
-            logger.error(f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. No position opened.")
+            # P-08 (2026-04-26): Surface the broker's actual rejection reason.
+            # Previously the log discarded res_a entirely so every abort looked
+            # identical and we couldn't tell auth failures from bad-symbol
+            # rejections from insufficient-funds.
+            broker_msg = res_a.get("message") or res_a.get("error") or res_a
+            logger.error(
+                f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. "
+                f"No position opened. Broker response: {broker_msg}"
+            )
             return
 
         # Leg B
@@ -467,7 +485,7 @@ class ArbitrageMonitor:
             close_res = await self.brokerage.place_value_order(exec_t_a, target_cash, close_side_a)
             if close_res.get("status") == "error":
                 orphan_msg = (
-                    f"🚨 CRITICAL — EMERGENCY CLOSE FAILED\n"
+                    f"CRITICAL - EMERGENCY CLOSE FAILED\n"
                     f"Signal: {signal_id}\n"
                     f"Ticker: {exec_t_a} ({side_a} leg)\n"
                     f"The position is now ORPHANED. Manual intervention required.\n"
@@ -531,7 +549,7 @@ class ArbitrageMonitor:
             "status": status_b,
             "metadata": {"broker_response": res_b}
         })
-        
+
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
 
     async def _recheck_cointegration(self, pair: dict):
@@ -565,10 +583,10 @@ class ArbitrageMonitor:
             if not is_coint:
                 pair['is_cointegrated'] = False
                 if previously_coint:
-                    # Only alert on a real break (True → False transition).
+                    # Only alert on a real break (True -> False transition).
                     # If the pair was already non-cointegrated at startup, stay quiet.
                     msg = (
-                        f"⚠️ COINTEGRATION BREAK: {t_a}/{t_b} — "
+                        f"COINTEGRATION BREAK: {t_a}/{t_b} - "
                         f"ADF p-value={p_val:.4f} > 0.05. "
                         f"Pair suspended until cointegration is restored."
                     )
@@ -582,9 +600,9 @@ class ArbitrageMonitor:
             else:
                 pair['is_cointegrated'] = True
                 if not previously_coint:
-                    # Alert only on a real restore (False → True transition).
+                    # Alert only on a real restore (False -> True transition).
                     msg = (
-                        f"✅ COINTEGRATION RESTORED: {t_a}/{t_b} — "
+                        f"COINTEGRATION RESTORED: {t_a}/{t_b} - "
                         f"ADF p-value={p_val:.4f}. Pair re-activated."
                     )
                     logger.info(msg)
@@ -597,7 +615,7 @@ class ArbitrageMonitor:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
     async def run(self):
-        # FR-006: Pre-flight line — operator must know mode/universe/window
+        # FR-006: Pre-flight line - operator must know mode/universe/window
         # before a single log line about infra appears.
         self.log_preflight()
 
@@ -611,13 +629,13 @@ class ArbitrageMonitor:
         # (so /api/pairs can hot-reload, etc).
         dashboard_service.attach_monitor(self)
         await dashboard_service.start()
-        
+
         # Sprint J: Start Telegram Listener (Async)
         await notification_service.start_listening()
-        
+
         # Sprint C: Startup Health Checks
         logger.info("Running System Health Checks...")
-        
+
         # 1. PostgreSQL Check
         try:
             async with persistence_service.engine.connect() as conn:
@@ -639,7 +657,7 @@ class ArbitrageMonitor:
 
         # 3. Trading 212 API Check (if not exclusively paper/mocked)
         if not settings.PAPER_TRADING:
-            await asyncio.sleep(1) # Rate limit safety delay
+            await asyncio.sleep(1)  # Rate limit safety delay
             try:
                 # Await async brokerage call
                 test_ping = await self.brokerage.get_portfolio()
@@ -650,35 +668,35 @@ class ArbitrageMonitor:
                 logger.error(msg)
                 await notification_service.send_alert(msg)
                 return
-                
+
         logger.info("All Health Checks Passed (Postgres, Redis, T212). Bot is active.")
-        
+
         # Sprint J: Signal the user via Telegram that we are entering MISSION MODE
-        await notification_service.send_message("📊 *System Health*: All Checks Passed.\n\n🔄 *Mode*: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
-        
+        await notification_service.send_message("System Health: All Checks Passed.\n\nMode: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
+
         # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
         # from a previous crashed session doesn't silently block all signals.
         await persistence_service.set_system_state("operational_status", "NORMAL")
         await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         logger.info("Circuit breaker reset to NORMAL on startup.")
-        
+
         try:
             while True:
                 try:
                     from src.services.performance_service import performance_service
                     p_metrics = await performance_service.get_portfolio_metrics()
                     await dashboard_service.update_metrics(p_metrics)
-                    
+
                     pnl = await persistence_service.get_total_pnl()
                     await dashboard_service.update(
-                        stage="Monitoring", 
-                        details=f"Scanning {len(self.active_pairs)} pairs...", 
+                        stage="Monitoring",
+                        details=f"Scanning {len(self.active_pairs)} pairs...",
                         pnl=pnl
                     )
                 except Exception as e:
                     logger.error(f"Error pushing metrics to dashboard: {e}")
                     await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
-                # Exit Strategy Loop — M-06: run all exit evaluations concurrently
+                # Exit Strategy Loop - M-06: run all exit evaluations concurrently
                 open_signals = []
                 try:
                     open_signals = await persistence_service.get_open_signals()
@@ -696,7 +714,7 @@ class ArbitrageMonitor:
 
                 latest_prices = await data_service.get_latest_price(list(set(all_tickers)))
 
-                # Daily cointegration re-validation — fire background tasks so
+                # Daily cointegration re-validation - fire background tasks so
                 # historical data fetches don't block the current scan cycle.
                 today = datetime.now().date()
                 for pair in self.active_pairs:
@@ -707,7 +725,7 @@ class ArbitrageMonitor:
                 tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
                 results = await asyncio.gather(*tasks)
 
-                # L-14: Enriched heartbeat — show analyzed vs vetoed vs open signal counts
+                # L-14: Enriched heartbeat - show analyzed vs vetoed vs open signal counts
                 active_signals = [r for r in results if r and r.get('confidence', 0) > 0.6]
                 vetoed = [r for r in results if r and r.get('vetoed')]
                 logger.info(
@@ -716,7 +734,7 @@ class ArbitrageMonitor:
                     f"{len(vetoed)} vetoed | "
                     f"{len(open_signals)} open positions ---"
                 )
-                
+
                 await asyncio.sleep(15)
         except asyncio.CancelledError:
             logger.info("Shutdown signal received. Closing connections...")
@@ -731,38 +749,38 @@ class ArbitrageMonitor:
         sig_id = signal["signal_id"]
         legs = signal.get("legs", [])
         if len(legs) != 2: return
-        
+
         leg_a, leg_b = legs[0], legs[1]
         t_a, t_b = leg_a["ticker"], leg_b["ticker"]
-        
+
         # Get real-time prices
         prices = await data_service.get_latest_price([t_a, t_b])
         if t_a not in prices or t_b not in prices: return
-        
+
         p_a, p_b = prices[t_a], prices[t_b]
-        
+
         current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
         cost_basis = signal["total_cost_basis"]
-        
+
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis, max_loss_pct=0.02):
             logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH)
             return
-            
+
         # 2. Statistical Stop Loss / Take profit
         pair_id = f"{t_a}_{t_b}"
         kf = await arbitrage_service.get_or_create_filter(pair_id)
         if not kf: return
-        
+
         # Calculate current dynamic z-score based on latest price
         spread, z_score = kf.calculate_spread_and_zscore(p_a, p_b)
-        
+
         # Statistical Take Profit (Mean Reversion complete)
         if abs(z_score) <= 0.5:
             logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT)
-        
+
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= 3.5:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
@@ -795,7 +813,7 @@ class ArbitrageMonitor:
 
         # N2 fix: in paper mode, route through shadow_service so the shadow ledger
         # gets a proper close log with directional PnL breakdown.
-        # shadow_service.close_simulated_trade does NOT call persistence — we handle
+        # shadow_service.close_simulated_trade does NOT call persistence - we handle
         # DB writes once here for both live and paper paths to preserve exit_reason.
         if settings.PAPER_TRADING:
             direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
@@ -817,4 +835,3 @@ class ArbitrageMonitor:
 if __name__ == "__main__":
     monitor = ArbitrageMonitor()
     asyncio.run(monitor.run())
-
