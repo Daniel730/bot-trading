@@ -101,6 +101,7 @@ class Settings(BaseSettings):
 
     MAX_SECTOR_EXPOSURE: float = 0.30
     PAIR_SECTORS: dict = {
+        # --- Original equity pairs ---
         'KO_PEP': 'Consumer Staples', 'MA_V': 'Financials', 'XOM_CVX': 'Energy',
         'JPM_BAC': 'Financials', 'WMT_TGT': 'Consumer Staples', 'GOOGL_GOOG': 'Technology',
         'MSFT_AAPL': 'Technology', 'DAL_UAL': 'Industrials', 'UPS_FDX': 'Industrials',
@@ -109,7 +110,20 @@ class Settings(BaseSettings):
         'NKE_ADDYY': 'Consumer Discretionary', 'PG_CL': 'Consumer Staples',
         'BA_AIR.PA': 'Industrials', 'T_VZ': 'Telecommunications',
         'VLO_MPC': 'Energy', 'COF_SYF': 'Financials', 'GS_MS': 'Financials',
-        'BTCE.DE_ZETH.DE': 'Crypto ETNs'
+        'BTCE.DE_ZETH.DE': 'Crypto ETNs',
+        # --- New high-volatility equity pairs ---
+        'NVDA_AMD': 'Technology',           # GPU/AI chip duopoly
+        'TSLA_RIVN': 'Consumer Discretionary',  # EV pair
+        'COIN_MSTR': 'Financials',          # Bitcoin-proxy stocks
+        'META_SNAP': 'Technology',          # Social media
+        'NFLX_DIS': 'Consumer Discretionary',   # Streaming wars
+        'UBER_LYFT': 'Consumer Discretionary',  # Rideshare duopoly
+        'MU_SMCI': 'Technology',            # Memory / AI servers
+        'SBUX_MCD': 'Consumer Discretionary',   # QSR
+        'SLB_HAL': 'Energy',               # Oilfield services
+        'AMZN_SHOP': 'Consumer Discretionary',  # E-commerce
+        'PLTR_BBAI': 'Technology',          # AI / defence analytics
+        'BRK-B_JPM': 'Financials',          # Financial giants
     }
 
     EU_HEDGE_MAPPINGS: dict = {
@@ -117,27 +131,41 @@ class Settings(BaseSettings):
     }
 
     ARBITRAGE_PAIRS: list = [
-        {'ticker_a': 'KO', 'ticker_b': 'PEP'},
-        {'ticker_a': 'MA', 'ticker_b': 'V'},
-        {'ticker_a': 'XOM', 'ticker_b': 'CVX'},
-        {'ticker_a': 'JPM', 'ticker_b': 'BAC'},
-        {'ticker_a': 'WMT', 'ticker_b': 'TGT'},
-        {'ticker_a': 'GOOGL', 'ticker_b': 'GOOG'},
-        {'ticker_a': 'MSFT', 'ticker_b': 'AAPL'},
-        {'ticker_a': 'DAL', 'ticker_b': 'UAL'},
-        {'ticker_a': 'UPS', 'ticker_b': 'FDX'},
-        {'ticker_a': 'HD', 'ticker_b': 'LOW'},
-        {'ticker_a': 'GM', 'ticker_b': 'F'},
-        {'ticker_a': 'INTC', 'ticker_b': 'AMD'},
-        {'ticker_a': 'PYPL', 'ticker_b': 'AFRM'},
-        {'ticker_a': 'NKE', 'ticker_b': 'ADDYY'},
-        {'ticker_a': 'PG', 'ticker_b': 'CL'},
-        {'ticker_a': 'BA', 'ticker_b': 'AIR.PA'},
-        {'ticker_a': 'T', 'ticker_b': 'VZ'},
-        {'ticker_a': 'VLO', 'ticker_b': 'MPC'},
-        {'ticker_a': 'COF', 'ticker_b': 'SYF'},
-        {'ticker_a': 'GS', 'ticker_b': 'MS'},
-        {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'}
+        # --- Classic pairs (original) ---
+        {'ticker_a': 'KO',      'ticker_b': 'PEP'},
+        {'ticker_a': 'MA',      'ticker_b': 'V'},
+        {'ticker_a': 'XOM',     'ticker_b': 'CVX'},
+        {'ticker_a': 'JPM',     'ticker_b': 'BAC'},
+        {'ticker_a': 'WMT',     'ticker_b': 'TGT'},
+        {'ticker_a': 'GOOGL',   'ticker_b': 'GOOG'},
+        {'ticker_a': 'MSFT',    'ticker_b': 'AAPL'},
+        {'ticker_a': 'DAL',     'ticker_b': 'UAL'},
+        {'ticker_a': 'UPS',     'ticker_b': 'FDX'},
+        {'ticker_a': 'HD',      'ticker_b': 'LOW'},
+        {'ticker_a': 'GM',      'ticker_b': 'F'},
+        {'ticker_a': 'INTC',    'ticker_b': 'AMD'},
+        {'ticker_a': 'PYPL',    'ticker_b': 'AFRM'},
+        {'ticker_a': 'NKE',     'ticker_b': 'ADDYY'},
+        {'ticker_a': 'PG',      'ticker_b': 'CL'},
+        {'ticker_a': 'BA',      'ticker_b': 'AIR.PA'},
+        {'ticker_a': 'T',       'ticker_b': 'VZ'},
+        {'ticker_a': 'VLO',     'ticker_b': 'MPC'},
+        {'ticker_a': 'COF',     'ticker_b': 'SYF'},
+        {'ticker_a': 'GS',      'ticker_b': 'MS'},
+        {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'},
+        # --- New high-volatility / high-profit pairs ---
+        {'ticker_a': 'NVDA',    'ticker_b': 'AMD'},     # GPU/AI chip duopoly — massive vol
+        {'ticker_a': 'TSLA',    'ticker_b': 'RIVN'},    # EV pair
+        {'ticker_a': 'COIN',    'ticker_b': 'MSTR'},    # Bitcoin-proxy stocks
+        {'ticker_a': 'META',    'ticker_b': 'SNAP'},    # Social media
+        {'ticker_a': 'NFLX',    'ticker_b': 'DIS'},     # Streaming wars
+        {'ticker_a': 'UBER',    'ticker_b': 'LYFT'},    # Rideshare duopoly
+        {'ticker_a': 'MU',      'ticker_b': 'SMCI'},    # Memory vs AI servers
+        {'ticker_a': 'SBUX',    'ticker_b': 'MCD'},     # QSR
+        {'ticker_a': 'SLB',     'ticker_b': 'HAL'},     # Oilfield services
+        {'ticker_a': 'AMZN',    'ticker_b': 'SHOP'},    # E-commerce
+        {'ticker_a': 'PLTR',    'ticker_b': 'BBAI'},    # AI / defence analytics
+        {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},     # Financial giants
     ]
 
     # Crypto pairs traded 24/7 — including weekends and outside US equity
@@ -145,7 +173,7 @@ class Settings(BaseSettings):
     # mode; process_pair's `is_crypto` guard makes sure equity pairs pause
     # off-hours while crypto pairs keep scanning.
     CRYPTO_TEST_PAIRS: list = [
-        # Layer 1 / smart-contract platforms
+        # --- Layer 1 / smart-contract platforms ---
         {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
         {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
         {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
@@ -158,26 +186,37 @@ class Settings(BaseSettings):
         {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
         {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
         {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
-        # Stores of value / Bitcoin forks
+        # --- Stores of value / Bitcoin forks ---
         {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
         {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
         {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
         {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
-        # Payments / xRP-style
+        # --- Payments / XRP-style ---
         {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
+        {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},  # Competing payment networks
         {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
-        # DeFi
-        {'ticker_a': 'UNI-USD',   'ticker_b': 'AAVE-USD'},
-        {'ticker_a': 'UNI-USD',   'ticker_b': 'LINK-USD'},
+        # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
+        {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},  # replaces UNI/LINK
+        {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},   # replaces UNI/AAVE
         {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
-        # Storage / utility
+        {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},  # Cosmos DeFi
+        # --- Storage / utility ---
         {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
-        # Layer 2 / scaling
-        {'ticker_a': 'MATIC-USD', 'ticker_b': 'SOL-USD'},
-        # Memes
+        # --- Cosmos ecosystem ---
+        {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},  # Celestia modular L1
+        # --- Infrastructure / enterprise ---
+        {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},  # Enterprise DLT pair
+        # --- Memes (high vol, mean-reverting spreads) ---
         {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
-        # Newer L1s (Move-based, etc.)
+        {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},  # Solana memes
+        # --- Newer L1s ---
         {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
+        # P-09 (2026-04-26): Removed pairs containing tickers that yfinance
+        # consistently reports as delisted (no spot data available):
+        #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
+        #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
+        #   JUP-USD, PEPE-USD.
+        # Re-add them once Yahoo Finance restores their feeds.
     ]
 
     DEV_EXECUTION_TICKERS: dict = {
