@@ -278,21 +278,28 @@ def _scrub_non_finite(obj):
 
 def _serialize_pair(active_pair: dict) -> dict:
     """Convert monitor.active_pairs entry into a JSON-friendly payload."""
+    ticker_a = active_pair.get("ticker_a", "")
+    ticker_b = active_pair.get("ticker_b", "")
+    is_crypto = "-USD" in ticker_a or "-USD" in ticker_b
+    pair_id = active_pair.get("id", "")
+    # Sector lookup: try direct id, then reversed id, then default by asset class.
+    sector = settings.PAIR_SECTORS.get(
+        pair_id,
+        settings.PAIR_SECTORS.get(
+            f"{ticker_b}_{ticker_a}",
+            "Crypto" if is_crypto else "Unassigned",
+        ),
+    )
     return {
-        "id": active_pair.get("id"),
-        "ticker_a": active_pair.get("ticker_a"),
-        "ticker_b": active_pair.get("ticker_b"),
+        "id": pair_id,
+        "ticker_a": ticker_a,
+        "ticker_b": ticker_b,
         "hedge_ratio": _safe_float(active_pair.get("hedge_ratio")),
         "mean": _safe_float(active_pair.get("mean")),
         "std": _safe_float(active_pair.get("std")),
         "is_cointegrated": active_pair.get("is_cointegrated"),
-        "sector": settings.PAIR_SECTORS.get(
-            active_pair.get("id", ""),
-            settings.PAIR_SECTORS.get(
-                f"{active_pair.get('ticker_b','')}_{active_pair.get('ticker_a','')}",
-                "Unassigned",
-            ),
-        ),
+        "is_crypto": is_crypto,
+        "sector": sector,
     }
 
 

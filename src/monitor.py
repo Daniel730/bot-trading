@@ -107,12 +107,15 @@ class ArbitrageMonitor:
                 f"randomised prices) | Pair universe: {pair_count} crypto pairs"
             )
         else:
-            pair_count = len(settings.ARBITRAGE_PAIRS)
+            equity_count = len(settings.ARBITRAGE_PAIRS)
+            crypto_count = len(settings.CRYPTO_TEST_PAIRS)
             next_open = self.next_market_open()
             logger.info(
-                f"MODE: {mode} | DEV_MODE=false | Pair universe: {pair_count} "
-                f"equity pairs | Next NYSE open: "
-                f"{next_open.strftime('%Y-%m-%d %H:%M %Z')}"
+                f"MODE: {mode} | DEV_MODE=false | Pair universe: "
+                f"{equity_count} equity + {crypto_count} crypto = "
+                f"{equity_count + crypto_count} total | "
+                f"Equity pairs gated by NYSE hours, crypto runs 24/7 | "
+                f"Next NYSE open: {next_open.strftime('%Y-%m-%d %H:%M %Z')}"
             )
 
     async def verify_entropy_baselines(self):
@@ -141,15 +144,27 @@ class ArbitrageMonitor:
         logger.info("L2 ENTROPY BASELINES VALIDATED. Proceeding with Live Startup.")
 
     async def initialize_pairs(self):
-        """Initializes cointegration metrics and Kalman filters."""
+        """Initializes cointegration metrics and Kalman filters.
+
+        - DEV_MODE: only crypto pairs (24/7 testing with randomized prices).
+        - PROD: equity pairs + crypto pairs combined. The market-hours guard
+          in process_pair() pauses equity scans outside NYSE hours; crypto
+          pairs (detected by '-USD' suffix) keep running on weekends and
+          overnight so the bot is never idle.
+        """
         if settings.LIVE_CAPITAL_DANGER:
             await self.verify_entropy_baselines()
-            
+
         if settings.DEV_MODE:
             pairs_to_init = settings.CRYPTO_TEST_PAIRS
         else:
-            pairs_to_init = settings.ARBITRAGE_PAIRS
-        logger.info(f"Initializing pairs in {'DEV' if settings.DEV_MODE else 'PROD'} mode...")
+            pairs_to_init = list(settings.ARBITRAGE_PAIRS) + list(settings.CRYPTO_TEST_PAIRS)
+        logger.info(
+            f"Initializing {len(pairs_to_init)} pairs in "
+            f"{'DEV' if settings.DEV_MODE else 'PROD'} mode "
+            f"(stocks={len(settings.ARBITRAGE_PAIRS) if not settings.DEV_MODE else 0}, "
+            f"crypto={len(settings.CRYPTO_TEST_PAIRS)})..."
+        )
         
         for pair_config in pairs_to_init:
             ticker_a, ticker_b = pair_config['ticker_a'], pair_config['ticker_b']
