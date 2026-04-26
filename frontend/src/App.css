@@ -1,53 +1,58 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap");
 
 /* ============================================================
    DESIGN TOKENS
    ============================================================ */
 :root {
-  --bg:           #0d1117;
-  --surface:      #161b22;
-  --surface-2:    #21262d;
-  --surface-3:    #2d333b;
-  --border:       #30363d;
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #21262d;
+  --surface-3: #2d333b;
+  --border: #30363d;
   --border-muted: rgba(48, 54, 61, 0.5);
 
-  --accent:       #388bfd;
+  --accent: #388bfd;
   --accent-muted: rgba(56, 139, 253, 0.12);
 
-  --green:        #3fb950;
-  --green-muted:  rgba(63, 185, 80, 0.12);
+  --green: #3fb950;
+  --green-muted: rgba(63, 185, 80, 0.12);
 
-  --red:          #f85149;
-  --red-muted:    rgba(248, 81, 73, 0.12);
+  --red: #f85149;
+  --red-muted: rgba(248, 81, 73, 0.12);
 
-  --yellow:       #d29922;
+  --yellow: #d29922;
   --yellow-muted: rgba(210, 153, 34, 0.12);
 
-  --purple:       #bc8cff;
+  --purple: #bc8cff;
   --purple-muted: rgba(188, 140, 255, 0.12);
 
-  --text:         #e6edf3;
-  --text-muted:   #8b949e;
-  --text-subtle:  #484f58;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --text-subtle: #484f58;
 
-  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono:    'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
 
-  --radius:       6px;
-  --radius-lg:    10px;
-  --radius-xl:    14px;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
 }
 
 /* ============================================================
    RESET & BASE
    ============================================================ */
-*, *::before, *::after {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   height: 100%;
 }
 
@@ -62,7 +67,9 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-button { cursor: pointer; }
+button {
+  cursor: pointer;
+}
 
 /* ============================================================
    APP SHELL
@@ -90,8 +97,16 @@ button { cursor: pointer; }
   z-index: 10;
 }
 
-.header-left  { display: flex; align-items: center; gap: 16px; }
-.header-right { display: flex; align-items: center; gap: 10px; }
+.header-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 
 .logo {
   display: flex;
@@ -133,14 +148,28 @@ button { cursor: pointer; }
   border-radius: 50%;
   flex-shrink: 0;
 }
-.pulse-dot.green  { background: var(--green);  animation: pulse-green 2.5s infinite; }
-.pulse-dot.yellow { background: var(--yellow); }
-.pulse-dot.red    { background: var(--red); }
-.pulse-dot.blue   { background: var(--accent); }
+.pulse-dot.green {
+  background: var(--green);
+  animation: pulse-green 2.5s infinite;
+}
+.pulse-dot.yellow {
+  background: var(--yellow);
+}
+.pulse-dot.red {
+  background: var(--red);
+}
+.pulse-dot.blue {
+  background: var(--accent);
+}
 
 @keyframes pulse-green {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5); }
-  50%       { box-shadow: 0 0 0 4px rgba(63, 185, 80, 0); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(63, 185, 80, 0);
+  }
 }
 
 .status-pill {
@@ -170,7 +199,10 @@ button { cursor: pointer; }
   font-family: var(--font-sans);
   font-weight: 500;
   border: 1px solid transparent;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
   white-space: nowrap;
 }
 
@@ -200,7 +232,9 @@ button { cursor: pointer; }
   padding: 14px 20px;
   border-right: 1px solid var(--border);
 }
-.kpi-item:last-child { border-right: none; }
+.kpi-item:last-child {
+  border-right: none;
+}
 
 .kpi-label {
   font-size: 11px;
@@ -217,9 +251,15 @@ button { cursor: pointer; }
   letter-spacing: -0.5px;
   line-height: 1.2;
 }
-.kpi-value.positive { color: var(--green); }
-.kpi-value.negative { color: var(--red);   }
-.kpi-value.muted    { color: var(--text-muted); }
+.kpi-value.positive {
+  color: var(--green);
+}
+.kpi-value.negative {
+  color: var(--red);
+}
+.kpi-value.muted {
+  color: var(--text-muted);
+}
 
 .kpi-sub {
   font-size: 11px;
@@ -248,10 +288,45 @@ button { cursor: pointer; }
    ============================================================ */
 .main {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: 280px 1fr 340px;
   flex: 1;
   overflow: hidden;
   min-height: 0;
+}
+
+/* Right-rail dedicated to the Trading Pairs panel. Mirrors the sidebar
+   on the left so the layout is symmetric and the pairs are always visible
+   without competing with the reasoning log for vertical real estate. */
+.pairs-rail {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.pairs-rail > .panel {
+  flex: 1;
+  border-radius: 0;
+  background: var(--surface);
+}
+.pairs-rail .panel-header {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+@media (max-width: 1280px) {
+  .main {
+    grid-template-columns: 240px 1fr 300px;
+  }
+}
+@media (max-width: 1024px) {
+  .main {
+    grid-template-columns: 220px 1fr;
+  }
+  .pairs-rail {
+    display: none;
+  }
 }
 
 /* ============================================================
@@ -269,7 +344,9 @@ button { cursor: pointer; }
   padding: 16px;
   border-bottom: 1px solid var(--border-muted);
 }
-.section:last-child { border-bottom: none; }
+.section:last-child {
+  border-bottom: none;
+}
 
 .section-title {
   display: flex;
@@ -433,8 +510,12 @@ button { cursor: pointer; }
   margin-bottom: 8px;
   transition: border-color 0.15s;
 }
-.signal-card:hover    { border-color: var(--text-subtle); }
-.signal-card:last-child { margin-bottom: 0; }
+.signal-card:hover {
+  border-color: var(--text-subtle);
+}
+.signal-card:last-child {
+  margin-bottom: 0;
+}
 
 .signal-top {
   display: flex;
@@ -478,11 +559,26 @@ button { cursor: pointer; }
   letter-spacing: 0.5px;
   white-space: nowrap;
 }
-.badge-blue   { background: var(--accent-muted);  color: var(--accent);  }
-.badge-green  { background: var(--green-muted);   color: var(--green);   }
-.badge-red    { background: var(--red-muted);     color: var(--red);     }
-.badge-yellow { background: var(--yellow-muted);  color: var(--yellow);  }
-.badge-purple { background: var(--purple-muted);  color: var(--purple);  }
+.badge-blue {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+.badge-green {
+  background: var(--green-muted);
+  color: var(--green);
+}
+.badge-red {
+  background: var(--red-muted);
+  color: var(--red);
+}
+.badge-yellow {
+  background: var(--yellow-muted);
+  color: var(--yellow);
+}
+.badge-purple {
+  background: var(--purple-muted);
+  color: var(--purple);
+}
 
 /* ============================================================
    THOUGHT LOG
@@ -495,7 +591,9 @@ button { cursor: pointer; }
   border-left-width: 3px;
   border-radius: 0 var(--radius) var(--radius) 0;
 }
-.thought-item:last-child { margin-bottom: 0; }
+.thought-item:last-child {
+  margin-bottom: 0;
+}
 
 .thought-header {
   display: flex;
@@ -573,7 +671,9 @@ button { cursor: pointer; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 32px 64px rgba(0,0,0,0.8);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 32px 64px rgba(0, 0, 0, 0.8);
 }
 
 .terminal-header {
@@ -585,7 +685,10 @@ button { cursor: pointer; }
   gap: 12px;
 }
 
-.terminal-dots { display: flex; gap: 7px; }
+.terminal-dots {
+  display: flex;
+  gap: 7px;
+}
 .terminal-dots span {
   width: 12px;
   height: 12px;
@@ -593,10 +696,18 @@ button { cursor: pointer; }
   cursor: pointer;
   transition: opacity 0.12s;
 }
-.terminal-dots span:hover { opacity: 0.75; }
-.td-red    { background: #ff5f57; }
-.td-yellow { background: #febc2e; }
-.td-green  { background: #28c840; }
+.terminal-dots span:hover {
+  opacity: 0.75;
+}
+.td-red {
+  background: #ff5f57;
+}
+.td-yellow {
+  background: #febc2e;
+}
+.td-green {
+  background: #28c840;
+}
 
 .terminal-title {
   flex: 1;
@@ -615,7 +726,9 @@ button { cursor: pointer; }
   transition: color 0.12s;
   padding: 0;
 }
-.terminal-close-btn:hover { color: var(--text); }
+.terminal-close-btn:hover {
+  color: var(--text);
+}
 
 .terminal-body {
   flex: 1;
@@ -648,14 +761,16 @@ button { cursor: pointer; }
   display: flex;
   align-items: center;
   padding: 10px 20px;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.02);
   border-top: 1px solid var(--border);
   gap: 8px;
   font-family: var(--font-mono);
   font-size: 12px;
 }
 
-.terminal-prompt { color: var(--green); }
+.terminal-prompt {
+  color: var(--green);
+}
 
 .terminal-input {
   flex: 1;
@@ -677,7 +792,9 @@ button { cursor: pointer; }
   transition: color 0.12s;
   padding: 0;
 }
-.terminal-send-btn:hover { color: var(--text); }
+.terminal-send-btn:hover {
+  color: var(--text);
+}
 
 .approval-btn {
   display: inline-flex;
@@ -696,7 +813,9 @@ button { cursor: pointer; }
   cursor: pointer;
   transition: background 0.12s;
 }
-.approval-btn:hover { background: rgba(63, 185, 80, 0.2); }
+.approval-btn:hover {
+  background: rgba(63, 185, 80, 0.2);
+}
 
 /* ============================================================
    TOAST / ERROR
@@ -745,10 +864,20 @@ button { cursor: pointer; }
 /* ============================================================
    SCROLLBAR
    ============================================================ */
-::-webkit-scrollbar          { width: 4px; height: 4px; }
-::-webkit-scrollbar-track    { background: transparent; }
-::-webkit-scrollbar-thumb    { background: var(--surface-3); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-subtle); }
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-subtle);
+}
 
 /* ============================================================
    MODE BADGE (header)
@@ -764,9 +893,21 @@ button { cursor: pointer; }
   font-family: var(--font-mono);
   border: 1px solid transparent;
 }
-.mode-live  { background: var(--red-muted);    color: var(--red);    border-color: rgba(248, 81, 73, 0.4); }
-.mode-paper { background: var(--accent-muted); color: var(--accent); border-color: rgba(56, 139, 253, 0.4); }
-.mode-dev   { background: var(--purple-muted); color: var(--purple); border-color: rgba(188, 140, 255, 0.4); }
+.mode-live {
+  background: var(--red-muted);
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.4);
+}
+.mode-paper {
+  background: var(--accent-muted);
+  color: var(--accent);
+  border-color: rgba(56, 139, 253, 0.4);
+}
+.mode-dev {
+  background: var(--purple-muted);
+  color: var(--purple);
+  border-color: rgba(188, 140, 255, 0.4);
+}
 
 /* ============================================================
    CONTENT GRID (2x2 + spans)
@@ -804,17 +945,29 @@ button { cursor: pointer; }
   align-items: center;
   justify-content: center;
   margin-left: 6px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    border-color 0.12s;
 }
 .panel-action-btn:hover {
   color: var(--text);
   background: var(--surface-2);
   border-color: var(--text-subtle);
 }
-.panel-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.panel-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
-@keyframes spin { to { transform: rotate(360deg); } }
-.spin { animation: spin 1s linear infinite; }
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
 
 /* ============================================================
    PAIRS PANEL — table layout
@@ -837,8 +990,12 @@ button { cursor: pointer; }
   letter-spacing: 0.5px;
   gap: 12px;
 }
-.pair-table-header span:nth-child(2) { text-align: right; }
-.pair-table-header span:nth-child(3) { text-align: center; }
+.pair-table-header span:nth-child(2) {
+  text-align: right;
+}
+.pair-table-header span:nth-child(3) {
+  text-align: center;
+}
 
 .pair-row {
   background: var(--surface);
@@ -847,8 +1004,12 @@ button { cursor: pointer; }
   overflow: hidden;
   transition: border-color 0.15s;
 }
-.pair-row:hover { border-color: var(--text-subtle); }
-.pair-row.pair-crypto { border-left: 2px solid var(--yellow); }
+.pair-row:hover {
+  border-color: var(--text-subtle);
+}
+.pair-row.pair-crypto {
+  border-left: 2px solid var(--yellow);
+}
 
 .pair-row-main {
   display: grid;
@@ -859,7 +1020,9 @@ button { cursor: pointer; }
   cursor: pointer;
   user-select: none;
 }
-.pair-row-main:focus-visible { outline: 1px solid var(--accent); }
+.pair-row-main:focus-visible {
+  outline: 1px solid var(--accent);
+}
 
 .pair-row-name {
   display: inline-flex;
@@ -893,14 +1056,18 @@ button { cursor: pointer; }
 
 .pair-expand-icon {
   color: var(--text-subtle);
-  transition: transform 0.2s ease, color 0.12s;
+  transition:
+    transform 0.2s ease,
+    color 0.12s;
   flex-shrink: 0;
 }
 .pair-expand-icon.expanded {
   transform: rotate(180deg);
   color: var(--text-muted);
 }
-.pair-row-main:hover .pair-expand-icon { color: var(--text-muted); }
+.pair-row-main:hover .pair-expand-icon {
+  color: var(--text-muted);
+}
 
 /* Expandable details area */
 .pair-row-details {
@@ -943,6 +1110,75 @@ button { cursor: pointer; }
 }
 
 /* ============================================================
+   PAIR FILTER CHIPS (in PairsPanel header)
+   ============================================================ */
+.pair-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.pair-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-subtle);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 9px;
+  border-radius: 11px;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    border-color 0.12s;
+  white-space: nowrap;
+}
+.pair-filter-chip:hover {
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+/* Active states — coloured per category */
+.pair-filter-chip.active {
+  color: var(--text);
+}
+.pair-filter-chip[data-kind="all"].active {
+  background: var(--surface-3);
+  border-color: var(--text-subtle);
+  color: var(--text);
+}
+.pair-filter-chip[data-kind="stocks"].active {
+  background: var(--accent-muted);
+  border-color: rgba(56, 139, 253, 0.55);
+  color: var(--accent);
+}
+.pair-filter-chip[data-kind="crypto"].active {
+  background: var(--yellow-muted);
+  border-color: rgba(210, 153, 34, 0.55);
+  color: var(--yellow);
+}
+
+/* Compact panel header inside the right rail so the chips wrap nicely */
+.pairs-rail .panel-header {
+  padding: 10px 14px;
+}
+.pairs-rail .pair-filter {
+  margin-left: 0;
+  width: 100%;
+  justify-content: flex-start;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border-muted);
+  margin-top: 2px;
+}
+
+/* ============================================================
    PAIRS EDITOR MODAL
    ============================================================ */
 .editor-window {
@@ -955,7 +1191,9 @@ button { cursor: pointer; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.04), 0 32px 64px rgba(0,0,0,0.7);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 32px 64px rgba(0, 0, 0, 0.7);
 }
 
 .editor-body {
@@ -1017,7 +1255,10 @@ button { cursor: pointer; }
   align-items: center;
   padding: 4px 6px;
   border-radius: 4px;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
+  transition:
+    color 0.12s,
+    background 0.12s,
+    border-color 0.12s;
 }
 .editor-remove-btn:hover {
   color: var(--red);
@@ -1047,7 +1288,9 @@ button { cursor: pointer; }
   border-radius: 4px;
   text-transform: uppercase;
 }
-.editor-input:focus { border-color: var(--accent); }
+.editor-input:focus {
+  border-color: var(--accent);
+}
 
 .editor-slash {
   font-family: var(--font-mono);
@@ -1067,7 +1310,9 @@ button { cursor: pointer; }
   font-size: 12px;
   font-weight: 600;
 }
-.editor-add-btn:hover { background: rgba(56, 139, 253, 0.2); }
+.editor-add-btn:hover {
+  background: rgba(56, 139, 253, 0.2);
+}
 
 .editor-msg {
   display: flex;
@@ -1093,7 +1338,7 @@ button { cursor: pointer; }
   align-items: center;
   gap: 8px;
   padding: 12px 20px;
-  background: rgba(255,255,255,0.02);
+  background: rgba(255, 255, 255, 0.02);
   border-top: 1px solid var(--border);
 }
 
@@ -1105,17 +1350,27 @@ button { cursor: pointer; }
   color: var(--text-muted);
   cursor: pointer;
 }
-.editor-toggle input { accent-color: var(--accent); }
+.editor-toggle input {
+  accent-color: var(--accent);
+}
 
-.editor-footer-spacer { flex: 1; }
+.editor-footer-spacer {
+  flex: 1;
+}
 
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
   color: white;
 }
-.btn-primary:hover { background: #4f9bff; border-color: #4f9bff; }
-.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary:hover {
+  background: #4f9bff;
+  border-color: #4f9bff;
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* ============================================================
    POSITIONS PANEL
@@ -1133,7 +1388,9 @@ button { cursor: pointer; }
   padding: 12px 14px;
   transition: border-color 0.15s;
 }
-.position-card:hover { border-color: var(--text-subtle); }
+.position-card:hover {
+  border-color: var(--text-subtle);
+}
 
 .position-top {
   display: flex;
@@ -1189,8 +1446,14 @@ button { cursor: pointer; }
   padding: 1px 5px;
   border-radius: 3px;
 }
-.position-leg-side[data-side="BUY"]  { background: var(--green-muted); color: var(--green); }
-.position-leg-side[data-side="SELL"] { background: var(--red-muted);   color: var(--red);   }
+.position-leg-side[data-side="BUY"] {
+  background: var(--green-muted);
+  color: var(--green);
+}
+.position-leg-side[data-side="SELL"] {
+  background: var(--red-muted);
+  color: var(--red);
+}
 
 .position-leg-ticker {
   font-family: var(--font-mono);
@@ -1204,35 +1467,4 @@ button { cursor: pointer; }
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 3px;
-}
-
-/* ============================================================
-   VERDICT FILTER (Reasoning Log)
-   ============================================================ */
-.verdict-filter {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: 12px;
-  color: var(--text-subtle);
-}
-
-.verdict-chip {
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-subtle);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  font-family: var(--font-sans);
-  text-transform: uppercase;
-  transition: color 0.12s, background 0.12s, border-color 0.12s;
-}
-.verdict-chip:hover { color: var(--text); border-color: var(--text-subtle); }
-.verdict-chip.active {
-  color: var(--text);
-  border-color: var(--text-subtle);
-  background: var(--surface-2);
 }
