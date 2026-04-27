@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
     PAPER_TRADING: bool = True
+    T212_BUDGET_USD: float = Field(default=0.0, validation_alias="T212_BUDGET_USD")
+    WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 10.0
     SGOV_SWEEP_TICKER: str = "SGOV"
     MIN_SWEEP_THRESHOLD: float = 10.0
@@ -109,16 +111,166 @@ class Settings(BaseSettings):
     MAX_RISK_PER_TRADE: float = 0.02
     MAX_DRAWDOWN: float = 0.10
     APPROVAL_THRESHOLD: float = 100.0
+    DEFAULT_WIN_PROBABILITY: float = 0.55
+    DEFAULT_WIN_LOSS_RATIO: float = 1.0
 
     MAX_FRICTION_PCT: float = 0.015
+    T212_FLAT_SPREAD_USD: float = Field(default=0.5, validation_alias="T212_FLAT_SPREAD_USD")
+    MICRO_TRADE_THRESHOLD_USD: float = Field(default=5.0, validation_alias="MICRO_TRADE_THRESHOLD_USD")
+    # WEB3 / DEX trades carry percentage-based gas + slippage instead of a
+    # fixed equity spread, so they need a wider friction tolerance.
+    # 3 % covers Uniswap pool fee (0.3%) + max configured slippage (1.5 %) +
+    # gas headroom on testnet. Raise toward 0.05 for high-gas mainnet use.
+    WEB3_MAX_FRICTION_PCT: float = Field(default=0.03, validation_alias="WEB3_MAX_FRICTION_PCT")
     MIN_TRADE_VALUE: float = 1.00
+    FINANCIAL_KILL_SWITCH_PCT: float = Field(default=0.02, validation_alias="FINANCIAL_KILL_SWITCH_PCT")
+    T212_LIMIT_SLIPPAGE_PCT: float = Field(default=0.01, validation_alias="T212_LIMIT_SLIPPAGE_PCT")
 
     EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
     EXECUTION_ENGINE_PORT: int = Field(default=50051, validation_alias="EXECUTION_ENGINE_PORT")
     LATENCY_ALARM_THRESHOLD_MS: float = Field(default=10.0, validation_alias="LATENCY_ALARM_THRESHOLD_MS")
 
+    WEB3_RPC_URL: str = Field(default="", validation_alias="WEB3_RPC_URL")
+    WEB3_PRIVATE_KEY: str = Field(default="", validation_alias="WEB3_PRIVATE_KEY")
+    WEB3_CHAIN_ID: int = Field(default=1, validation_alias="WEB3_CHAIN_ID")
+    WEB3_ROUTER_ADDRESS: str = Field(default="", validation_alias="WEB3_ROUTER_ADDRESS")
+    WEB3_WETH_ADDRESS: str = Field(default="", validation_alias="WEB3_WETH_ADDRESS")
+    WEB3_BASE_TOKEN_SYMBOL: str = Field(default="USDC", validation_alias="WEB3_BASE_TOKEN_SYMBOL")
+    WEB3_MAX_SLIPPAGE_BPS: int = Field(default=150, validation_alias="WEB3_MAX_SLIPPAGE_BPS")
+    WEB3_MAX_GAS_GWEI: float = Field(default=150.0, validation_alias="WEB3_MAX_GAS_GWEI")
+    WEB3_TX_TIMEOUT_SECONDS: int = Field(default=180, validation_alias="WEB3_TX_TIMEOUT_SECONDS")
+    WEB3_TX_GAS_LIMIT: int = Field(default=30000, validation_alias="WEB3_TX_GAS_LIMIT")
+    WEB3_SIGNAL_VALUE_WEI: int = Field(default=0, validation_alias="WEB3_SIGNAL_VALUE_WEI")
+    # Optional: set to your MetaMask wallet address so trade signals are sent
+    # TO your wallet (visible in MetaMask activity) instead of as self-transfers.
+    WEB3_METAMASK_ADDRESS: str = Field(default="", validation_alias="WEB3_METAMASK_ADDRESS")
+    CRYPTO_TOKEN_MAPPING: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "USDC": {"address": "", "decimals": 6},
+            "WETH": {"address": "", "decimals": 18},
+            "ETH": {"address": "", "decimals": 18, "is_native": True},
+            "BTC": {"address": "", "decimals": 8},
+            "WBTC": {"address": "", "decimals": 8},
+            "SOL": {"address": "", "decimals": 9},
+            "AVAX": {"address": "", "decimals": 18},
+            "BNB": {"address": "", "decimals": 18},
+            "ADA": {"address": "", "decimals": 18},
+            "DOT": {"address": "", "decimals": 10},
+            "NEAR": {"address": "", "decimals": 24},
+            "ATOM": {"address": "", "decimals": 6},
+            "ALGO": {"address": "", "decimals": 6},
+            "LTC": {"address": "", "decimals": 8},
+            "BCH": {"address": "", "decimals": 8},
+            "ETC": {"address": "", "decimals": 18},
+            "XRP": {"address": "", "decimals": 6},
+            "XLM": {"address": "", "decimals": 7},
+            "HBAR": {"address": "", "decimals": 8},
+            "TRX": {"address": "", "decimals": 6},
+            "EOS": {"address": "", "decimals": 4},
+            "LINK": {"address": "", "decimals": 18},
+            "AAVE": {"address": "", "decimals": 18},
+            "CRV": {"address": "", "decimals": 18},
+            "INJ": {"address": "", "decimals": 18},
+            "FIL": {"address": "", "decimals": 18},
+            "TIA": {"address": "", "decimals": 6},
+            "DOGE": {"address": "", "decimals": 8},
+            "SHIB": {"address": "", "decimals": 18},
+            "WIF": {"address": "", "decimals": 6},
+            "BONK": {"address": "", "decimals": 5},
+        },
+        validation_alias="CRYPTO_TOKEN_MAPPING",
+    )
+
     KALMAN_DELTA: float = 1e-5
     KALMAN_R: float = 0.001
+    MONITOR_ENTRY_ZSCORE: float = Field(default=2.0, validation_alias="MONITOR_ENTRY_ZSCORE")
+    MONITOR_MIN_AI_CONFIDENCE: float = Field(default=0.5, validation_alias="MONITOR_MIN_AI_CONFIDENCE")
+    ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
+    SPREAD_GUARD_MAX_PCT: float = Field(default=0.003, validation_alias="SPREAD_GUARD_MAX_PCT")
+    TAKE_PROFIT_ZSCORE: float = Field(default=0.5, validation_alias="TAKE_PROFIT_ZSCORE")
+    STOP_LOSS_ZSCORE: float = Field(default=3.5, validation_alias="STOP_LOSS_ZSCORE")
+    SCAN_INTERVAL_SECONDS: int = Field(default=15, validation_alias="SCAN_INTERVAL_SECONDS")
+    RISK_DRAWDOWN_ZERO_PCT: float = Field(default=0.15, validation_alias="RISK_DRAWDOWN_ZERO_PCT")
+    RISK_SHARPE_FLOOR: float = Field(default=0.5, validation_alias="RISK_SHARPE_FLOOR")
+    RISK_MULTIPLIER_CAP_LOW_SHARPE: float = Field(default=0.1, validation_alias="RISK_MULTIPLIER_CAP_LOW_SHARPE")
+    RISK_SLIPPAGE_NORMAL: float = Field(default=0.001, validation_alias="RISK_SLIPPAGE_NORMAL")
+    RISK_SLIPPAGE_HIGH_VOL: float = Field(default=0.0005, validation_alias="RISK_SLIPPAGE_HIGH_VOL")
+    VOLATILITY_ENTROPY_THRESHOLD: float = Field(default=0.8, validation_alias="VOLATILITY_ENTROPY_THRESHOLD")
+    VOLATILITY_FALLBACK_ENTROPY: float = Field(default=0.5, validation_alias="VOLATILITY_FALLBACK_ENTROPY")
+    MARKET_REGIME_FALLBACK_CONFIDENCE: float = Field(default=0.5, validation_alias="MARKET_REGIME_FALLBACK_CONFIDENCE")
+    MARKET_REGIME_BASE_CONFIDENCE: float = Field(default=0.7, validation_alias="MARKET_REGIME_BASE_CONFIDENCE")
+    MARKET_REGIME_EMA_BULL_FACTOR: float = Field(default=1.01, validation_alias="MARKET_REGIME_EMA_BULL_FACTOR")
+    MARKET_REGIME_EMA_BEAR_FACTOR: float = Field(default=0.99, validation_alias="MARKET_REGIME_EMA_BEAR_FACTOR")
+    MARKET_REGIME_VOLATILITY_HIGH: float = Field(default=0.30, validation_alias="MARKET_REGIME_VOLATILITY_HIGH")
+    MARKET_REGIME_VOLATILITY_LOW: float = Field(default=0.10, validation_alias="MARKET_REGIME_VOLATILITY_LOW")
+    MARKET_REGIME_ENTROPY_SPIKE: float = Field(default=0.85, validation_alias="MARKET_REGIME_ENTROPY_SPIKE")
+    ORCH_AGENT_CONFIDENCE_THRESHOLD: float = Field(default=0.5, validation_alias="ORCH_AGENT_CONFIDENCE_THRESHOLD")
+    ORCH_FUNDAMENTAL_DEFAULT_SCORE: int = Field(default=50, validation_alias="ORCH_FUNDAMENTAL_DEFAULT_SCORE")
+    ORCH_FUNDAMENTAL_VETO_SCORE: int = Field(default=40, validation_alias="ORCH_FUNDAMENTAL_VETO_SCORE")
+    ORCH_ACCURACY_LOW_THRESHOLD: float = Field(default=0.4, validation_alias="ORCH_ACCURACY_LOW_THRESHOLD")
+    ORCH_ACCURACY_HIGH_THRESHOLD: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_HIGH_THRESHOLD")
+    ORCH_ACCURACY_LOW_MULTIPLIER: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_LOW_MULTIPLIER")
+    ORCH_ACCURACY_HIGH_MULTIPLIER: float = Field(default=1.1, validation_alias="ORCH_ACCURACY_HIGH_MULTIPLIER")
+    GLOBAL_STRATEGY_ACCURACY_DEFAULT: float = Field(default=0.5, validation_alias="GLOBAL_STRATEGY_ACCURACY_DEFAULT")
+    COINTEGRATION_MIN_OBSERVATIONS: int = Field(default=20, validation_alias="COINTEGRATION_MIN_OBSERVATIONS")
+    COINTEGRATION_PVALUE_THRESHOLD: float = Field(default=0.05, validation_alias="COINTEGRATION_PVALUE_THRESHOLD")
+
+    # Spec 037: Rolling cointegration stability check. A pair must pass the
+    # ADF test in at least COINTEGRATION_ROLLING_PASS_RATE of the rolling
+    # windows of size COINTEGRATION_ROLLING_WINDOW (with stride
+    # COINTEGRATION_ROLLING_STEP) to be admitted to the live universe.
+    # Defaults are calibrated for hourly bars over a ~30-day calibration period.
+    COINTEGRATION_ROLLING_WINDOW: int = Field(default=60, validation_alias="COINTEGRATION_ROLLING_WINDOW")
+    COINTEGRATION_ROLLING_STEP: int = Field(default=5, validation_alias="COINTEGRATION_ROLLING_STEP")
+    COINTEGRATION_ROLLING_PASS_RATE: float = Field(default=0.7, validation_alias="COINTEGRATION_ROLLING_PASS_RATE")
+    COINTEGRATION_ROLLING_ENABLED: bool = Field(default=True, validation_alias="COINTEGRATION_ROLLING_ENABLED")
+
+    # Spec 037: Kalman session-boundary handling. We inflate Q (process noise)
+    # by KALMAN_Q_SESSION_FACTOR for the first KALMAN_Q_SESSION_BARS bars of
+    # each new trading session, then decay linearly back to base. This lets
+    # the filter "breathe" through overnight gaps without throwing away the
+    # state it has already learned (vs. the legacy P bump which is a one-shot
+    # uncertainty boost).
+    KALMAN_Q_SESSION_FACTOR: float = Field(default=5.0, validation_alias="KALMAN_Q_SESSION_FACTOR")
+    KALMAN_Q_SESSION_BARS: int = Field(default=10, validation_alias="KALMAN_Q_SESSION_BARS")
+    KALMAN_USE_Q_INFLATION: bool = Field(default=True, validation_alias="KALMAN_USE_Q_INFLATION")
+
+    # Spec 037: Pair-eligibility gate. Cross-currency / cross-session pairs
+    # rarely cointegrate in any economically useful sense; LSE pairs carry
+    # 0.5 % stamp duty per buy leg which usually exceeds short-hold edge.
+    ACCOUNT_CURRENCY: str = Field(default="EUR", validation_alias="ACCOUNT_CURRENCY")
+    BLOCK_CROSS_CURRENCY_PAIRS: bool = Field(default=True, validation_alias="BLOCK_CROSS_CURRENCY_PAIRS")
+    BLOCK_LSE_PAIRS_FOR_SHORT_HOLD: bool = Field(default=True, validation_alias="BLOCK_LSE_PAIRS_FOR_SHORT_HOLD")
+    PAIR_MAX_ROUND_TRIP_COST_PCT: float = Field(default=0.0125, validation_alias="PAIR_MAX_ROUND_TRIP_COST_PCT")
+
+    # Spec 038: when True, treat XETRA, EURONEXT, BORSA_ITALIANA and SIX as
+    # the same session group ("EU continental"). Their wall-clock windows
+    # overlap by ~7-8 hours so cross-venue pairs (ASML.AS / SAP.DE,
+    # MC.PA / NESN.SW) can be admitted. Default False keeps the strict
+    # market_id rule in place - opt in per deployment after verifying that
+    # cointegration holds across the venue boundary for your hourly bar
+    # frequency.
+    ALLOW_EU_CONTINENTAL_OVERLAP: bool = Field(
+        default=False, validation_alias="ALLOW_EU_CONTINENTAL_OVERLAP"
+    )
+
+    # Spec 038: cost-aware z-score gate. When enabled, the entry z-score
+    # threshold for a pair is scaled up proportionally to its estimated
+    # round-trip cost. Pairs with higher friction (HK, Swiss, cross-currency)
+    # require more statistical edge before the bot fires a signal. The
+    # baseline is the cost level at which no scaling is applied; pairs
+    # cheaper than the baseline trade at the global threshold unchanged.
+    MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED: bool = Field(
+        default=False, validation_alias="MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED"
+    )
+    MONITOR_ENTRY_ZSCORE_COST_BASELINE: float = Field(
+        default=0.0015, validation_alias="MONITOR_ENTRY_ZSCORE_COST_BASELINE"
+    )
+    MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP: float = Field(
+        default=3.0, validation_alias="MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP"
+    )
+
+    PORTFOLIO_RISK_FREE_RATE: float = Field(default=0.02, validation_alias="PORTFOLIO_RISK_FREE_RATE")
 
     MAX_SECTOR_EXPOSURE: float = 0.30
     PAIR_SECTORS: dict = {
@@ -145,6 +297,47 @@ class Settings(BaseSettings):
         'AMZN_SHOP': 'Consumer Discretionary',  # E-commerce
         'PLTR_BBAI': 'Technology',          # AI / defence analytics
         'BRK-B_JPM': 'Financials',          # Financial giants
+        # --- Global Expansion Pairs ---
+        'ASML.AS_SAP.DE': 'Technology',     # European tech giants
+        'SHEL.L_BP.L': 'Energy',           # UK Energy pair
+        'MC.PA_RMS.PA': 'Luxury',          # French luxury
+        '9988.HK_0700.HK': 'Technology',    # HK Big Tech (Alibaba/Tencent)
+        '3690.HK_9999.HK': 'Technology',    # HK Consumer Tech
+        # --- Crypto: Layer 1 / Smart-contract platforms ---
+        'ETH-USD_BTC-USD': 'Crypto L1',     'BTC-USD_ETH-USD': 'Crypto L1',
+        'ETH-USD_SOL-USD': 'Crypto L1',     'SOL-USD_ETH-USD': 'Crypto L1',
+        'SOL-USD_AVAX-USD': 'Crypto L1',    'AVAX-USD_SOL-USD': 'Crypto L1',
+        'BNB-USD_ETH-USD': 'Crypto L1',     'ETH-USD_BNB-USD': 'Crypto L1',
+        'ADA-USD_DOT-USD': 'Crypto L1',     'DOT-USD_ADA-USD': 'Crypto L1',
+        'ADA-USD_SOL-USD': 'Crypto L1',     'SOL-USD_ADA-USD': 'Crypto L1',
+        'AVAX-USD_DOT-USD': 'Crypto L1',    'DOT-USD_AVAX-USD': 'Crypto L1',
+        'NEAR-USD_SOL-USD': 'Crypto L1',    'SOL-USD_NEAR-USD': 'Crypto L1',
+        'ATOM-USD_DOT-USD': 'Crypto L1',    'DOT-USD_ATOM-USD': 'Crypto L1',
+        'AVAX-USD_ATOM-USD': 'Crypto L1',   'ATOM-USD_AVAX-USD': 'Crypto L1',
+        'ADA-USD_ALGO-USD': 'Crypto L1',    'ALGO-USD_ADA-USD': 'Crypto L1',
+        'ETH-USD_ATOM-USD': 'Crypto L1',    'ATOM-USD_ETH-USD': 'Crypto L1',
+        'ALGO-USD_NEAR-USD': 'Crypto L1',   'NEAR-USD_ALGO-USD': 'Crypto L1',
+        # --- Crypto: Store of Value / Bitcoin forks ---
+        'BTC-USD_LTC-USD': 'Crypto Store of Value',  'LTC-USD_BTC-USD': 'Crypto Store of Value',
+        'BTC-USD_BCH-USD': 'Crypto Store of Value',  'BCH-USD_BTC-USD': 'Crypto Store of Value',
+        'LTC-USD_BCH-USD': 'Crypto Store of Value',  'BCH-USD_LTC-USD': 'Crypto Store of Value',
+        'ETC-USD_LTC-USD': 'Crypto Store of Value',  'LTC-USD_ETC-USD': 'Crypto Store of Value',
+        # --- Crypto: Payments / Enterprise DLT ---
+        'XRP-USD_XLM-USD': 'Crypto Payments',   'XLM-USD_XRP-USD': 'Crypto Payments',
+        'XRP-USD_HBAR-USD': 'Crypto Payments',  'HBAR-USD_XRP-USD': 'Crypto Payments',
+        'TRX-USD_EOS-USD': 'Crypto Payments',   'EOS-USD_TRX-USD': 'Crypto Payments',
+        'HBAR-USD_ALGO-USD': 'Crypto Payments', 'ALGO-USD_HBAR-USD': 'Crypto Payments',
+        # --- Crypto: DeFi ---
+        'AAVE-USD_LINK-USD': 'Crypto DeFi',  'LINK-USD_AAVE-USD': 'Crypto DeFi',
+        'AAVE-USD_CRV-USD': 'Crypto DeFi',   'CRV-USD_AAVE-USD': 'Crypto DeFi',
+        'LINK-USD_DOT-USD': 'Crypto DeFi',   'DOT-USD_LINK-USD': 'Crypto DeFi',
+        'INJ-USD_ATOM-USD': 'Crypto DeFi',   'ATOM-USD_INJ-USD': 'Crypto DeFi',
+        # --- Crypto: Storage / Utility ---
+        'FIL-USD_ATOM-USD': 'Crypto Utility', 'ATOM-USD_FIL-USD': 'Crypto Utility',
+        'TIA-USD_ATOM-USD': 'Crypto Utility', 'ATOM-USD_TIA-USD': 'Crypto Utility',
+        # --- Crypto: Memes ---
+        'DOGE-USD_SHIB-USD': 'Crypto Memes', 'SHIB-USD_DOGE-USD': 'Crypto Memes',
+        'WIF-USD_BONK-USD': 'Crypto Memes',  'BONK-USD_WIF-USD': 'Crypto Memes',
     }
 
     EU_HEDGE_MAPPINGS: dict = {
@@ -187,6 +380,12 @@ class Settings(BaseSettings):
         {'ticker_a': 'AMZN',    'ticker_b': 'SHOP'},    # E-commerce
         {'ticker_a': 'PLTR',    'ticker_b': 'BBAI'},    # AI / defence analytics
         {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},     # Financial giants
+        # --- Global Expansion (Europe / Asia) ---
+        {'ticker_a': 'ASML.AS', 'ticker_b': 'SAP.DE'},  # Dutch/German Tech
+        {'ticker_a': 'SHEL.L',  'ticker_b': 'BP.L'},    # UK Energy
+        {'ticker_a': 'MC.PA',   'ticker_b': 'RMS.PA'},  # French Luxury
+        {'ticker_a': '9988.HK', 'ticker_b': '0700.HK'}, # HK Tech
+        {'ticker_a': '3690.HK', 'ticker_b': '9999.HK'}, # HK Tech/Gaming
     ]
 
     # Crypto pairs traded 24/7 — including weekends and outside US equity
@@ -255,6 +454,14 @@ class Settings(BaseSettings):
     @property
     def is_t212_demo(self) -> bool:
         return self.TRADING_212_MODE.lower() == "demo"
+
+    @property
+    def web3_enabled(self) -> bool:
+        return bool(
+            self.WEB3_RPC_URL.strip()
+            and self.WEB3_PRIVATE_KEY.strip()
+            and self.WEB3_ROUTER_ADDRESS.strip()
+        )
 
 settings = Settings()
 

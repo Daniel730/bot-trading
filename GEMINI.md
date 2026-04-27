@@ -4,7 +4,7 @@ Auto-generated from all feature plans. Last updated: 2026-04-12
 
 ## Active Technologies
 - Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity`, `grpcio`, `grpcio-tools`, `numpy`, `scipy` (028-dynamic-risk-and-volatility-switch)
-- SQLite (Arbitrage pairs, Signal records, Virtual Pie state, Trade Ledger, DCA Schedules, Portfolio Strategies) (014-low-budget-investor-suite)
+- SQLite (Arbitrage pairs, Signal records, Virtual Pie state, Trade Ledger, DCA Schedules, Portfolio Strategies, System State / Budgets) (014-low-budget-investor-suite)
 - PostgreSQL (R2DBC) (028-dynamic-risk-and-volatility-switch)
 - Redis (Idempotency, Entropy, Latency Telemetry) (028-dynamic-risk-and-volatility-switch)
 - gRPC (Python/Java with Nanosecond Interceptors) (027-model-calibration)
@@ -17,6 +17,7 @@ src/
     portfolio_manager_agent.py (Feature 014)
     macro_economic_agent.py (Feature 014)
   services/
+    budget_service.py (Unified Budgeting)
     dca_service.py (Feature 014)
     performance_service.py (Feature 028)
     volatility_service.py (Feature 028)
