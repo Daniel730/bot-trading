@@ -16,9 +16,10 @@ import {
   CheckCircle,
   Clock,
   Filter,
+  Settings as SettingsIcon,
 } from 'lucide-react';
 import './App.css';
-import { useDashboardStream, sendTerminalCommand } from './services/api';
+import { useDashboardStream, sendTerminalCommand, fetchSettings, updateSettings } from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
 import PairsPanel from './components/PairsPanel';
 import PositionsPanel from './components/PositionsPanel';
@@ -118,12 +119,43 @@ const App: React.FC = () => {
   const { isConnected, risk, thoughts, botState } = useTelemetry(token);
 
   const [terminalOpen, setTerminalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [approvalThreshold, setApprovalThreshold] = useState<number | string>('');
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [terminalInput, setTerminalInput] = useState('');
   const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('ALL');
   const [, setNowTick] = useState(0); // forces uptime re-render every 30s
   const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
   const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null);
   const terminalEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (settingsOpen) {
+      if (data?.runtime?.approval_threshold !== undefined) {
+        setApprovalThreshold(data.runtime.approval_threshold);
+      } else {
+        fetchSettings(token)
+          .then(res => setApprovalThreshold(res.approval_threshold))
+          .catch(err => console.error(err));
+      }
+    }
+  }, [settingsOpen, data?.runtime?.approval_threshold, token]);
+
+  const handleSaveSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSettingsError(null);
+    const val = Number(approvalThreshold);
+    if (isNaN(val) || val < 0) {
+      setSettingsError('Please enter a valid positive number');
+      return;
+    }
+    try {
+      await updateSettings(token, val);
+      setSettingsOpen(false);
+    } catch (err: any) {
+      setSettingsError(err.message || 'Failed to save settings');
+    }
+  };
 
   // Auto-scroll terminal
   useEffect(() => {
@@ -225,6 +257,10 @@ const App: React.FC = () => {
 
           <div className="divider" />
 
+          <button className="btn btn-default" onClick={() => setSettingsOpen(true)}>
+            <SettingsIcon size={12} />
+            Settings
+          </button>
           <button className="btn btn-default" onClick={() => setTerminalOpen(true)}>
             <TerminalIcon size={12} />
             Terminal
@@ -631,6 +667,56 @@ const App: React.FC = () => {
                   <Send size={14} />
                 </button>
               </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Settings Modal */}
+      <AnimatePresence>
+        {settingsOpen && (
+          <motion.div
+            className="overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={(e) => e.target === e.currentTarget && setSettingsOpen(false)}
+          >
+            <motion.div
+              className="editor-window settings-window"
+              initial={{ scale: 0.96, opacity: 0, y: 10 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.96, opacity: 0, y: 10 }}
+              transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+            >
+              <div className="panel-header">
+                <SettingsIcon size={14} />
+                Bot Settings
+              </div>
+              <div className="editor-body">
+                <form onSubmit={handleSaveSettings}>
+                  <div className="settings-input-group">
+                    <label className="settings-label">Auto-Trade Threshold (EUR)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className="settings-input"
+                      value={approvalThreshold}
+                      onChange={(e) => setApprovalThreshold(e.target.value)}
+                      placeholder="e.g. 100.0"
+                    />
+                    <div className="settings-help">
+                      Trades below this amount execute automatically. Trades at or above this amount require your manual approval.
+                    </div>
+                  </div>
+                  {settingsError && <div className="editor-msg error">{settingsError}</div>}
+                  <div className="editor-footer" style={{ padding: '16px 0 0', border: 'none', background: 'none' }}>
+                    <div className="editor-footer-spacer" />
+                    <button type="button" className="btn btn-default" onClick={() => setSettingsOpen(false)}>Cancel</button>
+                    <button type="submit" className="btn btn-primary">Save Settings</button>
+                  </div>
+                </form>
+              </div>
             </motion.div>
           </motion.div>
         )}

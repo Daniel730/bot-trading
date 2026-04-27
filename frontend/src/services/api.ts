@@ -48,6 +48,7 @@ export interface RuntimeInfo {
   live_capital_danger: boolean;
   region: string;
   bot_start_time: string;
+  approval_threshold?: number;
 }
 
 export interface DashboardData {
@@ -111,9 +112,9 @@ export interface OpenPosition {
   opened_at: string | null;
 }
 
-const API_BASE = (window.location.port === '5173' || window.location.port === '3000')
+const API_BASE = import.meta.env.VITE_API_URL || ((window.location.port === '5173' || window.location.port === '3000')
   ? `${window.location.protocol}//${window.location.hostname}:8080` 
-  : window.location.origin;
+  : window.location.origin);
 
 export const useDashboardStream = (token: string | null) => {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -204,3 +205,34 @@ export const fetchOpenPositions = async (token: string | null): Promise<{ positi
   if (!response.ok) throw new Error(`Failed to fetch positions (${response.status})`);
   return response.json();
 };
+
+export interface SettingsData {
+  approval_threshold: number;
+}
+
+export const fetchSettings = async (token: string | null): Promise<SettingsData> => {
+  const url = new URL('/api/settings', API_BASE);
+  if (token) url.searchParams.set('token', token);
+  const response = await fetch(url.toString());
+  if (!response.ok) throw new Error(`Failed to fetch settings (${response.status})`);
+  return response.json();
+};
+
+export const updateSettings = async (
+  token: string | null,
+  approval_threshold: number
+): Promise<{ status: string; approval_threshold: number }> => {
+  const url = new URL('/api/settings', API_BASE);
+  if (token) url.searchParams.set('token', token);
+  const response = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ approval_threshold }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to update settings (${response.status})`);
+  }
+  return response.json();
+};
+
