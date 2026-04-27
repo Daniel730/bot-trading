@@ -64,6 +64,7 @@ class TradeLedger(Base):
     price: Mapped[float] = mapped_column(Numeric(20, 10))
     fee: Mapped[float] = mapped_column(Numeric(20, 10), default=0.0)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.COMPLETED)
+    venue: Mapped[str] = mapped_column(String(20), server_default="T212", index=True)
     execution_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, name="metadata")
     latency_rtt_ns: Mapped[Optional[int]] = mapped_column(Integer)
@@ -200,15 +201,29 @@ class PersistenceService:
         return cls._instance
 
     async def init_db(self):
-        """Initializes the database schema."""
+        """Initializes the database schema and performs necessary migrations."""
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            
+            # Runtime Migration: Add 'venue' column if it doesn't exist
+            # We use a raw SQL block for safety against existing data.
+            try:
+                from sqlalchemy import text
+                await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS venue VARCHAR(20) DEFAULT 'T212'"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_ledger_venue ON trade_ledger (venue)"))
+            except Exception as e:
+                logger.warning(f"PersistenceService: Migration notice (venue column): {e}")
 
     async def log_trade(self, trade_data: dict):
-        """Logs a trade execution to the ledger."""
+        """Logs a trade execution to the ledger with automatic venue detection."""
         if 'signal_id' in trade_data and isinstance(trade_data['signal_id'], str):
             trade_data['signal_id'] = uuid.UUID(trade_data['signal_id'])
             
+        # Automatic Venue Detection
+        if "venue" not in trade_data or not trade_data["venue"]:
+            ticker = trade_data.get("ticker", "").upper()
+            trade_data["venue"] = "WEB3" if "-USD" in ticker else "T212"
+
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 trade = TradeLedger(**trade_data)
@@ -297,15 +312,17 @@ class PersistenceService:
         from src.agents.reflection_agent import reflection_agent
         asyncio.create_task(reflection_agent.reflect_on_trade(str(signal_id)))
 
-    async def get_open_signals(self) -> List[dict]:
+    async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """
         Retrieves all currently OPEN positions grouped by signal_id, 
-        returning the average cost basis, current side, etc.
+        optionally filtered by venue.
         """
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
             # We fetch all OPEN orders that represent trades
             stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.OPEN)
+            if venue:
+                stmt = stmt.where(TradeLedger.venue == venue)
             result = await session.execute(stmt)
             trades = result.scalars().all()
             
@@ -317,7 +334,8 @@ class PersistenceService:
                     signals[sig] = {
                         "signal_id": sig,
                         "legs": [],
-                        "total_cost_basis": 0.0
+                        "total_cost_basis": 0.0,
+                        "venue": t.venue
                     }
                 signals[sig]["legs"].append({
                     "ticker": t.ticker,
@@ -381,11 +399,13 @@ class PersistenceService:
             tickers = set(result_a.scalars().all()) | set(result_b.scalars().all())
             return sorted(list(tickers))
 
-    async def get_daily_returns(self) -> Dict[str, float]:
+    async def get_daily_returns(self, venue: Optional[str] = None) -> Dict[str, float]:
         """Returns aggregated daily PnL mapping of form {'YYYY-MM-DD': pnl_sum} based on CLOSED trades."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
             stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.CLOSED)
+            if venue:
+                stmt = stmt.where(TradeLedger.venue == venue)
             result = await session.execute(stmt)
             trades = result.scalars().all()
             
@@ -407,19 +427,19 @@ class PersistenceService:
 
             return daily_pnl
 
-    async def get_total_pnl(self) -> float:
+    async def get_total_pnl(self, venue: Optional[str] = None) -> float:
         """Returns the absolute sum of all closed trade PnL."""
-        daily_returns = await self.get_daily_returns()
+        daily_returns = await self.get_daily_returns(venue=venue)
         return sum(daily_returns.values())
 
-    async def get_daily_pnl_for_date(self, date_str: str) -> float:
+    async def get_daily_pnl_for_date(self, date_str: str, venue: Optional[str] = None) -> float:
         """Returns realized PnL for one UTC date (YYYY-MM-DD)."""
-        daily_returns = await self.get_daily_returns()
+        daily_returns = await self.get_daily_returns(venue=venue)
         return float(daily_returns.get(date_str, 0.0))
 
-    async def get_current_investment(self) -> float:
+    async def get_current_investment(self, venue: Optional[str] = None) -> float:
         """Returns open-position cost basis across all active signals."""
-        open_signals = await self.get_open_signals()
+        open_signals = await self.get_open_signals(venue=venue)
         return float(sum(float(sig.get("total_cost_basis", 0.0)) for sig in open_signals))
 
     async def get_agent_metrics(self, agent_name: str) -> tuple[int, int]:
