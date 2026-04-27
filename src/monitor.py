@@ -200,6 +200,7 @@ class ArbitrageMonitor:
             max_round_trip_cost_pct=settings.PAIR_MAX_ROUND_TRIP_COST_PCT,
             block_cross_currency=settings.BLOCK_CROSS_CURRENCY_PAIRS,
             block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
+            allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
         )
         logger.info(
             f"Initializing {len(pairs_to_init)} pairs in "
@@ -382,8 +383,22 @@ class ArbitrageMonitor:
             # Sprint J: Heartbeat log for pair health
             logger.info(f"SCAN [{t_a}/{t_b}] Current Z-Score: {z_score:.2f} | Beta: {state_vec[1]:.4f}")
 
-            # Signal Generation
-            if abs(z_score) > settings.MONITOR_ENTRY_ZSCORE:
+            # Signal Generation - Spec 038: optionally scale the entry z-score
+            # by this pair's round-trip cost so that high-friction pairs (HK,
+            # Swiss, cross-currency) require more statistical edge before
+            # firing. Falls back to the global threshold when the toggle is off
+            # or when no cost estimate is available on the pair record.
+            entry_zscore = settings.MONITOR_ENTRY_ZSCORE
+            if settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED:
+                cost_pct = float(pair.get("estimated_cost_pct") or 0.0)
+                baseline = float(settings.MONITOR_ENTRY_ZSCORE_COST_BASELINE)
+                if baseline > 0 and cost_pct > baseline:
+                    scale = min(
+                        cost_pct / baseline,
+                        float(settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP),
+                    )
+                    entry_zscore = settings.MONITOR_ENTRY_ZSCORE * scale
+            if abs(z_score) > entry_zscore:
                 signal_id = str(uuid.uuid4())
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 

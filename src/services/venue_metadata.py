@@ -3,167 +3,85 @@
 This is the single source of truth used by the pair-eligibility service and the
 cost-aware edge filter. It is intentionally a pure-Python module (no external
 state) so it can be imported from any service without circular dependencies.
-
-A ticker's "session" is the trading window during which its native exchange
-publishes prices. Two tickers with different sessions cannot form a Kalman
-pairs-trading pair: the spread would be evaluated against stale prices on one
-leg, breaking the cointegration premise.
-
-A ticker's "currency" is the settlement currency on the user's broker. Pairing
-two assets in different currencies turns FX moves into a hidden second factor
-that the Kalman filter cannot decouple from the alpha signal.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict
 
 
 @dataclass(frozen=True)
 class VenueProfile:
     """Static metadata about a venue (exchange).
 
-    fx_fee_pct: round-trip currency conversion fee charged by the broker when
-        the user's account is denominated in a different currency than this
-        venue. Trading 212's documented retail fee is 0.15 % per conversion.
-    stamp_duty_pct: government stamp duty levied at purchase. UK LSE charges
-        0.5 % on most stocks (AIM exempt, ETFs exempt). Most other venues
-        charge zero.
-    typical_spread_bps: realistic round-trip spread the bot should assume even
-        when L1 quotes look tight. Used as a floor in the cost model.
-    market_id: human-readable session id used to gate pair eligibility.
-        Two tickers must share the same market_id to be paired.
+    stamp_duty_per_side: True -> stamp duty charged on BOTH buy and sell
+        (HK, SIX). False -> charged on buys only (UK SDRT, Italian FTT).
+    session_group: coarser bucket for the optional EU-overlap rule. Venues
+        sharing wall-clock windows can be opted into same-session via
+        ``allow_eu_continental_overlap``.
     """
 
     market_id: str
     currency: str
     fx_fee_pct: float = 0.0
     stamp_duty_pct: float = 0.0
-    typical_spread_bps: float = 5.0  # 5 bps = 0.05% baseline
+    stamp_duty_per_side: bool = False
+    typical_spread_bps: float = 5.0
+    session_group: str = ""
 
 
-# --- Suffix-driven venue rules (Yahoo Finance / Trading 212 conventions) ---
-# Keys are ticker suffixes (lower-cased without dot prefix). Order matters
-# only for documentation; lookup is exact-match.
 _SUFFIX_VENUES: Dict[str, VenueProfile] = {
-    "hk": VenueProfile(
-        market_id="HKEX",
-        currency="HKD",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0013,  # HK stamp duty 0.13 % per trade leg
-        typical_spread_bps=15.0,
-    ),
-    "l": VenueProfile(
-        market_id="LSE",
-        currency="GBP",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.005,  # UK SDRT 0.5 % on buys (AIM exempt — handled via override)
-        typical_spread_bps=8.0,
-    ),
-    "as": VenueProfile(  # Euronext Amsterdam
-        market_id="EURONEXT",
-        currency="EUR",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=5.0,
-    ),
-    "pa": VenueProfile(  # Euronext Paris
-        market_id="EURONEXT",
-        currency="EUR",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=5.0,
-    ),
-    "br": VenueProfile(  # Euronext Brussels
-        market_id="EURONEXT",
-        currency="EUR",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=8.0,
-    ),
-    "ls": VenueProfile(  # Euronext Lisbon
-        market_id="EURONEXT",
-        currency="EUR",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=10.0,
-    ),
-    "de": VenueProfile(  # Xetra
-        market_id="XETRA",
-        currency="EUR",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=5.0,
-    ),
-    "mi": VenueProfile(  # Borsa Italiana
-        market_id="BORSA_ITALIANA",
-        currency="EUR",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.001,  # Italian FTT for derivatives is higher; equities ~0.1 %
-        typical_spread_bps=8.0,
-    ),
-    "sw": VenueProfile(  # SIX Swiss
-        market_id="SIX",
-        currency="CHF",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.00075,  # Swiss stamp duty
-        typical_spread_bps=8.0,
-    ),
-    "co": VenueProfile(  # Copenhagen
-        market_id="NASDAQ_COPENHAGEN",
-        currency="DKK",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=10.0,
-    ),
-    "st": VenueProfile(  # Stockholm
-        market_id="NASDAQ_STOCKHOLM",
-        currency="SEK",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=10.0,
-    ),
-    "to": VenueProfile(  # Toronto
-        market_id="TSX",
-        currency="CAD",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=8.0,
-    ),
-    "t": VenueProfile(  # Tokyo
-        market_id="TSE",
-        currency="JPY",
-        fx_fee_pct=0.0015,
-        stamp_duty_pct=0.0,
-        typical_spread_bps=10.0,
-    ),
+    "hk": VenueProfile(market_id="HKEX", currency="HKD",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0013, stamp_duty_per_side=True,
+        typical_spread_bps=15.0, session_group="ASIA"),
+    "l": VenueProfile(market_id="LSE", currency="GBP",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.005, stamp_duty_per_side=False,
+        typical_spread_bps=8.0, session_group="UK"),
+    "as": VenueProfile(market_id="EURONEXT", currency="EUR",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=5.0, session_group="EU_CONTINENTAL"),
+    "pa": VenueProfile(market_id="EURONEXT", currency="EUR",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=5.0, session_group="EU_CONTINENTAL"),
+    "br": VenueProfile(market_id="EURONEXT", currency="EUR",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=8.0, session_group="EU_CONTINENTAL"),
+    "ls": VenueProfile(market_id="EURONEXT", currency="EUR",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=10.0, session_group="EU_CONTINENTAL"),
+    "de": VenueProfile(market_id="XETRA", currency="EUR",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=5.0, session_group="EU_CONTINENTAL"),
+    "mi": VenueProfile(market_id="BORSA_ITALIANA", currency="EUR",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.001, stamp_duty_per_side=False,
+        typical_spread_bps=8.0, session_group="EU_CONTINENTAL"),
+    "sw": VenueProfile(market_id="SIX", currency="CHF",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.00075, stamp_duty_per_side=True,
+        typical_spread_bps=8.0, session_group="EU_CONTINENTAL"),
+    "co": VenueProfile(market_id="NASDAQ_COPENHAGEN", currency="DKK",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=10.0, session_group="NORDIC"),
+    "st": VenueProfile(market_id="NASDAQ_STOCKHOLM", currency="SEK",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=10.0, session_group="NORDIC"),
+    "to": VenueProfile(market_id="TSX", currency="CAD",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=8.0, session_group="NORTH_AMERICA"),
+    "t": VenueProfile(market_id="TSE", currency="JPY",
+        fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+        typical_spread_bps=10.0, session_group="ASIA"),
 }
 
-# Default for plain US tickers (no suffix).
-_US_VENUE = VenueProfile(
-    market_id="US_EQUITY",
-    currency="USD",
-    fx_fee_pct=0.0015,  # Portuguese-resident T212 user pays FX even on USD
-    stamp_duty_pct=0.0,
-    typical_spread_bps=3.0,
-)
+_US_VENUE = VenueProfile(market_id="US_EQUITY", currency="USD",
+    fx_fee_pct=0.0015, stamp_duty_pct=0.0,
+    typical_spread_bps=3.0, session_group="NORTH_AMERICA")
 
-# Crypto pairs traded against USD. We model them as a single 24/7 session.
-_CRYPTO_VENUE = VenueProfile(
-    market_id="CRYPTO_24_7",
-    currency="USD",
-    fx_fee_pct=0.0,  # crypto routes through Web3, no FX leg
-    stamp_duty_pct=0.0,
-    typical_spread_bps=10.0,
-)
+_CRYPTO_VENUE = VenueProfile(market_id="CRYPTO_24_7", currency="USD",
+    fx_fee_pct=0.0, stamp_duty_pct=0.0,
+    typical_spread_bps=10.0, session_group="CRYPTO")
 
 
 def get_venue_profile(ticker: str) -> VenueProfile:
-    """Return the VenueProfile that owns this ticker.
-
-    The function is suffix-driven and falls back to US equity. Crypto tickers
-    (containing "-USD") are always classified as CRYPTO_24_7.
-    """
     t = ticker.strip().upper()
     if "-USD" in t:
         return _CRYPTO_VENUE
@@ -175,45 +93,51 @@ def get_venue_profile(ticker: str) -> VenueProfile:
     return _US_VENUE
 
 
-def same_session(ticker_a: str, ticker_b: str) -> bool:
-    """Return True iff both tickers trade in the same session window."""
-    return get_venue_profile(ticker_a).market_id == get_venue_profile(ticker_b).market_id
+def same_session(ticker_a: str, ticker_b: str, *,
+                 allow_eu_continental_overlap: bool = False) -> bool:
+    """Return True iff both tickers trade in the same session window.
+
+    Default: strict market_id match. With ``allow_eu_continental_overlap``,
+    venues in the EU_CONTINENTAL session group (XETRA, EURONEXT, SIX,
+    BORSA_ITALIANA) are treated as the same session because their wall-clock
+    windows overlap by ~7-8 hours.
+    """
+    v_a = get_venue_profile(ticker_a)
+    v_b = get_venue_profile(ticker_b)
+    if v_a.market_id == v_b.market_id:
+        return True
+    if allow_eu_continental_overlap:
+        return (v_a.session_group != ""
+                and v_a.session_group == v_b.session_group
+                and v_a.session_group == "EU_CONTINENTAL")
+    return False
 
 
 def same_currency(ticker_a: str, ticker_b: str) -> bool:
-    """Return True iff both tickers settle in the same currency."""
     return get_venue_profile(ticker_a).currency == get_venue_profile(ticker_b).currency
 
 
-def estimate_round_trip_cost_pct(ticker_a: str, ticker_b: str, account_currency: str = "EUR") -> float:
-    """Estimate the round-trip cost of trading both legs of a pair, as a percentage.
+def estimate_round_trip_cost_pct(ticker_a: str, ticker_b: str,
+                                 account_currency: str = "EUR") -> float:
+    """Combined round-trip cost (entry + exit) for a pair, as a fraction.
 
-    Includes for each leg:
-        - FX fee (only if leg currency != account currency)
-        - Stamp duty (charged once on the buy leg; we assume one buy + one sell
-          per round-trip per pair, so one stamp duty per leg lifecycle)
-        - Typical spread (round-trip)
-
-    The result is the *combined* cost across both legs and represents the
-    minimum z-score-driven edge the strategy must beat to be profitable.
+    Per leg:
+      - FX fee x 2 (entry + exit) if currency != account_currency.
+      - Stamp duty x 1 if buy-only (UK, Italian); x 2 if per-side (HK, SIX).
+      - Typical spread once per leg.
     """
     total = 0.0
     for ticker in (ticker_a, ticker_b):
         v = get_venue_profile(ticker)
         leg_cost = 0.0
         if v.currency != account_currency:
-            # Round-trip FX: pay on entry, pay on exit.
             leg_cost += 2.0 * v.fx_fee_pct
-        leg_cost += v.stamp_duty_pct
-        leg_cost += v.typical_spread_bps / 10000.0  # bps -> pct
+        stamp_multiplier = 2.0 if v.stamp_duty_per_side else 1.0
+        leg_cost += stamp_multiplier * v.stamp_duty_pct
+        leg_cost += v.typical_spread_bps / 10000.0
         total += leg_cost
     return total
 
 
-__all__ = [
-    "VenueProfile",
-    "get_venue_profile",
-    "same_session",
-    "same_currency",
-    "estimate_round_trip_cost_pct",
-]
+__all__ = ["VenueProfile", "get_venue_profile", "same_session",
+           "same_currency", "estimate_round_trip_cost_pct"]
