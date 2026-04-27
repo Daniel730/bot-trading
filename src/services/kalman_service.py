@@ -42,28 +42,31 @@ class KalmanFilter:
         Update the filter with new price observations.
         :param price_a: Price of Asset A (observation)
         :param price_b: Price of Asset B (regressor)
+        :return: (state, innovation_variance, z_score, spread)
         """
         try:
             # 1. Predict (A = I, so x_minus = x, P_minus = P + Q)
-            # x_minus = self.state
             P_minus = self.P + self.Q
             
             # 2. Observation Matrix H = [1, price_b]
             H = np.array([[1.0, price_b]])
             
-            # 3. Residual / Innovation
+            # 3. Residual / Innovation (Prior)
             y = price_a
-            innovation = y - np.dot(H, self.state)
+            spread = float(y - np.dot(H, self.state).item())
             
             # 4. Residual Covariance S = H * P_minus * H^T + R
             S = np.dot(H, np.dot(P_minus, H.T)) + self.R
             self.innovation_variance = float(S.item())
             
+            # Z-score (Prior)
+            z_score = float(spread / np.sqrt(self.innovation_variance))
+
             # 5. Kalman Gain K = P_minus * H^T * S^-1
             K = np.dot(P_minus, H.T) / S
             
-            # 6. Update State x = x_minus + K * innovation
-            new_state = self.state + K.flatten() * innovation
+            # 6. Update State x = x_minus + K * spread
+            new_state = self.state + K.flatten() * spread
             
             # 7. Update Covariance P = (I - K*H) * P_minus
             new_P = (np.eye(2) - np.dot(K, H)) @ P_minus
@@ -73,8 +76,6 @@ class KalmanFilter:
                 raise ValueError("NaN or Inf detected in Kalman update. Resetting filter.")
 
             # Reasonableness Guard: Prevent exploding beta
-            # beta is state[1]. We allow up to 1000 for high-price-diff pairs (BTC/ETH).
-            # We clip the new_state before assignment.
             new_state[1] = np.clip(new_state[1], 0.001, 1000.0)
 
             self.state = new_state
@@ -82,12 +83,13 @@ class KalmanFilter:
             
         except (ValueError, np.linalg.LinAlgError) as e:
             logger.error(f"Kalman update failed: {e}. Resetting filter to initial state.")
-            # Log error and reset to initial known sane state
             self.state = self.initial_state.copy()
             self.P = self.initial_covariance.copy()
-            self.innovation_variance = 1.0 # High variance to prevent immediate trades
+            self.innovation_variance = 1.0
+            z_score = 0.0
+            spread = 0.0
         
-        return self.state, self.innovation_variance
+        return self.state, self.innovation_variance, z_score, spread
 
     def calculate_spread_and_zscore(self, price_a, price_b):
         """

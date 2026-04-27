@@ -60,13 +60,21 @@ class TestKalmanFilter(unittest.TestCase):
         # Initial state [0.0, 1.0]
         # Expected spread = 150.5 - (1.0 * 100.0 + 0.0) = 50.5
         
-        # First update to set innovation_variance
-        kf.update(pa, pb)
+        # update() now returns (state, innovation_variance, z_score, spread)
+        # where z_score and spread are calculated BEFORE the update (using prior state).
+        state, inv_var, z_score, spread = kf.update(pa, pb)
         
-        spread, z_score = kf.calculate_spread_and_zscore(pa, pb)
-        
-        self.assertIsInstance(spread, float)
+        self.assertAlmostEqual(spread, 50.5)
         self.assertIsInstance(z_score, float)
+        self.assertTrue(z_score > 0)
+        
+        # Since the filter was at [0,1], the spread should be 50.5.
+        # Innovation variance depends on P (initially 10*I) and R (1e-3).
+        # S = H*P*H^T + R = [1, 100] * [[10,0],[0,10]] * [1, 100]^T + 0.001
+        # S = (10 + 10*10000) + 0.001 = 100010.001
+        # z = 50.5 / sqrt(100010.001) approx 50.5 / 316.24 approx 0.159
+        self.assertAlmostEqual(z_score, 50.5 / np.sqrt(inv_var))
+
         
 if __name__ == '__main__':
     unittest.main()
