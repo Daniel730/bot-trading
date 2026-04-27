@@ -3,6 +3,7 @@ import logging
 import uuid
 import asyncio
 from datetime import datetime
+from src.config import settings
 from src.services.persistence_service import persistence_service, OrderStatus, MarketRegime
 from src.services.agent_log_service import agent_trace
 
@@ -84,13 +85,15 @@ class ReflectionAgent:
                 }
 
                 # P-05 (2026-04-26): TradeJournal.entry_regime is NOT NULL.
-                # In the recovery path (no pre-existing journal row) the
-                # ON CONFLICT DO UPDATE degenerates to a plain INSERT, which
-                # blew up with NotNullViolationError. If we have no entry
-                # context, fall back to the latest logged regime, then to
-                # STABLE so the row can be persisted and the reflection isn't
-                # lost.
-                if journal is None:
+                # PostgreSQL validates the full INSERT candidate row even when
+                # ON CONFLICT DO UPDATE fires, so entry_regime must ALWAYS be
+                # present in journal_data — not just in the no-journal path.
+                if journal is not None:
+                    # Re-use the value already stored in the existing row.
+                    journal_data["entry_regime"] = journal.entry_regime
+                else:
+                    # Recovery path: no pre-existing journal row. Fall back to
+                    # the latest logged regime, then to STABLE.
                     fallback_regime = MarketRegime.STABLE
                     try:
                         latest = await persistence_service.get_latest_market_regime()
@@ -116,7 +119,10 @@ class ReflectionAgent:
         """
         Updates a global performance score that influences future trade confidence.
         """
-        current_perf_str = await persistence_service.get_system_state("global_strategy_accuracy", "0.5")
+        current_perf_str = await persistence_service.get_system_state(
+            "global_strategy_accuracy",
+            str(settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT),
+        )
         current_perf = float(current_perf_str)
 
         # Simple moving average / EMA approach

@@ -1,8 +1,10 @@
 import asyncio
 import time
 import uuid
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from src.config import settings
+from src.services.web3_service import web3_service
+from src.services.budget_service import budget_service
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 import requests
 import logging
@@ -15,6 +17,7 @@ class BrokerageService:
     def __init__(self, api_key: str = None, api_secret: str = None):
         self.api_key = api_key or settings.effective_t212_key.strip()
         self.api_secret = api_secret or settings.T212_API_SECRET.strip()
+        self.web3 = web3_service
         self._cache = {}
         self._cache_ttl = 5  # 5 seconds
         self._cache_lock = asyncio.Lock()  # FR-014: Single-Flight prevention (Async)
@@ -96,6 +99,14 @@ class BrokerageService:
             return ticker.replace(".L", "_L_EQ")
 
         return f"{ticker}_US_EQ"
+
+    @staticmethod
+    def _is_crypto_ticker(ticker: str) -> bool:
+        return "-USD" in ticker.upper()
+
+    def get_venue(self, ticker: str) -> str:
+        """Determines the venue (WEB3 or T212) for a given ticker."""
+        return "WEB3" if self._is_crypto_ticker(ticker) else "T212"
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         # P-03: Method is now async so _recover_timeout_order can be awaited correctly
@@ -223,7 +234,90 @@ class BrokerageService:
 
         return True
 
+    async def get_web3_account_cash(self) -> Optional[float]:
+        """Returns the wallet's base-token balance in USD.
+
+        Parallel to get_account_cash() for T212 — raw balance with no budget cap
+        applied. The monitor applies budget_service.get_effective_cash() on top of
+        this, exactly as it does for T212 free cash.  Returns None on error so the
+        caller can fall back to venue-cap-only mode.
+        """
+        if not self.web3.enabled:
+            logger.warning("WEB3: get_web3_account_cash called but web3 is not enabled.")
+            return None
+        try:
+            snapshot = await self.web3.get_budget_snapshot()
+            if snapshot.get("status") == "error":
+                logger.warning(f"WEB3: Budget snapshot error — {snapshot.get('message')}")
+                return None
+            return float(snapshot.get("balance_usd", 0.0))
+        except Exception as e:
+            logger.error(f"WEB3: Error fetching account cash: {e}")
+            return None
+
+    async def _place_value_order_web3(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+        """WEB3 equivalent of _place_value_order_t212.
+
+        Applies the same pre-execution pipeline — friction check, price lookup,
+        token-quantity calculation, agent logging — before delegating to
+        web3_service.place_value_order() for on-chain execution.
+        """
+        from src.services.data_service import data_service
+        from src.services.risk_service import FeeAnalyzer
+        from src.services.agent_log_service import agent_logger
+
+        # 1. WEB3-specific friction check.
+        #    T212 uses a flat $0.50 equity-spread estimate which destroys tiny
+        #    Kelly-sized orders (e.g. $1.89 → 26 % friction).  DEX friction is
+        #    percentage-based: pool fee (~0.3 %) + configured max slippage (BPS).
+        slippage_usd = amount * (settings.WEB3_MAX_SLIPPAGE_BPS / 10_000)
+        web3_fee_analyzer = FeeAnalyzer(max_friction_pct=settings.WEB3_MAX_FRICTION_PCT)
+        friction_check = web3_fee_analyzer.check_fees(
+            ticker=ticker, amount_fiat=amount, spread_est=slippage_usd
+        )
+        if not friction_check["is_acceptable"]:
+            return {"status": "error", "message": friction_check["rejection_reason"]}
+        friction = friction_check["total_friction_percent"]
+
+        # 2. Price lookup
+        prices = await data_service.get_latest_price([ticker])
+        if ticker not in prices:
+            return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
+        price = float(prices[ticker])
+        if price <= 0:
+            return {"status": "error", "message": f"Invalid price ({price}) for {ticker}. Rejecting order."}
+
+        # 3. Token-quantity calculation
+        raw_quantity = amount / price
+        logger.info(
+            f"WEB3: Value order {ticker}: ${amount:.2f} / ${price:.6f} = {raw_quantity:.6f} tokens ({side})"
+        )
+
+        # 4. Execute via web3_service (on-chain swap or simulation)
+        result = await self.web3.place_value_order(ticker=ticker, amount_fiat=amount, side=side)
+
+        # 5. Log trade (same as T212 path)
+        if result.get("status") != "error":
+            agent_logger.log_fractional_trade(ticker, amount, raw_quantity, price, side, friction)
+
+        return result
+
     async def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+        # Feature 037: route crypto spot orders to on-chain Web3 execution
+        # while keeping all non-crypto tickers on Trading212.
+        venue = self.get_venue(ticker)
+        if venue == "WEB3" and not settings.PAPER_TRADING:
+            logger.info("BrokerageDispatcher: routing %s to WEB3 execution path", ticker)
+            result = await self._place_value_order_web3(ticker=ticker, amount=amount, side=side)
+        else:
+            result = await self._place_value_order_t212(ticker=ticker, amount=amount, side=side)
+
+        if result.get("status") != "error" and not settings.PAPER_TRADING:
+            budget_service.update_used_budget(venue, amount)
+
+        return result
+
+    async def _place_value_order_t212(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
         """
         Feature 014/016: Executes a value-based order by calculating required quantity.
         Enforces minTradeQuantity and quantityIncrement from brokerage metadata.
@@ -265,8 +359,9 @@ class BrokerageService:
 
         logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares")
 
-        # Feature 018: Calculate 1% slippage-capped limitPrice
-        limit_price = price * 1.01 if side.upper() == "BUY" else price * 0.99
+        # Feature 018: Slippage-capped limitPrice driven by configuration.
+        slip = settings.T212_LIMIT_SLIPPAGE_PCT
+        limit_price = price * (1 + slip) if side.upper() == "BUY" else price * (1 - slip)
 
         # P-04 (2026-04-26): place_market_order is async — must be awaited.
         # Previously this created an un-awaited coroutine, so live orders were

@@ -9,6 +9,7 @@ from src.agents.macro_economic_agent import macro_economic_agent
 from src.services.redis_service import redis_service
 from src.services.telemetry_service import telemetry_service
 from src.services.persistence_service import persistence_service
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -99,14 +100,20 @@ class Orchestrator:
             "agent_name": "BULL_AGENT",
             "signal_id": sig_id,
             "thought": str(bull_results.get("reasoning", "Analysis complete")) if not isinstance(bull_results, Exception) else f"Error: {bull_results}",
-            "verdict": "BULLISH" if not isinstance(bull_results, Exception) and bull_results.get("confidence", 0) > 0.5 else "NEUTRAL"
+            "verdict": "BULLISH"
+            if not isinstance(bull_results, Exception)
+            and bull_results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
+            else "NEUTRAL"
         })
 
         telemetry_service.broadcast("thought", {
             "agent_name": "BEAR_AGENT",
             "signal_id": sig_id,
             "thought": str(bear_results.get("reasoning", "Analysis complete")) if not isinstance(bear_results, Exception) else f"Error: {bear_results}",
-            "verdict": "BEARISH" if not isinstance(bear_results, Exception) and bear_results.get("confidence", 0) > 0.5 else "NEUTRAL"
+            "verdict": "BEARISH"
+            if not isinstance(bear_results, Exception)
+            and bear_results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
+            else "NEUTRAL"
         })
 
         # Track if any major API timeout occurred for circuit breaker
@@ -129,30 +136,38 @@ class Orchestrator:
             state['bear_verdict'] = bear_results
 
         # Handle Fundamental Score A (Redis)
-        score_a = 50
+        score_a = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
         if isinstance(score_data_a, Exception):
             logger.warning("Orchestrator Redis read failed for %s: %s", ticker_a, score_data_a)
         elif score_data_a:
-            score_a = score_data_a.get("score", 50)
+            score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
         else:
-            logger.warning("CRITICAL - Fundamental cache miss for %s. Defaulting to 50.", ticker_a)
+            logger.warning(
+                "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                ticker_a, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+            )
             telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
 
         # Handle Fundamental Score B (Redis)
-        score_b = 50
+        score_b = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
         if isinstance(score_data_b, Exception):
             logger.warning("Orchestrator Redis read failed for %s: %s", ticker_b, score_data_b)
         elif score_data_b:
-            score_b = score_data_b.get("score", 50)
+            score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
         else:
-            logger.warning("CRITICAL - Fundamental cache miss for %s. Defaulting to 50.", ticker_b)
+            logger.warning(
+                "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                ticker_b, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+            )
             telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
 
         telemetry_service.broadcast("thought", {
             "agent_name": "SEC_AGENT",
             "signal_id": sig_id,
             "thought": f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}",
-            "verdict": "VETO" if score_a < 40 or score_b < 40 else "NEUTRAL"
+            "verdict": "VETO"
+            if score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE
+            else "NEUTRAL"
         })
 
         # FR-003: Circuit Breaker Logic (Persistent)
@@ -164,7 +179,7 @@ class Orchestrator:
             await persistence_service.set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
             if consecutive_timeouts >= 3:
                 await persistence_service.set_system_state("operational_status", "DEGRADED_MODE")
-                logger.critical("Circuit Breaker Tripped\! Entering DEGRADED_MODE after %d consecutive timeouts.", consecutive_timeouts)
+                logger.critical("Circuit Breaker Tripped! Entering DEGRADED_MODE after %d consecutive timeouts.", consecutive_timeouts)
         else:
             # Reset on full successful loop. O1 fix: also restore operational_status so a
             # transient API blip earlier in the session does not freeze the bot for the day.
@@ -173,22 +188,25 @@ class Orchestrator:
 
         # FR-010: Feedback Loop Integration
         # Scale confidence based on recent historical performance (Global Strategy Accuracy)
-        accuracy_str = await persistence_service.get_system_state("global_strategy_accuracy", "0.5")
+        accuracy_str = await persistence_service.get_system_state(
+            "global_strategy_accuracy",
+            str(settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT),
+        )
         global_accuracy = float(accuracy_str)
 
         # Accuracy penalty: if global accuracy < 0.4, we scale down everything
         performance_multiplier = 1.0
-        if global_accuracy < 0.4:
-            performance_multiplier = 0.7  # 30% penalty
-        elif global_accuracy > 0.7:
-            performance_multiplier = 1.1  # 10% boost for high-performing periods
+        if global_accuracy < settings.ORCH_ACCURACY_LOW_THRESHOLD:
+            performance_multiplier = settings.ORCH_ACCURACY_LOW_MULTIPLIER
+        elif global_accuracy > settings.ORCH_ACCURACY_HIGH_THRESHOLD:
+            performance_multiplier = settings.ORCH_ACCURACY_HIGH_MULTIPLIER
 
         # 3. Aggregation Logic with VETO
         bull_conf = state['bull_verdict']['confidence']
         bear_conf = state['bear_verdict']['confidence']
 
         # Absolute VETO if structural integrity score < 40 for either ticker
-        if score_a < 40 or score_b < 40:
+        if score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE:
             state["final_confidence"] = 0.0
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason
@@ -244,7 +262,9 @@ class Orchestrator:
             "signal_id": state['signal_context'].get('signal_id', 'N/A'),
             "ticker_pair": f"{ticker_a}_{ticker_b}",
             "thought": state["final_verdict"],
-            "verdict": "EXECUTE" if state["final_confidence"] > 0.5 else "REJECT"
+            "verdict": "EXECUTE"
+            if state["final_confidence"] > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
+            else "REJECT"
         })
 
         # Sprint H: Sector Gravity Check (Beacon Asset)
@@ -261,7 +281,7 @@ class Orchestrator:
                 regime = await macro_economic_agent.get_ticker_regime(beacon)
                 if regime == "EXTREME_VOLATILITY":
                     state["final_confidence"] = 0.0
-                    state["final_verdict"] = f"CRITICAL VETO: Sector Leader {beacon} in Flash Crash\! Aborting trade for {ticker}."
+                    state["final_verdict"] = f"CRITICAL VETO: Sector Leader {beacon} in Flash Crash! Aborting trade for {ticker}."
                     break
 
         return state

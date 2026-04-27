@@ -66,7 +66,7 @@ class DashboardState:
             "daily_usage_pct": None
         }
         self.market_regime = {"regime": "STABLE", "confidence": 1.0}
-        self.global_accuracy = 0.5
+        self.global_accuracy = settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT
         self.active_signals = []
         self.terminal_messages = []
         self.listeners = []
@@ -560,34 +560,63 @@ class DashboardService:
     async def _poll_metrics(self):
         while True:
             try:
-                is_shadow = settings.TRADING_212_MODE.lower() == "demo" or settings.DEV_MODE
-                
                 total_cash = None
                 pending_value = None
-                
-                # Fetch cash if not paper trading OR if we are in DEMO mode with a valid key
-                if not settings.PAPER_TRADING or settings.is_t212_demo:
+
+                # --- WEB3 venue: pull wallet balance in USD as the cash figure ---
+                if settings.web3_enabled:
+                    try:
+                        total_cash = await brokerage_service.get_web3_account_cash()
+                        pending_value = 0.0  # WEB3 has no pending orders concept
+                    except Exception as e:
+                        logger.warning(f"DASHBOARD: Could not fetch WEB3 cash: {e}")
+
+                # --- T212 venue: fetch from broker API when WEB3 isn't the active path ---
+                if total_cash is None and (not settings.PAPER_TRADING or settings.is_t212_demo):
                     try:
                         total_cash = await asyncio.to_thread(brokerage_service.get_account_cash)
                         pending_value = await brokerage_service.get_pending_orders_value()
-                        
-                        # US-032: Remove hardcoded fallback. If API is down, send None to trigger 'ERR' in UI.
-                        if total_cash == 0 and settings.is_t212_demo and not settings.PAPER_TRADING:
-                            # Only if key is actually valid but balance is 0? 
-                            # If it's 401, brokerage_service usually returns 0.0 on catching except.
-                            # We'll trust the None fallback below.
-                            pass
                     except Exception as e:
                         logger.warning(f"DASHBOARD: Could not fetch brokerage cash: {e}")
-                
-                spendable_cash = (total_cash - pending_value) if total_cash is not None and pending_value is not None else None
-                daily_allocation = (total_cash * 0.25) if total_cash is not None else None
-                daily_invested = self.persistence.get_daily_invested(datetime.now().date().isoformat(), is_shadow=is_shadow)
+
+                # --- WEB3 budget: use BudgetService data for daily_budget/usage ---
+                if settings.web3_enabled:
+                    try:
+                        from src.services.budget_service import budget_service
+                        web3_budget = budget_service.get_venue_budget_info("WEB3")
+                        web3_used = web3_budget["used"]
+                        web3_total = web3_budget["total"]
+                        # Cap = configured budget or fall back to 25 % of wallet
+                        daily_allocation = web3_total if web3_total > 0 else (
+                            (total_cash * 0.25) if total_cash is not None else None
+                        )
+                        daily_invested_web3 = web3_used
+                    except Exception as e:
+                        logger.warning(f"DASHBOARD: Could not fetch WEB3 budget info: {e}")
+                        daily_allocation = (total_cash * 0.25) if total_cash is not None else None
+                        daily_invested_web3 = None
+                else:
+                    daily_allocation = (total_cash * 0.25) if total_cash is not None else None
+                    daily_invested_web3 = None
+
+                spendable_cash = (total_cash - (pending_value or 0.0)) if total_cash is not None else None
+                daily_invested = (
+                    daily_invested_web3
+                    if daily_invested_web3 is not None
+                    else None
+                )
+
+                # Use authoritative PostgreSQL trade ledger metrics.
+                from src.services.persistence_service import persistence_service
+                today = datetime.now().date().isoformat()
+                realized_daily_pnl = await persistence_service.get_daily_pnl_for_date(today)
+                total_realized_pnl = await persistence_service.get_total_pnl()
+                current_investment = await persistence_service.get_current_investment()
                 
                 metrics = {
-                    "total_revenue": self.persistence.get_total_revenue(is_shadow=is_shadow),
-                    "total_invested": self.persistence.get_current_investment(is_shadow=is_shadow),
-                    "daily_profit": self.persistence.get_daily_pnl(datetime.now().date().isoformat(), is_shadow=is_shadow),
+                    "total_revenue": total_realized_pnl,
+                    "total_invested": current_investment,
+                    "daily_profit": realized_daily_pnl,
                     "available_cash": total_cash,
                     "pending_orders_value": pending_value,
                     "spendable_cash": spendable_cash,
@@ -598,7 +627,10 @@ class DashboardService:
                 # Fetch Intelligence Data
                 from src.services.persistence_service import persistence_service
                 regime = await persistence_service.get_latest_market_regime()
-                accuracy_str = await persistence_service.get_system_state("global_strategy_accuracy", "0.5")
+                accuracy_str = await persistence_service.get_system_state(
+                    "global_strategy_accuracy",
+                    str(settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT),
+                )
                 
                 async with dashboard_state._lock:
                     dashboard_state.portfolio_metrics.update(metrics)
