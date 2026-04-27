@@ -25,10 +25,12 @@ async def test_execute_trade_success(monitor):
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock) as mock_shadow, \
          patch.object(settings, "PAPER_TRADING", False):
         
         mock_bid_ask.return_value = (150.0, 150.1) # low spread
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_shadow.return_value = [] # empty portfolio for simplicity
         # get_account_cash is SYNC
         monitor.brokerage.get_account_cash.return_value = 10000.0
         monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "orderId": "123"})
@@ -76,8 +78,8 @@ async def test_orchestrator_veto(monitor):
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock):
         
         mock_kf = MagicMock()
-        mock_kf.update.return_value = ([0, 1.0], 0.1)
-        mock_kf.calculate_spread_and_zscore.return_value = (0.5, 3.0) # Trigger signal (z > 2.0)
+        # New signature: (state, innovation_variance, z_score, spread)
+        mock_kf.update.return_value = ([0, 1.0], 0.1, 3.0, 0.5) 
         mock_kf_get.return_value = mock_kf
         
         # Orchestrator VETO (confidence < 0.5)

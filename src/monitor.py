@@ -273,8 +273,9 @@ class ArbitrageMonitor:
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
                 return diagnostic
-            state_vec, innovation_var = kf.update(price_a, price_b)
-            spread, z_score = kf.calculate_spread_and_zscore(price_a, price_b)
+            
+            # Prior Z-score and spread are calculated inside update() BEFORE the state is adjusted
+            state_vec, innovation_var, z_score, spread = kf.update(price_a, price_b)
 
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
@@ -283,7 +284,7 @@ class ArbitrageMonitor:
             logger.info(f"SCAN [{t_a}/{t_b}] Current Z-Score: {z_score:.2f} | Beta: {state_vec[1]:.4f}")
 
             # Signal Generation
-            if abs(z_score) > 2.0:
+            if abs(z_score) > 0.:
                 signal_id = str(uuid.uuid4())
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
