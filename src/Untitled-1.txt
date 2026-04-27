@@ -1,0 +1,22 @@
+I will implement a comprehensive fix to separate Trading 212 and MetaMask (Web3) budgets and metrics. This involves
+updating the database schema to track the venue for each trade, modifying the persistence layer to support venue-specific
+calculations, and fixing the dashboard polling logic to correctly aggregate and report metrics for both platforms.
+
+Phase 1: Persistence & Schema
+
+1.  Modify src/services/persistence_service.py:
+    - Add a venue column to the TradeLedger model.
+    - Implement an automatic venue detection in log_trade (using the -USD ticker suffix rule).
+    - Update all aggregation methods (get_daily_returns, get_total_pnl, get_current_investment) to support an optional
+      venue filter.
+    - Add a runtime migration in init_db to add the venue column to the existing PostgreSQL table.
+
+Phase 2: Brokerage & Monitoring 2. Modify src/services/brokerage_service.py:
+_ Ensure place_value_order returns the detected venue in its response. 3. Modify src/monitor.py:
+_ Ensure that when logging trades, the venue is correctly passed to the persistence service.
+
+Phase 3: Dashboard & Reporting 4. Modify src/services/dashboard_service.py:
+_ Fix the \_poll_metrics loop to independently fetch cash balances for both T212 and Web3.
+_ Calculate separate daily_budget, total_invested, and daily_profit for each venue. \* Update the metrics payload to provide both venue-specific data and corrected global totals.
+
+Phase 4: Frontend 5. Modify frontend/src/App.tsx: \* Update the KPI strip to display separate metrics for T212 and Web3, ensuring clear visibility into both budgets.
