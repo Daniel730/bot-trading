@@ -90,6 +90,7 @@ class DashboardState:
             "live_capital_danger": settings.LIVE_CAPITAL_DANGER,
             "region": settings.REGION,
             "bot_start_time": self.bot_start_time,
+            "approval_threshold": settings.APPROVAL_THRESHOLD,
         }
 
     async def add_message(self, msg_type: str, text: str, metadata: dict = None):
@@ -233,6 +234,25 @@ async def terminal_command(request: CommandRequest, token: str = Query(None)):
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))
     return result
+
+# ─── SETTINGS API ───────────────────────────────────────────────────────────
+
+class SettingsUpdateRequest(BaseModel):
+    approval_threshold: float
+
+@app.get("/api/settings")
+async def get_settings(token: str = Query(None)):
+    verify_token(token)
+    return {"approval_threshold": settings.APPROVAL_THRESHOLD}
+
+@app.post("/api/settings")
+async def update_settings(request: SettingsUpdateRequest, token: str = Query(None)):
+    verify_token(token)
+    settings.APPROVAL_THRESHOLD = request.approval_threshold
+    from src.config import save_settings_override
+    save_settings_override({"APPROVAL_THRESHOLD": request.approval_threshold})
+    await dashboard_state.add_message("SYSTEM", f"Auto-trade threshold updated to {request.approval_threshold} EUR")
+    return {"status": "ok", "approval_threshold": settings.APPROVAL_THRESHOLD}
 
 # ─── PAIRS API ──────────────────────────────────────────────────────────────
 

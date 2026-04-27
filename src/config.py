@@ -10,6 +10,27 @@ load_dotenv()
 
 # Path to user-editable pairs override file (created/edited by the dashboard).
 PAIRS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "pairs.json"
+BOT_SETTINGS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "bot_settings.json"
+
+def _load_settings_override():
+    try:
+        if not BOT_SETTINGS_OVERRIDE_PATH.exists():
+            return None
+        with BOT_SETTINGS_OVERRIDE_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return None
+        return data
+    except Exception:
+        return None
+
+def save_settings_override(new_settings: dict) -> None:
+    BOT_SETTINGS_OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    existing = _load_settings_override() or {}
+    existing.update(new_settings)
+    with BOT_SETTINGS_OVERRIDE_PATH.open("w", encoding="utf-8") as fh:
+        json.dump(existing, fh, indent=2)
+
 
 
 def _load_pairs_override():
@@ -244,3 +265,8 @@ if _override:
         settings.ARBITRAGE_PAIRS = _override["ARBITRAGE_PAIRS"]
     if isinstance(_override.get("CRYPTO_TEST_PAIRS"), list):
         settings.CRYPTO_TEST_PAIRS = _override["CRYPTO_TEST_PAIRS"]
+
+_settings_override = _load_settings_override()
+if _settings_override:
+    if "APPROVAL_THRESHOLD" in _settings_override:
+        settings.APPROVAL_THRESHOLD = float(_settings_override["APPROVAL_THRESHOLD"])
