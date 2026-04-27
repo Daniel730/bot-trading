@@ -5,6 +5,7 @@ from typing import Dict, Any
 from src.services.data_service import data_service
 from src.services.volatility_service import volatility_service
 from src.services.persistence_service import persistence_service, MarketRegime
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,11 @@ class MarketRegimeService:
             # 1. Fetch historical data (daily for regime detection)
             hist = data_service.get_historical_data([ticker], period="60d", interval="1d")
             if hist.empty:
-                return {"regime": MarketRegime.STABLE, "confidence": 0.5, "features": {}}
+                return {
+                    "regime": MarketRegime.STABLE,
+                    "confidence": settings.MARKET_REGIME_FALLBACK_CONFIDENCE,
+                    "features": {},
+                }
 
             # 2. Calculate Indicators
             # P-06 (2026-04-26): yfinance returns a 1-column DataFrame when a
@@ -39,7 +44,11 @@ class MarketRegimeService:
                     prices = prices[ticker] if ticker in prices.columns else prices.iloc[:, 0]
             prices = prices.dropna()
             if prices.empty:
-                return {"regime": MarketRegime.STABLE, "confidence": 0.5, "features": {}}
+                return {
+                    "regime": MarketRegime.STABLE,
+                    "confidence": settings.MARKET_REGIME_FALLBACK_CONFIDENCE,
+                    "features": {},
+                }
 
             returns = prices.pct_change().dropna()
 
@@ -59,19 +68,19 @@ class MarketRegimeService:
 
             # 3. Decision Logic
             regime = MarketRegime.STABLE
-            confidence = 0.7
+            confidence = settings.MARKET_REGIME_BASE_CONFIDENCE
 
             # Trending logic
-            if curr_ema_s > curr_ema_l * 1.01 and current_price > curr_ema_s:
+            if curr_ema_s > curr_ema_l * settings.MARKET_REGIME_EMA_BULL_FACTOR and current_price > curr_ema_s:
                 regime = MarketRegime.TRENDING_UP
-            elif curr_ema_s < curr_ema_l * 0.99 and current_price < curr_ema_s:
+            elif curr_ema_s < curr_ema_l * settings.MARKET_REGIME_EMA_BEAR_FACTOR and current_price < curr_ema_s:
                 regime = MarketRegime.TRENDING_DOWN
 
             # Volatility Overrides
             # High volatility if daily returns std > certain threshold OR L2 entropy is very high
-            if volatility > 0.30 or entropy > 0.85:
+            if volatility > settings.MARKET_REGIME_VOLATILITY_HIGH or entropy > settings.MARKET_REGIME_ENTROPY_SPIKE:
                 regime = MarketRegime.VOLATILE
-            elif volatility < 0.10:
+            elif volatility < settings.MARKET_REGIME_VOLATILITY_LOW:
                 # If neither trending nor volatile, it's sideways/stable
                 if regime not in [MarketRegime.TRENDING_UP, MarketRegime.TRENDING_DOWN]:
                     regime = MarketRegime.SIDEWAYS
@@ -98,6 +107,10 @@ class MarketRegimeService:
 
         except Exception as e:
             logger.error(f"Error classifying market regime: {e}")
-            return {"regime": MarketRegime.STABLE, "confidence": 0.5, "features": {}}
+            return {
+                "regime": MarketRegime.STABLE,
+                "confidence": settings.MARKET_REGIME_FALLBACK_CONFIDENCE,
+                "features": {},
+            }
 
 market_regime_service = MarketRegimeService()

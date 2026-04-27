@@ -44,6 +44,12 @@ Desenvolvida para democratizar o trading quantitativo, esta suite permite operar
 - **Goal-Setting**: Configuração de metas financeiras com ajuste dinâmico de risco.
 - **Micro-Optimization**: Manutenção de fricção < 1.5% para investimentos mínimos.
 
+### 4. Gestão Unificada de Orçamento (BudgetService)
+O sistema agora rastreia de forma persistente o capital utilizado em cada venue:
+- **Isolamento de Risco**: T212 e Web3 operam com limites de capital independentes e persistentes.
+- **Continuidade**: O orçamento utilizado é guardado em SQLite, garantindo que o bot respeita os limites mesmo após reinícios.
+- **Abstração de Venue**: O motor de arbitragem decide automaticamente onde executar com base no ticker, sem lógica hardcoded.
+
 ---
 
 ## 🛠️ Stack Técnica

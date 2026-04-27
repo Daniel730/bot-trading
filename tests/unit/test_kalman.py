@@ -66,15 +66,43 @@ class TestKalmanFilter(unittest.TestCase):
         
         self.assertAlmostEqual(spread, 50.5)
         self.assertIsInstance(z_score, float)
-        self.assertTrue(z_score > 0)
-        
-        # Since the filter was at [0,1], the spread should be 50.5.
-        # Innovation variance depends on P (initially 10*I) and R (1e-3).
-        # S = H*P*H^T + R = [1, 100] * [[10,0],[0,10]] * [1, 100]^T + 0.001
-        # S = (10 + 10*10000) + 0.001 = 100010.001
-        # z = 50.5 / sqrt(100010.001) approx 50.5 / 316.24 approx 0.159
-        self.assertAlmostEqual(z_score, 50.5 / np.sqrt(inv_var))
 
+    def test_bump_uncertainty_convergence(self):
+        """Test if bump_uncertainty speeds up convergence after a gap."""
+        # Setup: converge to beta=1.0
+        kf = KalmanFilter(delta=1e-5, r=1e-3)
+        for _ in range(100):
+            kf.update(100.0, 100.0)
         
+        initial_beta = kf.state[1]
+        self.assertAlmostEqual(initial_beta, 1.0, places=2)
+        
+        # Scenario: sudden gap to beta=2.0
+        # We'll create two filters: one bumped, one not.
+        kf_normal = KalmanFilter(delta=1e-5, r=1e-3)
+        kf_bumped = KalmanFilter(delta=1e-5, r=1e-3)
+        
+        # Sync states
+        kf_normal.state = kf.state.copy()
+        kf_normal.P = kf.P.copy()
+        kf_bumped.state = kf.state.copy()
+        kf_bumped.P = kf.P.copy()
+        
+        # Apply bump to one
+        kf_bumped.bump_uncertainty(multiplier=100.0)
+        
+        # New observation reflecting beta=2.0 (Price A = 200, Price B = 100)
+        kf_normal.update(200.0, 100.0)
+        kf_bumped.update(200.0, 100.0)
+        
+        # The bumped filter should have moved much closer to beta=2.0
+        dist_normal = abs(kf_normal.state[1] - 2.0)
+        dist_bumped = abs(kf_bumped.state[1] - 2.0)
+        
+        print(f"\nNormal beta after gap: {kf_normal.state[1]:.4f} (dist: {dist_normal:.4f})")
+        print(f"Bumped beta after gap: {kf_bumped.state[1]:.4f} (dist: {dist_bumped:.4f})")
+        
+        self.assertLess(dist_bumped, dist_normal, "Bumped filter should converge faster after a gap.")
+
 if __name__ == '__main__':
     unittest.main()

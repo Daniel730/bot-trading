@@ -1,11 +1,11 @@
 from decimal import Decimal, ROUND_DOWN
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from src.config import settings
 from src.services.agent_log_service import agent_trace
 
 class FeeAnalyzer:
-    def __init__(self, max_friction_pct: float = None):
-        from src.config import settings
-        self.max_friction_pct = max_friction_pct if max_friction_pct is not None else settings.MAX_FRICTION_PCT
+    def __init__(self, max_friction_pct: Optional[float] = None):
+        self.max_friction_pct = settings.MAX_FRICTION_PCT if max_friction_pct is None else max_friction_pct
 
     def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0, flat_spread: float = 0.5) -> Dict:
         """
@@ -32,8 +32,8 @@ class FeeAnalyzer:
         }
 
 class KellyCalculator:
-    def __init__(self, fractional_kelly: float = 0.25):
-        self.fractional_kelly = fractional_kelly
+    def __init__(self, fractional_kelly: Optional[float] = None):
+        self.fractional_kelly = settings.KELLY_FRACTION if fractional_kelly is None else fractional_kelly
 
     def calculate_size(self, win_prob: float, win_loss_ratio: float) -> float:
         """
@@ -76,14 +76,14 @@ class RiskService:
         
         # SC-001: Position size scales linearly with drawdown: 0% at 15% drawdown
         risk_multiplier = 1.0
-        if drawdown >= 0.15:
+        if drawdown >= settings.RISK_DRAWDOWN_ZERO_PCT:
             risk_multiplier = 0.0
         elif drawdown > 0:
-            risk_multiplier = max(0.0, 1.0 - (drawdown / 0.15))
+            risk_multiplier = max(0.0, 1.0 - (drawdown / settings.RISK_DRAWDOWN_ZERO_PCT))
             
         # User Story 1 Acceptance 2: Sharpe ratio < 0.5 => Kelly fraction capped at 0.1
-        if sharpe < 0.5:
-            risk_multiplier = min(risk_multiplier, 0.1)
+        if sharpe < settings.RISK_SHARPE_FLOOR:
+            risk_multiplier = min(risk_multiplier, settings.RISK_MULTIPLIER_CAP_LOW_SHARPE)
 
         # User Story 3: Tighten maxSlippage if Volatility Switch is HIGH
         vol_status = await volatility_service.get_volatility_status(ticker)
@@ -91,9 +91,9 @@ class RiskService:
         
         # Default slippage 0.1% (0.001)
         # Acceptance Scenario: Reduce from 0.001 to 0.0005 in high vol
-        max_slippage = 0.001
+        max_slippage = settings.RISK_SLIPPAGE_NORMAL
         if vol_status == "HIGH_VOLATILITY":
-            max_slippage = 0.0005
+            max_slippage = settings.RISK_SLIPPAGE_HIGH_VOL
             
         # FR-003, US1: Broadcast risk parameters for Dashboard
         from src.services.telemetry_service import telemetry_service
@@ -169,16 +169,17 @@ class RiskService:
             "action": "AUTO_HEDGE_PROPOSED"
         }
 
-    def calculate_friction(self, amount: float, ticker: str = "GENERIC", flat_spread: float = 0.5) -> Dict:
+    def calculate_friction(self, amount: float, ticker: str = "GENERIC", flat_spread: Optional[float] = None) -> Dict:
         """
         T007/FR-007: Calculates friction and enforces strict micro-budget rejection.
         If trade < $5.00 and friction > 1.5%, status MUST be FRICTION_REJECT.
         """
-        res = self.fee_analyzer.check_fees(ticker=ticker, amount_fiat=amount, flat_spread=flat_spread)
+        spread = settings.T212_FLAT_SPREAD_USD if flat_spread is None else flat_spread
+        res = self.fee_analyzer.check_fees(ticker=ticker, amount_fiat=amount, flat_spread=spread)
         
         status = "ACCEPTED"
         # Decision 4 / FR-007: Micro-budget threshold check
-        if amount < 5.00 and not res["is_acceptable"]:
+        if amount < settings.MICRO_TRADE_THRESHOLD_USD and not res["is_acceptable"]:
             status = "FRICTION_REJECT"
             
         return {
@@ -188,10 +189,18 @@ class RiskService:
             "rejection_reason": res["rejection_reason"]
         }
 
-    def validate_trade(self, ticker: str, total_portfolio_cash: float, amount_fiat: float, win_prob: float = 0.55, win_loss_ratio: float = 1.0, hedging_state: str = "NORMAL") -> Dict:
+    def validate_trade(
+        self,
+        ticker: str,
+        total_portfolio_cash: float,
+        amount_fiat: float,
+        win_prob: float = settings.DEFAULT_WIN_PROBABILITY,
+        win_loss_ratio: float = settings.DEFAULT_WIN_LOSS_RATIO,
+        hedging_state: str = "NORMAL",
+    ) -> Dict:
         """
         Performs full risk validation for a proposed trade.
-        Uses Half-Kelly and enforces max 5% absolute portfolio exposure per trade.
+        Uses Half-Kelly and enforces max configured portfolio exposure per trade.
         """
         # DEFCON 1 Veto: Reject high-volatility long trades if market risk is extreme
         if hedging_state == "DEFCON_1" and ticker not in self.inverse_etfs.values():
@@ -203,14 +212,14 @@ class RiskService:
 
         fee_check = self.fee_analyzer.check_fees(ticker, amount_fiat)
         
-        # User defined overrides for Kelly calculation: 0.55 win probability by default
+        # User-defined overrides for Kelly inputs.
         kelly_fraction = self.kelly_calculator.calculate_size(win_prob, win_loss_ratio)
         
         # HALF-KELLY constraint
         half_kelly_fraction = kelly_fraction / 2.0
         
-        # Max 5% of portfolio total value per position
-        max_allowed_fiat = total_portfolio_cash * 0.05
+        # Max allocation cap of portfolio total value per position
+        max_allowed_fiat = total_portfolio_cash * (settings.MAX_ALLOCATION_PERCENTAGE / 100.0)
         
         # Proposed value using the adjusted Kelly multiplied by the configured standard allocation or the entire portfolio (scaled). We fallback to minimum of calculated ones.
         proposed_fiat = amount_fiat * half_kelly_fraction
@@ -223,7 +232,7 @@ class RiskService:
         )
         
         # Ensure minimum friction limits are kept
-        is_acceptable = fee_check["is_acceptable"] and final_amount > 1.0 # At least $1 to execute
+        is_acceptable = fee_check["is_acceptable"] and final_amount >= settings.MIN_TRADE_VALUE
         
         return {
             "ticker": ticker,
@@ -234,7 +243,12 @@ class RiskService:
             "rejection_reason": fee_check["rejection_reason"] if not is_acceptable else ""
         }
 
-    def check_financial_kill_switch(self, position_current_value: float, position_cost_basis: float, max_loss_pct: float = 0.02) -> bool:
+    def check_financial_kill_switch(
+        self,
+        position_current_value: float,
+        position_cost_basis: float,
+        max_loss_pct: float = settings.FINANCIAL_KILL_SWITCH_PCT,
+    ) -> bool:
         """
         Hard financial stop-loss guard. If position loses more than maximum loss percentage (2% default).
         Returns True if Kill switch triggered (abort position).
@@ -278,7 +292,7 @@ class PortfolioOptimizer:
         """
         return returns_df.cov()
 
-    def get_sharpe_ratio(self, returns, risk_free_rate=0.02):
+    def get_sharpe_ratio(self, returns, risk_free_rate: float = settings.PORTFOLIO_RISK_FREE_RATE):
         """
         Calculates the Sharpe Ratio.
         """
