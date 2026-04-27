@@ -222,7 +222,7 @@ button {
    ============================================================ */
 .kpi-strip {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
@@ -1603,4 +1603,70 @@ button {
   font-size: 11px;
   color: var(--text-muted);
   margin-top: 3px;
+}
+
+/* ============================================================
+   VENUE INDICATORS (T212 / WEB3)
+   ============================================================ */
+.venue-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.venue-t212 {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+.venue-web3 {
+  background: var(--purple-muted);
+  color: var(--purple);
+}
+
+.venue-breakdown {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.venue-breakdown > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.venue-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.venue-dot-t212 {
+  background: var(--accent);
+}
+.venue-dot-web3 {
+  background: var(--purple);
+}
+
+@media (max-width: 1280px) {
+  .kpi-strip {
+    grid-template-columns: repeat(5, 1fr);
+  }
+}
+@media (max-width: 1024px) {
+  .kpi-strip {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 768px) {
+  .kpi-strip {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }

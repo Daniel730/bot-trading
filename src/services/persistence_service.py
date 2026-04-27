@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Numeric, DateTime, JSON, Enum, func, Boolean, Integer, Text, ForeignKey
@@ -7,6 +8,8 @@ from datetime import datetime
 from typing import Optional, List, Dict
 import uuid
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 class Base(DeclarativeBase):
     pass

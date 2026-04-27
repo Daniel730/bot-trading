@@ -719,7 +719,8 @@ class ArbitrageMonitor:
             "quantity": size_a,
             "price": price_a,
             "status": status_a,
-            "metadata": {"broker_response": res_a}
+            "venue": venue,
+            "metadata_json": {"broker_response": res_a}
         })
 
         # Log Leg B
@@ -731,7 +732,8 @@ class ArbitrageMonitor:
             "quantity": size_b,
             "price": price_b,
             "status": status_b,
-            "metadata": {"broker_response": res_b}
+            "venue": venue,
+            "metadata_json": {"broker_response": res_b}
         })
 
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
