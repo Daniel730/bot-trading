@@ -382,6 +382,53 @@ class Settings(BaseSettings):
         {'ticker_a': 'PLTR',    'ticker_b': 'BBAI'},
         {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},
 
+        # German Automotive (High Correlation)
+        {"stock1": "BMW.DE", "stock2": "MBG.DE"},        # BMW vs Mercedes-Benz
+        {"stock1": "VOW3.DE", "stock2": "PAH3.DE"},      # VW vs Porsche SE
+        {"stock1": "CON.DE", "stock2": "PUM.DE"},        # Continental vs Puma (Consumer/Industrial)
+        
+        # European Banking (High Beta)
+        {"stock1": "DBK.DE", "stock2": "CBK.DE"},        # Deutsche Bank vs Commerzbank
+        {"stock1": "BNP.PA", "stock2": "GLE.PA"},        # BNP Paribas vs Societe Generale
+        {"stock1": "ACA.PA", "stock2": "BNP.PA"},        # Credit Agricole vs BNP Paribas
+        
+        # French Luxury (The "Gold Standard" for Pairs)
+        {"stock1": "MC.PA", "stock2": "RMS.PA"},         # LVMH vs Hermes
+        {"stock1": "MC.PA", "stock2": "KER.PA"},         # LVMH vs Kering (Gucci)
+        {"stock1": "OR.PA", "stock2": "EL.PA"},          # L'Oreal vs EssilorLuxottica
+        
+        # Energy & Utilities
+        {"stock1": "RWE.DE", "stock2": "EOAN.DE"},       # RWE vs E.ON
+        {"stock1": "ENGI.PA", "stock2": "ORAN.PA"},      # Engie vs Orange
+
+        # Energy & Mining (Commodity Driven)
+        {"stock1": "SHEL.L", "stock2": "BP.L"},          # Shell vs BP
+        {"stock1": "RIO.L", "stock2": "BHP.L"},          # Rio Tinto vs BHP
+        {"stock1": "AAL.L", "stock2": "GLEN.L"},         # Anglo American vs Glencore
+        
+        # Banking & Insurance
+        {"stock1": "LLOY.L", "stock2": "BARC.L"},        # Lloyds vs Barclays
+        {"stock1": "HSBA.L", "stock2": "STAN.L"},        # HSBC vs Standard Chartered
+        {"stock1": "AV.L", "stock2": "LGEN.L"},          # Aviva vs Legal & General
+        
+        # Consumer & Retail
+        {"stock1": "TSCO.L", "stock2": "SBRY.L"},        # Tesco vs Sainsbury’s
+        {"stock1": "ULVR.L", "stock2": "RKT.L"},         # Unilever vs Reckitt
+        {"stock1": "BATS.L", "stock2": "IMB.L"},         # British Am. Tobacco vs Imperial Brands
+
+        # Semiconductors (Very High Correlation)
+        {"stock1": "ASML.AS", "stock2": "ASM.AS"},       # ASML vs ASM International (Euronext)
+        {"stock1": "NVDA", "stock2": "AMD"},             # Nvidia vs AMD
+        {"stock1": "LRCX", "stock2": "AMAT"},            # Lam Research vs Applied Materials
+
+        # Big Tech Proxies
+        {"stock1": "GOOGL", "stock2": "META"},           # Alphabet vs Meta
+        {"stock1": "MSFT", "stock2": "AAPL"},            # Microsoft vs Apple
+
+        # Payments & Fintech
+        {"stock1": "V", "stock2": "MA"},                 # Visa vs Mastercard
+        {"stock1": "PYPL", "stock2": "SQ"},              # PayPal vs Block
+
         # --- SEMICONDUCTORS & HARDWARE (Expanded) ---
         {'ticker_a': 'AVGO',    'ticker_b': 'QCOM'},
         {'ticker_a': 'AMAT',    'ticker_b': 'LRCX'},
