@@ -286,7 +286,7 @@ class NotificationService:
         except Exception as e:
             print(f"DASHBOARD (paper-notify): add_message failed, non-fatal: {e}")
 
-    async def request_approval(self, trade_summary: str) -> bool:
+    async def request_approval(self, trade_summary: str, trade_value: float = None) -> bool:
         """Gate a trade on operator approval.
 
         In live mode: sends inline-button Telegram message and waits for
@@ -296,6 +296,11 @@ class NotificationService:
         under 100ms and dispatches a fire-and-forget notification so the
         operator still has visibility (spec FR-001..FR-003).
         """
+        # Threshold auto-approval fast path.
+        if trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
+            asyncio.create_task(self._paper_notify(f"Auto-approved (value €{trade_value:.2f} < threshold €{settings.APPROVAL_THRESHOLD}):\n{trade_summary}"))
+            return True
+
         # Paper-mode fast path.
         if settings.PAPER_TRADING:
             asyncio.create_task(self._paper_notify(trade_summary))
@@ -380,6 +385,20 @@ class NotificationService:
                 f"Details: {dashboard_service.dashboard_state.details}"
             )
             return {"status": "success", "message": "Status sent"}
+
+        elif command.startswith("/set_threshold"):
+            parts = command.split()
+            if len(parts) > 1:
+                try:
+                    val = float(parts[1])
+                    settings.APPROVAL_THRESHOLD = val
+                    from src.config import save_settings_override
+                    save_settings_override({"APPROVAL_THRESHOLD": val})
+                    await self.send_message(f"✅ Auto-trade threshold updated to {val} EUR")
+                    return {"status": "success", "message": f"Threshold set to {val}"}
+                except ValueError:
+                    return {"status": "error", "message": "Invalid value"}
+            return {"status": "error", "message": "Missing value"}
 
         elif command == "/exposure":
             from src.services.shadow_service import shadow_service
