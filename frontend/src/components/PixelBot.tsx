@@ -151,10 +151,9 @@ const PixelBot: React.FC<PixelBotProps> = ({ mood }) => {
             padding: '4px 12px',
             borderRadius: '20px',
             border: '1px solid var(--primary)',
-            zIndex: 30
         }}
       >
-        AGENT_LINK: {mood.toUpperCase()}
+        MODE: {mood.toUpperCase()}
       </div>
     </div>
   );

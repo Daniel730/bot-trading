@@ -32,3 +32,4 @@ matplotlib
 prefect
 grpcio>=1.59.0
 grpcio-tools>=1.59.0
+web3>=6.20.0

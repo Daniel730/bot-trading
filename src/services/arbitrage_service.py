@@ -2,11 +2,12 @@ import pandas as pd
 from statsmodels.tsa.stattools import adfuller
 import asyncio
 import statsmodels.api as sm
-from typing import Tuple, Dict
+from typing import Optional, Tuple, Dict
 from src.services.kalman_service import KalmanFilter
 from src.services.agent_log_service import agent_trace
 import logging
 from src.services.redis_service import redis_service
+from src.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -82,24 +83,121 @@ class ArbitrageService:
         Returns: (is_cointegrated, p_value, hedge_ratio)
         """
         df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
-        if df.empty or len(df) < 20:
+        if df.empty or len(df) < settings.COINTEGRATION_MIN_OBSERVATIONS:
             return False, 1.0, 0.0
-            
+
         s1 = df.iloc[:, 0]
         s2 = df.iloc[:, 1]
 
         s2_with_const = sm.add_constant(s2)
         model = sm.OLS(s1, s2_with_const)
         results = model.fit()
-        
+
         hedge_ratio = float(results.params.iloc[1])
         intercept = float(results.params.iloc[0])
-        
+
         spread = s1 - (hedge_ratio * s2) - intercept
         adf_result = adfuller(spread)
         p_value = float(adf_result[1])
-        
-        return p_value < 0.05, p_value, hedge_ratio
+
+        return p_value < settings.COINTEGRATION_PVALUE_THRESHOLD, p_value, hedge_ratio
+
+    @staticmethod
+    @agent_trace("ArbitrageService.check_rolling_cointegration")
+    def check_rolling_cointegration(
+        ticker_a_series: pd.Series,
+        ticker_b_series: pd.Series,
+        window: int = 60,
+        step: int = 5,
+        min_pass_rate: float = 0.7,
+        pvalue_threshold: Optional[float] = None,
+    ) -> Dict:
+        """Rolling Engle-Granger cointegration stability check.
+
+        A single ADF test on a static window can flatter a pair that was
+        coíntegrated for half the period and decoupled for the other half.
+        For Kalman pairs trading we need stability — the cointegration must
+        hold across most rolling sub-windows of the calibration period.
+
+        Parameters
+        ----------
+        window:
+            Number of observations per rolling window (typically 60 hourly
+            bars ≈ ~2 weeks of US trading).
+        step:
+            Stride between consecutive windows.
+        min_pass_rate:
+            Minimum fraction of windows that must reject the unit-root null
+            for the pair to be considered stably cointegrated. 0.7 is the
+            empirical sweet spot — too lenient (0.5) admits regime-shifting
+            pairs, too strict (0.9) rejects almost all real-world pairs.
+        pvalue_threshold:
+            Override for `settings.COINTEGRATION_PVALUE_THRESHOLD`.
+
+        Returns
+        -------
+        dict with keys:
+            ``stable``        — bool, True iff pass rate >= min_pass_rate
+            ``pass_rate``     — fraction of windows that passed
+            ``windows_total`` — number of windows actually evaluated
+            ``windows_pass``  — number of windows that passed
+            ``median_pvalue`` — median ADF p-value across windows
+            ``last_pvalue``   — ADF p-value of the most recent window
+        """
+        threshold = (
+            pvalue_threshold
+            if pvalue_threshold is not None
+            else settings.COINTEGRATION_PVALUE_THRESHOLD
+        )
+        df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
+        n = len(df)
+        empty_result = {
+            "stable": False,
+            "pass_rate": 0.0,
+            "windows_total": 0,
+            "windows_pass": 0,
+            "median_pvalue": 1.0,
+            "last_pvalue": 1.0,
+        }
+        if n < window or window < settings.COINTEGRATION_MIN_OBSERVATIONS:
+            return empty_result
+
+        s1 = df.iloc[:, 0]
+        s2 = df.iloc[:, 1]
+        pvalues: list[float] = []
+        for start in range(0, n - window + 1, step):
+            end = start + window
+            sub_a = s1.iloc[start:end]
+            sub_b = s2.iloc[start:end]
+            try:
+                sub_b_const = sm.add_constant(sub_b)
+                ols = sm.OLS(sub_a, sub_b_const).fit()
+                hedge = float(ols.params.iloc[1])
+                intercept = float(ols.params.iloc[0])
+                spread = sub_a - (hedge * sub_b) - intercept
+                # adfuller raises on degenerate spreads (constant) — skip those.
+                if float(spread.std()) <= 0.0:
+                    continue
+                _, pval, *_ = adfuller(spread, autolag="AIC")
+                pvalues.append(float(pval))
+            except Exception as e:
+                logger.debug("rolling-coint window %s-%s failed: %s", start, end, e)
+                continue
+
+        if not pvalues:
+            return empty_result
+
+        passed = [p for p in pvalues if p < threshold]
+        pass_rate = len(passed) / len(pvalues)
+        median_p = float(pd.Series(pvalues).median())
+        return {
+            "stable": pass_rate >= min_pass_rate,
+            "pass_rate": pass_rate,
+            "windows_total": len(pvalues),
+            "windows_pass": len(passed),
+            "median_pvalue": median_p,
+            "last_pvalue": pvalues[-1],
+        }
 
     @staticmethod
     def calculate_zscore(ticker_a_price: float, ticker_b_price: float, hedge_ratio: float, 

@@ -449,35 +449,24 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
                     <CheckCircle2 size={12} /> {saveOk}
                   </div>
                 )}
-              </div>
-
-              <div className="editor-footer">
-                <label className="editor-toggle">
-                  <input
-                    type="checkbox"
-                    checked={applyNow}
-                    onChange={(e) => setApplyNow(e.target.checked)}
-                  />
-                  Apply immediately (hot-reload)
-                </label>
-                <div className="editor-footer-spacer" />
-                <button
-                  className="btn btn-default"
-                  onClick={() => setEditorOpen(false)}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleSave}
-                  disabled={
-                    saving || (draftStocks.length === 0 && draftCrypto.length === 0)
-                  }
-                >
-                  <Save size={12} />
-                  {saving ? 'Saving…' : 'Save both lists'}
-                </button>
+                <div className="editor-footer">
+                  <label className="editor-apply-label">
+                    <input
+                      type="checkbox"
+                      checked={applyNow}
+                      onChange={(e) => setApplyNow(e.target.checked)}
+                    />
+                    Apply immediately
+                  </label>
+                  <button
+                    className="editor-save-btn"
+                    onClick={handleSave}
+                    disabled={saving}
+                  >
+                    <Save size={12} />
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
               </div>
             </motion.div>
           </motion.div>
