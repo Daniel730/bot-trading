@@ -140,7 +140,7 @@ class PortfolioManagerAgent:
     async def scan_sector_universe(self, sector: str):
         """
         Scans a specific S&P 500 sector for cointegrated pairs.
-        Saves candidates to UniverseCandidate table.
+        Uses bulk search to avoid re-analyzing existing candidates and bulk inserts for speed.
         """
         universe = await self.get_sp500_universe()
         
@@ -164,11 +164,21 @@ class PortfolioManagerAgent:
 
         logger.info(f"Scanning sector {sector} with {len(sector_tickers)} tickers...")
         
+        # Bulk fetch existing candidate IDs to avoid redundant analysis
+        existing_ids = await persistence_service.get_existing_candidate_ids(sector)
+        new_candidates = []
+
         # This is a placeholder for a more complex chunked scanning logic
         # In a real environment, this would run as a background task
         # Mocking 10 pairs for now
-        for i in range(min(5, len(sector_tickers)-1)):
+        for i in range(min(10, len(sector_tickers)-1)):
             t_a, t_b = sector_tickers[i], sector_tickers[i+1]
+            pair_id = f"{t_a}_{t_b}"
+            
+            if pair_id in existing_ids:
+                logger.info(f"Skipping existing candidate: {pair_id}")
+                continue
+
             try:
                 df = await asyncio.to_thread(self.data_service.get_historical_data, [t_a, t_b], "1y", "1d")
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
@@ -179,22 +189,24 @@ class PortfolioManagerAgent:
                     spread_returns = spread.pct_change().dropna()
                     pair_sortino = self.calculate_sortino_ratio(np.array([1.0]), pd.DataFrame(spread_returns)) # Simplified for single spread
                     
-                    # Save candidate
-                    async with persistence_service.AsyncSessionLocal() as session:
-                        candidate = UniverseCandidate(
-                            pair_id=f"{t_a}_{t_b}",
-                            sector=sector,
-                            p_value=p_val,
-                            correlation=df[t_a].corr(df[t_b]),
-                            expected_return=spread_returns.mean() * 252,
-                            volatility=spread_returns.std() * np.sqrt(252),
-                            sortino=pair_sortino
-                        )
-                        session.add(candidate)
-                        await session.commit()
-                        logger.info(f"New Candidate Found: {t_a}/{t_b} in {sector} (Sortino: {pair_sortino:.2f})")
+                    # Add to bulk list
+                    new_candidates.append(UniverseCandidate(
+                        pair_id=pair_id,
+                        sector=sector,
+                        p_value=p_val,
+                        correlation=df[t_a].corr(df[t_b]),
+                        expected_return=spread_returns.mean() * 252,
+                        volatility=spread_returns.std() * np.sqrt(252),
+                        sortino=pair_sortino
+                    ))
+                    logger.info(f"Found new candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
             except Exception as e:
+                logger.error(f"Error analyzing {pair_id}: {e}")
                 continue
+
+        if new_candidates:
+            await persistence_service.save_universe_candidates(new_candidates)
+            logger.info(f"Successfully bulk inserted {len(new_candidates)} new candidates for {sector}.")
 
     async def get_optimization_advice(self, new_ticker: str) -> Dict:
         """

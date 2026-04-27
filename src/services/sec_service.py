@@ -25,6 +25,38 @@ class SECService:
         
         self._initialized = True
 
+    async def prewarm_cik_cache(self, tickers: list[str]):
+        """
+        Bulk checks and populates CIK cache for a list of tickers.
+        Significantly reduces 'one-by-one' DB roundtrips.
+        """
+        if not tickers:
+            return
+
+        # 1. Bulk load from SQLite
+        existing = self.persistence.get_cik_mappings(tickers)
+        missing = [t for t in tickers if t not in existing]
+        
+        if not missing:
+            return
+
+        print(f"SEC_SERVICE: Pre-warming CIK cache for {len(missing)} missing tickers...")
+        
+        # 2. Fetch missing. We use a semaphore to avoid slamming the SEC too hard
+        semaphore = asyncio.Semaphore(5)
+        
+        async def fetch_and_cache(ticker: str):
+            async with semaphore:
+                try:
+                    # This calls our existing retry-wrapped get_cik
+                    await self.get_cik(ticker)
+                except Exception:
+                    pass
+
+        tasks = [fetch_and_cache(t) for t in missing]
+        await asyncio.gather(*tasks)
+        print(f"SEC_SERVICE: CIK cache pre-warming complete.")
+
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_exponential(multiplier=1, min=2, max=10),

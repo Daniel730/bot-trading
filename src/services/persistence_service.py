@@ -468,18 +468,22 @@ class PersistenceService:
             result = await session.execute(stmt)
             return {row[0].ticker: float(row[0].target_weight) for row in result.all()}
 
-    async def update_optimized_allocation(self, ticker: str, weight: float):
-        """Updates or inserts a target weight for a ticker."""
-        from sqlalchemy.dialects.postgresql import insert
+    async def get_existing_candidate_ids(self, sector: str) -> List[str]:
+        """Returns list of pair_ids already in UniverseCandidate for a sector."""
+        from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
-            stmt = insert(OptimizedAllocation).values(
-                ticker=ticker,
-                target_weight=weight
-            ).on_conflict_do_update(
-                index_elements=['ticker'],
-                set_={'target_weight': weight, 'last_updated': func.now()}
-            )
-            await session.execute(stmt)
-            await session.commit()
+            stmt = select(UniverseCandidate.pair_id).where(UniverseCandidate.sector == sector)
+            result = await session.execute(stmt)
+            return [row[0] for row in result.all()]
+
+    async def save_universe_candidates(self, candidates: List[UniverseCandidate]):
+        """Bulk saves universe candidates."""
+        if not candidates:
+            return
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                for c in candidates:
+                    session.add(c)
+                # Or use bulk_save_objects if needed, but session.add in a loop within a transaction is usually fine for small/medium batches in async
 
 persistence_service = PersistenceService()

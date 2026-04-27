@@ -345,7 +345,7 @@ class Settings(BaseSettings):
     }
 
     ARBITRAGE_PAIRS: list = [
-        # --- Classic pairs (original) ---
+        # --- YOUR ORIGINAL CLASSIC PAIRS ---
         {'ticker_a': 'KO',      'ticker_b': 'PEP'},
         {'ticker_a': 'MA',      'ticker_b': 'V'},
         {'ticker_a': 'XOM',     'ticker_b': 'CVX'},
@@ -367,25 +367,101 @@ class Settings(BaseSettings):
         {'ticker_a': 'COF',     'ticker_b': 'SYF'},
         {'ticker_a': 'GS',      'ticker_b': 'MS'},
         {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'},
-        # --- New high-volatility / high-profit pairs ---
-        {'ticker_a': 'NVDA',    'ticker_b': 'AMD'},     # GPU/AI chip duopoly — massive vol
-        {'ticker_a': 'TSLA',    'ticker_b': 'RIVN'},    # EV pair
-        {'ticker_a': 'COIN',    'ticker_b': 'MSTR'},    # Bitcoin-proxy stocks
-        {'ticker_a': 'META',    'ticker_b': 'SNAP'},    # Social media
-        {'ticker_a': 'NFLX',    'ticker_b': 'DIS'},     # Streaming wars
-        {'ticker_a': 'UBER',    'ticker_b': 'LYFT'},    # Rideshare duopoly
-        {'ticker_a': 'MU',      'ticker_b': 'SMCI'},    # Memory vs AI servers
-        {'ticker_a': 'SBUX',    'ticker_b': 'MCD'},     # QSR
-        {'ticker_a': 'SLB',     'ticker_b': 'HAL'},     # Oilfield services
-        {'ticker_a': 'AMZN',    'ticker_b': 'SHOP'},    # E-commerce
-        {'ticker_a': 'PLTR',    'ticker_b': 'BBAI'},    # AI / defence analytics
-        {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},     # Financial giants
-        # --- Global Expansion (Europe / Asia) ---
-        {'ticker_a': 'ASML.AS', 'ticker_b': 'SAP.DE'},  # Dutch/German Tech
-        {'ticker_a': 'SHEL.L',  'ticker_b': 'BP.L'},    # UK Energy
-        {'ticker_a': 'MC.PA',   'ticker_b': 'RMS.PA'},  # French Luxury
-        {'ticker_a': '9988.HK', 'ticker_b': '0700.HK'}, # HK Tech
-        {'ticker_a': '3690.HK', 'ticker_b': '9999.HK'}, # HK Tech/Gaming
+        
+        # --- YOUR ORIGINAL HIGH-VOL PAIRS ---
+        {'ticker_a': 'NVDA',    'ticker_b': 'AMD'},
+        {'ticker_a': 'TSLA',    'ticker_b': 'RIVN'},
+        {'ticker_a': 'COIN',    'ticker_b': 'MSTR'},
+        {'ticker_a': 'META',    'ticker_b': 'SNAP'},
+        {'ticker_a': 'NFLX',    'ticker_b': 'DIS'},
+        {'ticker_a': 'UBER',    'ticker_b': 'LYFT'},
+        {'ticker_a': 'MU',      'ticker_b': 'SMCI'},
+        {'ticker_a': 'SBUX',    'ticker_b': 'MCD'},
+        {'ticker_a': 'SLB',     'ticker_b': 'HAL'},
+        {'ticker_a': 'AMZN',    'ticker_b': 'SHOP'},
+        {'ticker_a': 'PLTR',    'ticker_b': 'BBAI'},
+        {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},
+
+        # --- SEMICONDUCTORS & HARDWARE (Expanded) ---
+        {'ticker_a': 'AVGO',    'ticker_b': 'QCOM'},
+        {'ticker_a': 'AMAT',    'ticker_b': 'LRCX'},
+        {'ticker_a': 'KLAC',    'ticker_b': 'ASML'},
+        {'ticker_a': 'TXN',     'ticker_b': 'ADI'},
+        {'ticker_a': 'MCHP',    'ticker_b': 'NXPI'},
+        {'ticker_a': 'WDC',     'ticker_b': 'STX'},
+        {'ticker_a': 'HPQ',     'ticker_b': 'HPE'},
+
+        # --- SAAS & CLOUD SOFTWARE ---
+        {'ticker_a': 'CRM',     'ticker_b': 'ADBE'},
+        {'ticker_a': 'NOW',     'ticker_b': 'TEAM'},
+        {'ticker_a': 'SNOW',    'ticker_b': 'PLTR'},
+        {'ticker_a': 'WDAY',    'ticker_b': 'SAP'},
+        {'ticker_a': 'ADSK',    'ticker_b': 'PTC'},
+        {'ticker_a': 'ZS',      'ticker_b': 'CRWD'},
+        {'ticker_a': 'PANW',    'ticker_b': 'FTNT'},
+        {'ticker_a': 'DDOG',    'ticker_b': 'NET'},
+        {'ticker_a': 'OKTA',    'ticker_b': 'MDB'},
+
+        # --- FINTECH & BANKING ---
+        {'ticker_a': 'C',       'ticker_b': 'WFC'},
+        {'ticker_a': 'BLK',     'ticker_b': 'TROW'},
+        {'ticker_a': 'SCHW',    'ticker_b': 'IBKR'},
+        {'ticker_a': 'PNC',     'ticker_b': 'USB'},
+        {'ticker_a': 'BX',      'ticker_b': 'KKR'},
+        {'ticker_a': 'SPGI',    'ticker_b': 'MCO'},
+        {'ticker_a': 'CME',     'ticker_b': 'ICE'},
+        {'ticker_a': 'MET',     'ticker_b': 'PRU'},
+        {'ticker_a': 'AIG',     'ticker_b': 'TRV'},
+
+        # --- CONSUMER RETAIL & LUXURY ---
+        {'ticker_a': 'COST',    'ticker_b': 'BJ'},
+        {'ticker_a': 'LULU',    'ticker_b': 'NKE'},
+        {'ticker_a': 'DG',      'ticker_b': 'DLTR'},
+        {'ticker_a': 'TJX',     'ticker_b': 'ROST'},
+        {'ticker_a': 'EL',      'ticker_b': 'ULTA'},
+        {'ticker_a': 'BKNG',    'ticker_b': 'EXPE'},
+        {'ticker_a': 'MAR',     'ticker_b': 'HLT'},
+        {'ticker_a': 'YUM',     'ticker_b': 'QSR'},
+        {'ticker_a': 'MDLZ',    'ticker_b': 'HSY'},
+        {'ticker_a': 'CL',      'ticker_b': 'KMB'},
+
+        # --- ENERGY & INDUSTRIALS ---
+        {'ticker_a': 'PSX',     'ticker_b': 'VLO'},
+        {'ticker_a': 'COP',     'ticker_b': 'EOG'},
+        {'ticker_a': 'CAT',     'ticker_b': 'DE'},
+        {'ticker_a': 'LMT',     'ticker_b': 'NOC'},
+        {'ticker_a': 'GD',      'ticker_b': 'RTX'},
+        {'ticker_a': 'WM',      'ticker_b': 'RSG'},
+        {'ticker_a': 'UNP',     'ticker_b': 'NSC'},
+        {'ticker_a': 'CSX',     'ticker_b': 'CP'},
+        {'ticker_a': 'ETN',     'ticker_b': 'EMR'},
+        {'ticker_a': 'URI',     'ticker_b': 'HRI'},
+        {'ticker_a': 'VMC',     'ticker_b': 'MLM'},
+        {'ticker_a': 'GE',      'ticker_b': 'HON'},
+
+        # --- PHARMA & HEALTHCARE ---
+        {'ticker_a': 'PFE',     'ticker_b': 'MRK'},
+        {'ticker_a': 'JNJ',     'ticker_b': 'ABBV'},
+        {'ticker_a': 'LLY',     'ticker_b': 'NVO'},
+        {'ticker_a': 'UNH',     'ticker_b': 'ELV'},
+        {'ticker_a': 'CI',      'ticker_b': 'HUM'},
+        {'ticker_a': 'ISRG',    'ticker_b': 'SYK'},
+        {'ticker_a': 'BSX',     'ticker_b': 'MDT'},
+        {'ticker_a': 'TMO',     'ticker_b': 'A'},
+        {'ticker_a': 'AMGN',    'ticker_b': 'GILD'},
+        {'ticker_a': 'ZTS',     'ticker_b': 'IDXX'},
+        {'ticker_a': 'REGN',    'ticker_b': 'VRTX'},
+        {'ticker_a': 'MCK',     'ticker_b': 'COR'},
+
+        # --- REAL ESTATE (REITS) & UTILITIES ---
+        {'ticker_a': 'AMT',     'ticker_b': 'CCI'},
+        {'ticker_a': 'PLD',     'ticker_b': 'PSA'},
+        {'ticker_a': 'O',       'ticker_b': 'ADC'},
+        {'ticker_a': 'DUK',     'ticker_b': 'SO'},
+        {'ticker_a': 'NEE',     'ticker_b': 'D'},
+        {'ticker_a': 'AEP',     'ticker_b': 'SRE'},
+        {'ticker_a': 'CMCSA',   'ticker_b': 'CHTR'},
+        {'ticker_a': 'SPOT',    'ticker_b': 'WMG'}
     ]
 
     # Crypto pairs traded 24/7 — including weekends and outside US equity
@@ -394,49 +470,49 @@ class Settings(BaseSettings):
     # off-hours while crypto pairs keep scanning.
     CRYPTO_TEST_PAIRS: list = [
         # --- Layer 1 / smart-contract platforms ---
-        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
-        {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
-        {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
-        {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
-        {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
-        {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
-        {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
-        {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
-        {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
-        # --- Stores of value / Bitcoin forks ---
-        {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
-        {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
-        {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
-        {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
-        # --- Payments / XRP-style ---
-        {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
-        {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},  # Competing payment networks
-        {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
-        # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
-        {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},  # replaces UNI/LINK
-        {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},   # replaces UNI/AAVE
-        {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},  # Cosmos DeFi
-        # --- Storage / utility ---
-        {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
-        # --- Cosmos ecosystem ---
-        {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},  # Celestia modular L1
-        # --- Infrastructure / enterprise ---
-        {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},  # Enterprise DLT pair
-        # --- Memes (high vol, mean-reverting spreads) ---
-        {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
-        {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},  # Solana memes
-        # --- Newer L1s ---
-        {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
-        # P-09 (2026-04-26): Removed pairs containing tickers that yfinance
-        # consistently reports as delisted (no spot data available):
-        #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
-        #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
-        #   JUP-USD, PEPE-USD.
-        # Re-add them once Yahoo Finance restores their feeds.
+        # {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
+        # {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
+        # {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
+        # {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
+        # {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
+        # {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
+        # {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
+        # {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
+        # {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
+        # {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
+        # {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
+        # {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
+        # # --- Stores of value / Bitcoin forks ---
+        # {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
+        # {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
+        # {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
+        # {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
+        # # --- Payments / XRP-style ---
+        # {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
+        # {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},  # Competing payment networks
+        # {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
+        # # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
+        # {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},  # replaces UNI/LINK
+        # {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},   # replaces UNI/AAVE
+        # {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
+        # {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},  # Cosmos DeFi
+        # # --- Storage / utility ---
+        # {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
+        # # --- Cosmos ecosystem ---
+        # {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},  # Celestia modular L1
+        # # --- Infrastructure / enterprise ---
+        # {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},  # Enterprise DLT pair
+        # # --- Memes (high vol, mean-reverting spreads) ---
+        # {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
+        # {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},  # Solana memes
+        # # --- Newer L1s ---
+        # {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
+        # # P-09 (2026-04-26): Removed pairs containing tickers that yfinance
+        # # consistently reports as delisted (no spot data available):
+        # #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
+        # #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
+        # #   JUP-USD, PEPE-USD.
+        # # Re-add them once Yahoo Finance restores their feeds.
     ]
 
     DEV_EXECUTION_TICKERS: dict = {

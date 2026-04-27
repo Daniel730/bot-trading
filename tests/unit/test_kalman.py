@@ -60,12 +60,11 @@ class TestKalmanFilter(unittest.TestCase):
         # Initial state [0.0, 1.0]
         # Expected spread = 150.5 - (1.0 * 100.0 + 0.0) = 50.5
         
-        # First update to set innovation_variance
-        kf.update(pa, pb)
+        # update() now returns (state, innovation_variance, z_score, spread)
+        # where z_score and spread are calculated BEFORE the update (using prior state).
+        state, inv_var, z_score, spread = kf.update(pa, pb)
         
-        spread, z_score = kf.calculate_spread_and_zscore(pa, pb)
-        
-        self.assertIsInstance(spread, float)
+        self.assertAlmostEqual(spread, 50.5)
         self.assertIsInstance(z_score, float)
 
     def test_bump_uncertainty_convergence(self):
