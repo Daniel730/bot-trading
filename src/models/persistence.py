@@ -38,9 +38,27 @@ class PersistenceManager:
         conn.close()
         return row[0] if row else None
 
+    def get_cik_mappings(self, tickers: list[str]) -> Dict[str, str]:
+        if not tickers:
+            return {}
+        conn = sqlite3.connect(self.db_path)
+        placeholders = ', '.join(['?'] * len(tickers))
+        cursor = conn.execute(f"SELECT ticker, cik FROM cik_mapping WHERE ticker IN ({placeholders})", tickers)
+        results = {row[0]: row[1] for row in cursor.fetchall()}
+        conn.close()
+        return results
+
     def save_cik_mapping(self, ticker: str, cik: str):
         conn = sqlite3.connect(self.db_path)
         conn.execute("INSERT OR REPLACE INTO cik_mapping VALUES (?, ?)", (ticker, cik))
+        conn.commit()
+        conn.close()
+
+    def save_cik_mappings(self, mapping: Dict[str, str]):
+        if not mapping:
+            return
+        conn = sqlite3.connect(self.db_path)
+        conn.executemany("INSERT OR REPLACE INTO cik_mapping VALUES (?, ?)", list(mapping.items()))
         conn.commit()
         conn.close()
 

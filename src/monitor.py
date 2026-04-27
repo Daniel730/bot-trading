@@ -281,10 +281,15 @@ class ArbitrageMonitor:
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
 
             # Sprint J: Heartbeat log for pair health
-            logger.info(f"SCAN [{t_a}/{t_b}] Current Z-Score: {z_score:.2f} | Beta: {state_vec[1]:.4f}")
+            # US-033: Increased precision and diagnostic visibility
+            logger.info(f"SCAN [{t_a}/{t_b}] Z-Score: {z_score:.4f} | Beta: {state_vec[1]:.4f}")
+            
+            # Log raw diagnostics for the first few pairs to debug "zero-drift"
+            if pair['id'] in [p['id'] for p in self.active_pairs[:5]]:
+                 logger.debug(f"DEBUG [{t_a}/{t_b}] spread={spread:.6f} inv_var={innovation_var:.6f}")
 
             # Signal Generation
-            if abs(z_score) > 0.:
+            if abs(z_score) > 1.0:
                 signal_id = str(uuid.uuid4())
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
@@ -360,8 +365,8 @@ class ArbitrageMonitor:
             spread_b = (ask_b - bid_b) / bid_b if bid_b > 0 else 0
             # Bug L-02: Proportional spread calculation
             total_spread = (1 + spread_a) * (1 + spread_b) - 1
-            if total_spread > 0.003:
-                logger.warning(f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > 0.3% max threshold.")
+            if total_spread > 0.50:
+                logger.warning(f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > 50% max threshold.")
                 return
         else:
             logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
@@ -456,7 +461,7 @@ class ArbitrageMonitor:
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
-        res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
+        res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a, price=price_a)
         status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
 
@@ -472,8 +477,11 @@ class ArbitrageMonitor:
             )
             return
 
+        # Delay between legs to respect T212 Rate Limits
+        await asyncio.sleep(1.0)
+
         # Leg B
-        res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b)
+        res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b, price=price_b)
         status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
@@ -723,8 +731,15 @@ class ArbitrageMonitor:
                         asyncio.create_task(self._recheck_cointegration(pair))
                         self.last_cointegration_check[pair['id']] = today
 
-                tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
-                results = await asyncio.gather(*tasks)
+                tasks = []
+                for pair in self.active_pairs:
+                    # Process pairs sequentially or with a delay to avoid 429
+                    res = await self.process_pair(pair, latest_prices)
+                    tasks.append(res)
+                    # Small delay between pairs to spread out API load
+                    await asyncio.sleep(2.0)
+                
+                results = tasks
 
                 # L-14: Enriched heartbeat - show analyzed vs vetoed vs open signal counts
                 active_signals = [r for r in results if r and r.get('confidence', 0) > 0.6]
