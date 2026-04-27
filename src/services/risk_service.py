@@ -3,10 +3,11 @@ from typing import Dict, Any, List
 from src.services.agent_log_service import agent_trace
 
 class FeeAnalyzer:
-    def __init__(self, max_friction_pct: float = 0.015):
-        self.max_friction_pct = max_friction_pct
+    def __init__(self, max_friction_pct: float = None):
+        from src.config import settings
+        self.max_friction_pct = max_friction_pct if max_friction_pct is not None else settings.MAX_FRICTION_PCT
 
-    def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0, flat_spread: float = 0.0) -> Dict:
+    def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0, flat_spread: float = 0.5) -> Dict:
         """
         Calculates total friction and determines if the trade is acceptable.
         """

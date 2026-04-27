@@ -22,7 +22,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bot_pass}
       POSTGRES_DB: ${POSTGRES_DB:-trading_bot}
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always

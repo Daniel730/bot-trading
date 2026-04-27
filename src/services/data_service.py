@@ -1,6 +1,7 @@
 import logging
 import yfinance as yf
 import pandas as pd
+import requests
 from polygon import RESTClient
 from typing import List, Optional
 from src.config import settings
@@ -84,34 +85,27 @@ class DataService:
     def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
         """Internal helper to fetch prices from yfinance with tenacity retries."""
         results = {}
-        # Bug L-09: Enforce auto_adjust=True
-        df = yf.download(tickers, period="1d", interval="1m", progress=False, auto_adjust=True)
-        if df.empty:
-            raise ValueError(f"yfinance returned empty dataframe for {tickers}")
         
-        import random
-        # Handle multi-index (multiple tickers) or flat (single ticker)
-        if len(tickers) > 1:
-            for ticker in tickers:
-                if 'Close' in df.columns and ticker in df['Close'].columns:
-                    val = df['Close'][ticker].iloc[-1]
+        # US-035: Per-ticker fetch is more robust against crumb/auth errors than batch download
+        import time
+        for ticker in tickers:
+            try:
+                t = yf.Ticker(ticker)
+                # Fetch 1 day of 1m data
+                df = t.history(period="1d", interval="1m", auto_adjust=True)
+                if not df.empty:
+                    val = df['Close'].iloc[-1]
                     if not pd.isna(val):
+                        # Apply DEV_MODE randomization if active
                         if settings.DEV_MODE:
+                            import random
                             val = float(val) * (1 + random.uniform(-0.015, 0.015))
                         results[ticker] = float(val)
-        else:
-            ticker = tickers[0]
-            if 'Close' in df.columns:
-                close = df['Close']
-                # yfinance >=0.2 returns MultiIndex even for a single ticker
-                if isinstance(close, pd.DataFrame):
-                    val = close[ticker].iloc[-1] if ticker in close.columns else float('nan')
-                else:
-                    val = close.iloc[-1]
-                if not pd.isna(val):
-                    if settings.DEV_MODE:
-                        val = float(val) * (1 + random.uniform(-0.015, 0.015))
-                    results[ticker] = float(val)
+                # Small delay to prevent Yahoo from flagging the IP
+                time.sleep(0.5)
+            except Exception as e:
+                logger.warning(f"DataService: Error fetching {ticker} specifically: {e}")
+                continue
                     
         if not results:
             raise ValueError(f"No valid prices found in yfinance response for {tickers}")
