@@ -137,3 +137,96 @@ def test_estimate_round_trip_cost_includes_stamp_duty_for_lse():
     lse_cost = estimate_round_trip_cost_pct("SHEL.L", "BP.L", account_currency="EUR")
     # Two stamp duty legs at 0.5 % each = 1 % minimum delta.
     assert lse_cost - us_cost > 0.009
+
+
+# ---- Spec 038: stamp-duty asymmetry + EU continental session group --------
+
+
+def test_hk_stamp_duty_is_two_sided():
+    """HK stamp duty is charged on BOTH buy and sell, so a round-trip pair
+    pays 4 × stamp_duty_pct in total (2 sides × 2 legs), not 2× as the
+    pre-038 model assumed.
+    """
+    # Pair on HKEX, account in EUR (FX leg present).
+    cost = estimate_round_trip_cost_pct("9988.HK", "0700.HK", account_currency="EUR")
+    # Stamp duty contribution alone: 2 legs × 2 sides × 0.0013 = 0.0052
+    # Plus FX 4 × 0.0015 = 0.0060, plus spread 2 × 0.0015 = 0.0030
+    # Total ~ 0.0142. Pin a lower bound that is comfortably above the
+    # legacy two-sided model (which would give ~0.012).
+    assert cost > 0.013
+
+
+def test_swiss_stamp_duty_is_two_sided():
+    """SIX Swiss stamp duty is charged per side. A pair on SIX should reflect
+    the doubled stamp duty in its round-trip cost estimate.
+    """
+    # Synthetic Swiss pair (NESN.SW / ROG.SW) — both on SIX.
+    swiss = estimate_round_trip_cost_pct("NESN.SW", "ROG.SW", account_currency="EUR")
+    # Per-side stamp duty: 2 legs × 2 sides × 0.00075 = 0.003
+    # Plus FX 4 × 0.0015 = 0.006, plus spread 2 × 0.0008 = 0.0016
+    # Lower bound to make sure the doubling actually applies.
+    assert swiss > 0.009
+
+
+def test_uk_stamp_duty_remains_one_sided():
+    """UK SDRT is buy-only. A round-trip pair pays 2 × 0.5 % (one buy per
+    leg), not 4 × 0.5 %. The legacy model is correct here; this test pins
+    the invariant so a careless refactor doesn't accidentally double UK.
+    """
+    cost = estimate_round_trip_cost_pct("SHEL.L", "BP.L", account_currency="EUR")
+    # If UK were treated as per-side, cost would jump above 2 %. It must
+    # stay below.
+    assert cost < 0.018
+
+
+def test_eu_continental_overlap_default_blocks_xetra_euronext():
+    """Default behaviour (flag off): ASML.AS / SAP.DE remains blocked."""
+    result = evaluate_pair("ASML.AS", "SAP.DE", account_currency="EUR")
+    assert result.admit is False
+    assert "different_sessions" in result.reason
+
+
+def test_eu_continental_overlap_admits_xetra_euronext_when_enabled():
+    """Spec 038: with the EU-overlap flag on, EURONEXT and XETRA pair up."""
+    result = evaluate_pair(
+        "ASML.AS",
+        "SAP.DE",
+        account_currency="EUR",
+        allow_eu_continental_overlap=True,
+    )
+    assert result.admit is True
+    assert result.reason == "admitted"
+
+
+def test_eu_continental_overlap_does_not_unlock_cross_region():
+    """The EU-overlap flag must NOT also let HK/EU or US/EU pairs through —
+    those are still blocked by the strict session rule."""
+    # HK <-> EU: still rejected even with the flag on.
+    hk_eu = evaluate_pair(
+        "9988.HK",
+        "ASML.AS",
+        account_currency="EUR",
+        allow_eu_continental_overlap=True,
+    )
+    assert hk_eu.admit is False
+    # US <-> EU: still rejected as cross-currency / cross-session.
+    us_eu = evaluate_pair(
+        "AAPL",
+        "ASML.AS",
+        account_currency="EUR",
+        allow_eu_continental_overlap=True,
+    )
+    assert us_eu.admit is False
+
+
+def test_filter_pair_universe_passes_eu_overlap_flag():
+    """Bulk filter must respect the new flag end-to-end."""
+    candidate = [
+        {"ticker_a": "ASML.AS", "ticker_b": "SAP.DE"},
+    ]
+    admitted_off, _ = filter_pair_universe(candidate, account_currency="EUR")
+    admitted_on, _ = filter_pair_universe(
+        candidate, account_currency="EUR", allow_eu_continental_overlap=True
+    )
+    assert admitted_off == []
+    assert len(admitted_on) == 1

@@ -243,6 +243,33 @@ class Settings(BaseSettings):
     BLOCK_LSE_PAIRS_FOR_SHORT_HOLD: bool = Field(default=True, validation_alias="BLOCK_LSE_PAIRS_FOR_SHORT_HOLD")
     PAIR_MAX_ROUND_TRIP_COST_PCT: float = Field(default=0.0125, validation_alias="PAIR_MAX_ROUND_TRIP_COST_PCT")
 
+    # Spec 038: when True, treat XETRA, EURONEXT, BORSA_ITALIANA and SIX as
+    # the same session group ("EU continental"). Their wall-clock windows
+    # overlap by ~7-8 hours so cross-venue pairs (ASML.AS / SAP.DE,
+    # MC.PA / NESN.SW) can be admitted. Default False keeps the strict
+    # market_id rule in place - opt in per deployment after verifying that
+    # cointegration holds across the venue boundary for your hourly bar
+    # frequency.
+    ALLOW_EU_CONTINENTAL_OVERLAP: bool = Field(
+        default=False, validation_alias="ALLOW_EU_CONTINENTAL_OVERLAP"
+    )
+
+    # Spec 038: cost-aware z-score gate. When enabled, the entry z-score
+    # threshold for a pair is scaled up proportionally to its estimated
+    # round-trip cost. Pairs with higher friction (HK, Swiss, cross-currency)
+    # require more statistical edge before the bot fires a signal. The
+    # baseline is the cost level at which no scaling is applied; pairs
+    # cheaper than the baseline trade at the global threshold unchanged.
+    MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED: bool = Field(
+        default=False, validation_alias="MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED"
+    )
+    MONITOR_ENTRY_ZSCORE_COST_BASELINE: float = Field(
+        default=0.0015, validation_alias="MONITOR_ENTRY_ZSCORE_COST_BASELINE"
+    )
+    MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP: float = Field(
+        default=3.0, validation_alias="MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP"
+    )
+
     PORTFOLIO_RISK_FREE_RATE: float = Field(default=0.02, validation_alias="PORTFOLIO_RISK_FREE_RATE")
 
     MAX_SECTOR_EXPOSURE: float = 0.30

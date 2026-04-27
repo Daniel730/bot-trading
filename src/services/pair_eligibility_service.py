@@ -4,7 +4,7 @@ Why this exists
 ---------------
 Adding tickers from new sessions (HK, EU, LSE) is tempting because it gives the
 bot more "uptime", but most cross-region pairs do not cointegrate in any
-economically useful sense — FX moves and macro regime divergence dominate the
+economically useful sense - FX moves and macro regime divergence dominate the
 residual that the Kalman filter is supposed to mean-revert. Even when
 cointegration holds, hidden trading costs (UK stamp duty 0.5 %, Trading 212 FX
 fee 0.15 % per conversion, wider HK spreads) often exceed the statistical
@@ -14,7 +14,9 @@ This service centralises the rules that decide whether a candidate pair is
 admissible to the live universe at all, before a Kalman filter is even
 allocated. The rules are:
 
-1. Both tickers must trade in the same session (same `market_id`).
+1. Both tickers must trade in the same session (same `market_id`), unless the
+   `allow_eu_continental_overlap` flag is on, in which case the EU_CONTINENTAL
+   session group acts as one session.
 2. Both tickers must settle in the same currency, OR cross-currency must be
    explicitly enabled via settings.
 3. Estimated round-trip cost must be below the configured ceiling. This stops
@@ -30,7 +32,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Optional
 
 from src.services.venue_metadata import (
     estimate_round_trip_cost_pct,
@@ -70,69 +71,38 @@ def evaluate_pair(
     max_round_trip_cost_pct: float = 0.0125,
     block_cross_currency: bool = True,
     block_lse_short_hold: bool = True,
+    allow_eu_continental_overlap: bool = False,
 ) -> EligibilityResult:
     """Decide whether (ticker_a, ticker_b) should be admitted to the universe.
 
-    The function is pure (no I/O) and deterministic. It is safe to call from
-    inside `initialize_pairs` or from a unit test.
-
-    Parameters
-    ----------
-    account_currency:
-        Settlement currency of the user's account. Used to estimate FX costs.
-        Portuguese-resident T212 users typically have EUR accounts.
-    max_round_trip_cost_pct:
-        Hard ceiling on the estimated total round-trip cost of opening and
-        closing the pair. Pairs with cost above this are rejected even if
-        their cointegration p-value is great, because the strategy cannot
-        beat the friction.
-    block_cross_currency / block_lse_short_hold:
-        Toggles wired through `Settings` so the operator can override per
-        deployment.
+    Spec 038 - allow_eu_continental_overlap relaxes the session rule so XETRA,
+    EURONEXT, BORSA_ITALIANA and SIX are treated as the same session group.
     """
     a = ticker_a.strip().upper()
     b = ticker_b.strip().upper()
 
-    # Crypto pairs always pass — different rule set and different venue.
     if _is_crypto(a) and _is_crypto(b):
         cost = estimate_round_trip_cost_pct(a, b, account_currency=account_currency)
         return EligibilityResult(True, "crypto_pair", cost)
 
     if _is_crypto(a) ^ _is_crypto(b):
-        return EligibilityResult(
-            False,
-            "mixed_crypto_equity_pair_not_supported",
-            0.0,
-        )
+        return EligibilityResult(False, "mixed_crypto_equity_pair_not_supported", 0.0)
 
-    if not same_session(a, b):
+    if not same_session(a, b, allow_eu_continental_overlap=allow_eu_continental_overlap):
         v_a = get_venue_profile(a).market_id
         v_b = get_venue_profile(b).market_id
-        return EligibilityResult(
-            False,
-            f"different_sessions:{v_a}_vs_{v_b}",
-            0.0,
-        )
+        return EligibilityResult(False, f"different_sessions:{v_a}_vs_{v_b}", 0.0)
 
     if block_cross_currency and not same_currency(a, b):
         c_a = get_venue_profile(a).currency
         c_b = get_venue_profile(b).currency
-        return EligibilityResult(
-            False,
-            f"cross_currency:{c_a}_vs_{c_b}",
-            0.0,
-        )
+        return EligibilityResult(False, f"cross_currency:{c_a}_vs_{c_b}", 0.0)
 
     if block_lse_short_hold:
         v_a = get_venue_profile(a).market_id
         v_b = get_venue_profile(b).market_id
         if v_a == "LSE" or v_b == "LSE":
-            # Stamp duty 0.5 % per buy leg is brutal for sub-week holds; skip.
-            return EligibilityResult(
-                False,
-                "lse_excluded_due_to_stamp_duty",
-                0.0,
-            )
+            return EligibilityResult(False, "lse_excluded_due_to_stamp_duty", 0.0)
 
     cost = estimate_round_trip_cost_pct(a, b, account_currency=account_currency)
     if cost > max_round_trip_cost_pct:
@@ -146,22 +116,17 @@ def evaluate_pair(
 
 
 def filter_pair_universe(
-    pairs: list[dict],
+    pairs: list,
     *,
     account_currency: str = "EUR",
     max_round_trip_cost_pct: float = 0.0125,
     block_cross_currency: bool = True,
     block_lse_short_hold: bool = True,
-) -> tuple[list[dict], list[dict]]:
-    """Split a candidate universe into (admitted, rejected) lists.
-
-    Each `pairs` entry is expected to be a dict with `ticker_a` / `ticker_b`
-    keys, matching the existing `settings.ARBITRAGE_PAIRS` schema. Each
-    rejected entry gets a `rejection` field added with the eligibility
-    verdict for downstream logging.
-    """
-    admitted: list[dict] = []
-    rejected: list[dict] = []
+    allow_eu_continental_overlap: bool = False,
+):
+    """Split a candidate universe into (admitted, rejected) lists."""
+    admitted = []
+    rejected = []
     for pair in pairs:
         verdict = evaluate_pair(
             pair["ticker_a"],
@@ -170,6 +135,7 @@ def filter_pair_universe(
             max_round_trip_cost_pct=max_round_trip_cost_pct,
             block_cross_currency=block_cross_currency,
             block_lse_short_hold=block_lse_short_hold,
+            allow_eu_continental_overlap=allow_eu_continental_overlap,
         )
         if verdict.admit:
             enriched = dict(pair)
@@ -180,7 +146,7 @@ def filter_pair_universe(
             enriched["rejection"] = verdict.to_dict()
             rejected.append(enriched)
             logger.info(
-                "PAIR ELIGIBILITY: rejected %s/%s — %s",
+                "PAIR ELIGIBILITY: rejected %s/%s - %s",
                 pair["ticker_a"],
                 pair["ticker_b"],
                 verdict.reason,
@@ -188,8 +154,4 @@ def filter_pair_universe(
     return admitted, rejected
 
 
-__all__ = [
-    "EligibilityResult",
-    "evaluate_pair",
-    "filter_pair_universe",
-]
+__all__ = ["EligibilityResult", "evaluate_pair", "filter_pair_universe"]
