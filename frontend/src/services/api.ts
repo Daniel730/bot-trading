@@ -1,10 +1,28 @@
 import { useEffect, useState } from 'react';
 
-export interface PortfolioMetrics {
+export interface VenueMetrics {
+  available_cash: number | null;
+  pending_orders_value: number | null;
+  spendable_cash: number | null;
   daily_budget: number | null;
+  daily_used: number | null;
+  daily_usage_pct: number | null;
+  daily_profit: number | null;
+  total_revenue: number | null;
+  total_invested: number | null;
+}
+
+export interface PortfolioMetrics {
+  total_revenue: number | null;
   total_invested: number | null;
   daily_profit: number | null;
+  available_cash: number | null;
+  pending_orders_value: number | null;
+  spendable_cash: number | null;
+  daily_budget: number | null;
   daily_usage_pct: number | null;
+  t212?: VenueMetrics;
+  web3?: VenueMetrics;
 }
 
 export interface Signal {
