@@ -631,6 +631,38 @@ button {
   line-height: 1.6;
 }
 
+.verdict-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.verdict-chip {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-subtle);
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: var(--font-mono);
+}
+
+.verdict-chip:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+.verdict-chip.active {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--text);
+}
+
 /* ============================================================
    EMPTY STATE
    ============================================================ */
@@ -1209,6 +1241,104 @@ button {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* ============================================================
+   EDITOR TABS & HINT
+   ============================================================ */
+.editor-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+}
+
+.editor-tab {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.15s;
+}
+
+.editor-tab:hover {
+  background: var(--surface-3);
+  color: var(--text);
+  border-color: var(--text-subtle);
+}
+
+.editor-tab.active {
+  background: var(--accent-muted);
+  border-color: rgba(56, 139, 253, 0.4);
+  color: var(--accent);
+}
+
+.editor-tab-count {
+  background: var(--surface-3);
+  color: var(--text-muted);
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.editor-tab.active .editor-tab-count {
+  background: var(--accent);
+  color: white;
+}
+
+.editor-hint {
+  font-size: 11px;
+  color: var(--text-subtle);
+  background: var(--surface-2);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border-left: 2px solid var(--accent);
+}
+
+/* Settings Modal specific */
+.settings-window {
+  width: 400px;
+}
+
+.settings-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.settings-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-input {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+}
+.settings-input:focus {
+  border-color: var(--accent);
+}
+
+.settings-help {
+  font-size: 11px;
+  color: var(--text-subtle);
+  line-height: 1.5;
 }
 
 .editor-section-title {
