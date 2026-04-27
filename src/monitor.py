@@ -352,6 +352,9 @@ class ArbitrageMonitor:
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
                 return diagnostic
+            
+            # Prior Z-score and spread are calculated inside update() BEFORE the state is adjusted
+            state_vec, innovation_var, z_score, spread = kf.update(price_a, price_b)
 
             # Spec 037: Session-boundary handling. Instead of a one-shot P bump
             # (which throws away calibration), we inflate Q for the first N
@@ -381,7 +384,12 @@ class ArbitrageMonitor:
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
 
             # Sprint J: Heartbeat log for pair health
-            logger.info(f"SCAN [{t_a}/{t_b}] Current Z-Score: {z_score:.2f} | Beta: {state_vec[1]:.4f}")
+            # US-033: Increased precision and diagnostic visibility
+            logger.info(f"SCAN [{t_a}/{t_b}] Z-Score: {z_score:.4f} | Beta: {state_vec[1]:.4f}")
+            
+            # Log raw diagnostics for the first few pairs to debug "zero-drift"
+            if pair['id'] in [p['id'] for p in self.active_pairs[:5]]:
+                 logger.debug(f"DEBUG [{t_a}/{t_b}] spread={spread:.6f} inv_var={innovation_var:.6f}")
 
             # Signal Generation - Spec 038: optionally scale the entry z-score
             # by this pair's round-trip cost so that high-friction pairs (HK,
@@ -623,7 +631,7 @@ class ArbitrageMonitor:
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
-        res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a)
+        res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a, price=price_a)
         status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
 
@@ -642,8 +650,11 @@ class ArbitrageMonitor:
             )
             return
 
+        # Delay between legs to respect T212 Rate Limits
+        await asyncio.sleep(1.0)
+
         # Leg B
-        res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b)
+        res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b, price=price_b)
         status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
@@ -926,8 +937,15 @@ class ArbitrageMonitor:
                         asyncio.create_task(self._recheck_cointegration(pair))
                         self.last_cointegration_check[pair['id']] = today
 
-                tasks = [self.process_pair(pair, latest_prices) for pair in self.active_pairs]
-                results = await asyncio.gather(*tasks)
+                tasks = []
+                for pair in self.active_pairs:
+                    # Process pairs sequentially or with a delay to avoid 429
+                    res = await self.process_pair(pair, latest_prices)
+                    tasks.append(res)
+                    # Small delay between pairs to spread out API load
+                    await asyncio.sleep(2.0)
+                
+                results = tasks
 
                 # L-14: Enriched heartbeat - show analyzed vs vetoed vs open signal counts
                 active_signals = [

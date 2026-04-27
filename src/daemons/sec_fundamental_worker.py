@@ -51,6 +51,9 @@ class SECFundamentalWorker:
                 universe = await persistence_service.get_active_trading_universe()
                 print(f"AGENT_LOGGER: SEC Worker processing universe: {universe}")
                 
+                # Pre-warm CIK cache in bulk
+                await self.analyst.sec_service.prewarm_cik_cache(universe)
+                
                 for ticker in universe:
                     if not self.is_running or not self.is_within_window():
                         if not self.is_within_window():
