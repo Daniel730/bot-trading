@@ -270,33 +270,79 @@ const App: React.FC = () => {
 
       {/* ── KPI STRIP ───────────────────────────────────────────────────── */}
       <div className="kpi-strip">
+        {/* T212 Budget */}
         <div className="kpi-item">
-          <div className="kpi-label">Daily Budget</div>
-          <div className="kpi-value">{fmtCurrency(data?.metrics?.daily_budget)}</div>
+          <div className="kpi-label">
+            <span className="venue-pill venue-t212">T212</span>
+            Budget
+          </div>
+          <div className="kpi-value">{fmtCurrency(data?.metrics?.t212?.daily_budget)}</div>
           <div className="progress-bar">
             <div
               className="progress-fill"
               style={{
-                width: `${Math.min(usagePct ?? 0, 100)}%`,
+                width: `${Math.min(data?.metrics?.t212?.daily_usage_pct ?? 0, 100)}%`,
                 background:
-                  (usagePct ?? 0) > 90
+                  (data?.metrics?.t212?.daily_usage_pct ?? 0) > 90
                     ? 'var(--red)'
-                    : (usagePct ?? 0) > 70
+                    : (data?.metrics?.t212?.daily_usage_pct ?? 0) > 70
                     ? 'var(--yellow)'
                     : 'var(--accent)',
               }}
             />
           </div>
           <div className="kpi-sub">
-            {usagePct == null ? 'Usage unavailable' : `${usagePct.toFixed(1)}% utilized`}
+            {data?.metrics?.t212?.daily_usage_pct == null
+              ? 'Usage unavailable'
+              : `${data.metrics.t212.daily_usage_pct.toFixed(1)}% utilized`}
           </div>
         </div>
 
+        {/* WEB3 Budget */}
+        <div className="kpi-item">
+          <div className="kpi-label">
+            <span className="venue-pill venue-web3">WEB3</span>
+            Budget
+          </div>
+          <div className="kpi-value">{fmtCurrency(data?.metrics?.web3?.daily_budget)}</div>
+          <div className="progress-bar">
+            <div
+              className="progress-fill"
+              style={{
+                width: `${Math.min(data?.metrics?.web3?.daily_usage_pct ?? 0, 100)}%`,
+                background:
+                  (data?.metrics?.web3?.daily_usage_pct ?? 0) > 90
+                    ? 'var(--red)'
+                    : (data?.metrics?.web3?.daily_usage_pct ?? 0) > 70
+                    ? 'var(--yellow)'
+                    : '#8b5cf6',
+              }}
+            />
+          </div>
+          <div className="kpi-sub">
+            {data?.metrics?.web3?.daily_usage_pct == null
+              ? 'Usage unavailable'
+              : `${data.metrics.web3.daily_usage_pct.toFixed(1)}% utilized`}
+          </div>
+        </div>
+
+        {/* Capital Deployed (per-venue breakdown) */}
         <div className="kpi-item">
           <div className="kpi-label">Capital Deployed</div>
           <div className="kpi-value">{fmtCurrency(data?.metrics?.total_invested)}</div>
+          <div className="kpi-sub venue-breakdown">
+            <span>
+              <span className="venue-dot venue-dot-t212" />
+              T212: {fmtCurrency(data?.metrics?.t212?.total_invested)}
+            </span>
+            <span>
+              <span className="venue-dot venue-dot-web3" />
+              WEB3: {fmtCurrency(data?.metrics?.web3?.total_invested)}
+            </span>
+          </div>
         </div>
 
+        {/* Daily P&L (per-venue breakdown) */}
         <div className="kpi-item">
           <div className="kpi-label">Daily P&L</div>
           <div
@@ -306,8 +352,19 @@ const App: React.FC = () => {
           >
             {fmtCurrency(dailyProfit)}
           </div>
+          <div className="kpi-sub venue-breakdown">
+            <span>
+              <span className="venue-dot venue-dot-t212" />
+              {fmtCurrency(data?.metrics?.t212?.daily_profit)}
+            </span>
+            <span>
+              <span className="venue-dot venue-dot-web3" />
+              {fmtCurrency(data?.metrics?.web3?.daily_profit)}
+            </span>
+          </div>
         </div>
 
+        {/* Strategy Accuracy (global) */}
         <div className="kpi-item">
           <div className="kpi-label">Strategy Accuracy</div>
           <div

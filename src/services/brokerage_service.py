@@ -272,6 +272,9 @@ class BrokerageService:
         if result.get("status") != "error" and not settings.PAPER_TRADING:
             budget_service.update_used_budget(venue, amount)
 
+        # Always include venue in the response so callers (monitor, dashboard)
+        # can propagate it to the persistence layer deterministically.
+        result["venue"] = venue
         return result
 
     async def _place_value_order_t212(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:

@@ -558,80 +558,114 @@ class DashboardService:
             logger.error(f"DASHBOARD STARTUP ERROR: {e}")
 
     async def _poll_metrics(self):
+        """Independently fetches cash balances and PnL for both T212 and WEB3
+        venues, computing separate and global metrics every 10 seconds."""
         while True:
             try:
-                total_cash = None
-                pending_value = None
+                from src.services.persistence_service import persistence_service
+                from src.services.budget_service import budget_service
+                today = datetime.now().date().isoformat()
 
-                # --- WEB3 venue: pull wallet balance in USD as the cash figure ---
+                # ── T212 venue ──────────────────────────────────────────────
+                t212_cash: Optional[float] = None
+                t212_pending: float = 0.0
+                if not settings.PAPER_TRADING or settings.is_t212_demo:
+                    try:
+                        t212_cash = await asyncio.to_thread(brokerage_service.get_account_cash)
+                        t212_pending = await brokerage_service.get_pending_orders_value()
+                    except Exception as e:
+                        logger.warning(f"DASHBOARD: Could not fetch T212 cash: {e}")
+
+                t212_budget_info = budget_service.get_venue_budget_info("T212")
+                t212_daily_budget = t212_budget_info["total"] if t212_budget_info["total"] > 0 else (
+                    (t212_cash * 0.25) if t212_cash is not None else None
+                )
+                t212_daily_used = t212_budget_info["used"]
+
+                t212_daily_pnl = await persistence_service.get_daily_pnl_for_date(today, venue="T212")
+                t212_total_pnl = await persistence_service.get_total_pnl(venue="T212")
+                t212_invested = await persistence_service.get_current_investment(venue="T212")
+
+                # ── WEB3 venue ──────────────────────────────────────────────
+                web3_cash: Optional[float] = None
                 if settings.web3_enabled:
                     try:
-                        total_cash = await brokerage_service.get_web3_account_cash()
-                        pending_value = 0.0  # WEB3 has no pending orders concept
+                        web3_cash = await brokerage_service.get_web3_account_cash()
                     except Exception as e:
                         logger.warning(f"DASHBOARD: Could not fetch WEB3 cash: {e}")
 
-                # --- T212 venue: fetch from broker API when WEB3 isn't the active path ---
-                if total_cash is None and (not settings.PAPER_TRADING or settings.is_t212_demo):
-                    try:
-                        total_cash = await asyncio.to_thread(brokerage_service.get_account_cash)
-                        pending_value = await brokerage_service.get_pending_orders_value()
-                    except Exception as e:
-                        logger.warning(f"DASHBOARD: Could not fetch brokerage cash: {e}")
-
-                # --- WEB3 budget: use BudgetService data for daily_budget/usage ---
-                if settings.web3_enabled:
-                    try:
-                        from src.services.budget_service import budget_service
-                        web3_budget = budget_service.get_venue_budget_info("WEB3")
-                        web3_used = web3_budget["used"]
-                        web3_total = web3_budget["total"]
-                        # Cap = configured budget or fall back to 25 % of wallet
-                        daily_allocation = web3_total if web3_total > 0 else (
-                            (total_cash * 0.25) if total_cash is not None else None
-                        )
-                        daily_invested_web3 = web3_used
-                    except Exception as e:
-                        logger.warning(f"DASHBOARD: Could not fetch WEB3 budget info: {e}")
-                        daily_allocation = (total_cash * 0.25) if total_cash is not None else None
-                        daily_invested_web3 = None
-                else:
-                    daily_allocation = (total_cash * 0.25) if total_cash is not None else None
-                    daily_invested_web3 = None
-
-                spendable_cash = (total_cash - (pending_value or 0.0)) if total_cash is not None else None
-                daily_invested = (
-                    daily_invested_web3
-                    if daily_invested_web3 is not None
-                    else None
+                web3_budget_info = budget_service.get_venue_budget_info("WEB3")
+                web3_daily_budget = web3_budget_info["total"] if web3_budget_info["total"] > 0 else (
+                    (web3_cash * 0.25) if web3_cash is not None else None
                 )
+                web3_daily_used = web3_budget_info["used"]
 
-                # Use authoritative PostgreSQL trade ledger metrics.
-                from src.services.persistence_service import persistence_service
-                today = datetime.now().date().isoformat()
-                realized_daily_pnl = await persistence_service.get_daily_pnl_for_date(today)
-                total_realized_pnl = await persistence_service.get_total_pnl()
-                current_investment = await persistence_service.get_current_investment()
-                
+                web3_daily_pnl = await persistence_service.get_daily_pnl_for_date(today, venue="WEB3")
+                web3_total_pnl = await persistence_service.get_total_pnl(venue="WEB3")
+                web3_invested = await persistence_service.get_current_investment(venue="WEB3")
+
+                # ── Global totals (sum of both venues) ──────────────────────
+                global_cash = sum(c for c in [t212_cash, web3_cash] if c is not None) or None
+                global_pending = t212_pending  # WEB3 has no pending-order concept
+                global_spendable = (global_cash - global_pending) if global_cash is not None else None
+                global_daily_budget = sum(b for b in [t212_daily_budget, web3_daily_budget] if b is not None) or None
+                global_daily_used = t212_daily_used + web3_daily_used
+
+                global_daily_pnl = await persistence_service.get_daily_pnl_for_date(today)
+                global_total_pnl = await persistence_service.get_total_pnl()
+                global_invested = await persistence_service.get_current_investment()
+
                 metrics = {
-                    "total_revenue": total_realized_pnl,
-                    "total_invested": current_investment,
-                    "daily_profit": realized_daily_pnl,
-                    "available_cash": total_cash,
-                    "pending_orders_value": pending_value,
-                    "spendable_cash": spendable_cash,
-                    "daily_budget": daily_allocation,
-                    "daily_usage_pct": (daily_invested / daily_allocation * 100) if daily_allocation and daily_allocation > 0 else None
+                    "total_revenue": global_total_pnl,
+                    "total_invested": global_invested,
+                    "daily_profit": global_daily_pnl,
+                    "available_cash": global_cash,
+                    "pending_orders_value": global_pending,
+                    "spendable_cash": global_spendable,
+                    "daily_budget": global_daily_budget,
+                    "daily_usage_pct": (
+                        (global_daily_used / global_daily_budget * 100)
+                        if global_daily_budget and global_daily_budget > 0
+                        else None
+                    ),
+                    "t212": {
+                        "available_cash": t212_cash,
+                        "pending_orders_value": t212_pending,
+                        "spendable_cash": (t212_cash - t212_pending) if t212_cash is not None else None,
+                        "daily_budget": t212_daily_budget,
+                        "daily_used": t212_daily_used,
+                        "daily_usage_pct": (
+                            (t212_daily_used / t212_daily_budget * 100)
+                            if t212_daily_budget and t212_daily_budget > 0
+                            else None
+                        ),
+                        "daily_profit": t212_daily_pnl,
+                        "total_revenue": t212_total_pnl,
+                        "total_invested": t212_invested,
+                    },
+                    "web3": {
+                        "available_cash": web3_cash,
+                        "pending_orders_value": 0.0,
+                        "spendable_cash": web3_cash,
+                        "daily_budget": web3_daily_budget,
+                        "daily_used": web3_daily_used,
+                        "daily_usage_pct": (
+                            (web3_daily_used / web3_daily_budget * 100)
+                            if web3_daily_budget and web3_daily_budget > 0
+                            else None
+                        ),
+                        "daily_profit": web3_daily_pnl,
+                        "total_revenue": web3_total_pnl,
+                        "total_invested": web3_invested,
+                    },
                 }
-                
-                # Fetch Intelligence Data
-                from src.services.persistence_service import persistence_service
+
                 regime = await persistence_service.get_latest_market_regime()
                 accuracy_str = await persistence_service.get_system_state(
                     "global_strategy_accuracy",
                     str(settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT),
                 )
-                
+
                 async with dashboard_state._lock:
                     dashboard_state.portfolio_metrics.update(metrics)
                     if regime:
@@ -643,7 +677,7 @@ class DashboardService:
             await asyncio.sleep(10)
 
     async def update_metrics(self, metrics: dict):
-        """Proxy to dashboard_init_state and broadcast."""
+        """Proxy to dashboard_state and broadcast."""
         await dashboard_state.update_metrics(metrics)
 
     async def update(self, stage: str, details: str, pnl: float = None, signals: int = None, active_signals: list = None):
