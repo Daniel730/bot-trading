@@ -5,7 +5,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy import String, Numeric, DateTime, JSON, Enum, func, Boolean, Integer, Text, ForeignKey
 import enum
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import uuid
 from src.config import settings
 
@@ -444,6 +444,182 @@ class PersistenceService:
         """Returns open-position cost basis across all active signals."""
         open_signals = await self.get_open_signals(venue=venue)
         return float(sum(float(sig.get("total_cost_basis", 0.0)) for sig in open_signals))
+
+    async def get_trade_history(
+        self,
+        page: int = 1,
+        page_size: int = 25,
+        search: Optional[str] = None,
+        status: Optional[str] = None,
+        venue: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Returns a paginated, signal-grouped trade history for the dashboard."""
+        from collections import defaultdict
+        from sqlalchemy import select, or_, func as sa_func, desc
+
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+
+        async with self.AsyncSessionLocal() as session:
+            grouped = select(
+                TradeLedger.signal_id.label("signal_id"),
+                sa_func.min(TradeLedger.execution_timestamp).label("opened_at"),
+                sa_func.max(TradeLedger.execution_timestamp).label("updated_at"),
+            ).group_by(TradeLedger.signal_id)
+
+            if status:
+                try:
+                    grouped = grouped.where(TradeLedger.status == OrderStatus[status.upper()])
+                except KeyError:
+                    pass
+            if venue:
+                grouped = grouped.where(TradeLedger.venue == venue.upper())
+            if search:
+                pattern = f"%{search.upper()}%"
+                grouped = grouped.where(
+                    or_(
+                        sa_func.upper(TradeLedger.ticker).like(pattern),
+                        sa_func.cast(TradeLedger.signal_id, String).like(f"%{search}%"),
+                    )
+                )
+
+            subquery = grouped.subquery()
+            total_stmt = select(sa_func.count()).select_from(subquery)
+            total = int((await session.execute(total_stmt)).scalar_one() or 0)
+
+            page_stmt = (
+                select(subquery.c.signal_id)
+                .order_by(desc(subquery.c.opened_at))
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+            signal_ids = [row[0] for row in (await session.execute(page_stmt)).all()]
+            if not signal_ids:
+                return {"items": [], "total": total, "page": page, "page_size": page_size}
+
+            rows_stmt = (
+                select(TradeLedger)
+                .where(TradeLedger.signal_id.in_(signal_ids))
+                .order_by(desc(TradeLedger.execution_timestamp))
+            )
+            rows = (await session.execute(rows_stmt)).scalars().all()
+
+        grouped_rows: dict[str, list[TradeLedger]] = defaultdict(list)
+        for row in rows:
+            grouped_rows[str(row.signal_id)].append(row)
+
+        items = []
+        for signal_id in signal_ids:
+            legs = grouped_rows.get(str(signal_id), [])
+            if not legs:
+                continue
+            sorted_legs = sorted(legs, key=lambda item: item.execution_timestamp or datetime.min)
+            first = sorted_legs[0]
+            tickers = [leg.ticker for leg in sorted_legs]
+            pnl = None
+            for leg in sorted_legs:
+                if leg.metadata_json and "pnl" in leg.metadata_json:
+                    pnl = float(leg.metadata_json["pnl"])
+                    break
+            total_notional = sum(float(leg.quantity) * float(leg.price) for leg in sorted_legs)
+            items.append(
+                {
+                    "signal_id": str(signal_id),
+                    "pair": " / ".join(tickers[:2]) if len(tickers) >= 2 else ", ".join(tickers),
+                    "venue": first.venue,
+                    "status": first.status.value,
+                    "opened_at": first.execution_timestamp.isoformat() if first.execution_timestamp else None,
+                    "legs": [
+                        {
+                            "ticker": leg.ticker,
+                            "side": leg.side.value,
+                            "quantity": float(leg.quantity),
+                            "price": float(leg.price),
+                            "fee": float(leg.fee or 0.0),
+                            "status": leg.status.value,
+                            "timestamp": leg.execution_timestamp.isoformat() if leg.execution_timestamp else None,
+                        }
+                        for leg in sorted_legs
+                    ],
+                    "notional": total_notional,
+                    "pnl": pnl,
+                }
+            )
+
+        return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    async def get_trade_summary(self) -> Dict[str, float]:
+        """Returns high-level dashboard trade counts and win-rate metrics."""
+        from sqlalchemy import select
+
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.CLOSED)
+            trades = (await session.execute(stmt)).scalars().all()
+
+        closed_signal_pnls: Dict[str, float] = {}
+        for trade in trades:
+            if not trade.metadata_json or "pnl" not in trade.metadata_json:
+                continue
+            key = str(trade.signal_id or trade.id)
+            if key not in closed_signal_pnls:
+                closed_signal_pnls[key] = float(trade.metadata_json["pnl"])
+
+        closed_count = len(closed_signal_pnls)
+        wins = sum(1 for pnl in closed_signal_pnls.values() if pnl > 0)
+        losses = sum(1 for pnl in closed_signal_pnls.values() if pnl < 0)
+        win_rate = (wins / closed_count) if closed_count else 0.0
+        return {
+            "closed_trades": float(closed_count),
+            "wins": float(wins),
+            "losses": float(losses),
+            "win_rate": float(win_rate),
+        }
+
+    async def get_chart_series(self, metric: str) -> Dict[str, Any]:
+        """Returns time-series data for a small set of dashboard chart metrics."""
+        metric_key = (metric or "").lower()
+        daily_returns = await self.get_daily_returns()
+        ordered_days = sorted(daily_returns.keys())
+
+        if metric_key in {"profit", "cumulative_profit", "roi"}:
+            cumulative = 0.0
+            points = []
+            for day in ordered_days:
+                daily = float(daily_returns[day])
+                cumulative += daily
+                points.append({"timestamp": day, "value": cumulative, "daily": daily})
+            return {"metric": metric, "points": points}
+
+        if metric_key in {"win_loss", "wins", "losses"}:
+            history = await self.get_trade_history(page=1, page_size=500)
+            buckets: Dict[str, Dict[str, float]] = {}
+            for trade in history["items"]:
+                day = (trade.get("opened_at") or "")[:10]
+                if not day:
+                    continue
+                bucket = buckets.setdefault(day, {"wins": 0.0, "losses": 0.0})
+                pnl = trade.get("pnl")
+                if pnl is None:
+                    continue
+                if pnl >= 0:
+                    bucket["wins"] += 1.0
+                else:
+                    bucket["losses"] += 1.0
+            return {
+                "metric": metric,
+                "points": [
+                    {"timestamp": day, "wins": values["wins"], "losses": values["losses"]}
+                    for day, values in sorted(buckets.items())
+                ],
+            }
+
+        if metric_key in {"profit_per_day", "daily_profit"}:
+            return {
+                "metric": metric,
+                "points": [{"timestamp": day, "value": float(daily_returns[day])} for day in ordered_days],
+            }
+
+        raise ValueError(f"Unsupported metric: {metric}")
 
     async def get_agent_metrics(self, agent_name: str) -> tuple[int, int]:
         """Returns (successes, failures) for Thompson Sampling."""
