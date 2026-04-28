@@ -263,26 +263,29 @@ class BrokerageService:
             return {"status": "error", "message": friction_check["rejection_reason"]}
         friction = friction_check["total_friction_percent"]
 
-        # 2. Price lookup
-        prices = await data_service.get_latest_price([ticker])
-        if ticker not in prices:
-            return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
-        price = float(prices[ticker])
-        if price <= 0:
-            return {"status": "error", "message": f"Invalid price ({price}) for {ticker}. Rejecting order."}
+        # 2. Price lookup for observability only. Web3 execution owns the final
+        # quote/swap math, so a transient yfinance miss must not block routing.
+        raw_quantity = 0.0
+        try:
+            prices = await data_service.get_latest_price([ticker])
+            price = float(prices.get(ticker, 0.0))
+            if price > 0:
+                raw_quantity = amount / price
+                logger.info(
+                    f"WEB3: Value order {ticker}: ${amount:.2f} / ${price:.6f} = {raw_quantity:.6f} tokens ({side})"
+                )
+            else:
+                logger.warning("WEB3: Price unavailable for %s; delegating quote to Web3 service.", ticker)
+        except Exception as e:
+            logger.warning("WEB3: Price lookup failed for %s; delegating quote to Web3 service: %s", ticker, e)
 
-        # 3. Token-quantity calculation
-        raw_quantity = amount / price
-        logger.info(
-            f"WEB3: Value order {ticker}: ${amount:.2f} / ${price:.6f} = {raw_quantity:.6f} tokens ({side})"
-        )
-
-        # 4. Execute via web3_service (on-chain swap or simulation)
+        # 3. Execute via web3_service (on-chain swap or simulation)
         result = await self.web3.place_value_order(ticker=ticker, amount_fiat=amount, side=side)
 
-        # 5. Log trade (same as T212 path)
+        # 4. Log trade (same as T212 path) when we had enough local pricing data.
         if result.get("status") != "error":
-            agent_logger.log_fractional_trade(ticker, amount, raw_quantity, price, side, friction)
+            if raw_quantity > 0:
+                agent_logger.log_fractional_trade(ticker, amount, raw_quantity, price, side, friction)
 
         return result
 
