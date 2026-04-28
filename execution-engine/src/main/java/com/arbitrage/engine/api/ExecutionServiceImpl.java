@@ -101,7 +101,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
 
                 // 2. Latency Check
                 long nowNs = System.nanoTime();
-                if (nowNs - request.getTimestampNs() > 50_000_000L) { // 50ms
+                if (nowNs - request.getTimestampNs() > 1_000_000_000L) { // 1s
                     return Mono.error(new LatencyTimeoutException("Stale Alpha - Latency too high"));
                 }
 
