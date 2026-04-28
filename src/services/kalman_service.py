@@ -80,7 +80,12 @@ class KalmanFilter:
 
             self.state = new_state
             self.P = new_P
-            
+
+            # Spec 037: decay Q back toward base after inflate_q() was called
+            if hasattr(self, '_q_inflate_remaining') and self._q_inflate_remaining > 0:
+                self.Q = np.maximum(self._q_base, self.Q - self._q_inflate_step)
+                self._q_inflate_remaining -= 1
+
         except (ValueError, np.linalg.LinAlgError) as e:
             logger.error(f"Kalman update failed: {e}. Resetting filter to initial state.")
             self.state = self.initial_state.copy()
@@ -108,6 +113,26 @@ class KalmanFilter:
             z_score = 0.0
             
         return spread, z_score
+
+    def bump_uncertainty(self, multiplier: float = 10.0):
+        """Legacy one-shot P boost for session-open handling.
+        Multiplies the state covariance P by *multiplier* so the filter
+        can adapt faster after an overnight gap.
+        """
+        self.P = self.P * multiplier
+
+    def inflate_q(self, factor: float = 5.0, n_bars: int = 10):
+        """Spec 037: Linear Q-inflation for session-boundary handling.
+        Inflates Q by *factor* at session open then decays it linearly
+        back to the base value over the next *n_bars* update() calls.
+        This lets the filter breathe through overnight gaps without
+        discarding its calibrated covariance (unlike bump_uncertainty).
+        """
+        if not hasattr(self, '_q_base'):
+            self._q_base = self.Q.copy()
+        self._q_inflate_remaining = int(n_bars)
+        self._q_inflate_step = self._q_base * (factor - 1.0) / max(int(n_bars), 1)
+        self.Q = self._q_base * factor
 
     def get_state_dict(self):
         """Return state for persistence."""
