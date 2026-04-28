@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0f\x65xecution.proto\x12\x14\x63om.arbitrage.engine\"6\n\x11KillSwitchRequest\x12\x0e\n\x06reason\x18\x01 \x01(\t\x12\x11\n\tliquidate\x18\x02 \x01(\x08\"u\n\x12KillSwitchResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0estatus_message\x18\x02 \x01(\t\x12\x18\n\x10orders_cancelled\x18\x03 \x01(\x05\x12\x1c\n\x14positions_liquidated\x18\x04 \x01(\x05\"\xb4\x02\n\x10\x45xecutionRequest\x12\x11\n\tsignal_id\x18\x01 \x01(\t\x12\x0f\n\x07pair_id\x18\x02 \x01(\t\x12\x14\n\x0ctimestamp_ns\x18\x03 \x01(\x03\x12\x18\n\x10max_slippage_pct\x18\x04 \x01(\x01\x12\x17\n\x0frisk_multiplier\x18\x05 \x01(\x01\x12\x41\n\x04legs\x18\x06 \x03(\x0b\x32\x33.com.arbitrage.engine.ExecutionRequest.ExecutionLeg\x1ap\n\x0c\x45xecutionLeg\x12\x0e\n\x06ticker\x18\x01 \x01(\t\x12(\n\x04side\x18\x02 \x01(\x0e\x32\x1a.com.arbitrage.engine.Side\x12\x10\n\x08quantity\x18\x03 \x01(\x01\x12\x14\n\x0ctarget_price\x18\x04 \x01(\x01\"\'\n\x12TradeStatusRequest\x12\x11\n\tsignal_id\x18\x01 \x01(\t\"\x9f\x01\n\x11\x45xecutionResponse\x12\x11\n\tsignal_id\x18\x01 \x01(\t\x12\x35\n\x06status\x18\x02 \x01(\x0e\x32%.com.arbitrage.engine.ExecutionStatus\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x13\n\x0b\x61\x63tual_vwap\x18\x04 \x01(\x01\x12\x1a\n\x12processing_time_ns\x18\x05 \x01(\x03*9\n\x04Side\x12\x14\n\x10SIDE_UNSPECIFIED\x10\x00\x12\x0c\n\x08SIDE_BUY\x10\x01\x12\r\n\tSIDE_SELL\x10\x02*\xd5\x01\n\x0f\x45xecutionStatus\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n\x0eSTATUS_SUCCESS\x10\x01\x12\x1c\n\x18STATUS_REJECTED_SLIPPAGE\x10\x02\x12\x19\n\x15STATUS_REJECTED_DEPTH\x10\x03\x12\x1b\n\x17STATUS_REJECTED_LATENCY\x10\x04\x12\x17\n\x13STATUS_BROKER_ERROR\x10\x05\x12\x14\n\x10STATUS_NOT_FOUND\x10\x06\x12\x11\n\rSTATUS_HALTED\x10\x07\x32\xc6\x02\n\x10\x45xecutionService\x12\x61\n\x0c\x45xecuteTrade\x12&.com.arbitrage.engine.ExecutionRequest\x1a\'.com.arbitrage.engine.ExecutionResponse\"\x00\x12\x65\n\x0eGetTradeStatus\x12(.com.arbitrage.engine.TradeStatusRequest\x1a\'.com.arbitrage.engine.ExecutionResponse\"\x00\x12h\n\x11TriggerKillSwitch\x12\'.com.arbitrage.engine.KillSwitchRequest\x1a(.com.arbitrage.engine.KillSwitchResponse\"\x00\x42-\n\x19\x63om.arbitrage.engine.grpcB\x0e\x45xecutionProtoP\x01\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0fexecution.proto\x12\x14com.arbitrage.engine\"6\n\x11KillSwitchRequest\x12\x0e\n\x06reason\x18\x01 \x01(\t\x12\x11\n\tliquidate\x18\x02 \x01(\x08\"u\n\x12KillSwitchResponse\x12\x0f\n\x07success\x18\x01 \x01(\x08\x12\x16\n\x0estatus_message\x18\x02 \x01(\t\x12\x18\n\x10orders_cancelled\x18\x03 \x01(\x05\x12\x1c\n\x14positions_liquidated\x18\x04 \x01(\x05\"\xcd\x02\n\x10ExecutionRequest\x12\x11\n\tsignal_id\x18\x01 \x01(\t\x12\x0f\n\x07pair_id\x18\x02 \x01(\t\x12\x18\n\x10max_slippage_pct\x18\x04 \x01(\t\x12\x17\n\x0frisk_multiplier\x18\x05 \x01(\t\x12\x17\n\x0fclient_order_id\x18\x07 \x01(\t\x12\x14\n\x0ctimestamp_ns\x18\x03 \x01(\x03\x12A\n\x04legs\x18\x06 \x03(\x0b23.com.arbitrage.engine.ExecutionRequest.ExecutionLeg\x1ap\n\x0cExecutionLeg\x12\x0e\n\x06ticker\x18\x01 \x01(\t\x12\x10\n\x08quantity\x18\x03 \x01(\t\x12\x14\n\x0ctarget_price\x18\x04 \x01(\t\x12(\n\x04side\x18\x02 \x01(\x0e2\x1a.com.arbitrage.engine.Side\"\'\n\x12TradeStatusRequest\x12\x11\n\tsignal_id\x18\x01 \x01(\t\"\x9f\x01\n\x11ExecutionResponse\x12\x11\n\tsignal_id\x18\x01 \x01(\t\x12\x0f\n\x07message\x18\x03 \x01(\t\x12\x13\n\x0bactual_vwap\x18\x04 \x01(\t\x125\n\x06status\x18\x02 \x01(\x0e2%.com.arbitrage.engine.ExecutionStatus\x12\x1a\n\x12processing_time_ns\x18\x05 \x01(\x03*9\n\x04Side\x12\x14\n\x10SIDE_UNSPECIFIED\x10\x00\x12\x0c\n\x08SIDE_BUY\x10\x01\x12\r\n\tSIDE_SELL\x10\x02*\xd5\x01\n\x0fExecutionStatus\x12\x16\n\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n\x0eSTATUS_SUCCESS\x10\x01\x12\x1c\n\x18STATUS_REJECTED_SLIPPAGE\x10\x02\x12\x19\n\x15STATUS_REJECTED_DEPTH\x10\x03\x12\x1b\n\x17STATUS_REJECTED_LATENCY\x10\x04\x12\x17\n\x13STATUS_BROKER_ERROR\x10\x05\x12\x14\n\x10STATUS_NOT_FOUND\x10\x06\x12\x11\n\rSTATUS_HALTED\x10\x072\xc0\x02\n\x10ExecutionService\x12_\n\x0cExecuteTrade\x12&.com.arbitrage.engine.ExecutionRequest\x1a\'.com.arbitrage.engine.ExecutionResponse\x12c\n\x0eGetTradeStatus\x12(.com.arbitrage.engine.TradeStatusRequest\x1a\'.com.arbitrage.engine.ExecutionResponse\x12f\n\x11TriggerKillSwitch\x12\'.com.arbitrage.engine.KillSwitchRequest\x1a(.com.arbitrage.engine.KillSwitchResponseB-\n\x19com.arbitrage.engine.grpcB\x0eExecutionProtoP\x01b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,22 +32,22 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'execution_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\031com.arbitrage.engine.grpcB\016ExecutionProtoP\001'
-  _globals['_SIDE']._serialized_start=730
-  _globals['_SIDE']._serialized_end=787
-  _globals['_EXECUTIONSTATUS']._serialized_start=790
-  _globals['_EXECUTIONSTATUS']._serialized_end=1003
+  _globals['_SIDE']._serialized_start=755
+  _globals['_SIDE']._serialized_end=812
+  _globals['_EXECUTIONSTATUS']._serialized_start=815
+  _globals['_EXECUTIONSTATUS']._serialized_end=1028
   _globals['_KILLSWITCHREQUEST']._serialized_start=41
   _globals['_KILLSWITCHREQUEST']._serialized_end=95
   _globals['_KILLSWITCHRESPONSE']._serialized_start=97
   _globals['_KILLSWITCHRESPONSE']._serialized_end=214
   _globals['_EXECUTIONREQUEST']._serialized_start=217
-  _globals['_EXECUTIONREQUEST']._serialized_end=525
-  _globals['_EXECUTIONREQUEST_EXECUTIONLEG']._serialized_start=413
-  _globals['_EXECUTIONREQUEST_EXECUTIONLEG']._serialized_end=525
-  _globals['_TRADESTATUSREQUEST']._serialized_start=527
-  _globals['_TRADESTATUSREQUEST']._serialized_end=566
-  _globals['_EXECUTIONRESPONSE']._serialized_start=569
-  _globals['_EXECUTIONRESPONSE']._serialized_end=728
-  _globals['_EXECUTIONSERVICE']._serialized_start=1006
-  _globals['_EXECUTIONSERVICE']._serialized_end=1332
+  _globals['_EXECUTIONREQUEST']._serialized_end=550
+  _globals['_EXECUTIONREQUEST_EXECUTIONLEG']._serialized_start=438
+  _globals['_EXECUTIONREQUEST_EXECUTIONLEG']._serialized_end=550
+  _globals['_TRADESTATUSREQUEST']._serialized_start=552
+  _globals['_TRADESTATUSREQUEST']._serialized_end=591
+  _globals['_EXECUTIONRESPONSE']._serialized_start=594
+  _globals['_EXECUTIONRESPONSE']._serialized_end=753
+  _globals['_EXECUTIONSERVICE']._serialized_start=1031
+  _globals['_EXECUTIONSERVICE']._serialized_end=1351
 # @@protoc_insertion_point(module_scope)

@@ -74,8 +74,10 @@ async def test_audit_logging(client):
         json={"command": "/exposure"}
     )
     
-    # Check SQLite logs
+    # Check SQLite logs — query specifically for the /exposure command log entry
     with dashboard_service.persistence._get_connection() as conn:
-        row = conn.execute("SELECT * FROM logs WHERE source = 'DASHBOARD_TERMINAL' ORDER BY timestamp DESC LIMIT 1").fetchone()
+        row = conn.execute(
+            "SELECT * FROM logs WHERE source = 'DASHBOARD_TERMINAL' AND message LIKE '%/exposure%' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
         assert row is not None
         assert "/exposure" in row["message"]

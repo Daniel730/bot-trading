@@ -98,9 +98,9 @@ class MacroEconomicAgent:
         }
 
     def format_summary_for_telegram(self, summary: dict) -> str:
-        risk_text = "ðŸŸ¢ RISK-ON" if summary.get("risk_on") else "ðŸ”´ RISK-OFF"
+        risk_text = "🟢 RISK-ON" if summary.get("risk_on") else "🔴 RISK-OFF"
         return (
-            "ðŸŒ **Macro Economic Summary**\n\n"
+            "🌐 **Macro Economic Summary**\n\n"
             f"{risk_text}\n"
             f"10Y Yield: {float(summary.get('yield_10y', 0.0)):.2f}%\n"
             f"VIX: {float(summary.get('vix', 0.0)):.2f}\n"
