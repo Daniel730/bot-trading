@@ -23,6 +23,8 @@ async def test_dynamic_sharpe_impact():
     
     # Case 1: High Risk-Free Rate (5%)
     with patch('src.services.persistence_service.persistence_service.get_daily_returns', return_value=daily_pnl), \
+         patch('src.services.performance_service.redis_service.get_json', return_value=None), \
+         patch('src.services.performance_service.redis_service.set_json', return_value=None), \
          patch('yfinance.Ticker') as mock_ticker:
         
         mock_info = MagicMock()
