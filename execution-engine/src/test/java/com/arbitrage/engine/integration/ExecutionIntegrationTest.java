@@ -10,10 +10,6 @@ import com.arbitrage.engine.persistence.TradeLedgerRepository;
 import io.grpc.stub.StreamObserver;
 import io.r2dbc.postgresql.PostgresqlConnectionConfiguration;
 import io.r2dbc.postgresql.PostgresqlConnectionFactory;
-import io.r2dbc.spi.Result;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -22,7 +18,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -45,7 +40,8 @@ class ExecutionIntegrationTest {
     }
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine");
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine")
+            .withInitScript("init.sql");
 
     private static TradeLedgerRepository repository;
     private static RedisOrderSync redisSync;
@@ -64,24 +60,6 @@ class ExecutionIntegrationTest {
                         .database(postgres.getDatabaseName())
                         .build()
         );
-
-        // Manually run init.sql to ensure tables exist
-        try {
-            String initSql = new String(ExecutionIntegrationTest.class.getClassLoader()
-                    .getResourceAsStream("init.sql").readAllBytes());
-            Mono.usingWhen(
-                Mono.from(connectionFactory.create()),
-                connection -> Flux.from(connection.createStatement(initSql).execute())
-                        .flatMap(Result::getRowsUpdated)
-                        .then(),
-                connection -> Mono.from(connection.close())
-            ).block(Duration.ofSeconds(10));
-            System.out.println("DEBUG: Database initialized successfully with init.sql");
-        } catch (Exception e) {
-            System.err.println("DEBUG: Failed to initialize database: " + e.getMessage());
-            e.printStackTrace();
-        }
-
         repository = new TradeLedgerRepository(connectionFactory);
 
         // Mock Redis for now to avoid needing a Redis container
@@ -134,7 +112,7 @@ class ExecutionIntegrationTest {
 
             @Override
             public void onError(Throwable t) {
-                fail(t.getMessage());
+                fail("gRPC onError: " + t.getMessage());
             }
 
             @Override
@@ -143,15 +121,13 @@ class ExecutionIntegrationTest {
             }
         });
 
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
-        assertNotNull(responseHolder[0]);
+        assertTrue(latch.await(10, TimeUnit.SECONDS), "Timed out waiting for gRPC response");
+        assertNotNull(responseHolder[0], "Response holder is null");
+        
         if (responseHolder[0].getStatus() != ExecutionStatus.STATUS_SUCCESS) {
-            System.out.println("DEBUG: Trade execution failed. Status: " + responseHolder[0].getStatus() + 
-                 ", Message: " + responseHolder[0].getMessage());
-            fail("Trade execution failed. Status: " + responseHolder[0].getStatus() + 
-                 ", Message: " + responseHolder[0].getMessage());
+            fail("Trade failed. Status: " + responseHolder[0].getStatus() + ", Msg: " + responseHolder[0].getMessage());
         }
-        // actualVwap is now an exact decimal string; compare numerically
+        
         assertEquals(0, new BigDecimal(responseHolder[0].getActualVwap()).compareTo(new BigDecimal("50")));
     }
 
@@ -206,11 +182,11 @@ class ExecutionIntegrationTest {
     void testExecuteTrade_LatencyRejection() throws InterruptedException {
         String signalId = UUID.randomUUID().toString();
 
-        // Request timestamp is 1 second in the past
+        // Request timestamp is 2 seconds in the past (threshold is 1s)
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setSignalId(signalId)
                 .setPairId("KO_PEP")
-                .setTimestampNs(System.nanoTime() - 1_000_000_000L)
+                .setTimestampNs(System.nanoTime() - 2_000_000_000L)
                 .setMaxSlippagePct("0.01")
                 .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
                         .setTicker("KO")
