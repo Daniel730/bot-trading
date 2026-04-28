@@ -124,8 +124,10 @@ class ExecutionIntegrationTest {
 
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         assertNotNull(responseHolder[0]);
-        assertEquals(ExecutionStatus.STATUS_SUCCESS, responseHolder[0].getStatus(), 
-            "Trade execution failed with message: " + responseHolder[0].getMessage());
+        if (responseHolder[0].getStatus() != ExecutionStatus.STATUS_SUCCESS) {
+            fail("Trade execution failed. Status: " + responseHolder[0].getStatus() + 
+                 ", Message: " + responseHolder[0].getMessage());
+        }
         // actualVwap is now an exact decimal string; compare numerically
         assertEquals(0, new BigDecimal(responseHolder[0].getActualVwap()).compareTo(new BigDecimal("50")));
     }
