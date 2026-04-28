@@ -190,7 +190,46 @@ class DashboardState:
 dashboard_state = DashboardState()
 
 
-def verify_token(token: str = Query(None)):
+def _dashboard_secret() -> str:
+    return settings.DASHBOARD_TOKEN.strip().strip('"').strip("'")
+
+
+class DashboardSessionManager:
+    def __init__(self, ttl_seconds: int = 12 * 60 * 60):
+        self.ttl_seconds = ttl_seconds
+        self._sessions: Dict[str, dict] = {}
+
+    def create(self, actor: str = "dashboard") -> dict:
+        raw = secrets.token_urlsafe(32)
+        digest = self._hash(raw)
+        expires_at = _utcnow() + timedelta(seconds=self.ttl_seconds)
+        self._sessions[digest] = {"actor": actor, "expires_at": expires_at}
+        return {"session_token": raw, "expires_at": expires_at.isoformat(), "actor": actor}
+
+    def verify(self, session_token: Optional[str]) -> dict:
+        if not session_token:
+            raise HTTPException(status_code=401, detail="Dashboard login is required.")
+        digest = self._hash(session_token)
+        session = self._sessions.get(digest)
+        if not session:
+            raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+        if session["expires_at"] <= _utcnow():
+            self._sessions.pop(digest, None)
+            raise HTTPException(status_code=401, detail="Dashboard session expired.")
+        return session
+
+    def revoke(self, session_token: Optional[str]) -> None:
+        if session_token:
+            self._sessions.pop(self._hash(session_token), None)
+
+    def _hash(self, value: str) -> str:
+        return hmac.new(_dashboard_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+session_manager = DashboardSessionManager()
+
+
+def verify_security_token(token: str = Query(None)):
     secret = settings.DASHBOARD_TOKEN.strip().strip('"').strip("'")
     if token != secret:
         logger.warning(
@@ -200,6 +239,12 @@ def verify_token(token: str = Query(None)):
         )
         raise HTTPException(status_code=403, detail="Invalid Dashboard Token")
     return token
+
+
+def verify_token(token: str = Query(None), session: str = Query(None)):
+    verified_token = verify_security_token(token)
+    session_manager.verify(session)
+    return verified_token
 
 
 def _serialize_pair(active_pair: dict) -> dict:
@@ -376,6 +421,12 @@ class DashboardConfigUpdateRequest(BaseModel):
     otp_token: Optional[str] = None
 
 
+class DashboardLoginRequest(BaseModel):
+    security_token: str
+    otp_token: Optional[str] = None
+    actor: str = "dashboard"
+
+
 class TOTPVerifyRequest(BaseModel):
     token: str
 
@@ -412,6 +463,15 @@ class DashboardService:
             "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True},
             "PAPER_TRADING": {"type": "bool", "sensitive": True},
             "DEV_MODE": {"type": "bool", "sensitive": True},
+            "OPENAI_API_KEY": {"type": "str", "sensitive": True},
+            "GEMINI_API_KEY": {"type": "str", "sensitive": True},
+            "POLYGON_API_KEY": {"type": "str", "sensitive": True},
+            "T212_API_KEY": {"type": "str", "sensitive": True},
+            "T212_API_SECRET": {"type": "str", "sensitive": True},
+            "TRADING_212_API_KEY": {"type": "str", "sensitive": True},
+            "TELEGRAM_BOT_TOKEN": {"type": "str", "sensitive": True},
+            "WEB3_PRIVATE_KEY": {"type": "str", "sensitive": True},
+            "WEB3_RPC_URL": {"type": "str", "sensitive": True},
         }
 
     def attach_monitor(self, monitor):
@@ -436,25 +496,55 @@ class DashboardService:
                 if lowered in {"0", "false", "no", "off"}:
                     return False
                 raise ValueError("invalid boolean")
+            if kind == "str":
+                return str(value)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid value for {key}: {value}") from exc
+        return value
+
+    def _mask_sensitive_value(self, value: Any) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+        if len(text) <= 8:
+            return "********"
+        return f"{text[:4]}...{text[-4:]}"
+
+    def _is_masked_placeholder(self, value: Any) -> bool:
+        text = str(value or "")
+        return text == "********" or ("..." in text and len(text) <= 16)
+
+    def _audit_value(self, key: str, value: Any) -> Any:
+        if self.editable_config.get(key, {}).get("sensitive"):
+            return self._mask_sensitive_value(value)
         return value
 
     def get_dashboard_config(self) -> dict:
         items = []
         for key, spec in self.editable_config.items():
+            raw_value = getattr(settings, key)
             items.append(
                 {
                     "key": key,
-                    "value": getattr(settings, key),
+                    "value": self._mask_sensitive_value(raw_value) if spec["sensitive"] else raw_value,
                     "type": spec["type"],
                     "sensitive": spec["sensitive"],
                 }
             )
+        audit_log = []
+        for entry in self.persistence.get_recent_config_changes(limit=25):
+            key = entry.get("key")
+            if self.editable_config.get(key, {}).get("sensitive"):
+                entry = {
+                    **entry,
+                    "old_value": self._mask_sensitive_value(entry.get("old_value")),
+                    "new_value": self._mask_sensitive_value(entry.get("new_value")),
+                }
+            audit_log.append(entry)
         return {
             "items": items,
             "two_factor": self.totp.public_status(),
-            "audit_log": self.persistence.get_recent_config_changes(limit=25),
+            "audit_log": audit_log,
         }
 
     async def update_dashboard_config(self, actor: str, updates: Dict[str, Any], otp_token: Optional[str]) -> dict:
@@ -465,8 +555,13 @@ class DashboardService:
         requires_2fa = False
         for key, value in updates.items():
             normalized_key = str(key).strip().upper()
+            if self.editable_config.get(normalized_key, {}).get("sensitive") and self._is_masked_placeholder(value):
+                continue
             normalized_updates[normalized_key] = self._coerce_config_value(normalized_key, value)
             requires_2fa = requires_2fa or self.editable_config[normalized_key]["sensitive"]
+
+        if not normalized_updates:
+            raise HTTPException(status_code=400, detail="No changed configuration values provided.")
 
         if requires_2fa:
             status = self.totp.public_status()
@@ -482,8 +577,8 @@ class DashboardService:
             self.persistence.log_config_change(
                 actor=actor,
                 key=key,
-                old_value=old_value,
-                new_value=value,
+                old_value=self._audit_value(key, old_value),
+                new_value=self._audit_value(key, value),
                 requires_2fa=self.editable_config[key]["sensitive"],
             )
 
@@ -757,9 +852,28 @@ class DashboardService:
 dashboard_service = DashboardService()
 
 
+@app.post("/api/auth/login")
+async def login(request: DashboardLoginRequest):
+    verify_security_token(request.security_token)
+    status = dashboard_service.totp.public_status()
+    if status["enabled"]:
+        if not request.otp_token or not dashboard_service.totp.verify_token_or_backup(request.otp_token):
+            raise HTTPException(status_code=403, detail="A valid 2FA token is required to log in.")
+    session = session_manager.create(actor=request.actor)
+    await dashboard_state.add_message("SYSTEM", "Dashboard login succeeded.", metadata={"type": "dashboard_login", "actor": request.actor})
+    return {"status": "ok", **session, "two_factor": dashboard_service.totp.public_status()}
+
+
+@app.post("/api/auth/logout")
+async def logout(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
+    session_manager.revoke(session)
+    return {"status": "ok"}
+
+
 @app.get("/stream")
-async def message_stream(request: Request, token: str = Query(None)):
-    verify_token(token)
+async def message_stream(request: Request, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     q = asyncio.Queue()
     async with dashboard_state._lock:
         dashboard_state.listeners.append(q)
@@ -803,9 +917,9 @@ async def ping():
 
 
 @app.websocket("/ws/telemetry")
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(None), session: str = Query(None)):
     try:
-        verify_token(token)
+        verify_token(token, session)
     except HTTPException:
         await websocket.close(code=4003)
         return
@@ -822,8 +936,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
 
 
 @app.post("/api/terminal/command")
-async def terminal_command(request: CommandRequest, token: str = Query(None)):
-    verify_token(token)
+async def terminal_command(request: CommandRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     from src.services.notification_service import notification_service
 
     result = await notification_service.handle_dashboard_command(request.command, request.metadata)
@@ -833,14 +947,14 @@ async def terminal_command(request: CommandRequest, token: str = Query(None)):
 
 
 @app.get("/api/settings")
-async def get_settings(token: str = Query(None)):
-    verify_token(token)
+async def get_settings(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return {"approval_threshold": settings.APPROVAL_THRESHOLD}
 
 
 @app.post("/api/settings")
-async def update_settings(request: SettingsUpdateRequest, token: str = Query(None)):
-    verify_token(token)
+async def update_settings(request: SettingsUpdateRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     old_value = settings.APPROVAL_THRESHOLD
     settings.APPROVAL_THRESHOLD = request.approval_threshold
     save_settings_override({"APPROVAL_THRESHOLD": request.approval_threshold})
@@ -856,21 +970,22 @@ async def update_settings(request: SettingsUpdateRequest, token: str = Query(Non
 
 
 @app.get("/api/stats/summary")
-async def get_stats_summary(token: str = Query(None)):
-    verify_token(token)
+async def get_stats_summary(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return await dashboard_service.build_summary()
 
 
 @app.get("/api/stats/trades")
 async def get_trade_history(
     token: str = Query(None),
+    session: str = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=200),
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     venue: Optional[str] = Query(None),
 ):
-    verify_token(token)
+    verify_token(token, session)
     from src.services.persistence_service import persistence_service
 
     return await persistence_service.get_trade_history(
@@ -883,8 +998,8 @@ async def get_trade_history(
 
 
 @app.get("/api/stats/charts/{metric}")
-async def get_chart_metric(metric: str, token: str = Query(None)):
-    verify_token(token)
+async def get_chart_metric(metric: str, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     from src.services.persistence_service import persistence_service
 
     try:
@@ -894,38 +1009,38 @@ async def get_chart_metric(metric: str, token: str = Query(None)):
 
 
 @app.get("/api/system/health")
-async def get_system_health(token: str = Query(None)):
-    verify_token(token)
+async def get_system_health(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return dashboard_service.health_snapshot()
 
 
 @app.get("/api/system/logs")
-async def get_system_logs(token: str = Query(None), limit: int = Query(100, ge=10, le=500)):
-    verify_token(token)
+async def get_system_logs(token: str = Query(None), session: str = Query(None), limit: int = Query(100, ge=10, le=500)):
+    verify_token(token, session)
     return dashboard_service.read_recent_logs(limit=limit)
 
 
 @app.post("/api/bot/restart")
-async def restart_bot(token: str = Query(None)):
-    verify_token(token)
+async def restart_bot(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return await dashboard_service.bot_control("restart", actor="dashboard")
 
 
 @app.post("/api/bot/control")
-async def control_bot(request: BotControlRequest, token: str = Query(None)):
-    verify_token(token)
+async def control_bot(request: BotControlRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return await dashboard_service.bot_control(request.action, actor=request.actor)
 
 
 @app.get("/api/config")
-async def get_config(token: str = Query(None)):
-    verify_token(token)
+async def get_config(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return dashboard_service.get_dashboard_config()
 
 
 @app.post("/api/config/update")
-async def update_config(request: DashboardConfigUpdateRequest, token: str = Query(None)):
-    verify_token(token)
+async def update_config(request: DashboardConfigUpdateRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return await dashboard_service.update_dashboard_config(
         actor=request.actor,
         updates=request.updates,
@@ -934,14 +1049,14 @@ async def update_config(request: DashboardConfigUpdateRequest, token: str = Quer
 
 
 @app.post("/api/auth/2fa/initiate")
-async def initiate_2fa(token: str = Query(None)):
-    verify_token(token)
+async def initiate_2fa(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     return dashboard_service.totp.initiate_setup()
 
 
 @app.post("/api/auth/2fa/verify")
-async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None)):
-    verify_token(token)
+async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     if dashboard_service.totp.verify_setup(request.token):
         await dashboard_state.add_message("SYSTEM", "Two-factor authentication enabled for dashboard config changes.")
         return {"status": "ok", "two_factor": dashboard_service.totp.public_status()}
@@ -951,8 +1066,8 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None)):
 
 
 @app.get("/api/pairs")
-async def list_pairs(token: str = Query(None)):
-    verify_token(token)
+async def list_pairs(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     monitor = dashboard_state.monitor
 
     active_serialized: list = []
@@ -998,8 +1113,8 @@ async def list_pairs(token: str = Query(None)):
 
 
 @app.post("/api/pairs")
-async def update_pairs(request: PairsUpdateRequest, token: str = Query(None)):
-    verify_token(token)
+async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
 
     seen = set()
     cleaned: list = []
@@ -1064,8 +1179,8 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None)):
 
 
 @app.get("/api/positions")
-async def list_open_positions(token: str = Query(None)):
-    verify_token(token)
+async def list_open_positions(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
     from src.services.data_service import data_service
     from src.services.persistence_service import persistence_service
 
@@ -1138,8 +1253,7 @@ frontend_path = "frontend/dist" if os.path.exists("frontend/dist") else "dashboa
 
 
 @app.get("/")
-async def get_dashboard(token: str = Query(None)):
-    verify_token(token)
+async def get_dashboard():
     index_file = os.path.join(frontend_path, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)

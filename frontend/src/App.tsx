@@ -6,6 +6,7 @@ import {
   Cpu,
   Gauge,
   History,
+  LogOut,
   Play,
   RefreshCw,
   Search,
@@ -34,6 +35,8 @@ import {
   fetchSystemLogs,
   fetchTradeHistory,
   initiateTwoFactor,
+  login,
+  logout,
   updateConfig,
   useDashboardStream,
   verifyTwoFactor,
@@ -139,10 +142,16 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: 
 
 function App() {
   const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token') ?? '';
+  const tokenFromUrl = urlParams.get('token') ?? '';
+  const [securityToken, setSecurityToken] = useState(() => sessionStorage.getItem('dashboardSecurityToken') ?? '');
+  const [sessionToken, setSessionToken] = useState(() => sessionStorage.getItem('dashboardSessionToken') ?? '');
+  const [loginToken, setLoginToken] = useState(() => tokenFromUrl);
+  const [loginOtp, setLoginOtp] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
 
-  const { data, error } = useDashboardStream(token);
-  const { isConnected, risk, thoughts, botState } = useTelemetry(token);
+  const isAuthenticated = Boolean(securityToken && sessionToken);
+  const { data, error } = useDashboardStream(isAuthenticated ? securityToken : null, sessionToken);
+  const { isConnected, risk, thoughts, botState } = useTelemetry(isAuthenticated ? securityToken : null, sessionToken);
 
   const [page, setPage] = useState<Page>('overview');
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -166,13 +175,13 @@ function App() {
   const [isBusy, setIsBusy] = useState(false);
 
   const refreshDashboard = async () => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     try {
       const [summaryData, profitData, winLossData, positionsData] = await Promise.all([
-        fetchSummary(token),
-        fetchChartMetric(token, 'cumulative_profit'),
-        fetchChartMetric(token, 'win_loss'),
-        fetchOpenPositions(token),
+        fetchSummary(securityToken, sessionToken),
+        fetchChartMetric(securityToken, sessionToken, 'cumulative_profit'),
+        fetchChartMetric(securityToken, sessionToken, 'win_loss'),
+        fetchOpenPositions(securityToken, sessionToken),
       ]);
       setSummary(summaryData);
       setProfitChart(profitData);
@@ -184,9 +193,9 @@ function App() {
   };
 
   const refreshTradeHistory = async () => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     try {
-      const history = await fetchTradeHistory(token, {
+      const history = await fetchTradeHistory(securityToken, sessionToken, {
         page: tradePage,
         pageSize: 12,
         search: tradeSearch || undefined,
@@ -200,9 +209,9 @@ function App() {
   };
 
   const refreshHealth = async () => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     try {
-      const [healthData, logData] = await Promise.all([fetchSystemHealth(token), fetchSystemLogs(token, 80)]);
+      const [healthData, logData] = await Promise.all([fetchSystemHealth(securityToken, sessionToken), fetchSystemLogs(securityToken, sessionToken, 80)]);
       setHealth(healthData);
       setLogs(logData);
     } catch (err: any) {
@@ -211,9 +220,9 @@ function App() {
   };
 
   const refreshConfig = async () => {
-    if (!token) return;
+    if (!isAuthenticated) return;
     try {
-      const configData = await fetchConfig(token);
+      const configData = await fetchConfig(securityToken, sessionToken);
       setConfig(configData);
       setConfigForm(
         Object.fromEntries(configData.items.map((item) => [item.key, String(item.value)])),
@@ -237,7 +246,7 @@ function App() {
     // They are triggered by the explicit dependency keys below to avoid resetting
     // the polling interval on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [isAuthenticated, securityToken, sessionToken]);
 
   useEffect(() => {
     refreshTradeHistory();
@@ -258,7 +267,7 @@ function App() {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await controlBot(token, action);
+      const result = await controlBot(securityToken, sessionToken, action);
       setSystemMessage(`Bot ${result.action} request accepted.`);
       await refreshDashboard();
     } catch (err: any) {
@@ -283,7 +292,7 @@ function App() {
         setSystemMessage('No settings changed.');
         return;
       }
-      const response = await updateConfig(token, updates, 'dashboard', otpToken || undefined);
+      const response = await updateConfig(securityToken, sessionToken, updates, 'dashboard', otpToken || undefined);
       setConfig(response);
       setConfigForm(Object.fromEntries(response.items.map((item) => [item.key, String(item.value)])));
       setOtpToken('');
@@ -300,7 +309,7 @@ function App() {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await initiateTwoFactor(token);
+      const result = await initiateTwoFactor(securityToken, sessionToken);
       setTwoFactorSetup(result);
       setSystemMessage('2FA setup secret generated. Verify with your authenticator code to enable it.');
     } catch (err: any) {
@@ -315,7 +324,7 @@ function App() {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      await verifyTwoFactor(token, twoFactorCode);
+      await verifyTwoFactor(securityToken, sessionToken, twoFactorCode);
       setTwoFactorCode('');
       setTwoFactorSetup(null);
       await refreshConfig();
@@ -327,12 +336,76 @@ function App() {
     }
   };
 
-  if (!token) {
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setIsBusy(true);
+    setLoginError(null);
+    setSystemError(null);
+    try {
+      const result = await login(loginToken.trim(), loginOtp.trim() || undefined);
+      sessionStorage.setItem('dashboardSecurityToken', loginToken.trim());
+      sessionStorage.setItem('dashboardSessionToken', result.session_token);
+      setSecurityToken(loginToken.trim());
+      setSessionToken(result.session_token);
+      setLoginOtp('');
+      setSystemMessage('Dashboard login succeeded.');
+    } catch (err: any) {
+      setLoginError(err.message || 'Login failed.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout(securityToken, sessionToken);
+    } catch {
+      // The local session is cleared either way.
+    }
+    sessionStorage.removeItem('dashboardSecurityToken');
+    sessionStorage.removeItem('dashboardSessionToken');
+    setSecurityToken('');
+    setSessionToken('');
+    setSummary(null);
+    setConfig(null);
+    setLoginToken('');
+  };
+
+  if (!isAuthenticated) {
     return (
-      <div className="locked-screen">
-        <Shield size={28} />
-        <h1>Dashboard access denied</h1>
-        <p>Add a valid `?token=` query parameter to open the dashboard.</p>
+      <div className="login-screen">
+        <form className="login-panel" onSubmit={handleLogin}>
+          <div className="login-mark">
+            <Shield size={24} />
+          </div>
+          <div>
+            <h1>Alpha Arbitrage</h1>
+            <p>Operations Console</p>
+          </div>
+          {loginError ? <div className="banner error">{loginError}</div> : null}
+          <label className="setting-field">
+            <span>Security Token</span>
+            <input
+              type="password"
+              value={loginToken}
+              onChange={(event) => setLoginToken(event.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </label>
+          <label className="setting-field">
+            <span>Authenticator / Backup Code</span>
+            <input
+              value={loginOtp}
+              onChange={(event) => setLoginOtp(event.target.value)}
+              autoComplete="one-time-code"
+            />
+          </label>
+          <button className="primary-btn" disabled={isBusy} type="submit">
+            <Shield size={14} />
+            Login
+          </button>
+        </form>
       </div>
     );
   }
@@ -392,6 +465,10 @@ function App() {
           <button className="ghost-btn" onClick={() => { refreshDashboard(); refreshTradeHistory(); refreshHealth(); refreshConfig(); }}>
             <RefreshCw size={14} />
             Refresh
+          </button>
+          <button className="ghost-btn" onClick={handleLogout}>
+            <LogOut size={14} />
+            Logout
           </button>
         </header>
 
@@ -660,10 +737,22 @@ function App() {
                   {config?.items.map((item) => (
                     <label key={item.key} className="setting-field">
                       <span>{item.key}{item.sensitive ? ' · 2FA' : ''}</span>
-                      <input
-                        value={configForm[item.key] ?? ''}
-                        onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
-                      />
+                      {item.type === 'bool' ? (
+                        <select
+                          value={configForm[item.key] ?? 'false'}
+                          onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                        >
+                          <option value="true">Enabled</option>
+                          <option value="false">Disabled</option>
+                        </select>
+                      ) : (
+                        <input
+                          type={item.sensitive ? 'password' : item.type === 'str' ? 'text' : 'number'}
+                          step={item.type === 'int' ? '1' : item.type === 'float' ? '0.0001' : undefined}
+                          value={configForm[item.key] ?? ''}
+                          onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                        />
+                      )}
                     </label>
                   ))}
                 </div>
