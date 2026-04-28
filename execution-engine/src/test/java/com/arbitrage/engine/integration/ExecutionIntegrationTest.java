@@ -2,6 +2,7 @@ package com.arbitrage.engine.integration;
 
 import com.arbitrage.engine.api.ExecutionServiceImpl;
 import com.arbitrage.engine.api.L2FeedService;
+import com.arbitrage.engine.broker.Broker;
 import com.arbitrage.engine.core.models.L2OrderBook;
 import com.arbitrage.engine.grpc.*;
 import com.arbitrage.engine.persistence.RedisOrderSync;
@@ -38,6 +39,7 @@ class ExecutionIntegrationTest {
     private static TradeLedgerRepository repository;
     private static RedisOrderSync redisSync;
     private static L2FeedService l2FeedService;
+    private static Broker broker;
     private static ExecutionServiceImpl service;
 
     @BeforeAll
@@ -52,34 +54,42 @@ class ExecutionIntegrationTest {
                         .build()
         );
         repository = new TradeLedgerRepository(connectionFactory);
-        
+
         // Mock Redis for now to avoid needing a Redis container
         redisSync = mock(RedisOrderSync.class);
         when(redisSync.markInFlight(Mockito.any(), anyString())).thenReturn(reactor.core.publisher.Mono.empty());
-        
+
         l2FeedService = mock(L2FeedService.class);
-        
-        service = new ExecutionServiceImpl(repository, redisSync, l2FeedService);
+
+        // Mock Broker to return a successful execution response by default
+        broker = mock(Broker.class);
+        when(broker.execute(Mockito.any()))
+                .thenReturn(reactor.core.publisher.Mono.just(
+                        new Broker.BrokerExecutionResponse(true, "OK", List.of())));
+        when(broker.cancelAllOrders()).thenReturn(0);
+        when(broker.liquidateAllPositions()).thenReturn(0);
+
+        service = new ExecutionServiceImpl(repository, redisSync, l2FeedService, broker);
     }
 
     @Test
     void testExecuteTrade_Success() throws InterruptedException {
         String signalId = UUID.randomUUID().toString();
-        
+
         when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", System.currentTimeMillis(),
-            List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))), 
+            List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))),
             List.of()));
 
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setSignalId(signalId)
                 .setPairId("KO_PEP")
                 .setTimestampNs(System.nanoTime())
-                .setMaxSlippagePct(0.01)
+                .setMaxSlippagePct("0.01")
                 .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
                         .setTicker("KO")
                         .setSide(Side.SIDE_BUY)
-                        .setQuantity(10.0)
-                        .setTargetPrice(50.0)
+                        .setQuantity("10.0")
+                        .setTargetPrice("50.0")
                         .build())
                 .build();
 
@@ -106,28 +116,29 @@ class ExecutionIntegrationTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         assertNotNull(responseHolder[0]);
         assertEquals(ExecutionStatus.STATUS_SUCCESS, responseHolder[0].getStatus());
-        assertEquals(50.0, responseHolder[0].getActualVwap());
+        // actualVwap is now an exact decimal string; compare numerically
+        assertEquals(0, new BigDecimal(responseHolder[0].getActualVwap()).compareTo(new BigDecimal("50")));
     }
 
     @Test
     void testExecuteTrade_SlippageVeto() throws InterruptedException {
         String signalId = UUID.randomUUID().toString();
-        
+
         // Price moved to 51.00, which is > 50.00 * 1.01
         when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", System.currentTimeMillis(),
-            List.of(new L2OrderBook.Level(new BigDecimal("51.00"), new BigDecimal("100"))), 
+            List.of(new L2OrderBook.Level(new BigDecimal("51.00"), new BigDecimal("100"))),
             List.of()));
 
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setSignalId(signalId)
                 .setPairId("KO_PEP")
                 .setTimestampNs(System.nanoTime())
-                .setMaxSlippagePct(0.01)
+                .setMaxSlippagePct("0.01")
                 .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
                         .setTicker("KO")
                         .setSide(Side.SIDE_BUY)
-                        .setQuantity(10.0)
-                        .setTargetPrice(50.0)
+                        .setQuantity("10.0")
+                        .setTargetPrice("50.0")
                         .build())
                 .build();
 
@@ -159,18 +170,18 @@ class ExecutionIntegrationTest {
     @Test
     void testExecuteTrade_LatencyRejection() throws InterruptedException {
         String signalId = UUID.randomUUID().toString();
-        
+
         // Request timestamp is 1 second in the past
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setSignalId(signalId)
                 .setPairId("KO_PEP")
-                .setTimestampNs(System.nanoTime() - 1_000_000_000L) 
-                .setMaxSlippagePct(0.01)
+                .setTimestampNs(System.nanoTime() - 1_000_000_000L)
+                .setMaxSlippagePct("0.01")
                 .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
                         .setTicker("KO")
                         .setSide(Side.SIDE_BUY)
-                        .setQuantity(10.0)
-                        .setTargetPrice(50.0)
+                        .setQuantity("10.0")
+                        .setTargetPrice("50.0")
                         .build())
                 .build();
 
@@ -203,33 +214,33 @@ class ExecutionIntegrationTest {
     @Test
     void testExecuteTrade_MultiLeg_AtomicFailure() throws InterruptedException {
         String signalId = UUID.randomUUID().toString();
-        
+
         // KO is fine
         when(l2FeedService.getLatestBook("KO")).thenReturn(new L2OrderBook("KO", System.currentTimeMillis(),
-            List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))), 
+            List.of(new L2OrderBook.Level(new BigDecimal("50.00"), new BigDecimal("100"))),
             List.of()));
-            
+
         // PEP has slippage (Price 101.00 > Target 100.00 * 1.005)
         when(l2FeedService.getLatestBook("PEP")).thenReturn(new L2OrderBook("PEP", System.currentTimeMillis(),
-            List.of(new L2OrderBook.Level(new BigDecimal("101.00"), new BigDecimal("100"))), 
+            List.of(new L2OrderBook.Level(new BigDecimal("101.00"), new BigDecimal("100"))),
             List.of()));
 
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setSignalId(signalId)
                 .setPairId("KO_PEP")
                 .setTimestampNs(System.nanoTime())
-                .setMaxSlippagePct(0.005)
+                .setMaxSlippagePct("0.005")
                 .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
                         .setTicker("KO")
                         .setSide(Side.SIDE_BUY)
-                        .setQuantity(10.0)
-                        .setTargetPrice(50.0)
+                        .setQuantity("10.0")
+                        .setTargetPrice("50.0")
                         .build())
                 .addLegs(ExecutionRequest.ExecutionLeg.newBuilder()
                         .setTicker("PEP")
                         .setSide(Side.SIDE_BUY)
-                        .setQuantity(5.0)
-                        .setTargetPrice(100.0)
+                        .setQuantity("5.0")
+                        .setTargetPrice("100.0")
                         .build())
                 .build();
 
