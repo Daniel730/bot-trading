@@ -286,6 +286,14 @@ class NotificationService:
         except Exception as e:
             print(f"DASHBOARD (paper-notify): add_message failed, non-fatal: {e}")
 
+    def _schedule_paper_notify(self, trade_summary: str) -> None:
+        async def runner():
+            try:
+                await self._paper_notify(trade_summary)
+            except Exception as e:
+                print(f"PAPER notify failed, non-fatal: {e}")
+        asyncio.create_task(runner())
+
     async def request_approval(self, trade_summary: str, trade_value: float = None) -> bool:
         """Gate a trade on operator approval.
 
@@ -298,12 +306,12 @@ class NotificationService:
         """
         # Threshold auto-approval fast path.
         if trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
-            asyncio.create_task(self._paper_notify(f"Auto-approved (value €{trade_value:.2f} < threshold €{settings.APPROVAL_THRESHOLD}):\n{trade_summary}"))
+            self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
             return True
 
         # Paper-mode fast path.
         if settings.PAPER_TRADING:
-            asyncio.create_task(self._paper_notify(trade_summary))
+            self._schedule_paper_notify(trade_summary)
             return True
 
         if not self._telegram_enabled:

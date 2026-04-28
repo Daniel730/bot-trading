@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from typing import Dict
 from src.services.persistence_service import persistence_service, FrequencyType
 from src.services.agent_log_service import agent_trace
+from src.config import settings
 
 class DRIPManager:
     """Manages micro-dividend accumulation and sweep logic."""
@@ -44,7 +45,7 @@ class DCAService:
                     await self._execute_dca(schedule)
                     
                     # Calculate next run based on frequency
-                    new_next_run = self._calculate_next_run(schedule.frequency, schedule.next_run)
+                    new_next_run = self.calculate_next_run(schedule.frequency, schedule.next_run)
                     await persistence_service.update_dca_next_run(schedule.id, new_next_run)
             
             await asyncio.sleep(60) # Check every minute
@@ -64,14 +65,28 @@ class DCAService:
             except Exception as e:
                 print(f"DCAService Error: Failed to invest in {ticker}: {e}")
 
-    def _calculate_next_run(self, frequency: FrequencyType, last_run: datetime) -> datetime:
-        if frequency == FrequencyType.DAILY:
+    def calculate_next_run(self, frequency: FrequencyType | str, last_run: datetime) -> datetime:
+        frequency_value = frequency.value if hasattr(frequency, "value") else str(frequency).lower()
+        if frequency_value == "daily":
             return last_run + timedelta(days=1)
-        elif frequency == FrequencyType.WEEKLY:
+        elif frequency_value == "weekly":
             return last_run + timedelta(weeks=1)
-        elif frequency == FrequencyType.MONTHLY:
+        elif frequency_value == "monthly":
             return last_run + timedelta(days=30)
         return last_run + timedelta(days=1)
+
+    def _calculate_next_run(self, frequency: FrequencyType, last_run: datetime) -> datetime:
+        return self.calculate_next_run(frequency, last_run)
+
+    def is_market_open(self) -> bool:
+        if settings.DEV_MODE:
+            return True
+        now = datetime.now()
+        if now.weekday() >= 5:
+            return False
+        start = now.replace(hour=settings.START_HOUR, minute=settings.START_MINUTE, second=0, microsecond=0)
+        end = now.replace(hour=settings.END_HOUR, minute=settings.END_MINUTE, second=0, microsecond=0)
+        return start <= now <= end
 
     def stop(self):
         self._running = False

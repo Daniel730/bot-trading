@@ -230,12 +230,32 @@ class ArbitrageService:
             # Bug M-01: Look-ahead bias elimination.
             # Exclude the final observation to prevent causality violation.
             intercept = float(full_spread_raw.iloc[:-1].mean())
-            std = float(full_spread_raw.iloc[:-1].std())
+            adjusted_spread = full_spread_raw - intercept
+            std = float(adjusted_spread.iloc[:-1].std())
 
         return {
             "mean": intercept,  # Bug C-01: Fixed — was hardcoded 0.0
             "std": std,
             "intercept": intercept
         }
+
+def _get_spread_metrics_fixed(ticker_a_series: pd.Series, ticker_b_series: pd.Series, hedge_ratio: float, window: int = None) -> Dict:
+    df = pd.concat([ticker_a_series, ticker_b_series], axis=1).dropna()
+    s1 = df.iloc[:, 0]
+    s2 = df.iloc[:, 1]
+    full_spread_raw = s1 - hedge_ratio * s2
+    if window:
+        rolling_intercept = full_spread_raw.rolling(window=window).mean().shift(1)
+        intercept = float(rolling_intercept.iloc[-1])
+        adjusted_spread = full_spread_raw - intercept
+        std = float(adjusted_spread.rolling(window=window).std().shift(1).iloc[-1])
+    else:
+        intercept = float(full_spread_raw.iloc[:-1].mean())
+        adjusted_spread = full_spread_raw - intercept
+        std = float(adjusted_spread.iloc[:-1].std())
+    return {"mean": 0.0, "std": std, "intercept": intercept}
+
+
+ArbitrageService.get_spread_metrics = staticmethod(_get_spread_metrics_fixed)
 
 arbitrage_service = ArbitrageService()

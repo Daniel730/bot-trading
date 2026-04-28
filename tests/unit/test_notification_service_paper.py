@@ -29,7 +29,7 @@ async def test_request_approval_paper_fast_path_returns_true_under_100ms():
     try:
         # Break Telegram send: any fire-and-forget notify must swallow it.
         broken_send = AsyncMock(side_effect=RuntimeError("network down"))
-        with patch.object(notification_service.app.bot, "send_message", broken_send):
+        with patch.object(notification_service, "_paper_notify", broken_send):
             start = time.perf_counter()
             result = await notification_service.request_approval(
                 "test paper trade summary"
@@ -65,7 +65,7 @@ async def test_request_approval_paper_survives_dashboard_failure():
 
     try:
         ok_send = AsyncMock(return_value=None)
-        with patch.object(notification_service.app.bot, "send_message", ok_send), \
+        with patch.object(notification_service, "_paper_notify", ok_send), \
              patch(
                  "src.services.dashboard_service.dashboard_state.add_message",
                  new=AsyncMock(side_effect=RuntimeError("dashboard offline")),

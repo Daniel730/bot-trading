@@ -93,6 +93,10 @@ class BrokerageService:
         metadata = self.get_symbol_metadata(ticker)
         qty_incr = Decimal(str(metadata.get("quantityIncrement", "0.000001")))
         tick_size = Decimal(str(metadata.get("tickSize", "0.01")))
+        if qty_incr <= 0:
+            qty_incr = Decimal("0.000001")
+        if tick_size <= 0:
+            tick_size = Decimal("0.01")
 
         decimal_qty = Decimal(str(quantity))
         final_qty_dec = (decimal_qty / qty_incr).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * qty_incr
@@ -212,7 +216,7 @@ class BrokerageService:
             if snapshot.get("status") == "error":
                 logger.warning(f"WEB3: Budget snapshot error — {snapshot.get('message')}")
                 return None
-            return float(snapshot.get("balance_usd", 0.0))
+            return float(snapshot.get("balance_usd", snapshot.get("available_usd", 0.0)))
         except Exception as e:
             logger.error(f"WEB3: Error fetching account cash: {e}")
             return None
