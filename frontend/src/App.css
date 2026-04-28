@@ -509,13 +509,46 @@ th {
   cursor: not-allowed;
 }
 
+.login-screen,
 .locked-screen {
   min-height: 100vh;
   display: grid;
   place-items: center;
   text-align: center;
-  gap: 10px;
   padding: 32px;
+}
+
+.login-panel {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(20px);
+  text-align: left;
+}
+
+.login-panel h1,
+.login-panel p {
+  margin: 0;
+}
+
+.login-panel p {
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.login-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--gold), #ff8f5c);
+  color: #0f1724;
 }
 
 @media (max-width: 1180px) {

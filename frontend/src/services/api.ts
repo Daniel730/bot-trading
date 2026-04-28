@@ -233,7 +233,7 @@ export interface LogsResponse {
 export interface ConfigItem {
   key: string;
   value: string | number | boolean | null;
-  type: 'float' | 'int' | 'bool';
+  type: 'float' | 'int' | 'bool' | 'str';
   sensitive: boolean;
 }
 
@@ -265,18 +265,31 @@ export interface TwoFactorInitiateResponse {
   backup_codes: string[];
 }
 
+export interface AuthSession {
+  session_token: string;
+  expires_at: string;
+  actor: string;
+  two_factor: TwoFactorStatus;
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || ((window.location.port === '5173' || window.location.port === '3000')
   ? `${window.location.protocol}//${window.location.hostname}:8080`
   : window.location.origin);
 
-const withToken = (path: string, token: string | null) => {
+const withToken = (path: string, token: string | null, sessionToken?: string | null) => {
   const url = new URL(path, API_BASE);
   if (token) url.searchParams.set('token', token);
+  if (sessionToken) url.searchParams.set('session', sessionToken);
   return url;
 };
 
-async function requestJson<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
-  const response = await fetch(withToken(path, token).toString(), init);
+async function requestJson<T>(
+  path: string,
+  token: string | null,
+  init?: RequestInit,
+  sessionToken?: string | null,
+): Promise<T> {
+  const response = await fetch(withToken(path, token, sessionToken).toString(), init);
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.detail || `Request failed (${response.status})`);
@@ -284,13 +297,13 @@ async function requestJson<T>(path: string, token: string | null, init?: Request
   return response.json();
 }
 
-export const useDashboardStream = (token: string | null) => {
+export const useDashboardStream = (token: string | null, sessionToken?: string | null) => {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) return;
-    const url = withToken('/stream', token);
+    if (!token || !sessionToken) return;
+    const url = withToken('/stream', token, sessionToken);
     const eventSource = new EventSource(url.toString());
 
     eventSource.onmessage = (event) => {
@@ -312,25 +325,36 @@ export const useDashboardStream = (token: string | null) => {
     return () => {
       eventSource.close();
     };
-  }, [token]);
+  }, [token, sessionToken]);
 
   return { data, error };
 };
 
-export const sendTerminalCommand = async (command: string, token: string | null, metadata?: any) =>
+export const login = async (securityToken: string, otpToken?: string): Promise<AuthSession> =>
+  requestJson<AuthSession>('/api/auth/login', null, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ security_token: securityToken, otp_token: otpToken || undefined, actor: 'dashboard' }),
+  });
+
+export const logout = async (token: string | null, sessionToken: string | null) =>
+  requestJson<{ status: string }>('/api/auth/logout', token, { method: 'POST' }, sessionToken);
+
+export const sendTerminalCommand = async (command: string, token: string | null, sessionToken: string | null, metadata?: any) =>
   requestJson<{ status: string; message: string }>('/api/terminal/command', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command, metadata }),
-  });
+  }, sessionToken);
 
-export const fetchPairs = async (token: string | null): Promise<PairsResponse> =>
-  requestJson<PairsResponse>('/api/pairs', token);
+export const fetchPairs = async (token: string | null, sessionToken?: string | null): Promise<PairsResponse> =>
+  requestJson<PairsResponse>('/api/pairs', token, undefined, sessionToken);
 
 export const updatePairs = async (
   token: string | null,
   pairs: PairConfigEntry[],
   options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[] } = {},
+  sessionToken?: string | null,
 ): Promise<{ status: string; saved_pairs: number; reloaded: boolean; reload_error: string | null }> =>
   requestJson('/api/pairs', token, {
     method: 'POST',
@@ -340,33 +364,34 @@ export const updatePairs = async (
       crypto_pairs: options.cryptoPairs,
       apply_now: options.applyNow ?? true,
     }),
-  });
+  }, sessionToken);
 
-export const fetchOpenPositions = async (token: string | null): Promise<{ positions: OpenPosition[] }> =>
-  requestJson('/api/positions', token);
+export const fetchOpenPositions = async (token: string | null, sessionToken?: string | null): Promise<{ positions: OpenPosition[] }> =>
+  requestJson('/api/positions', token, undefined, sessionToken);
 
 export interface SettingsData {
   approval_threshold: number;
 }
 
-export const fetchSettings = async (token: string | null): Promise<SettingsData> =>
-  requestJson('/api/settings', token);
+export const fetchSettings = async (token: string | null, sessionToken?: string | null): Promise<SettingsData> =>
+  requestJson('/api/settings', token, undefined, sessionToken);
 
-export const updateSettings = async (token: string | null, approval_threshold: number) =>
+export const updateSettings = async (token: string | null, sessionToken: string | null, approval_threshold: number) =>
   requestJson<{ status: string; approval_threshold: number }>('/api/settings', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approval_threshold }),
-  });
+  }, sessionToken);
 
-export const fetchSummary = async (token: string | null): Promise<SummaryResponse> =>
-  requestJson('/api/stats/summary', token);
+export const fetchSummary = async (token: string | null, sessionToken?: string | null): Promise<SummaryResponse> =>
+  requestJson('/api/stats/summary', token, undefined, sessionToken);
 
 export const fetchTradeHistory = async (
   token: string | null,
+  sessionToken: string | null,
   params: { page?: number; pageSize?: number; search?: string; status?: string; venue?: string } = {},
 ): Promise<TradeHistoryResponse> => {
-  const url = withToken('/api/stats/trades', token);
+  const url = withToken('/api/stats/trades', token, sessionToken);
   if (params.page) url.searchParams.set('page', String(params.page));
   if (params.pageSize) url.searchParams.set('page_size', String(params.pageSize));
   if (params.search) url.searchParams.set('search', params.search);
@@ -377,17 +402,18 @@ export const fetchTradeHistory = async (
   return response.json();
 };
 
-export const fetchChartMetric = async (token: string | null, metric: string): Promise<ChartResponse> =>
-  requestJson(`/api/stats/charts/${metric}`, token);
+export const fetchChartMetric = async (token: string | null, sessionToken: string | null, metric: string): Promise<ChartResponse> =>
+  requestJson(`/api/stats/charts/${metric}`, token, undefined, sessionToken);
 
-export const fetchSystemHealth = async (token: string | null): Promise<HealthResponse> =>
-  requestJson('/api/system/health', token);
+export const fetchSystemHealth = async (token: string | null, sessionToken?: string | null): Promise<HealthResponse> =>
+  requestJson('/api/system/health', token, undefined, sessionToken);
 
-export const fetchSystemLogs = async (token: string | null, limit = 100): Promise<LogsResponse> =>
-  requestJson(`/api/system/logs?limit=${limit}`, token);
+export const fetchSystemLogs = async (token: string | null, sessionToken: string | null, limit = 100): Promise<LogsResponse> =>
+  requestJson(`/api/system/logs?limit=${limit}`, token, undefined, sessionToken);
 
 export const controlBot = async (
   token: string | null,
+  sessionToken: string | null,
   action: 'start' | 'stop' | 'restart',
   actor = 'dashboard',
 ): Promise<{ status: string; requested_state: string; action: string }> =>
@@ -395,13 +421,14 @@ export const controlBot = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, actor }),
-  });
+  }, sessionToken);
 
-export const fetchConfig = async (token: string | null): Promise<ConfigResponse> =>
-  requestJson('/api/config', token);
+export const fetchConfig = async (token: string | null, sessionToken?: string | null): Promise<ConfigResponse> =>
+  requestJson('/api/config', token, undefined, sessionToken);
 
 export const updateConfig = async (
   token: string | null,
+  sessionToken: string | null,
   updates: Record<string, string | number | boolean>,
   actor = 'dashboard',
   otpToken?: string,
@@ -410,17 +437,17 @@ export const updateConfig = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ actor, updates, otp_token: otpToken }),
-  });
+  }, sessionToken);
 
-export const initiateTwoFactor = async (token: string | null): Promise<TwoFactorInitiateResponse> =>
+export const initiateTwoFactor = async (token: string | null, sessionToken: string | null): Promise<TwoFactorInitiateResponse> =>
   requestJson('/api/auth/2fa/initiate', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-  });
+  }, sessionToken);
 
-export const verifyTwoFactor = async (token: string | null, code: string) =>
+export const verifyTwoFactor = async (token: string | null, sessionToken: string | null, code: string) =>
   requestJson<{ status: string; verified?: boolean; two_factor: TwoFactorStatus }>('/api/auth/2fa/verify', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token: code }),
-  });
+  }, sessionToken);
