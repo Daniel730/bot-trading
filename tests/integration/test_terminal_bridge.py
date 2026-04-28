@@ -9,10 +9,21 @@ from src.config import settings
 def client():
     return TestClient(app)
 
+
+def dashboard_auth_query(client):
+    token = settings.DASHBOARD_TOKEN or "arbi-elite-2026"
+    response = client.post(
+        "/api/auth/login",
+        json={"security_token": token, "actor": "test"},
+    )
+    assert response.status_code == 200
+    return f"token={token}&session={response.json()['session_token']}"
+
+
 @pytest.mark.asyncio
 async def test_terminal_command_integration(client):
     """Verify end-to-end command flow from API to Terminal State."""
-    token = settings.DASHBOARD_TOKEN or "arbi-elite-2026"
+    auth_query = dashboard_auth_query(client)
     
     # Clear messages
     async with dashboard_state._lock:
@@ -20,7 +31,7 @@ async def test_terminal_command_integration(client):
     
     # 1. Send /status command via API
     response = client.post(
-        f"/api/terminal/command?token={token}",
+        f"/api/terminal/command?{auth_query}",
         json={"command": "/status"}
     )
     
@@ -42,7 +53,7 @@ async def test_terminal_command_integration(client):
 @pytest.mark.asyncio
 async def test_terminal_approval_integration(client):
     """Verify approval command flow."""
-    token = settings.DASHBOARD_TOKEN or "arbi-elite-2026"
+    auth_query = dashboard_auth_query(client)
     from src.services.notification_service import notification_service
     
     # 1. Mock a pending approval
@@ -52,7 +63,7 @@ async def test_terminal_approval_integration(client):
     
     # 2. Send /approve command
     response = client.post(
-        f"/api/terminal/command?token={token}",
+        f"/api/terminal/command?{auth_query}",
         json={"command": f"/approve {cid}"}
     )
     
@@ -66,11 +77,11 @@ async def test_terminal_approval_integration(client):
 @pytest.mark.asyncio
 async def test_audit_logging(client):
     """Verify that commands are logged to the database (Principle III)."""
-    token = settings.DASHBOARD_TOKEN or "arbi-elite-2026"
+    auth_query = dashboard_auth_query(client)
     
     # Send a command
     client.post(
-        f"/api/terminal/command?token={token}",
+        f"/api/terminal/command?{auth_query}",
         json={"command": "/exposure"}
     )
     
