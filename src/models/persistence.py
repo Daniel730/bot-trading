@@ -2,6 +2,7 @@ import sqlite3
 import json
 import logging
 import os
+import uuid
 from typing import Dict, Any, Optional, List
 from src.config import settings
 
@@ -11,22 +12,39 @@ class PersistenceManager:
     def __init__(self, db_path: Optional[str] = None):
         # Fallback to a default if settings doesn't have it or passed as None
         self.db_path = db_path or getattr(settings, "DB_PATH", "logs/trading_bot.db")
+        self._memory_uri = None
+        self._memory_anchor = None
+        if self.db_path == ":memory:":
+            self._memory_uri = f"file:persistence_{uuid.uuid4().hex}?mode=memory&cache=shared"
+            self._memory_anchor = sqlite3.connect(self._memory_uri, uri=True)
+            self._memory_anchor.row_factory = sqlite3.Row
         db_dir = os.path.dirname(self.db_path)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
         self._init_db()
 
+    def _connect(self):
+        if self._memory_uri:
+            conn = sqlite3.connect(self._memory_uri, uri=True)
+        else:
+            conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        return conn
+
     def _init_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
+            conn = self._connect()
             # Legacy tables used by SECService, AgentLogService, DCA, etc.
             conn.execute("CREATE TABLE IF NOT EXISTS cik_mapping (ticker TEXT PRIMARY KEY, cik TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS thought_journal (signal_id TEXT PRIMARY KEY, bull TEXT, bear TEXT, news TEXT, verdict TEXT, shap TEXT, fundamental_impact REAL, sec_ref TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("CREATE TABLE IF NOT EXISTS events (level TEXT, source TEXT, message TEXT, metadata TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
+            conn.execute("CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY AUTOINCREMENT, signal_id TEXT, level TEXT, source TEXT, message TEXT, metadata TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
             conn.execute("CREATE TABLE IF NOT EXISTS dca_schedules (id TEXT PRIMARY KEY, amount REAL, frequency TEXT, strategy_id TEXT, next_run TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS portfolio_strategies (strategy_id TEXT, ticker TEXT, weight REAL, risk_profile TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS system_state (key TEXT PRIMARY KEY, value TEXT)")
+            conn.execute("CREATE TABLE IF NOT EXISTS fee_config (key TEXT PRIMARY KEY, value REAL)")
+            conn.execute("CREATE TABLE IF NOT EXISTS investment_goals (name TEXT PRIMARY KEY, target_amount REAL, deadline TEXT)")
+            conn.execute("CREATE TABLE IF NOT EXISTS user_life_events (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT, event_date TEXT, description TEXT)")
             conn.execute("CREATE TABLE IF NOT EXISTS cash_sweeps (id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, amount REAL, ticker TEXT, balance_after REAL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
             conn.execute(
                 """
@@ -56,9 +74,7 @@ class PersistenceManager:
             logger.error(f"PersistenceManager init error: {e}")
 
     def _get_connection(self):
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+        return self._connect()
 
     def load_cik_mapping(self, ticker: str) -> Optional[str]:
         conn = self._get_connection()
@@ -92,16 +108,41 @@ class PersistenceManager:
 
     def log_thought(self, signal_id: str, **kwargs):
         conn = self._get_connection()
-        # Simplified insert for legacy support
+        bull = kwargs.get('bull', '')
+        bear = kwargs.get('bear', '')
+        news = kwargs.get('news', '')
         verdict = kwargs.get('verdict', '')
-        conn.execute("INSERT OR REPLACE INTO thought_journal (signal_id, verdict) VALUES (?, ?)", (signal_id, verdict))
+        shap = kwargs.get('shap')
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO thought_journal
+                (signal_id, bull, bear, news, verdict, shap, fundamental_impact, sec_ref)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                signal_id,
+                bull,
+                bear,
+                news,
+                verdict,
+                json.dumps(shap) if shap is not None else None,
+                kwargs.get('fundamental_impact'),
+                kwargs.get('sec_ref'),
+            ),
+        )
         conn.commit()
         conn.close()
 
     def log_event(self, level: str, source: str, message: str, metadata: Optional[Dict] = None):
         conn = self._get_connection()
+        metadata_json = json.dumps(metadata) if metadata else None
+        signal_id = metadata.get("signal_id") if metadata else None
         conn.execute("INSERT INTO events (level, source, message, metadata) VALUES (?, ?, ?, ?)", 
-                     (level, source, message, json.dumps(metadata) if metadata else None))
+                     (level, source, message, metadata_json))
+        conn.execute(
+            "INSERT INTO logs (signal_id, level, source, message, metadata) VALUES (?, ?, ?, ?, ?)",
+            (signal_id, level, source, message, metadata_json),
+        )
         conn.commit()
         conn.close()
 
@@ -123,14 +164,86 @@ class PersistenceManager:
                      (strategy_id, ticker, weight, risk_profile))
         conn.commit()
         conn.close()
+
+    def get_portfolio_strategy(self, strategy_id: str) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        rows = conn.execute(
+            "SELECT ticker, weight, risk_profile FROM portfolio_strategies WHERE strategy_id = ?",
+            (strategy_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
         
     def save_dca_schedule(self, amount: float, frequency: str, strategy_id: str, next_run: Any):
-        import uuid
+        schedule_id = str(uuid.uuid4())
         conn = self._get_connection()
         conn.execute("INSERT INTO dca_schedules (id, amount, frequency, strategy_id, next_run) VALUES (?, ?, ?, ?, ?)", 
-                     (str(uuid.uuid4()), amount, frequency, strategy_id, next_run.isoformat() if hasattr(next_run, 'isoformat') else str(next_run)))
+                     (schedule_id, amount, frequency, strategy_id, next_run.isoformat() if hasattr(next_run, 'isoformat') else str(next_run)))
         conn.commit()
         conn.close()
+        return schedule_id
+
+    def get_active_dca_schedules(self) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        rows = conn.execute(
+            "SELECT id, amount, frequency, strategy_id, next_run FROM dca_schedules ORDER BY next_run"
+        ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def update_dca_next_run(self, schedule_id: str, next_run: Any):
+        conn = self._get_connection()
+        conn.execute(
+            "UPDATE dca_schedules SET next_run = ? WHERE id = ?",
+            (next_run.isoformat() if hasattr(next_run, 'isoformat') else str(next_run), schedule_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def set_fee_config(self, key: str, value: float):
+        conn = self._get_connection()
+        conn.execute("INSERT OR REPLACE INTO fee_config (key, value) VALUES (?, ?)", (key, float(value)))
+        conn.commit()
+        conn.close()
+
+    def get_fee_config(self, key: str, default: float = 0.0) -> float:
+        conn = self._get_connection()
+        row = conn.execute("SELECT value FROM fee_config WHERE key = ?", (key,)).fetchone()
+        conn.close()
+        return float(row["value"]) if row else default
+
+    def save_investment_goal(self, name: str, target_amount: float, deadline: str):
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT OR REPLACE INTO investment_goals (name, target_amount, deadline) VALUES (?, ?, ?)",
+            (name, float(target_amount), deadline),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_investment_goals(self) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        rows = conn.execute("SELECT name, target_amount, deadline FROM investment_goals").fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
+
+    def save_user_life_event(self, user_id: str, name: str, event_date: str, description: str):
+        conn = self._get_connection()
+        conn.execute(
+            "INSERT INTO user_life_events (user_id, name, event_date, description) VALUES (?, ?, ?, ?)",
+            (user_id, name, event_date, description),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_user_life_events(self, user_id: str) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        rows = conn.execute(
+            "SELECT user_id, name, event_date, description FROM user_life_events WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 
     def save_cash_sweep(self, sweep_type: str, amount: float, ticker: str, balance_after: float):
         conn = self._get_connection()
