@@ -19,7 +19,7 @@ class MockWebSocket {
 
 describe('Telemetry Memory Stability', () => {
   it('strictly enforces 100-entry limit under extreme burst', async () => {
-    const { result } = renderHook(() => useTelemetry('fake-token'));
+    const { result } = renderHook(() => useTelemetry('fake-token', 'fake-session'));
     
     // Wait for connection
     await new Promise(r => setTimeout(r, 10));
