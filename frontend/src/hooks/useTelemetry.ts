@@ -1,11 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { RiskTelemetry, ThoughtTelemetry, TelemetryMessage } from '../services/api';
 
-const API_BASE = (window.location.port === '5173' || window.location.port === '3000')
-  ? `${window.location.protocol}//${window.location.hostname}:8080` 
-  : window.location.origin;
+const getApiBase = () => {
+  if (typeof window === 'undefined') return 'http://localhost:8080';
+  return (window.location.port === '5173' || window.location.port === '3000')
+    ? `${window.location.protocol}//${window.location.hostname}:8080`
+    : window.location.origin;
+};
 
-const WS_BASE = API_BASE.replace('http', 'ws');
+const WS_BASE = getApiBase().replace('http', 'ws');
 
 export const useTelemetry = (token: string | null) => {
   const [isConnected, setIsConnected] = useState(false);
@@ -87,5 +90,5 @@ export const useTelemetry = (token: string | null) => {
     };
   }, [connect]);
 
-  return { isConnected, risk, thoughts, botState };
+  return { isConnected, risk, thoughts, botState, ws };
 };
