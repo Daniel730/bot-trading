@@ -1,5 +1,6 @@
 import asyncio
-from src.services.persistence_service import persistence_service
+from ..src.services.persistence_service import persistence_service
+from ..src.ser
 import sys
 
 async def main():
