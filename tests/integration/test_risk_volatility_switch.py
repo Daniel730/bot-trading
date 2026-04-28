@@ -23,10 +23,11 @@ async def test_volatility_switch_trigger():
         "asks": [[10001 + i, 0.01] for i in range(20)]
     }
     
-    with patch.object(redis_service, 'get_json', return_value=high_entropy_snapshot):
+    with patch.object(redis_service, 'get_json', return_value=high_entropy_snapshot), \
+         patch.object(performance_service, 'get_portfolio_metrics', return_value={"sharpe_ratio": 1.5, "max_drawdown": 0.05}):
         status = await volatility_service.get_volatility_status(ticker)
         assert status == "HIGH_VOLATILITY"
-        
+
         params = await risk_service.get_execution_params(ticker)
         assert params["max_slippage_pct"] == 0.0005 # Tightened from 0.001
 
@@ -94,8 +95,8 @@ async def test_execution_client_dynamic_params():
         
         await execution_client.execute_trade(signal_id, "KO_PEP", legs)
         
-        # Verify call arguments
+        # Verify call arguments (proto fields are exact decimal strings)
         call_args = mock_execute.call_args
         request = call_args[0][0]
-        assert request.risk_multiplier == 0.5
-        assert request.max_slippage_pct == 0.0005
+        assert float(request.risk_multiplier) == 0.5
+        assert float(request.max_slippage_pct) == 0.0005
