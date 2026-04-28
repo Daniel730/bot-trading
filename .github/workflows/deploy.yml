@@ -35,12 +35,111 @@ env:
   IMAGE_TAG: latest
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: bot_admin
+          POSTGRES_PASSWORD: ci_postgres_password
+          POSTGRES_DB: trading_bot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bot_admin -d trading_bot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: bot_admin
+      POSTGRES_PASSWORD: ci_postgres_password
+      POSTGRES_DB: trading_bot
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      DASHBOARD_TOKEN: ci_dashboard_token_not_for_production
+      PAPER_TRADING: "true"
+      DEV_MODE: "false"
+      DRY_RUN: "true"
+      T212_API_KEY: ""
+      T212_API_SECRET: ""
+      POLYGON_API_KEY: ""
+      GEMINI_API_KEY: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Run dependency-free bug-hunt audit
+        run: python scripts/bug_hunt_audit.py
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run Python unit tests
+        run: python -m pytest tests/unit -v --asyncio-mode=auto
+
+      - name: Run Python integration tests
+        run: python -m pytest tests/integration -v --asyncio-mode=auto
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Run Java tests and build execution engine
+        working-directory: execution-engine
+        run: gradle test shadowJar --no-daemon
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Test frontend
+        working-directory: frontend
+        run: npm run test -- --run
+
   # -----------------------------------------------------------------------
   # 1. BUILD on a GitHub-hosted x86 runner with buildx + QEMU, push linux/arm64
   #    images to GHCR. This replaces the 30-90 minute native Pi build with a
   #    ~3-5 minute cross-build that benefits from a real CPU and registry cache.
   # -----------------------------------------------------------------------
   build:
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

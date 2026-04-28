@@ -35,8 +35,12 @@ public class TradeLedgerRepository {
         String status,
         long latencyMs
     ) {
-        return Mono.from(connectionFactory.create())
-            .flatMap(connection -> 
+        if (audits.isEmpty()) {
+            return Mono.empty();
+        }
+        return Mono.usingWhen(
+            Mono.from(connectionFactory.create()),
+            connection ->
                 Mono.from(connection.beginTransaction())
                     .then(Mono.defer(() -> {
                         Statement statement = connection.createStatement(
@@ -63,18 +67,26 @@ public class TradeLedgerRepository {
                             .flatMap(Result::getRowsUpdated)
                             .then();
                     }))
-                    .then(Mono.from(connection.commitTransaction()))
-                    .onErrorResume(e -> Mono.from(connection.rollbackTransaction()).then(Mono.error(e)))
+                    .then(Mono.from(connection.commitTransaction())),
+            connection -> Mono.from(connection.close()),
+            (connection, error) -> Mono.from(connection.rollbackTransaction())
+                    .onErrorResume(rollbackError -> Mono.empty())
+                    .then(Mono.from(connection.close())),
+            connection -> Mono.from(connection.rollbackTransaction())
+                    .onErrorResume(rollbackError -> Mono.empty())
                     .then(Mono.from(connection.close()))
-            );
+        );
     }
 
     public Mono<String> getStatus(UUID signalId) {
-        return Mono.from(connectionFactory.create())
-            .flatMapMany(connection -> connection.createStatement(
-                "SELECT status FROM trade_ledger WHERE signal_id = $1"
-            ).bind(0, signalId).execute())
-            .flatMap(result -> result.map((row, metadata) -> row.get("status", String.class)))
-            .next();
+        return Mono.usingWhen(
+            Mono.from(connectionFactory.create()),
+            connection -> Flux.from(connection.createStatement(
+                    "SELECT status FROM trade_ledger WHERE signal_id = $1"
+                ).bind(0, signalId).execute())
+                .flatMap(result -> result.map((row, metadata) -> row.get("status", String.class)))
+                .next(),
+            connection -> Mono.from(connection.close())
+        );
     }
 }

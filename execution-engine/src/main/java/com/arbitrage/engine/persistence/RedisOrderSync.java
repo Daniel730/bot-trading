@@ -24,7 +24,7 @@ public class RedisOrderSync {
         return commands.hset(key, Map.of(
             "status", status,
             "timestamp", String.valueOf(System.currentTimeMillis())
-        )).then();
+        )).then(commands.expire(key, 3600L)).then();
     }
 
     public Mono<Boolean> exists(UUID signalId) {

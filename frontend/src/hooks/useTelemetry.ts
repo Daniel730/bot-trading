@@ -16,6 +16,7 @@ export const useTelemetry = (token: string | null) => {
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<number | null>(null);
   const retryCount = useRef(0);
+  const connectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(() => {
     if (!token) return;
@@ -62,7 +63,7 @@ export const useTelemetry = (token: string | null) => {
       const delay = Math.min(1000 * Math.pow(2, retryCount.current), 30000);
       reconnectTimeout.current = window.setTimeout(() => {
         retryCount.current++;
-        connect();
+        connectRef.current();
       }, delay);
     };
 
@@ -73,6 +74,10 @@ export const useTelemetry = (token: string | null) => {
 
     ws.current = socket;
   }, [token]);
+
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     connect();
