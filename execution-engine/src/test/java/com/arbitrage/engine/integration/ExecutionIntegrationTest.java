@@ -10,6 +10,9 @@ import com.arbitrage.engine.persistence.TradeLedgerRepository;
 import io.grpc.stub.StreamObserver;
 import io.r2dbc.postgresql.PostgresqlConnectionConfiguration;
 import io.r2dbc.postgresql.PostgresqlConnectionFactory;
+import io.r2dbc.spi.Result;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -19,6 +22,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
@@ -41,8 +45,7 @@ class ExecutionIntegrationTest {
     }
 
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine")
-            .withInitScript("init.sql"); // I'll create this
+    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine");
 
     private static TradeLedgerRepository repository;
     private static RedisOrderSync redisSync;
@@ -61,6 +64,24 @@ class ExecutionIntegrationTest {
                         .database(postgres.getDatabaseName())
                         .build()
         );
+
+        // Manually run init.sql to ensure tables exist
+        try {
+            String initSql = new String(ExecutionIntegrationTest.class.getClassLoader()
+                    .getResourceAsStream("init.sql").readAllBytes());
+            Mono.usingWhen(
+                Mono.from(connectionFactory.create()),
+                connection -> Flux.from(connection.createStatement(initSql).execute())
+                        .flatMap(Result::getRowsUpdated)
+                        .then(),
+                connection -> Mono.from(connection.close())
+            ).block(Duration.ofSeconds(10));
+            System.out.println("DEBUG: Database initialized successfully with init.sql");
+        } catch (Exception e) {
+            System.err.println("DEBUG: Failed to initialize database: " + e.getMessage());
+            e.printStackTrace();
+        }
+
         repository = new TradeLedgerRepository(connectionFactory);
 
         // Mock Redis for now to avoid needing a Redis container
