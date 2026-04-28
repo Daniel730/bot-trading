@@ -272,9 +272,16 @@ export interface AuthSession {
   two_factor: TwoFactorStatus;
 }
 
-const API_BASE = import.meta.env.VITE_API_URL || ((window.location.port === '5173' || window.location.port === '3000')
-  ? `${window.location.protocol}//${window.location.hostname}:8080`
-  : window.location.origin);
+const getApiBase = () => {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
+  const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+  if (isLocalHost && window.location.port !== '8080') {
+    return `${window.location.protocol}//${window.location.hostname}:8080`;
+  }
+  return window.location.origin;
+};
+
+const API_BASE = getApiBase();
 
 const withToken = (path: string, token: string | null, sessionToken?: string | null) => {
   const url = new URL(path, API_BASE);

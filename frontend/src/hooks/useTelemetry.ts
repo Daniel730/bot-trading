@@ -3,9 +3,11 @@ import type { RiskTelemetry, ThoughtTelemetry, TelemetryMessage } from '../servi
 
 const getApiBase = () => {
   if (typeof window === 'undefined') return 'http://localhost:8080';
-  return (window.location.port === '5173' || window.location.port === '3000')
-    ? `${window.location.protocol}//${window.location.hostname}:8080`
-    : window.location.origin;
+  const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+  if (isLocalHost && window.location.port !== '8080') {
+    return `${window.location.protocol}//${window.location.hostname}:8080`;
+  }
+  return window.location.origin;
 };
 
 const WS_BASE = getApiBase().replace('http', 'ws');
