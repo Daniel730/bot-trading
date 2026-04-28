@@ -275,7 +275,8 @@ export interface AuthSession {
 const getApiBase = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
   const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-  if (isLocalHost && window.location.port !== '8080') {
+  const isFrontendPort = window.location.port === '3000';
+  if ((isLocalHost || isFrontendPort) && window.location.port !== '8080') {
     return `${window.location.protocol}//${window.location.hostname}:8080`;
   }
   return window.location.origin;
