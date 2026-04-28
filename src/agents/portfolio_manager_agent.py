@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import inspect
 import requests
 import pandas as pd
 import numpy as np
@@ -17,11 +18,95 @@ from src.agents.macro_economic_agent import macro_economic_agent
 logger = logging.getLogger(__name__)
 
 class PortfolioManagerAgent:
-    def __init__(self):
+    def __init__(self, db=None):
+        from src.models.persistence import PersistenceManager
+
+        self.db = db or PersistenceManager(settings.DB_PATH)
         self.data_service = DataService()
         self.arbitrage_service = ArbitrageService()
         self._sp500_cache: pd.DataFrame = None
         self._last_cache_update: datetime = None
+
+    @agent_trace("PortfolioManagerAgent.generate_investment_thesis")
+    async def generate_investment_thesis(self, ticker: str) -> str:
+        ticker = ticker.upper()
+        with self.db._get_connection() as conn:
+            thoughts = conn.execute(
+                """
+                SELECT signal_id, bull, bear, news, verdict, timestamp
+                FROM thought_journal
+                ORDER BY timestamp DESC
+                LIMIT 5
+                """
+            ).fetchall()
+            logs = conn.execute(
+                """
+                SELECT signal_id, message, source, timestamp
+                FROM logs
+                WHERE message LIKE ? OR metadata LIKE ?
+                ORDER BY timestamp DESC
+                LIMIT 5
+                """,
+                (f"%{ticker}%", f"%{ticker}%"),
+            ).fetchall()
+
+        lines = [f"🛡️ **Investment Thesis for {ticker}**", ""]
+        if logs:
+            lines.append("Recent execution context:")
+            for row in logs:
+                signal = row["signal_id"] or "N/A"
+                lines.append(f"- [{signal}] {row['source']}: {row['message']}")
+            lines.append("")
+        if thoughts:
+            lines.append("Agent debate:")
+            for row in thoughts:
+                signal = row["signal_id"] or "N/A"
+                if row["bull"]:
+                    lines.append(f"- Bull ({signal}): {row['bull']}")
+                if row["bear"]:
+                    lines.append(f"- Bear ({signal}): {row['bear']}")
+                if row["news"]:
+                    lines.append(f"- News ({signal}): {row['news']}")
+                if row["verdict"]:
+                    lines.append(f"- Verdict ({signal}): {row['verdict']}")
+        if len(lines) == 2:
+            lines.append("No internal thesis logs found yet.")
+        return "\n".join(lines)
+
+    @agent_trace("PortfolioManagerAgent.allocate_funds")
+    async def allocate_funds(self, strategy_id: str, amount: float):
+        from src.services.brokerage_service import BrokerageService
+
+        strategy = self.db.get_portfolio_strategy(strategy_id)
+        brokerage = BrokerageService()
+        results = []
+        for asset in strategy:
+            value = float(amount) * float(asset["weight"])
+            result = brokerage.place_value_order(asset["ticker"], value, "BUY")
+            if inspect.isawaitable(result):
+                result = await result
+            results.append(result)
+        return results
+
+    def get_current_horizon(self, user_id: str) -> str:
+        from datetime import date
+
+        today = date.today()
+        relevant_dates = []
+        for goal in self.db.get_investment_goals():
+            try:
+                relevant_dates.append(datetime.fromisoformat(goal["deadline"]).date())
+            except Exception:
+                continue
+        for event in self.db.get_user_life_events(user_id):
+            try:
+                relevant_dates.append(datetime.fromisoformat(event["event_date"]).date())
+            except Exception:
+                continue
+        if not relevant_dates:
+            return "Long-Term"
+        nearest_days = min((target - today).days for target in relevant_dates)
+        return "Short-Term" if nearest_days <= 180 else "Long-Term"
 
     @agent_trace("PortfolioManagerAgent.get_sp500_universe")
     async def get_sp500_universe(self) -> pd.DataFrame:
@@ -261,3 +346,4 @@ class PortfolioManagerAgent:
         return {"status": "COMPLETED", "sector": sector}
 
 portfolio_manager_agent = PortfolioManagerAgent()
+portfolio_manager = portfolio_manager_agent
