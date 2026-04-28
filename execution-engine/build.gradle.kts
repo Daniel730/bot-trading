@@ -33,10 +33,12 @@ dependencies {
     implementation("ch.qos.logback:logback-classic:1.5.3")
 
     // Test
+    testImplementation(platform("org.testcontainers:testcontainers-bom:1.19.7"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
-    testImplementation("org.testcontainers:postgresql:1.19.7")
-    testImplementation("org.testcontainers:junit-jupiter:1.19.7")
+    testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("org.postgresql:postgresql:42.7.3") // JDBC driver required by Testcontainers PostgreSQLContainer
 }
 
 protobuf {

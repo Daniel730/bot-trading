@@ -32,6 +32,14 @@ import static org.mockito.Mockito.when;
 @Testcontainers
 class ExecutionIntegrationTest {
 
+    static {
+        try {
+            Class.forName("org.postgresql.Driver");
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException("PostgreSQL driver not found on classpath", e);
+        }
+    }
+
     @Container
     static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:15-alpine")
             .withInitScript("init.sql"); // I'll create this
@@ -58,6 +66,7 @@ class ExecutionIntegrationTest {
         // Mock Redis for now to avoid needing a Redis container
         redisSync = mock(RedisOrderSync.class);
         when(redisSync.markInFlight(Mockito.any(), anyString())).thenReturn(reactor.core.publisher.Mono.empty());
+        when(redisSync.checkAndMarkInFlight(Mockito.any(), anyString(), Mockito.anyInt())).thenReturn(reactor.core.publisher.Mono.just("NEW"));
 
         l2FeedService = mock(L2FeedService.class);
 
