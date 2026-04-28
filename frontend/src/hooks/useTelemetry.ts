@@ -10,7 +10,7 @@ const getApiBase = () => {
 
 const WS_BASE = getApiBase().replace('http', 'ws');
 
-export const useTelemetry = (token: string | null) => {
+export const useTelemetry = (token: string | null, sessionToken?: string | null) => {
   const [isConnected, setIsConnected] = useState(false);
   const [risk, setRisk] = useState<RiskTelemetry | null>(null);
   const [thoughts, setThoughts] = useState<ThoughtTelemetry[]>([]);
@@ -22,10 +22,11 @@ export const useTelemetry = (token: string | null) => {
   const connectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(() => {
-    if (!token) return;
+    if (!token || !sessionToken) return;
 
     const url = new URL('/ws/telemetry', WS_BASE);
     url.searchParams.set('token', token);
+    url.searchParams.set('session', sessionToken);
 
     const socket = new WebSocket(url.toString());
 
@@ -76,7 +77,7 @@ export const useTelemetry = (token: string | null) => {
     };
 
     ws.current = socket;
-  }, [token]);
+  }, [token, sessionToken]);
 
   useEffect(() => {
     connectRef.current = connect;

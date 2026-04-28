@@ -4,6 +4,7 @@ import { fetchOpenPositions, type OpenPosition } from '../services/api';
 
 interface PositionsPanelProps {
   token: string;
+  sessionToken: string;
 }
 
 const fmt = (val: number | null | undefined, decimals = 2): string => {
@@ -11,21 +12,21 @@ const fmt = (val: number | null | undefined, decimals = 2): string => {
   return val.toFixed(decimals);
 };
 
-const PositionsPanel: React.FC<PositionsPanelProps> = ({ token }) => {
+const PositionsPanel: React.FC<PositionsPanelProps> = ({ token, sessionToken }) => {
   const [positions, setPositions] = useState<OpenPosition[]>([]);
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchOpenPositions(token);
+      const data = await fetchOpenPositions(token, sessionToken);
       setPositions(data.positions || []);
     } catch (err) {
       console.error('Failed to fetch positions:', err);
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, sessionToken]);
 
   useEffect(() => {
     refresh();

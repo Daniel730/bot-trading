@@ -23,6 +23,7 @@ import {
 
 interface PairsPanelProps {
   token: string;
+  sessionToken: string;
 }
 
 type EditorTab = 'stocks' | 'crypto';
@@ -148,7 +149,7 @@ const PairRow: React.FC<PairRowProps> = ({ p }) => {
 
 // ─── PairsPanel ───────────────────────────────────────────────────────────────
 
-const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
+const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const [activePairs, setActivePairs] = useState<PairInfo[]>([]);
   const [configuredStocks, setConfiguredStocks] = useState<PairConfigEntry[]>([]);
   const [configuredCrypto, setConfiguredCrypto] = useState<PairConfigEntry[]>([]);
@@ -169,7 +170,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchPairs(token);
+      const data = await fetchPairs(token, sessionToken);
       setActivePairs(data.active_pairs || []);
       setConfiguredStocks(data.configured_pairs || []);
       setConfiguredCrypto(data.crypto_test_pairs || []);
@@ -178,7 +179,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, sessionToken]);
 
   useEffect(() => {
     refresh();
@@ -240,7 +241,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token }) => {
       const result = await updatePairs(token, draftStocks, {
         applyNow,
         cryptoPairs: draftCrypto,
-      });
+      }, sessionToken);
       const total = draftStocks.length + draftCrypto.length;
       setSaveOk(
         result.reloaded
