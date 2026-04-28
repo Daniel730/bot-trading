@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS trade_ledger (
     actual_vwap DECIMAL(18,10),
     status VARCHAR(50),
     latency_ms BIGINT,
+    execution_mode VARCHAR(20),
+    reasoning_metadata TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
