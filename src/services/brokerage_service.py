@@ -96,6 +96,11 @@ class BrokerageService:
 
         decimal_qty = Decimal(str(quantity))
         final_qty_dec = (decimal_qty / qty_incr).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * qty_incr
+        if final_qty_dec <= 0:
+            return {
+                "status": "error",
+                "message": f"Quantity rounds to zero for {ticker}; rejecting order before broker submission.",
+            }
 
         # H-01: Local idempotency key (logged only). T212's public order
         # schema does NOT accept clientOrderId - sending it caused 400/Invalid
@@ -129,7 +134,7 @@ class BrokerageService:
 
         try:
             response = await asyncio.to_thread(
-                requests.post, url, headers=self.headers, json=payload, timeout=15
+                self.session.post, url, json=payload, timeout=15
             )
             # Treat any 2xx as success
             if 200 <= response.status_code < 300:
@@ -259,7 +264,14 @@ class BrokerageService:
 
         return result
 
-    async def place_value_order(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+    async def place_value_order(
+        self,
+        ticker: str,
+        amount: float,
+        side: str,
+        price: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         # Feature 037: route crypto spot orders to on-chain Web3 execution
         # while keeping all non-crypto tickers on Trading212.
         venue = self.get_venue(ticker)
@@ -267,7 +279,13 @@ class BrokerageService:
             logger.info("BrokerageDispatcher: routing %s to WEB3 execution path", ticker)
             result = await self._place_value_order_web3(ticker=ticker, amount=amount, side=side)
         else:
-            result = await self._place_value_order_t212(ticker=ticker, amount=amount, side=side)
+            result = await self._place_value_order_t212(
+                ticker=ticker,
+                amount=amount,
+                side=side,
+                price=price,
+                client_order_id=client_order_id,
+            )
 
         if result.get("status") != "error" and not settings.PAPER_TRADING:
             budget_service.update_used_budget(venue, amount)
@@ -277,7 +295,14 @@ class BrokerageService:
         result["venue"] = venue
         return result
 
-    async def _place_value_order_t212(self, ticker: str, amount: float, side: str) -> Dict[str, Any]:
+    async def _place_value_order_t212(
+        self,
+        ticker: str,
+        amount: float,
+        side: str,
+        price: Optional[float] = None,
+        client_order_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Feature 014/016: Executes a value-based order by calculating required quantity.
         Enforces minTradeQuantity and quantityIncrement from brokerage metadata.
@@ -296,6 +321,9 @@ class BrokerageService:
             if ticker not in prices:
                 return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
             price = prices[ticker]
+        price = float(price)
+        if price <= 0:
+            return {"status": "error", "message": f"Invalid price ({price}) for {ticker}. Rejecting order."}
 
         raw_quantity = amount / price
 
@@ -313,6 +341,11 @@ class BrokerageService:
         if qty_incr > 0:
             final_quantity = round(raw_quantity / qty_incr) * qty_incr
             final_quantity = float(round(final_quantity, 6))
+        if final_quantity <= 0:
+            return {
+                "status": "error",
+                "message": f"Quantity rounds to zero for {ticker}; amount={amount:.2f}, price={price:.6f}",
+            }
 
         logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares")
 
@@ -320,7 +353,13 @@ class BrokerageService:
         slip = settings.T212_LIMIT_SLIPPAGE_PCT
         limit_price = price * (1 + slip) if side.upper() == "BUY" else price * (1 - slip)
 
-        result = await self.place_market_order(ticker, final_quantity, side, limit_price=limit_price)
+        result = await self.place_market_order(
+            ticker,
+            final_quantity,
+            side,
+            limit_price=limit_price,
+            client_order_id=client_order_id,
+        )
 
         if result.get("status") != "error":
             agent_logger.log_fractional_trade(ticker, amount, final_quantity, price, side, friction)

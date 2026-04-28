@@ -233,10 +233,15 @@ function App() {
       refreshHealth();
     }, 15000);
     return () => window.clearInterval(interval);
+    // Dashboard refresh callbacks intentionally read the latest token/form state.
+    // They are triggered by the explicit dependency keys below to avoid resetting
+    // the polling interval on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   useEffect(() => {
     refreshTradeHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tradePage, tradeStatus, tradeVenue]);
 
   const recentThoughts = useMemo(() => [...thoughts].reverse().slice(0, 6), [thoughts]);

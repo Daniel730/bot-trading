@@ -503,7 +503,14 @@ class ArbitrageMonitor:
         # - WEB3: wallet base-token balance converted to USD (async native).
         # Both paths return a raw balance; budget_service.get_effective_cash()
         # below applies the venue cap uniformly for both venues.
-        if is_crypto_pair and not settings.PAPER_TRADING:
+        if settings.PAPER_TRADING:
+            total_cash = (
+                venue_budget_cap
+                if venue_budget_cap and venue_budget_cap > 0
+                else settings.PAPER_TRADING_STARTING_CASH
+            )
+            budget_source = "paper_starting_cash"
+        elif is_crypto_pair:
             try:
                 total_cash = await self.brokerage.get_web3_account_cash()
                 budget_source = "web3_wallet_usd"
@@ -629,7 +636,13 @@ class ArbitrageMonitor:
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
-        res_a = await self.brokerage.place_value_order(exec_t_a, target_cash, side_a, price=price_a)
+        res_a = await self.brokerage.place_value_order(
+            exec_t_a,
+            target_cash,
+            side_a,
+            price=price_a,
+            client_order_id=f"{signal_id}-A",
+        )
         status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
 
@@ -652,7 +665,13 @@ class ArbitrageMonitor:
         await asyncio.sleep(1.0)
 
         # Leg B
-        res_b = await self.brokerage.place_value_order(exec_t_b, target_cash, side_b, price=price_b)
+        res_b = await self.brokerage.place_value_order(
+            exec_t_b,
+            target_cash,
+            side_b,
+            price=price_b,
+            client_order_id=f"{signal_id}-B",
+        )
         status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 

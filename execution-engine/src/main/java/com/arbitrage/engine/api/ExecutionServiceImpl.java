@@ -53,6 +53,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
 
     @Override
     public void executeTrade(ExecutionRequest request, StreamObserver<ExecutionResponse> responseObserver) {
+        AtomicBoolean responded = new AtomicBoolean(false);
         if (killSwitchActive.get()) {
             logger.warn("Trade rejected - Kill Switch Active: {}", request.getSignalId());
             responseObserver.onNext(ExecutionResponse.newBuilder()
@@ -64,7 +65,25 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
             return;
         }
 
-        UUID signalId = UUID.fromString(request.getSignalId());
+        UUID signalId;
+        try {
+            signalId = UUID.fromString(request.getSignalId());
+        } catch (IllegalArgumentException e) {
+            sendOnce(responded, responseObserver, ExecutionResponse.newBuilder()
+                    .setSignalId(request.getSignalId())
+                    .setStatus(ExecutionStatus.STATUS_BROKER_ERROR)
+                    .setMessage("Invalid signal_id UUID")
+                    .build());
+            return;
+        }
+        if (request.getLegsCount() == 0) {
+            sendOnce(responded, responseObserver, ExecutionResponse.newBuilder()
+                    .setSignalId(request.getSignalId())
+                    .setStatus(ExecutionStatus.STATUS_BROKER_ERROR)
+                    .setMessage("Execution request must contain at least one leg")
+                    .build());
+            return;
+        }
         long startTime = System.nanoTime();
         logger.info("executeTrade: signal_id={} client_order_id={}", signalId, request.getClientOrderId());
 
@@ -97,6 +116,9 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     ExecutionLeg.Side side = (protoLeg.getSide() == Side.SIDE_BUY) ? ExecutionLeg.Side.BUY : ExecutionLeg.Side.SELL;
                     BigDecimal requestedQty = new BigDecimal(protoLeg.getQuantity());
                     BigDecimal targetPrice = new BigDecimal(protoLeg.getTargetPrice());
+                    if (requestedQty.signum() <= 0 || targetPrice.signum() <= 0) {
+                        return Mono.error(new IllegalArgumentException("Leg quantity and target price must be positive for " + protoLeg.getTicker()));
+                    }
 
                     L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
                     if (book == null) {
@@ -163,21 +185,31 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     });
             })
             .subscribe(response -> {
-                responseObserver.onNext(response);
-                responseObserver.onCompleted();
+                sendOnce(responded, responseObserver, response);
             }, error -> {
                 ExecutionStatus failedStatus = ExecutionStatus.STATUS_BROKER_ERROR;
                 if (error instanceof VwapCalculator.InsufficientMarketDepthException) failedStatus = ExecutionStatus.STATUS_REJECTED_DEPTH;
                 else if (error instanceof SlippageGuard.SlippageViolationException) failedStatus = ExecutionStatus.STATUS_REJECTED_SLIPPAGE;
                 else if (error instanceof LatencyTimeoutException) failedStatus = ExecutionStatus.STATUS_REJECTED_LATENCY;
 
-                handleError(signalId, request, failedStatus, error.getMessage(), startTime, responseObserver);
+                handleError(signalId, request, failedStatus, error.getMessage(), startTime, responseObserver, responded);
             });
     }
 
     @Override
     public void getTradeStatus(TradeStatusRequest request, StreamObserver<ExecutionResponse> responseObserver) {
-        UUID signalId = UUID.fromString(request.getSignalId());
+        UUID signalId;
+        try {
+            signalId = UUID.fromString(request.getSignalId());
+        } catch (IllegalArgumentException e) {
+            responseObserver.onNext(ExecutionResponse.newBuilder()
+                    .setSignalId(request.getSignalId())
+                    .setStatus(ExecutionStatus.STATUS_BROKER_ERROR)
+                    .setMessage("Invalid signal_id UUID")
+                    .build());
+            responseObserver.onCompleted();
+            return;
+        }
         
         // Check Redis first, then PostgreSQL
         redisSync.getStatus(signalId)
@@ -238,7 +270,16 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
         }
     }
 
-    private void handleError(UUID signalId, ExecutionRequest request, ExecutionStatus status, String msg, long startTime, StreamObserver<ExecutionResponse> responseObserver) {
+    private void sendOnce(AtomicBoolean responded, StreamObserver<ExecutionResponse> responseObserver, ExecutionResponse response) {
+        if (responded.compareAndSet(false, true)) {
+            responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        } else {
+            logger.warn("Suppressing duplicate gRPC terminal response for signal {}", response.getSignalId());
+        }
+    }
+
+    private void handleError(UUID signalId, ExecutionRequest request, ExecutionStatus status, String msg, long startTime, StreamObserver<ExecutionResponse> responseObserver, AtomicBoolean responded) {
         logger.error("Execution failed for {}: {}", signalId, msg);
         
         ExecutionResponse response = ExecutionResponse.newBuilder()
@@ -252,11 +293,20 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
         List<TradeLedgerRepository.TradeAudit> audits = new ArrayList<>();
         ExecutionMode mode = EnvironmentConfig.isDryRun() ? ExecutionMode.PAPER : ExecutionMode.LIVE;
         for (ExecutionRequest.ExecutionLeg leg : request.getLegsList()) {
+            BigDecimal requestedQty;
+            BigDecimal targetPrice;
+            try {
+                requestedQty = new BigDecimal(leg.getQuantity());
+                targetPrice = new BigDecimal(leg.getTargetPrice());
+            } catch (NumberFormatException e) {
+                requestedQty = BigDecimal.ZERO;
+                targetPrice = BigDecimal.ZERO;
+            }
             audits.add(new TradeLedgerRepository.TradeAudit(
                     leg.getTicker(),
                     leg.getSide().name(),
-                    new BigDecimal(leg.getQuantity()),
-                    new BigDecimal(leg.getTargetPrice()),
+                    requestedQty,
+                    targetPrice,
                     BigDecimal.ZERO,
                     mode,
                     "Error: " + msg
@@ -274,7 +324,6 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                 err -> logger.error("Audit persist failed for signal {}: {}", signalId, err.getMessage())
             );
 
-        responseObserver.onNext(response);
-        responseObserver.onCompleted();
+        sendOnce(responded, responseObserver, response);
     }
 }

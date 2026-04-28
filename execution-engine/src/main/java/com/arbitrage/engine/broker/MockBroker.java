@@ -30,6 +30,10 @@ public class MockBroker implements Broker {
             try {
                 for (BrokerLeg leg : request.legs()) {
                     L2OrderBook book = l2FeedService.getLatestBook(leg.ticker());
+                    if (book == null) {
+                        logger.error("NO L2 DATA for {}", leg.ticker());
+                        return new BrokerExecutionResponse(false, "No L2 book for " + leg.ticker(), null);
+                    }
                     
                     // T008: Stale Data Check
                     long ageMs = System.currentTimeMillis() - book.timestamp();
