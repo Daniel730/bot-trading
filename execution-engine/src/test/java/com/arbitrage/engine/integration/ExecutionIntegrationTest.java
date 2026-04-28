@@ -125,6 +125,8 @@ class ExecutionIntegrationTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
         assertNotNull(responseHolder[0]);
         if (responseHolder[0].getStatus() != ExecutionStatus.STATUS_SUCCESS) {
+            System.out.println("DEBUG: Trade execution failed. Status: " + responseHolder[0].getStatus() + 
+                 ", Message: " + responseHolder[0].getMessage());
             fail("Trade execution failed. Status: " + responseHolder[0].getStatus() + 
                  ", Message: " + responseHolder[0].getMessage());
         }

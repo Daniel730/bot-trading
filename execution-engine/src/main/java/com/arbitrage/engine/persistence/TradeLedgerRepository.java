@@ -67,7 +67,8 @@ public class TradeLedgerRepository {
                             .flatMap(Result::getRowsUpdated)
                             .then();
                     }))
-                    .then(Mono.from(connection.commitTransaction())),
+                    .then(Mono.from(connection.commitTransaction()))
+                    .doOnError(e -> System.err.println("DEBUG: DB Error during saveAudits: " + e.getMessage())),
             connection -> Mono.from(connection.close()),
             (connection, error) -> Mono.from(connection.rollbackTransaction())
                     .onErrorResume(rollbackError -> Mono.empty())
@@ -75,7 +76,7 @@ public class TradeLedgerRepository {
             connection -> Mono.from(connection.rollbackTransaction())
                     .onErrorResume(rollbackError -> Mono.empty())
                     .then(Mono.from(connection.close()))
-        );
+        ).doOnError(e -> System.err.println("DEBUG: Connection Error in saveAudits: " + e.getMessage()));
     }
 
     public Mono<String> getStatus(UUID signalId) {

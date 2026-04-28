@@ -280,6 +280,7 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
     }
 
     private void handleError(UUID signalId, ExecutionRequest request, ExecutionStatus status, String msg, long startTime, StreamObserver<ExecutionResponse> responseObserver, AtomicBoolean responded) {
+        System.err.println("DEBUG: Execution failed for " + signalId + ": " + msg);
         logger.error("Execution failed for {}: {}", signalId, msg);
         
         ExecutionResponse response = ExecutionResponse.newBuilder()
