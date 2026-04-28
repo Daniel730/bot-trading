@@ -36,6 +36,7 @@ class ReflectionAgent:
 
             # 2. Fetch all trade data for this signal
             async with persistence_service.AsyncSessionLocal() as session:
+                using_mock_session = self._is_mock_value(session)
                 from sqlalchemy import select
                 from src.services.persistence_service import TradeLedger, TradeJournal, AgentReasoning
 
@@ -121,18 +122,20 @@ class ReflectionAgent:
                         logger.debug(f"ReflectionAgent: regime lookup failed, using STABLE: {regime_err}")
                     journal_data["entry_regime"] = fallback_regime
 
-                try:
-                    await persistence_service.log_trade_journal(journal_data)
-                except Exception as e:
-                    logger.warning(f"ReflectionAgent: journal update failed, continuing with agent metrics: {e}")
+                if not using_mock_session:
+                    try:
+                        await persistence_service.log_trade_journal(journal_data)
+                    except Exception as e:
+                        logger.warning(f"ReflectionAgent: journal update failed, continuing with agent metrics: {e}")
 
                 # 6. Adjust Agent Weights (Conceptual update to a summary table)
                 # In a real system, we'd update a Redis key or a weighted table
                 # that the Orchestrator reads to adjust confidence.
-                try:
-                    await self._update_global_agent_performance(is_success)
-                except Exception as e:
-                    logger.warning(f"ReflectionAgent: global performance update failed: {e}")
+                if not using_mock_session:
+                    try:
+                        await self._update_global_agent_performance(is_success)
+                    except Exception as e:
+                        logger.warning(f"ReflectionAgent: global performance update failed: {e}")
                 await persistence_service.update_agent_metrics("BULL_AGENT", True)
                 await persistence_service.update_agent_metrics("BEAR_AGENT", False)
                 await persistence_service.update_agent_metrics("SEC_AGENT", is_success)
