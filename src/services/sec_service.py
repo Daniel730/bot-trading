@@ -1,3 +1,5 @@
+import asyncio
+import re
 from typing import Optional, Dict
 from edgar import set_identity, Company
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -69,14 +71,14 @@ class SECService:
         """
         cached_cik = self.persistence.load_cik_mapping(ticker)
         if cached_cik:
-            return cached_cik
+            return str(cached_cik).zfill(10)
 
         try:
             # edgartools Company lookup is synchronous but fast
             # We wrap it in run_in_executor if needed, but for now direct call
             company = Company(ticker)
             if company and company.cik:
-                cik = company.cik
+                cik = str(company.cik).zfill(10)
                 self.persistence.save_cik_mapping(ticker, cik)
                 return cik
         except Exception as e:
@@ -179,6 +181,22 @@ class SECService:
                 print(f"Error parsing filing for {ticker} {form}: {e}")
                 
         return result
+
+    def extract_sections(self, html: str) -> Dict[str, str]:
+        text = re.sub(r"<[^>]+>", "\n", html)
+        text = re.sub(r"\s+", " ", text)
+        pattern = re.compile(r"\bITEM\s+(\d+[A-Z]?)\s*[\.:]\s*", re.IGNORECASE)
+        matches = list(pattern.finditer(text))
+        sections: Dict[str, str] = {}
+        wanted = {"1A", "3", "7"}
+        for idx, match in enumerate(matches):
+            item = match.group(1).upper()
+            if item not in wanted:
+                continue
+            start = match.end()
+            end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+            sections[f"Item {item}"] = text[start:end].strip()
+        return sections
 
 # Singleton instance
 sec_service = SECService()

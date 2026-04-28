@@ -24,6 +24,65 @@ class FundamentalAnalyst:
         # Using flash for faster adversarial debate (P95 Target < 30s)
         self.model = genai.GenerativeModel('gemini-1.5-flash')
 
+    async def prosecutor_analyze(self, ticker: str, sections: dict) -> dict:
+        findings = []
+        risk_terms = {
+            "litigation": ["litigation", "lawsuit", "legal proceeding"],
+            "default": ["default", "indebtedness", "debt covenant"],
+            "regulatory": ["regulatory", "investigation", "sanction"],
+        }
+        for source, text in sections.items():
+            lower = str(text).lower()
+            for factor, terms in risk_terms.items():
+                if any(term in lower for term in terms):
+                    findings.append({
+                        "factor": factor,
+                        "source": source,
+                        "snippet": str(text)[:240],
+                    })
+        return {"findings": findings, "severity_score": min(100, len(findings) * 25)}
+
+    async def defender_analyze(self, ticker: str, sections: dict) -> dict:
+        findings = []
+        resilience_terms = {
+            "liquidity": ["liquidity", "cash", "fund operations"],
+            "profitability": ["profitable", "margin", "earnings"],
+            "mitigation": ["mitigate", "insurance", "hedge"],
+        }
+        for source, text in sections.items():
+            lower = str(text).lower()
+            for factor, terms in resilience_terms.items():
+                if any(term in lower for term in terms):
+                    findings.append({
+                        "factor": factor,
+                        "source": source,
+                        "snippet": str(text)[:240],
+                    })
+        return {"findings": findings, "resilience_score": min(100, len(findings) * 25)}
+
+    async def analyze_structural_integrity(self, ticker: str, sections: dict) -> dict:
+        if not sections:
+            return {
+                "integrity_score": 50,
+                "recommendation": "NEUTRAL",
+                "rationale": "No SEC sections available.",
+                "risk_factors": [],
+                "filing_url": "",
+            }
+        prosecution = await self.prosecutor_analyze(ticker, sections)
+        defense = await self.defender_analyze(ticker, sections)
+        score = max(0, min(100, 50 - prosecution["severity_score"] + defense["resilience_score"]))
+        recommendation = "NO-GO" if score < 40 else "GO" if score > 70 else "NEUTRAL"
+        risks = [finding["factor"] for finding in prosecution["findings"]]
+        rationale = ", ".join(risks) if risks else "No material structural risks detected."
+        return {
+            "integrity_score": score,
+            "recommendation": recommendation,
+            "rationale": rationale,
+            "risk_factors": risks,
+            "filing_url": f"https://www.sec.gov/edgar/search/#/q={ticker}",
+        }
+
     async def analyze_ticker(self, signal_id: str, ticker: str) -> FundamentalSignal:
         """
         Performs an adversarial RAG analysis on a ticker's SEC filings.

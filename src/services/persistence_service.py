@@ -667,6 +667,22 @@ class PersistenceService:
             result = await session.execute(stmt)
             return {row[0].ticker: float(row[0].target_weight) for row in result.all()}
 
+    async def update_optimized_allocation(self, ticker: str, target_weight: float):
+        """Upsert a target portfolio allocation for optimizer output."""
+        from sqlalchemy.dialects.postgresql import insert
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = insert(OptimizedAllocation).values(
+                    ticker=ticker,
+                    target_weight=target_weight,
+                    last_updated=datetime.utcnow(),
+                )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[OptimizedAllocation.ticker],
+                    set_=dict(target_weight=target_weight, last_updated=datetime.utcnow()),
+                )
+                await session.execute(stmt)
+
     async def get_existing_candidate_ids(self, sector: str) -> List[str]:
         """Returns list of pair_ids already in UniverseCandidate for a sector."""
         from sqlalchemy import select

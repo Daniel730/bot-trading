@@ -518,6 +518,8 @@ class Settings(BaseSettings):
     # mode; process_pair's `is_crypto` guard makes sure equity pairs pause
     # off-hours while crypto pairs keep scanning.
     CRYPTO_TEST_PAIRS: list = [
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'ETH-USD'},
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
         # --- Layer 1 / smart-contract platforms ---
         # {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
         # {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},

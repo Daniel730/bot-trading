@@ -73,7 +73,7 @@ class Orchestrator:
         regime = await macro_economic_agent.get_ticker_regime(beacon)
 
         if regime in ["BEARISH", "EXTREME_VOLATILITY"]:
-            msg = f"VETO: Sector Leader {beacon} is {regime}. Aborting analysis to protect capital."
+            msg = f"CRITICAL VETO: Sector Leader {beacon} is {regime}. Aborting analysis to protect capital."
             logger.warning("[ORCHESTRATOR] %s - %s", pair_id, msg)
             telemetry_service.broadcast("orchestrator_veto", {"pair": pair_id, "reason": msg})
             return {"final_confidence": 0.0, "final_verdict": msg, "signal_context": state['signal_context']}

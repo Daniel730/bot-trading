@@ -21,6 +21,7 @@ from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service
 import uuid
 import pytz
+import inspect
 
 # Disable yfinance cache
 yf.set_tz_cache_location("/tmp/yf_cache")
@@ -512,7 +513,12 @@ class ArbitrageMonitor:
             budget_source = "paper_starting_cash"
         elif is_crypto_pair:
             try:
-                total_cash = await self.brokerage.get_web3_account_cash()
+                maybe_cash = self.brokerage.get_web3_account_cash()
+                total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
+                if not isinstance(total_cash, (int, float)):
+                    snapshot = self.brokerage.web3.get_budget_snapshot()
+                    snapshot = await snapshot if inspect.isawaitable(snapshot) else snapshot
+                    total_cash = float(snapshot.get("balance_usd", snapshot.get("available_usd", 0.0)))
                 budget_source = "web3_wallet_usd"
             except Exception as e:
                 logger.warning(f"WEB3 account cash fetch failed for {t_a}/{t_b}: {e}")

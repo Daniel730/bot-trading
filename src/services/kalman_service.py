@@ -27,9 +27,13 @@ class KalmanFilter:
         # State covariance matrix P
         self.P = self.initial_covariance.copy()
         
-        # Process noise covariance Q
+        # Process noise covariance Q.
         # Delta controls how fast the state evolves. Smaller delta = more stable beta.
-        self.Q = np.eye(2) * delta / (1 - delta)
+        self.Q_base = np.eye(2) * delta / (1 - delta)
+        self.Q = self.Q_base.copy()
+        self._q_inflation_remaining = 0
+        self._q_inflation_total = 0
+        self._q_inflation_factor = 1.0
         
         # Measurement noise variance R
         self.R = r
@@ -45,8 +49,10 @@ class KalmanFilter:
         :return: (state, innovation_variance, z_score, spread)
         """
         try:
+            q_for_update = self._current_q()
+
             # 1. Predict (A = I, so x_minus = x, P_minus = P + Q)
-            P_minus = self.P + self.Q
+            P_minus = self.P + q_for_update
             
             # 2. Observation Matrix H = [1, price_b]
             H = np.array([[1.0, price_b]])
@@ -81,15 +87,16 @@ class KalmanFilter:
             self.state = new_state
             self.P = new_P
 
-            # Spec 037: decay Q back toward base after inflate_q() was called
-            if hasattr(self, '_q_inflate_remaining') and self._q_inflate_remaining > 0:
-                self.Q = np.maximum(self._q_base, self.Q - self._q_inflate_step)
-                self._q_inflate_remaining -= 1
+            if self._q_inflation_remaining > 0:
+                self._q_inflation_remaining -= 1
+            self.Q = self._current_q()
 
         except (ValueError, np.linalg.LinAlgError) as e:
             logger.error(f"Kalman update failed: {e}. Resetting filter to initial state.")
             self.state = self.initial_state.copy()
             self.P = self.initial_covariance.copy()
+            self.Q = self.Q_base.copy()
+            self._q_inflation_remaining = 0
             self.innovation_variance = 1.0
             z_score = 0.0
             spread = 0.0
@@ -128,17 +135,26 @@ class KalmanFilter:
         This lets the filter breathe through overnight gaps without
         discarding its calibrated covariance (unlike bump_uncertainty).
         """
-        if not hasattr(self, '_q_base'):
-            self._q_base = self.Q.copy()
-        self._q_inflate_remaining = int(n_bars)
-        self._q_inflate_step = self._q_base * (factor - 1.0) / max(int(n_bars), 1)
-        self.Q = self._q_base * factor
+        if factor < 1.0 or n_bars < 1:
+            return
+        self._q_inflation_remaining = int(n_bars)
+        self._q_inflation_total = int(n_bars)
+        self._q_inflation_factor = float(factor)
+        self.Q = self.Q_base.copy()
+
+    def _current_q(self):
+        if self._q_inflation_remaining <= 0 or self._q_inflation_total <= 1:
+            return self.Q_base.copy()
+        progress = self._q_inflation_total - self._q_inflation_remaining
+        decay = progress / (self._q_inflation_total - 1)
+        scale = self._q_inflation_factor - ((self._q_inflation_factor - 1.0) * decay)
+        return self.Q_base * scale
 
     def get_state_dict(self):
         """Return state for persistence."""
         return {
             "alpha_beta": self.state.tolist(), # [alpha, beta]
             "p_matrix": self.P.tolist(),
-            "q_matrix": self.Q.tolist(),
+            "q_matrix": self.Q_base.tolist(),
             "r_value": float(self.R)
         }

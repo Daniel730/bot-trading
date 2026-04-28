@@ -213,7 +213,11 @@ class PortfolioManagerAgent:
         Determines if adding a new ticker improves the portfolio's Sortino Ratio.
         Returns: {"is_recommended": bool, "improvement": float, "target_weight": float}
         """
-        current_tickers = await persistence_service.get_active_portfolio_tickers()
+        try:
+            current_tickers = await persistence_service.get_active_portfolio_tickers()
+        except Exception as e:
+            logger.warning("Portfolio optimization advice using empty portfolio fallback: %s", e)
+            current_tickers = []
         if not current_tickers:
             return {"is_recommended": True, "improvement": 0.0, "target_weight": 0.20}
 

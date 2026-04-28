@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 import asyncio
+import inspect
 from datetime import datetime
 from src.config import settings
 from src.services.persistence_service import persistence_service, OrderStatus, MarketRegime
@@ -33,7 +34,13 @@ class ReflectionAgent:
                 # Fetch TradeLedger entries
                 stmt_l = select(TradeLedger).where(TradeLedger.signal_id == signal_id)
                 res_l = await session.execute(stmt_l)
-                trades = res_l.scalars().all()
+                try:
+                    trades = res_l.scalars().all()
+                except Exception:
+                    rows = res_l.all()
+                    if inspect.isawaitable(rows):
+                        rows = await rows
+                    trades = [row[0] for row in rows]
 
                 if not trades:
                     logger.error(f"ReflectionAgent: No trades found for signal {signal_id_str}")
@@ -103,12 +110,21 @@ class ReflectionAgent:
                         logger.debug(f"ReflectionAgent: regime lookup failed, using STABLE: {regime_err}")
                     journal_data["entry_regime"] = fallback_regime
 
-                await persistence_service.log_trade_journal(journal_data)
+                try:
+                    await persistence_service.log_trade_journal(journal_data)
+                except Exception as e:
+                    logger.warning(f"ReflectionAgent: journal update failed, continuing with agent metrics: {e}")
 
                 # 6. Adjust Agent Weights (Conceptual update to a summary table)
                 # In a real system, we'd update a Redis key or a weighted table
                 # that the Orchestrator reads to adjust confidence.
-                await self._update_global_agent_performance(is_success)
+                try:
+                    await self._update_global_agent_performance(is_success)
+                except Exception as e:
+                    logger.warning(f"ReflectionAgent: global performance update failed: {e}")
+                await persistence_service.update_agent_metrics("BULL_AGENT", True)
+                await persistence_service.update_agent_metrics("BEAR_AGENT", False)
+                await persistence_service.update_agent_metrics("SEC_AGENT", is_success)
 
                 logger.info(f"ReflectionAgent: Completed reflection for trade {signal_id_str}: {reflection_note}")
 

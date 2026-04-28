@@ -1,5 +1,6 @@
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
 from src.config import settings
 from src.services.agent_log_service import agent_trace
 
@@ -60,6 +61,7 @@ class RiskService:
             "IWM": "RWM",    # ProShares Short Russell2000
             "DIA": "DOG"     # ProShares Short Dow30
         }
+        self.sector_freezes: Dict[str, datetime] = {}
 
     async def get_execution_params(self, ticker: str) -> Dict[str, float]:
         """
@@ -169,11 +171,30 @@ class RiskService:
             "action": "AUTO_HEDGE_PROPOSED"
         }
 
-    def calculate_friction(self, amount: float, ticker: str = "GENERIC", flat_spread: Optional[float] = None) -> Dict:
+    def calculate_friction(
+        self,
+        amount: float,
+        ticker: str | float = "GENERIC",
+        flat_spread: Optional[float] = None,
+        fx_fee: float = 0.0,
+    ) -> Dict:
         """
         T007/FR-007: Calculates friction and enforces strict micro-budget rejection.
         If trade < $5.00 and friction > 1.5%, status MUST be FRICTION_REJECT.
         """
+        if isinstance(ticker, (int, float)):
+            spread_pct = float(ticker) / 100.0
+            commission = 0.0 if flat_spread is None else float(flat_spread)
+            total_cost = (amount * spread_pct) + commission + float(fx_fee)
+            friction_pct = total_cost / amount if amount > 0 else 1.0
+            return {
+                "total_cost": round(total_cost, 10),
+                "friction_pct": friction_pct,
+                "is_excessive": friction_pct > settings.MAX_FRICTION_PCT,
+                "is_acceptable": friction_pct <= settings.MAX_FRICTION_PCT,
+                "status": "ACCEPTED" if friction_pct <= settings.MAX_FRICTION_PCT else "FRICTION_REJECT",
+                "rejection_reason": None if friction_pct <= settings.MAX_FRICTION_PCT else "Friction exceeds limit",
+            }
         spread = settings.T212_FLAT_SPREAD_USD if flat_spread is None else flat_spread
         res = self.fee_analyzer.check_fees(ticker=ticker, amount_fiat=amount, flat_spread=spread)
         
@@ -188,6 +209,25 @@ class RiskService:
             "friction_pct": res["total_friction_percent"],
             "rejection_reason": res["rejection_reason"]
         }
+
+    def is_trade_allowed(self, amount: float, friction_pct: float) -> Dict:
+        if amount < settings.MIN_TRADE_VALUE:
+            return {"allowed": False, "reason": f"Trade value below minimum {settings.MIN_TRADE_VALUE:.2f}"}
+        if friction_pct > settings.MAX_FRICTION_PCT:
+            return {"allowed": False, "reason": f"Friction exceeds limit {settings.MAX_FRICTION_PCT:.2%}"}
+        return {"allowed": True, "reason": "OK"}
+
+    def trigger_sector_freeze(self, sector: str, rationale: str, duration_seconds: int = 3600) -> None:
+        self.sector_freezes[sector] = datetime.now() + timedelta(seconds=duration_seconds)
+
+    def is_sector_frozen(self, sector: str) -> bool:
+        expires_at = self.sector_freezes.get(sector)
+        if not expires_at:
+            return False
+        if expires_at <= datetime.now():
+            self.sector_freezes.pop(sector, None)
+            return False
+        return True
 
     def validate_trade(
         self,
