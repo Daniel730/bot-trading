@@ -280,7 +280,7 @@ class Settings(BaseSettings):
         'MSFT_AAPL': 'Technology', 'DAL_UAL': 'Industrials', 'UPS_FDX': 'Industrials',
         'HD_LOW': 'Consumer Discretionary', 'GM_F': 'Consumer Discretionary',
         'INTC_AMD': 'Technology', 'PYPL_AFRM': 'Financials',
-        'NKE_ADDYY': 'Consumer Discretionary', 'PG_CL': 'Consumer Staples',
+        'NKE_ADS.DE': 'Consumer Discretionary', 'PG_CL': 'Consumer Staples',
         'BA_AIR.PA': 'Industrials', 'T_VZ': 'Telecommunications',
         'VLO_MPC': 'Energy', 'COF_SYF': 'Financials', 'GS_MS': 'Financials',
         'BTCE.DE_ZETH.DE': 'Crypto ETNs',
@@ -359,7 +359,7 @@ class Settings(BaseSettings):
         {'ticker_a': 'GM',      'ticker_b': 'F'},
         {'ticker_a': 'INTC',    'ticker_b': 'AMD'},
         {'ticker_a': 'PYPL',    'ticker_b': 'AFRM'},
-        {'ticker_a': 'NKE',     'ticker_b': 'ADDYY'},
+        {'ticker_a': 'NKE',     'ticker_b': 'ADS.DE'},   # switched from ADDYY ADR → primary Xetra listing
         {'ticker_a': 'PG',      'ticker_b': 'CL'},
         {'ticker_a': 'BA',      'ticker_b': 'AIR.PA'},
         {'ticker_a': 'T',       'ticker_b': 'VZ'},
@@ -399,7 +399,7 @@ class Settings(BaseSettings):
         
         # Energy & Utilities
         {"ticker_a": "RWE.DE", "ticker_b": "EOAN.DE"},       # RWE vs E.ON
-        {"ticker_a": "ENGI.PA", "ticker_b": "ORAN.PA"},      # Engie vs Orange
+        {"ticker_a": "ENGI.PA", "ticker_b": "ORA.PA"},       # Engie vs Orange
 
         # Energy & Mining (Commodity Driven)
         {"ticker_a": "SHEL.L", "ticker_b": "BP.L"},          # Shell vs BP
@@ -427,7 +427,8 @@ class Settings(BaseSettings):
 
         # Payments & Fintech
         {"ticker_a": "V", "ticker_b": "MA"},                 # Visa vs Mastercard
-        {"ticker_a": "PYPL", "ticker_b": "SQ"},              # PayPal vs Block
+        # PYPL/SQ removed 2026-04-28: SQ (Block Inc.) returning "possibly delisted" from Yahoo Finance.
+        # Re-add once correct current ticker is confirmed.
 
         # --- SEMICONDUCTORS & HARDWARE (Expanded) ---
         {'ticker_a': 'AVGO',    'ticker_b': 'QCOM'},
