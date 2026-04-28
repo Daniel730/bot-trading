@@ -5,7 +5,7 @@ export interface VenueMetrics {
   pending_orders_value: number | null;
   spendable_cash: number | null;
   daily_budget: number | null;
-  daily_used: number | null;
+  daily_used?: number | null;
   daily_usage_pct: number | null;
   daily_profit: number | null;
   total_revenue: number | null;
@@ -67,6 +67,12 @@ export interface RuntimeInfo {
   region: string;
   bot_start_time: string;
   approval_threshold?: number;
+  desired_bot_state?: string;
+  last_control_action?: {
+    action: string;
+    actor: string;
+    timestamp: string;
+  } | null;
 }
 
 export interface DashboardData {
@@ -130,24 +136,168 @@ export interface OpenPosition {
   opened_at: string | null;
 }
 
+export interface TradeLeg {
+  ticker: string;
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  price: number;
+  fee: number;
+  status: string;
+  timestamp: string | null;
+}
+
+export interface TradeHistoryItem {
+  signal_id: string;
+  pair: string;
+  venue: string;
+  status: string;
+  opened_at: string | null;
+  notional: number;
+  pnl: number | null;
+  legs: TradeLeg[];
+}
+
+export interface TradeHistoryResponse {
+  items: TradeHistoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface SummaryResponse {
+  current_balance: number | null;
+  capital_deployed: number | null;
+  profit_today: number | null;
+  trades_today: number;
+  win_rate: number;
+  wins: number;
+  losses: number;
+  closed_trades: number;
+  system_uptime_seconds: number | null;
+  system_uptime_human: string;
+  bot_status: string;
+  stage: string;
+  cpu_pct: number | null;
+  memory_pct: number | null;
+  open_signals: number;
+  open_positions: number;
+  mode: string;
+}
+
+export interface ChartPoint {
+  timestamp: string;
+  value?: number;
+  daily?: number;
+  wins?: number;
+  losses?: number;
+}
+
+export interface ChartResponse {
+  metric: string;
+  points: ChartPoint[];
+}
+
+export interface HealthPoint {
+  timestamp: string;
+  cpu_pct: number | null;
+  rss_mb: number | null;
+  vms_mb: number | null;
+  threads: number | null;
+  net_sent_mb: number | null;
+  net_recv_mb: number | null;
+  system_memory_pct: number | null;
+  uptime_seconds: number | null;
+  hostname: string;
+}
+
+export interface HealthResponse {
+  status: string;
+  current: HealthPoint;
+  history: HealthPoint[];
+}
+
+export interface LogEvent {
+  level: string;
+  source: string;
+  message: string;
+  metadata?: any;
+  timestamp: string;
+}
+
+export interface LogsResponse {
+  file: string | null;
+  lines: string[];
+  events: LogEvent[];
+}
+
+export interface ConfigItem {
+  key: string;
+  value: string | number | boolean | null;
+  type: 'float' | 'int' | 'bool';
+  sensitive: boolean;
+}
+
+export interface TwoFactorStatus {
+  enabled: boolean;
+  pending_setup: boolean;
+  backup_codes_remaining: number;
+}
+
+export interface ConfigAuditEntry {
+  actor: string;
+  key: string;
+  old_value: any;
+  new_value: any;
+  requires_2fa: boolean;
+  timestamp: string;
+}
+
+export interface ConfigResponse {
+  items: ConfigItem[];
+  two_factor: TwoFactorStatus;
+  audit_log: ConfigAuditEntry[];
+}
+
+export interface TwoFactorInitiateResponse {
+  enabled: boolean;
+  secret: string;
+  otpauth_url: string;
+  backup_codes: string[];
+}
+
 const API_BASE = import.meta.env.VITE_API_URL || ((window.location.port === '5173' || window.location.port === '3000')
-  ? `${window.location.protocol}//${window.location.hostname}:8080` 
+  ? `${window.location.protocol}//${window.location.hostname}:8080`
   : window.location.origin);
+
+const withToken = (path: string, token: string | null) => {
+  const url = new URL(path, API_BASE);
+  if (token) url.searchParams.set('token', token);
+  return url;
+};
+
+async function requestJson<T>(path: string, token: string | null, init?: RequestInit): Promise<T> {
+  const response = await fetch(withToken(path, token).toString(), init);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Request failed (${response.status})`);
+  }
+  return response.json();
+}
 
 export const useDashboardStream = (token: string | null) => {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const url = new URL('/stream', API_BASE);
-    if (token) url.searchParams.set('token', token);
-
+    if (!token) return;
+    const url = withToken('/stream', token);
     const eventSource = new EventSource(url.toString());
 
     eventSource.onmessage = (event) => {
       try {
         const parsedData = JSON.parse(event.data);
         setData(parsedData);
+        setError(null);
       } catch (err) {
         console.error('Failed to parse SSE data:', err);
       }
@@ -167,40 +317,22 @@ export const useDashboardStream = (token: string | null) => {
   return { data, error };
 };
 
-export const sendTerminalCommand = async (command: string, token: string | null, metadata?: any) => {
-  const url = new URL('/api/terminal/command', API_BASE);
-  if (token) url.searchParams.set('token', token);
-
-  const response = await fetch(url.toString(), {
+export const sendTerminalCommand = async (command: string, token: string | null, metadata?: any) =>
+  requestJson<{ status: string; message: string }>('/api/terminal/command', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command, metadata }),
   });
 
-  if (!response.ok) {
-    const errorData = await response.json();
-    throw new Error(errorData.detail || 'Failed to send command');
-  }
-
-  return response.json();
-};
-
-export const fetchPairs = async (token: string | null): Promise<PairsResponse> => {
-  const url = new URL('/api/pairs', API_BASE);
-  if (token) url.searchParams.set('token', token);
-  const response = await fetch(url.toString());
-  if (!response.ok) throw new Error(`Failed to fetch pairs (${response.status})`);
-  return response.json();
-};
+export const fetchPairs = async (token: string | null): Promise<PairsResponse> =>
+  requestJson<PairsResponse>('/api/pairs', token);
 
 export const updatePairs = async (
   token: string | null,
   pairs: PairConfigEntry[],
   options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[] } = {},
-): Promise<{ status: string; saved_pairs: number; reloaded: boolean; reload_error: string | null }> => {
-  const url = new URL('/api/pairs', API_BASE);
-  if (token) url.searchParams.set('token', token);
-  const response = await fetch(url.toString(), {
+): Promise<{ status: string; saved_pairs: number; reloaded: boolean; reload_error: string | null }> =>
+  requestJson('/api/pairs', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -209,48 +341,86 @@ export const updatePairs = async (
       apply_now: options.applyNow ?? true,
     }),
   });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to update pairs (${response.status})`);
-  }
-  return response.json();
-};
 
-export const fetchOpenPositions = async (token: string | null): Promise<{ positions: OpenPosition[] }> => {
-  const url = new URL('/api/positions', API_BASE);
-  if (token) url.searchParams.set('token', token);
-  const response = await fetch(url.toString());
-  if (!response.ok) throw new Error(`Failed to fetch positions (${response.status})`);
-  return response.json();
-};
+export const fetchOpenPositions = async (token: string | null): Promise<{ positions: OpenPosition[] }> =>
+  requestJson('/api/positions', token);
 
 export interface SettingsData {
   approval_threshold: number;
 }
 
-export const fetchSettings = async (token: string | null): Promise<SettingsData> => {
-  const url = new URL('/api/settings', API_BASE);
-  if (token) url.searchParams.set('token', token);
-  const response = await fetch(url.toString());
-  if (!response.ok) throw new Error(`Failed to fetch settings (${response.status})`);
-  return response.json();
-};
+export const fetchSettings = async (token: string | null): Promise<SettingsData> =>
+  requestJson('/api/settings', token);
 
-export const updateSettings = async (
-  token: string | null,
-  approval_threshold: number
-): Promise<{ status: string; approval_threshold: number }> => {
-  const url = new URL('/api/settings', API_BASE);
-  if (token) url.searchParams.set('token', token);
-  const response = await fetch(url.toString(), {
+export const updateSettings = async (token: string | null, approval_threshold: number) =>
+  requestJson<{ status: string; approval_threshold: number }>('/api/settings', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ approval_threshold }),
   });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Failed to update settings (${response.status})`);
-  }
+
+export const fetchSummary = async (token: string | null): Promise<SummaryResponse> =>
+  requestJson('/api/stats/summary', token);
+
+export const fetchTradeHistory = async (
+  token: string | null,
+  params: { page?: number; pageSize?: number; search?: string; status?: string; venue?: string } = {},
+): Promise<TradeHistoryResponse> => {
+  const url = withToken('/api/stats/trades', token);
+  if (params.page) url.searchParams.set('page', String(params.page));
+  if (params.pageSize) url.searchParams.set('page_size', String(params.pageSize));
+  if (params.search) url.searchParams.set('search', params.search);
+  if (params.status) url.searchParams.set('status', params.status);
+  if (params.venue) url.searchParams.set('venue', params.venue);
+  const response = await fetch(url.toString());
+  if (!response.ok) throw new Error(`Failed to fetch trade history (${response.status})`);
   return response.json();
 };
 
+export const fetchChartMetric = async (token: string | null, metric: string): Promise<ChartResponse> =>
+  requestJson(`/api/stats/charts/${metric}`, token);
+
+export const fetchSystemHealth = async (token: string | null): Promise<HealthResponse> =>
+  requestJson('/api/system/health', token);
+
+export const fetchSystemLogs = async (token: string | null, limit = 100): Promise<LogsResponse> =>
+  requestJson(`/api/system/logs?limit=${limit}`, token);
+
+export const controlBot = async (
+  token: string | null,
+  action: 'start' | 'stop' | 'restart',
+  actor = 'dashboard',
+): Promise<{ status: string; requested_state: string; action: string }> =>
+  requestJson('/api/bot/control', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, actor }),
+  });
+
+export const fetchConfig = async (token: string | null): Promise<ConfigResponse> =>
+  requestJson('/api/config', token);
+
+export const updateConfig = async (
+  token: string | null,
+  updates: Record<string, string | number | boolean>,
+  actor = 'dashboard',
+  otpToken?: string,
+): Promise<ConfigResponse> =>
+  requestJson('/api/config/update', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ actor, updates, otp_token: otpToken }),
+  });
+
+export const initiateTwoFactor = async (token: string | null): Promise<TwoFactorInitiateResponse> =>
+  requestJson('/api/auth/2fa/initiate', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+
+export const verifyTwoFactor = async (token: string | null, code: string) =>
+  requestJson<{ status: string; verified?: boolean; two_factor: TwoFactorStatus }>('/api/auth/2fa/verify', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: code }),
+  });
