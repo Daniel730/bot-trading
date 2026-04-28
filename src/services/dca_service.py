@@ -84,8 +84,23 @@ class DCAService:
         now = datetime.now()
         if now.weekday() >= 5:
             return False
-        start = now.replace(hour=settings.START_HOUR, minute=settings.START_MINUTE, second=0, microsecond=0)
-        end = now.replace(hour=settings.END_HOUR, minute=settings.END_MINUTE, second=0, microsecond=0)
+
+        def int_setting(name: str, default: int) -> int:
+            value = getattr(settings, name, default)
+            return value if isinstance(value, int) and not isinstance(value, bool) else default
+
+        start = now.replace(
+            hour=int_setting("START_HOUR", 9),
+            minute=int_setting("START_MINUTE", 30),
+            second=0,
+            microsecond=0,
+        )
+        end = now.replace(
+            hour=int_setting("END_HOUR", 16),
+            minute=int_setting("END_MINUTE", 0),
+            second=0,
+            microsecond=0,
+        )
         return start <= now <= end
 
     def stop(self):

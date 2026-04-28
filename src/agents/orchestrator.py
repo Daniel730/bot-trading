@@ -225,7 +225,13 @@ class Orchestrator:
             w_bear = bear_weight / total_w
             w_sec = sec_weight / total_w
 
-            logger.info("[ORCHESTRATOR] %s - MAB adaptive weights: Bull=%.2f, Bear=%.2f", pair_id, w_bull, w_bear)
+            logger.info(
+                "[ORCHESTRATOR] %s - MAB adaptive weights: Bull=%.2f, Bear=%.2f, SEC=%.2f",
+                pair_id,
+                w_bull,
+                w_bear,
+                w_sec,
+            )
 
             avg_integrity = (score_a + score_b) / 200.0
 
@@ -238,10 +244,10 @@ class Orchestrator:
 
             if not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]:
                 final_conf *= 0.8
-                state["final_verdict"] = f"MAB: Bull({w_bull:.2f}), Bear({w_bear:.2f}) | SORTINO WARNING: Non-Optimal (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
+                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({w_sec:.2f}) | SORTINO WARNING: Non-Optimal (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Penalty Applied: Potential Sortino degradation.", pair_id)
             else:
-                state["final_verdict"] = f"MAB: Bull({w_bull:.2f}), Bear({w_bear:.2f}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
+                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({w_sec:.2f}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
 
             state["final_confidence"] = final_conf

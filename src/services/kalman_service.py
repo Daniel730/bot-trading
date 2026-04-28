@@ -89,7 +89,7 @@ class KalmanFilter:
 
             if self._q_inflation_remaining > 0:
                 self._q_inflation_remaining -= 1
-            self.Q = self._current_q()
+            self.Q = q_for_update
 
         except (ValueError, np.linalg.LinAlgError) as e:
             logger.error(f"Kalman update failed: {e}. Resetting filter to initial state.")

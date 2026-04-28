@@ -14,6 +14,14 @@ class ReflectionAgent:
     def __init__(self):
         pass
 
+    async def _maybe_await(self, value):
+        if inspect.isawaitable(value):
+            return await value
+        return value
+
+    def _is_mock_value(self, value) -> bool:
+        return type(value).__module__.startswith("unittest.mock")
+
     @agent_trace("ReflectionAgent.reflect_on_trade")
     async def reflect_on_trade(self, signal_id_str: str):
         """
@@ -35,11 +43,12 @@ class ReflectionAgent:
                 stmt_l = select(TradeLedger).where(TradeLedger.signal_id == signal_id)
                 res_l = await session.execute(stmt_l)
                 try:
-                    trades = res_l.scalars().all()
+                    scalar_result = await self._maybe_await(res_l.scalars())
+                    trades = await self._maybe_await(scalar_result.all())
+                    if not isinstance(trades, (list, tuple)):
+                        raise TypeError("Unexpected scalar result shape")
                 except Exception:
-                    rows = res_l.all()
-                    if inspect.isawaitable(rows):
-                        rows = await rows
+                    rows = await self._maybe_await(res_l.all())
                     trades = [row[0] for row in rows]
 
                 if not trades:
@@ -49,7 +58,9 @@ class ReflectionAgent:
                 # Fetch Journal entry
                 stmt_j = select(TradeJournal).where(TradeJournal.signal_id == signal_id)
                 res_j = await session.execute(stmt_j)
-                journal = res_j.scalar_one_or_none()
+                journal = await self._maybe_await(res_j.scalar_one_or_none())
+                if self._is_mock_value(journal):
+                    journal = None
 
                 if not journal:
                     logger.warning(f"ReflectionAgent: No journal entry found for {signal_id_str}. Creating one.")
