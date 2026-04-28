@@ -2,6 +2,7 @@ import grpc
 import logging
 import time
 import uuid
+import inspect
 from decimal import Decimal
 from typing import List, Optional
 from src.generated import execution_pb2
@@ -57,7 +58,9 @@ class ExecutionServiceClient:
         from src.services.risk_service import risk_service
 
         lock_key = f"idempotency:{signal_id}"
-        is_locked = await redis_service.set_nx(lock_key, "LOCKED", expire=60)
+        is_locked = redis_service.set_nx(lock_key, "LOCKED", expire=60)
+        if inspect.isawaitable(is_locked):
+            is_locked = await is_locked
         if not is_locked:
             logger.warning(
                 "Idempotency: Signal %s already in-flight. Rejecting duplicate.", signal_id
@@ -71,7 +74,9 @@ class ExecutionServiceClient:
         try:
             if max_slippage is None or risk_multiplier is None:
                 ref_ticker = legs[0]["ticker"] if legs else "GENERIC"
-                params = await risk_service.get_execution_params(ref_ticker)
+                params = risk_service.get_execution_params(ref_ticker)
+                if inspect.isawaitable(params):
+                    params = await params
                 if max_slippage is None:
                     max_slippage = params["max_slippage_pct"]
                 if risk_multiplier is None:

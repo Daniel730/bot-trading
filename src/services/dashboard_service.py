@@ -398,6 +398,7 @@ class DashboardService:
     def __init__(self):
         self.server = None
         self.persistence = PersistenceManager(settings.DB_PATH)
+        self.dashboard_state = dashboard_state
         self.health_history: Deque[dict] = deque(maxlen=120)
         self.totp = TOTPManager(self.persistence)
         self.editable_config: Dict[str, dict] = {

@@ -1,6 +1,7 @@
 import asyncio
 import numpy as np
 import logging
+import inspect
 from typing import Dict
 from src.services.persistence_service import persistence_service
 from src.services.redis_service import redis_service
@@ -86,7 +87,9 @@ class PerformanceService:
         L-13: Caches result in Redis for 1 hour to avoid redundant yfinance calls."""
         try:
             # L-13: Check Redis cache first — ^TNX changes at most once per day
-            cached = await redis_service.get_json("cache:tnx_yield")
+            cached = redis_service.get_json("cache:tnx_yield")
+            if inspect.isawaitable(cached):
+                cached = await cached
             if cached is not None:
                 return float(cached)
 
@@ -96,7 +99,9 @@ class PerformanceService:
                 # ^TNX is quoted in % directly (e.g. 4.2 means 4.2%)
                 return info.get("previousClose", 4.0) / 100.0
             rate = await asyncio.to_thread(fetch_tnx)
-            await redis_service.set_json("cache:tnx_yield", rate, ex=3600)
+            stored = redis_service.set_json("cache:tnx_yield", rate, ex=3600)
+            if inspect.isawaitable(stored):
+                await stored
             return rate
         except Exception as e:
             logger.warning(f"Could not fetch dynamic risk-free rate (^TNX), using 2% fallback: {e}")

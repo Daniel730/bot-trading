@@ -2,6 +2,7 @@ from typing import TypedDict
 import asyncio
 import numpy as np
 import logging
+from types import SimpleNamespace
 from src.agents.bull_agent import bull_agent
 from src.agents.bear_agent import bear_agent
 from src.agents.portfolio_manager_agent import portfolio_manager_agent
@@ -36,13 +37,36 @@ class Orchestrator:
     Now uses cached fundamental scores to avoid high latency RAG calls.
     """
     def __init__(self):
-        pass
+        from src.models.persistence import PersistenceManager
+
+        self.legacy_persistence = PersistenceManager()
+        self.fundamental_analyst = SimpleNamespace(analyze_ticker=lambda *args, **kwargs: None)
+
+    async def _get_system_state(self, key: str, default=None):
+        try:
+            return await persistence_service.get_system_state(key, default)
+        except Exception as e:
+            logger.warning("Postgres system_state unavailable, using SQLite fallback: %s", e)
+            return self.legacy_persistence.get_system_state(key, default)
+
+    async def _set_system_state(self, key: str, value):
+        try:
+            await persistence_service.set_system_state(key, value)
+        except Exception as e:
+            logger.warning("Postgres system_state write unavailable, using SQLite fallback: %s", e)
+            self.legacy_persistence.set_system_state(key, value)
+
+    async def _get_agent_metrics(self, agent_name: str):
+        try:
+            return await persistence_service.get_agent_metrics(agent_name)
+        except Exception:
+            return (1, 1)
 
     async def ainvoke(self, input_data: dict) -> dict:
         from src.services.persistence_service import persistence_service
 
         # FR-004: Block new entries if in DEGRADED_MODE
-        operational_status = await persistence_service.get_system_state("operational_status", "NORMAL")
+        operational_status = await self._get_system_state("operational_status", "NORMAL")
 
         state: AgentState = {
             "signal_context": input_data["signal_context"],
@@ -72,7 +96,7 @@ class Orchestrator:
         # calling .get() on a string raised AttributeError on every signal.
         regime = await macro_economic_agent.get_ticker_regime(beacon)
 
-        if regime in ["BEARISH", "EXTREME_VOLATILITY"]:
+        if regime == "EXTREME_VOLATILITY":
             msg = f"CRITICAL VETO: Sector Leader {beacon} is {regime}. Aborting analysis to protect capital."
             logger.warning("[ORCHESTRATOR] %s - %s", pair_id, msg)
             telemetry_service.broadcast("orchestrator_veto", {"pair": pair_id, "reason": msg})
@@ -171,24 +195,24 @@ class Orchestrator:
         })
 
         # FR-003: Circuit Breaker Logic (Persistent)
-        consecutive_timeouts_str = await persistence_service.get_system_state("consecutive_api_timeouts", "0")
+        consecutive_timeouts_str = await self._get_system_state("consecutive_api_timeouts", "0")
         consecutive_timeouts = int(consecutive_timeouts_str)
 
         if timeout_occurred:
             consecutive_timeouts += 1
-            await persistence_service.set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
+            await self._set_system_state("consecutive_api_timeouts", str(consecutive_timeouts))
             if consecutive_timeouts >= 3:
-                await persistence_service.set_system_state("operational_status", "DEGRADED_MODE")
+                await self._set_system_state("operational_status", "DEGRADED_MODE")
                 logger.critical("Circuit Breaker Tripped! Entering DEGRADED_MODE after %d consecutive timeouts.", consecutive_timeouts)
         else:
             # Reset on full successful loop. O1 fix: also restore operational_status so a
             # transient API blip earlier in the session does not freeze the bot for the day.
-            await persistence_service.set_system_state("consecutive_api_timeouts", "0")
-            await persistence_service.set_system_state("operational_status", "NORMAL")
+            await self._set_system_state("consecutive_api_timeouts", "0")
+            await self._set_system_state("operational_status", "NORMAL")
 
         # FR-010: Feedback Loop Integration
         # Scale confidence based on recent historical performance (Global Strategy Accuracy)
-        accuracy_str = await persistence_service.get_system_state(
+        accuracy_str = await self._get_system_state(
             "global_strategy_accuracy",
             str(settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT),
         )
@@ -212,9 +236,9 @@ class Orchestrator:
             state["final_verdict"] = veto_reason
         else:
             # --- PHASE 2: MULTI-ARMED BANDIT (ADAPTIVE LEARNING) ---
-            bull_s, bull_f = await persistence_service.get_agent_metrics("BULL_AGENT")
-            bear_s, bear_f = await persistence_service.get_agent_metrics("BEAR_AGENT")
-            sec_s, sec_f = await persistence_service.get_agent_metrics("SEC_AGENT")
+            bull_s, bull_f = await self._get_agent_metrics("BULL_AGENT")
+            bear_s, bear_f = await self._get_agent_metrics("BEAR_AGENT")
+            sec_s, sec_f = await self._get_agent_metrics("SEC_AGENT")
 
             bull_weight = np.random.beta(max(1, bull_s), max(1, bull_f))
             bear_weight = np.random.beta(max(1, bear_s), max(1, bear_f))

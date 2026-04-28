@@ -1,6 +1,7 @@
 from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
+import inspect
 from src.config import settings
 from src.services.agent_log_service import agent_trace
 
@@ -71,8 +72,10 @@ class RiskService:
         """
         from src.services.performance_service import performance_service
         from src.services.volatility_service import volatility_service
-        
-        perf_metrics = await performance_service.get_portfolio_metrics()
+
+        perf_metrics = performance_service.get_portfolio_metrics()
+        if inspect.isawaitable(perf_metrics):
+            perf_metrics = await perf_metrics
         sharpe = perf_metrics.get("sharpe_ratio", 1.0)
         drawdown = perf_metrics.get("max_drawdown", 0.0)
         
@@ -88,8 +91,12 @@ class RiskService:
             risk_multiplier = min(risk_multiplier, settings.RISK_MULTIPLIER_CAP_LOW_SHARPE)
 
         # User Story 3: Tighten maxSlippage if Volatility Switch is HIGH
-        vol_status = await volatility_service.get_volatility_status(ticker)
-        l2_entropy = await volatility_service.get_l2_entropy(ticker)
+        vol_status = volatility_service.get_volatility_status(ticker)
+        if inspect.isawaitable(vol_status):
+            vol_status = await vol_status
+        l2_entropy = volatility_service.get_l2_entropy(ticker)
+        if inspect.isawaitable(l2_entropy):
+            l2_entropy = await l2_entropy
         
         # Default slippage 0.1% (0.001)
         # Acceptance Scenario: Reduce from 0.001 to 0.0005 in high vol
@@ -147,7 +154,9 @@ class RiskService:
         
         current_map = hedge_map.get(region, hedge_map["US"])
         from src.services.brokerage_service import brokerage_service
-        portfolio = await brokerage_service.get_portfolio()
+        portfolio = brokerage_service.get_portfolio()
+        if inspect.isawaitable(portfolio):
+            portfolio = await portfolio
         
         suggested_hedges = []
         for pos in portfolio:
