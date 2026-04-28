@@ -353,13 +353,10 @@ class ArbitrageMonitor:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
                 return diagnostic
             
-            # Prior Z-score and spread are calculated inside update() BEFORE the state is adjusted
-            state_vec, innovation_var, z_score, spread = kf.update(price_a, price_b)
-
-            # Spec 037: Session-boundary handling. Instead of a one-shot P bump
-            # (which throws away calibration), we inflate Q for the first N
-            # bars after the session boundary and decay linearly back to base.
-            # Falls back to the legacy P bump if the operator disables it.
+            # Spec 037: Session-boundary Q/P adjustment applied BEFORE this
+            # tick's update so the inflated noise is in effect for the very
+            # first bar after market open. inflate_q() then decays Q linearly
+            # back to base over the next KALMAN_Q_SESSION_BARS updates.
             today = datetime.now().date()
             if not is_crypto and self.bumped_pairs_today.get(pair['id']) != today:
                 if settings.KALMAN_USE_Q_INFLATION:
@@ -377,8 +374,9 @@ class ArbitrageMonitor:
                     logger.info(f"KALMAN BUMP applied to {pair['id']} for market open.")
                 self.bumped_pairs_today[pair['id']] = today
 
-            state_vec, innovation_var = kf.update(price_a, price_b)
-            spread, z_score = kf.calculate_spread_and_zscore(price_a, price_b)
+            # Single Kalman update. z_score is computed from the PRIOR state
+            # (before this tick's measurement is absorbed) — correct for signals.
+            state_vec, innovation_var, z_score, spread = kf.update(price_a, price_b)
 
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
