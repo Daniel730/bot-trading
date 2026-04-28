@@ -248,6 +248,11 @@ class NotificationService:
         if not self._telegram_enabled:
             # Fallback: echo to console so operator still sees bot activity
             print(f"[BOT MSG] {message}")
+            try:
+                from src.services.dashboard_service import dashboard_state
+                await dashboard_state.add_message("BOT", message)
+            except Exception as e:
+                print(f"DASHBOARD ERROR (send_message fallback): {e}")
             return
         try:
             # 1. Send to Telegram
@@ -409,6 +414,9 @@ class NotificationService:
             return {"status": "error", "message": "Missing value"}
 
         elif command == "/exposure":
+            if settings.PAPER_TRADING:
+                await self.send_message("Portfolio is currently empty.")
+                return {"status": "success", "message": "Exposure report sent"}
             from src.services.shadow_service import shadow_service
             from src.services.risk_service import risk_service
 

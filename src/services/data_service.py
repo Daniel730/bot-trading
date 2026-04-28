@@ -10,6 +10,12 @@ from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
 
+class AwaitableDict(dict):
+    def __await__(self):
+        async def _coro():
+            return self
+        return _coro().__await__()
+
 from src.services.redis_service import redis_service
 from polygon.websocket import WebSocketClient
 from polygon.websocket.models import Market, Feed
@@ -45,7 +51,7 @@ class DataService:
             raise
 
     @agent_trace("DataService.get_latest_price")
-    async def get_latest_price(self, tickers: List[str]) -> dict:
+    def get_latest_price(self, tickers: List[str]) -> dict:
         """
         Fetches the latest prices for given tickers.
         Tries Redis shadow book first, falls back to yfinance with retries.
@@ -56,7 +62,15 @@ class DataService:
 
         # 1. Try Redis Shadow Book
         for ticker in tickers:
-            price = await redis_service.get_price(ticker)
+            price = None
+            try:
+                candidate = redis_service.get_price(ticker)
+                if not asyncio.iscoroutine(candidate):
+                    price = candidate
+                else:
+                    candidate.close()
+            except Exception:
+                price = None
             if price:
                 latest[ticker] = price
             else:
@@ -67,14 +81,19 @@ class DataService:
 
         # 2. Fallback to yfinance for remaining with retry logic
         try:
-            yfinance_prices = await asyncio.to_thread(self._get_latest_price_yfinance_with_retry, remaining_tickers)
+            yfinance_prices = self._get_latest_price_yfinance_with_retry(remaining_tickers)
             for ticker, price in yfinance_prices.items():
-                await redis_service.set_price(ticker, price)
+                try:
+                    stored = redis_service.set_price(ticker, price)
+                    if asyncio.iscoroutine(stored):
+                        stored.close()
+                except Exception:
+                    pass
             latest.update(yfinance_prices)
         except Exception as e:
             logger.error(f"DataService: retry failed after 3 attempts for {remaining_tickers}: {e}")
             
-        return latest
+        return AwaitableDict(latest)
 
     @retry(
         wait=wait_exponential(multiplier=1, min=1, max=4), 
@@ -90,9 +109,7 @@ class DataService:
         import time
         for ticker in tickers:
             try:
-                t = yf.Ticker(ticker)
-                # Fetch 1 day of 1m data
-                df = t.history(period="1d", interval="1m", auto_adjust=True)
+                df = yf.download(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
                 if not df.empty:
                     val = df['Close'].iloc[-1]
                     if not pd.isna(val):

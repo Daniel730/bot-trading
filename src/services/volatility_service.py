@@ -1,5 +1,6 @@
 import numpy as np
 import logging
+import inspect
 from src.services.redis_service import redis_service
 from src.config import settings
 
@@ -15,7 +16,9 @@ class VolatilityService:
         FR-003: System MUST implement a VolatilitySwitchService that calculates Shannon Entropy on L2 snapshots.
         """
         try:
-            snapshot = await redis_service.get_json(f"l2:snapshot:{ticker}")
+            snapshot = redis_service.get_json(f"l2:snapshot:{ticker}")
+            if inspect.isawaitable(snapshot):
+                snapshot = await snapshot
             if not snapshot:
                 # Fallback to current price if no L2 snapshot is available (neutral entropy)
                 return settings.VOLATILITY_FALLBACK_ENTROPY

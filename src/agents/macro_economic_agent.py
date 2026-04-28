@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import pandas as pd
+import inspect
 from typing import Dict, Literal
 from src.services.data_service import DataService
 
@@ -69,5 +70,41 @@ class MacroEconomicAgent:
             "interest_rate": 0.042,
             "inflation": 0.031
         }
+
+    async def get_macro_summary(self) -> dict:
+        from src.services.data_service import data_service
+
+        prices = data_service.get_latest_price(["^TNX", "^VIX", "SPY", "QQQ"])
+        if inspect.isawaitable(prices):
+            prices = await prices
+        hist = data_service.get_historical_data(["SPY"], "200d", "1d")
+        if inspect.isawaitable(hist):
+            hist = await hist
+        if isinstance(hist, pd.DataFrame) and "Close" in hist.columns:
+            spy_50d = float(hist["Close"].tail(50).mean())
+        elif hasattr(hist, "tail"):
+            spy_50d = float(hist.tail(50).mean())
+        else:
+            spy_50d = float(prices.get("SPY", 0.0))
+        spy_curr = float(prices.get("SPY", 0.0))
+        market_trend = "Bullish" if spy_curr >= spy_50d else "Bearish"
+        return {
+            "yield_10y": float(prices.get("^TNX", 0.0)),
+            "vix": float(prices.get("^VIX", 0.0)),
+            "market_trend": market_trend,
+            "spy_curr": spy_curr,
+            "spy_50d": spy_50d,
+            "risk_on": market_trend == "Bullish" and float(prices.get("^VIX", 0.0)) < 25.0,
+        }
+
+    def format_summary_for_telegram(self, summary: dict) -> str:
+        risk_text = "ðŸŸ¢ RISK-ON" if summary.get("risk_on") else "ðŸ”´ RISK-OFF"
+        return (
+            "ðŸŒ **Macro Economic Summary**\n\n"
+            f"{risk_text}\n"
+            f"10Y Yield: {float(summary.get('yield_10y', 0.0)):.2f}%\n"
+            f"VIX: {float(summary.get('vix', 0.0)):.2f}\n"
+            f"Market Trend: {summary.get('market_trend', 'Unknown')}"
+        )
 
 macro_economic_agent = MacroEconomicAgent()

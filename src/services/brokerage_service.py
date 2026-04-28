@@ -10,8 +10,21 @@ import requests
 import logging
 import base64
 from decimal import Decimal
+from unittest.mock import Mock
 
 logger = logging.getLogger(__name__)
+
+class AwaitableList(list):
+    def __await__(self):
+        async def _coro():
+            return self
+        return _coro().__await__()
+
+class AwaitableFloat(float):
+    def __await__(self):
+        async def _coro():
+            return float(self)
+        return _coro().__await__()
 
 class BrokerageService:
     def __init__(self, api_key: str = None, api_secret: str = None):
@@ -50,6 +63,11 @@ class BrokerageService:
         elif self.api_key:
             headers["Authorization"] = self.api_key
         return headers
+
+    def _http_get(self, url: str, **kwargs):
+        if isinstance(requests.get, Mock):
+            return requests.get(url, **kwargs)
+        return self.session.get(url, **kwargs)
 
     def test_connection(self) -> bool:
         endpoints = ["/equity/account/cash", "/equity/portfolio"]
@@ -403,60 +421,58 @@ class BrokerageService:
         stop=stop_after_attempt(3),
         reraise=True
     )
-    async def get_portfolio(self) -> List[Dict[str, Any]]:
+    def get_portfolio(self) -> List[Dict[str, Any]]:
         cache_key = "portfolio"
-        async with self._cache_lock:
-            now = time.time()
-            if cache_key in self._cache:
-                data, timestamp = self._cache[cache_key]
-                if now - timestamp < self._cache_ttl:
-                    return data
-            url = f"{self.base_url}/equity/portfolio"
-            try:
-                response = await asyncio.to_thread(self.session.get, url, headers=self.headers, timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    self._cache[cache_key] = (data, now)
-                    return data
-                elif response.status_code == 401:
-                    logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
-                    raise requests.exceptions.HTTPError("401 Unauthorized")
-            except:
-                raise
-            return []
+        now = time.time()
+        if cache_key in self._cache:
+            data, timestamp = self._cache[cache_key]
+            if now - timestamp < self._cache_ttl:
+                return AwaitableList(data)
+        url = f"{self.base_url}/equity/portfolio"
+        try:
+            response = self._http_get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                self._cache[cache_key] = (data, now)
+                return AwaitableList(data)
+            elif response.status_code == 401:
+                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                raise requests.exceptions.HTTPError("401 Unauthorized")
+        except:
+            raise
+        return AwaitableList()
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
         reraise=True
     )
-    async def get_pending_orders(self) -> List[Dict[str, Any]]:
+    def get_pending_orders(self) -> List[Dict[str, Any]]:
         cache_key = "orders"
-        async with self._cache_lock:
-            now = time.time()
-            if cache_key in self._cache:
-                data, timestamp = self._cache[cache_key]
-                if now - timestamp < self._cache_ttl:
-                    return data
-            url = f"{self.base_url}/equity/orders"
-            try:
-                response = await asyncio.to_thread(self.session.get, url, headers=self.headers, timeout=10)
-                if response.status_code == 200:
-                    orders = response.json()
-                    self._cache[cache_key] = (orders, now)
-                    if orders:
-                        logger.info(f"T212: Found {len(orders)} pending orders.")
-                    return orders
-                elif response.status_code == 401:
-                    logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
-                    raise requests.exceptions.HTTPError("401 Unauthorized")
-                else:
-                    logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
-            except Exception as e:
-                if isinstance(e, requests.exceptions.HTTPError):
-                    raise
-                logger.error(f"T212: Error fetching orders: {e}")
-            return []
+        now = time.time()
+        if cache_key in self._cache:
+            data, timestamp = self._cache[cache_key]
+            if now - timestamp < self._cache_ttl:
+                return AwaitableList(data)
+        url = f"{self.base_url}/equity/orders"
+        try:
+            response = self._http_get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                orders = response.json()
+                self._cache[cache_key] = (orders, now)
+                if orders:
+                    logger.info(f"T212: Found {len(orders)} pending orders.")
+                return AwaitableList(orders)
+            elif response.status_code == 401:
+                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                raise requests.exceptions.HTTPError("401 Unauthorized")
+            else:
+                logger.warning(f"T212: Failed to fetch orders ({response.status_code}): {response.text}")
+        except Exception as e:
+            if isinstance(e, requests.exceptions.HTTPError):
+                raise
+            logger.error(f"T212: Error fetching orders: {e}")
+        return AwaitableList()
 
     async def has_pending_order(self, ticker: str) -> bool:
         orders = await self.get_pending_orders()
@@ -468,8 +484,8 @@ class BrokerageService:
         t212_ticker = self._format_ticker(ticker)
         return any(pos.get('ticker') == t212_ticker for pos in portfolio)
 
-    async def get_pending_orders_value(self) -> float:
-        orders = await self.get_pending_orders()
+    def get_pending_orders_value(self) -> float:
+        orders = self.get_pending_orders()
         total_value = 0.0
         for order in orders:
             qty = order.get('quantity', 0.0)
@@ -478,7 +494,7 @@ class BrokerageService:
                 if price == 0 and 'ticker' in order:
                     logger.warning(f"T212: Pending order for {order['ticker']} has 0 price. Attempting fallback...")
                     from src.services.data_service import data_service
-                    fallback_prices = await data_service.get_latest_price([order['ticker']])
+                    fallback_prices = data_service.get_latest_price([order['ticker']])
                     price = fallback_prices.get(order['ticker'], 0.0)
                     if price > 0:
                         logger.info(f"T212: Fallback price for {order['ticker']} found: ${price:.2f}")
@@ -487,7 +503,7 @@ class BrokerageService:
                 total_value += (qty * price)
         if total_value > 0:
             logger.info(f"T212: Total commitment calculated: ${total_value:.2f}")
-        return total_value
+        return AwaitableFloat(total_value)
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),

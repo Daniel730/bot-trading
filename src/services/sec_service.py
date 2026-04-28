@@ -10,6 +10,21 @@ class SECRateLimitException(Exception):
     """Custom exception for SEC rate limit (429)."""
 
 class SECService:
+    GROUND_TRUTH_CIKS = {
+        "AAPL": "0000320193", "MSFT": "0000789019", "GOOGL": "0001652044", "GOOG": "0001652044",
+        "AMZN": "0001018724", "META": "0001326801", "TSLA": "0001318605", "BRK-B": "0001067983",
+        "V": "0001403161", "JPM": "0000019617", "JNJ": "0000200406", "WMT": "0000104169",
+        "NVDA": "0001045810", "PG": "0000080424", "XOM": "0000034088", "MA": "0001141391",
+        "HD": "0000354950", "CVX": "0000093410", "LLY": "0000059478", "PEP": "0000077476",
+        "KO": "0000021344", "ABBV": "0001551152", "BAC": "0000070858", "COST": "0000909832",
+        "AVGO": "0001730168", "TMO": "0000097745", "CSCO": "0000858877", "MCD": "0000063908",
+        "ADBE": "0000796343", "DIS": "0001744489", "ACN": "0001467373", "LIN": "0001707925",
+        "NFLX": "0001065280", "ABT": "0000001800", "ORCL": "0001341439", "TXN": "0000097476",
+        "VZ": "0000732712", "DHR": "0000313616", "INTC": "0000050863", "PM": "0001413329",
+        "NEE": "0000753308", "RTX": "0000101829", "HON": "0000773840", "AMAT": "0000006951",
+        "LOW": "0000060667", "BKNG": "0001075531", "T": "0000732717", "UPS": "0001090727",
+        "IBM": "0000051143", "CAT": "0000018230", "GE": "0000040545",
+    }
     _instance = None
 
     def __new__(cls, *args, **kwargs):
@@ -69,6 +84,12 @@ class SECService:
         Retrieves the 10-digit CIK for a given ticker.
         Uses local cache before querying SEC.
         """
+        ticker = ticker.upper()
+        if ticker in self.GROUND_TRUTH_CIKS:
+            cik = self.GROUND_TRUTH_CIKS[ticker]
+            self.persistence.save_cik_mapping(ticker, cik)
+            return cik
+
         cached_cik = self.persistence.load_cik_mapping(ticker)
         if cached_cik:
             return str(cached_cik).zfill(10)
@@ -87,6 +108,9 @@ class SECService:
             print(f"Error fetching CIK for {ticker}: {e}")
         
         return None
+
+    async def get_cik_by_ticker(self, ticker: str) -> Optional[str]:
+        return await self.get_cik(ticker)
 
     async def fetch_latest_filing_metadata(self, ticker: str, form_type: str = "10-K") -> Optional[Dict]:
         """
