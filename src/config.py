@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     )
 
     POLYGON_API_KEY: str = Field(default="", validation_alias="POLYGON_API_KEY")
+    OPENAI_API_KEY: str = Field(default="", validation_alias="OPENAI_API_KEY")
     GEMINI_API_KEY: str = Field(default="", validation_alias="GEMINI_API_KEY")
     TELEGRAM_BOT_TOKEN: str = Field(default="", validation_alias="TELEGRAM_BOT_TOKEN")
     TELEGRAM_CHAT_ID: str = Field(default="", validation_alias="TELEGRAM_CHAT_ID")
@@ -611,5 +612,6 @@ if _override:
 
 _settings_override = _load_settings_override()
 if _settings_override:
-    if "APPROVAL_THRESHOLD" in _settings_override:
-        settings.APPROVAL_THRESHOLD = float(_settings_override["APPROVAL_THRESHOLD"])
+    for _key, _value in _settings_override.items():
+        if hasattr(settings, _key):
+            setattr(settings, _key, _value)
