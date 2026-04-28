@@ -383,51 +383,51 @@ class Settings(BaseSettings):
         {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},
 
         # German Automotive (High Correlation)
-        {"stock1": "BMW.DE", "stock2": "MBG.DE"},        # BMW vs Mercedes-Benz
-        {"stock1": "VOW3.DE", "stock2": "PAH3.DE"},      # VW vs Porsche SE
-        {"stock1": "CON.DE", "stock2": "PUM.DE"},        # Continental vs Puma (Consumer/Industrial)
+        {"ticker_a": "BMW.DE", "ticker_b": "MBG.DE"},        # BMW vs Mercedes-Benz
+        {"ticker_a": "VOW3.DE", "ticker_b": "PAH3.DE"},      # VW vs Porsche SE
+        {"ticker_a": "CON.DE", "ticker_b": "PUM.DE"},        # Continental vs Puma (Consumer/Industrial)
         
         # European Banking (High Beta)
-        {"stock1": "DBK.DE", "stock2": "CBK.DE"},        # Deutsche Bank vs Commerzbank
-        {"stock1": "BNP.PA", "stock2": "GLE.PA"},        # BNP Paribas vs Societe Generale
-        {"stock1": "ACA.PA", "stock2": "BNP.PA"},        # Credit Agricole vs BNP Paribas
+        {"ticker_a": "DBK.DE", "ticker_b": "CBK.DE"},        # Deutsche Bank vs Commerzbank
+        {"ticker_a": "BNP.PA", "ticker_b": "GLE.PA"},        # BNP Paribas vs Societe Generale
+        {"ticker_a": "ACA.PA", "ticker_b": "BNP.PA"},        # Credit Agricole vs BNP Paribas
         
         # French Luxury (The "Gold Standard" for Pairs)
-        {"stock1": "MC.PA", "stock2": "RMS.PA"},         # LVMH vs Hermes
-        {"stock1": "MC.PA", "stock2": "KER.PA"},         # LVMH vs Kering (Gucci)
-        {"stock1": "OR.PA", "stock2": "EL.PA"},          # L'Oreal vs EssilorLuxottica
+        {"ticker_a": "MC.PA", "ticker_b": "RMS.PA"},         # LVMH vs Hermes
+        {"ticker_a": "MC.PA", "ticker_b": "KER.PA"},         # LVMH vs Kering (Gucci)
+        {"ticker_a": "OR.PA", "ticker_b": "EL.PA"},          # L'Oreal vs EssilorLuxottica
         
         # Energy & Utilities
-        {"stock1": "RWE.DE", "stock2": "EOAN.DE"},       # RWE vs E.ON
-        {"stock1": "ENGI.PA", "stock2": "ORAN.PA"},      # Engie vs Orange
+        {"ticker_a": "RWE.DE", "ticker_b": "EOAN.DE"},       # RWE vs E.ON
+        {"ticker_a": "ENGI.PA", "ticker_b": "ORAN.PA"},      # Engie vs Orange
 
         # Energy & Mining (Commodity Driven)
-        {"stock1": "SHEL.L", "stock2": "BP.L"},          # Shell vs BP
-        {"stock1": "RIO.L", "stock2": "BHP.L"},          # Rio Tinto vs BHP
-        {"stock1": "AAL.L", "stock2": "GLEN.L"},         # Anglo American vs Glencore
+        {"ticker_a": "SHEL.L", "ticker_b": "BP.L"},          # Shell vs BP
+        {"ticker_a": "RIO.L", "ticker_b": "BHP.L"},          # Rio Tinto vs BHP
+        {"ticker_a": "AAL.L", "ticker_b": "GLEN.L"},         # Anglo American vs Glencore
         
         # Banking & Insurance
-        {"stock1": "LLOY.L", "stock2": "BARC.L"},        # Lloyds vs Barclays
-        {"stock1": "HSBA.L", "stock2": "STAN.L"},        # HSBC vs Standard Chartered
-        {"stock1": "AV.L", "stock2": "LGEN.L"},          # Aviva vs Legal & General
+        {"ticker_a": "LLOY.L", "ticker_b": "BARC.L"},        # Lloyds vs Barclays
+        {"ticker_a": "HSBA.L", "ticker_b": "STAN.L"},        # HSBC vs Standard Chartered
+        {"ticker_a": "AV.L", "ticker_b": "LGEN.L"},          # Aviva vs Legal & General
         
         # Consumer & Retail
-        {"stock1": "TSCO.L", "stock2": "SBRY.L"},        # Tesco vs Sainsbury’s
-        {"stock1": "ULVR.L", "stock2": "RKT.L"},         # Unilever vs Reckitt
-        {"stock1": "BATS.L", "stock2": "IMB.L"},         # British Am. Tobacco vs Imperial Brands
+        {"ticker_a": "TSCO.L", "ticker_b": "SBRY.L"},        # Tesco vs Sainsbury’s
+        {"ticker_a": "ULVR.L", "ticker_b": "RKT.L"},         # Unilever vs Reckitt
+        {"ticker_a": "BATS.L", "ticker_b": "IMB.L"},         # British Am. Tobacco vs Imperial Brands
 
         # Semiconductors (Very High Correlation)
-        {"stock1": "ASML.AS", "stock2": "ASM.AS"},       # ASML vs ASM International (Euronext)
-        {"stock1": "NVDA", "stock2": "AMD"},             # Nvidia vs AMD
-        {"stock1": "LRCX", "stock2": "AMAT"},            # Lam Research vs Applied Materials
+        {"ticker_a": "ASML.AS", "ticker_b": "ASM.AS"},       # ASML vs ASM International (Euronext)
+        {"ticker_a": "NVDA", "ticker_b": "AMD"},             # Nvidia vs AMD
+        {"ticker_a": "LRCX", "ticker_b": "AMAT"},            # Lam Research vs Applied Materials
 
         # Big Tech Proxies
-        {"stock1": "GOOGL", "stock2": "META"},           # Alphabet vs Meta
-        {"stock1": "MSFT", "stock2": "AAPL"},            # Microsoft vs Apple
+        {"ticker_a": "GOOGL", "ticker_b": "META"},           # Alphabet vs Meta
+        {"ticker_a": "MSFT", "ticker_b": "AAPL"},            # Microsoft vs Apple
 
         # Payments & Fintech
-        {"stock1": "V", "stock2": "MA"},                 # Visa vs Mastercard
-        {"stock1": "PYPL", "stock2": "SQ"},              # PayPal vs Block
+        {"ticker_a": "V", "ticker_b": "MA"},                 # Visa vs Mastercard
+        {"ticker_a": "PYPL", "ticker_b": "SQ"},              # PayPal vs Block
 
         # --- SEMICONDUCTORS & HARDWARE (Expanded) ---
         {'ticker_a': 'AVGO',    'ticker_b': 'QCOM'},
