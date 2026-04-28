@@ -19,7 +19,7 @@ services:
     container_name: trading-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-bot_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bot_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-trading_bot}
     ports:
       - "5433:5432"

@@ -16,11 +16,17 @@ class TestBrokerageServiceIntegration(unittest.IsolatedAsyncioTestCase):
         self.patcher_key.stop()
         self.patcher_mode.stop()
 
-    @patch('src.services.brokerage_service.requests.post')
-    def test_place_market_order_success(self, mock_post):
-        # ...
-        result = self.service.place_market_order("KO", 1.0, "BUY")
-        # ... (rest of method remains same)
+    async def test_place_market_order_success(self):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"status": "success", "orderId": "123"}
+
+        with patch.object(self.service.session, "post", return_value=mock_response) as mock_post:
+            with patch.object(self.service, "get_symbol_metadata", return_value={}):
+                result = await self.service.place_market_order("KO", 1.0, "BUY")
+
+        self.assertEqual(result["status"], "success")
+        mock_post.assert_called_once()
 
     async def test_get_portfolio_success(self):
         # Mocking successful 200 response for T212 Portfolio
