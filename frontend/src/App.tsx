@@ -1,800 +1,803 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
-  Terminal as TerminalIcon,
-  Shield,
-  Zap,
-  Radio,
-  X,
-  Send,
-  TrendingUp,
-  TrendingDown,
+  BarChart3,
+  Bot,
+  Cpu,
+  Gauge,
+  History,
+  Play,
   RefreshCw,
-  Brain,
-  AlertTriangle,
-  CheckCircle,
-  Clock,
-  Filter,
+  Search,
   Settings as SettingsIcon,
+  Shield,
+  Square,
 } from 'lucide-react';
 import './App.css';
-import { useDashboardStream, sendTerminalCommand, fetchSettings, updateSettings } from './services/api';
+import {
+  type ChartPoint,
+  type ChartResponse,
+  type ConfigResponse,
+  type HealthResponse,
+  type LogsResponse,
+  type OpenPosition,
+  type SummaryResponse,
+  type TerminalMessage,
+  type TradeHistoryResponse,
+  type TwoFactorInitiateResponse,
+  controlBot,
+  fetchChartMetric,
+  fetchConfig,
+  fetchOpenPositions,
+  fetchSummary,
+  fetchSystemHealth,
+  fetchSystemLogs,
+  fetchTradeHistory,
+  initiateTwoFactor,
+  updateConfig,
+  useDashboardStream,
+  verifyTwoFactor,
+} from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
-import PairsPanel from './components/PairsPanel';
-import PositionsPanel from './components/PositionsPanel';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+type Page = 'overview' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
 
-function fmtCurrency(val: number | null | undefined): string {
-  if (val === null || val === undefined) return '—';
+const NAV_ITEMS: { key: Page; label: string; icon: React.ReactNode }[] = [
+  { key: 'overview', label: 'Overview', icon: <Gauge size={16} /> },
+  { key: 'analytics', label: 'Analytics', icon: <BarChart3 size={16} /> },
+  { key: 'trades', label: 'Trade History', icon: <History size={16} /> },
+  { key: 'control', label: 'Bot Control', icon: <Bot size={16} /> },
+  { key: 'settings', label: 'Settings', icon: <SettingsIcon size={16} /> },
+  { key: 'health', label: 'System Health', icon: <Cpu size={16} /> },
+];
+
+function formatCurrency(value: number | null | undefined) {
+  if (value === null || value === undefined) return '—';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-    minimumFractionDigits: 0,
     maximumFractionDigits: 0,
-  }).format(val);
+  }).format(value);
 }
 
-function fmtPct(val: number | null | undefined, decimals = 1): string {
-  if (val === null || val === undefined) return '—';
-  return `${(val * 100).toFixed(decimals)}%`;
+function formatPercent(value: number | null | undefined, scale = 100) {
+  if (value === null || value === undefined) return '—';
+  return `${(value * scale).toFixed(scale === 100 ? 1 : 0)}%`;
 }
 
-function getRegimeStyle(regime: string): { color: string; bg: string } {
-  switch (regime) {
-    case 'TRENDING_UP':   return { color: 'var(--green)',  bg: 'var(--green-muted)' };
-    case 'TRENDING_DOWN': return { color: 'var(--red)',    bg: 'var(--red-muted)'   };
-    case 'VOLATILE':      return { color: 'var(--yellow)', bg: 'var(--yellow-muted)' };
-    default:              return { color: 'var(--accent)', bg: 'var(--accent-muted)' };
-  }
+function formatCompact(value: number | null | undefined, suffix = '') {
+  if (value === null || value === undefined) return '—';
+  return `${value.toFixed(1)}${suffix}`;
 }
 
-function getRegimeIcon(regime: string) {
-  switch (regime) {
-    case 'TRENDING_UP':   return <TrendingUp size={16} />;
-    case 'TRENDING_DOWN': return <TrendingDown size={16} />;
-    case 'VOLATILE':      return <AlertTriangle size={16} />;
-    default:              return <RefreshCw size={16} />;
-  }
+function formatDateTime(value?: string | null) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
-function getVerdictColor(verdict: string): string {
-  switch (verdict) {
-    case 'BULLISH': return 'var(--green)';
-    case 'BEARISH': return 'var(--red)';
-    case 'VETO':    return 'var(--yellow)';
-    default:        return 'var(--accent)';
-  }
+function getTrendClass(value: number | null | undefined) {
+  if (value === null || value === undefined) return '';
+  if (value > 0) return 'positive';
+  if (value < 0) return 'negative';
+  return '';
 }
 
-function getSignalBadge(status: string): string {
-  const s = status.toUpperCase();
-  if (s.includes('EXECUTING'))           return 'badge-yellow';
-  if (s.includes('APPROVED') || s.includes('FILLED')) return 'badge-green';
-  if (s.includes('VETO') || s.includes('REJECTED'))   return 'badge-red';
-  return 'badge-blue';
+function sparklinePath(values: number[], width: number, height: number) {
+  if (!values.length) return '';
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+  return values
+    .map((value, index) => {
+      const x = (index / Math.max(values.length - 1, 1)) * width;
+      const y = height - ((value - min) / range) * height;
+      return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+    })
+    .join(' ');
 }
 
-function getStageDotColor(stage: string | undefined): string {
-  if (!stage) return 'blue';
-  const s = stage.toLowerCase();
-  if (s.includes('execut')) return 'yellow';
-  if (s.includes('error') || s.includes('fail')) return 'red';
-  return 'green';
+function LineMiniChart({ points, color }: { points: ChartPoint[]; color: string }) {
+  const values = points.map((point) => point.value ?? 0);
+  const path = sparklinePath(values, 300, 90);
+  return (
+    <svg viewBox="0 0 300 90" className="mini-chart">
+      <path d={path} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
 }
 
-function formatUptime(startIso: string | undefined): string {
-  if (!startIso) return '—';
-  const start = new Date(startIso).getTime();
-  if (Number.isNaN(start)) return '—';
-  const seconds = Math.max(0, Math.floor((Date.now() - start) / 1000));
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+function DualBarChart({ points }: { points: ChartPoint[] }) {
+  const max = Math.max(1, ...points.flatMap((point) => [point.wins ?? 0, point.losses ?? 0]));
+  return (
+    <div className="dual-bars">
+      {points.slice(-12).map((point) => (
+        <div key={point.timestamp} className="dual-bar-item">
+          <div className="dual-bar-stack">
+            <div className="dual-bar win" style={{ height: `${((point.wins ?? 0) / max) * 100}%` }} />
+            <div className="dual-bar loss" style={{ height: `${((point.losses ?? 0) / max) * 100}%` }} />
+          </div>
+          <span>{point.timestamp.slice(5)}</span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
-function getModeBadgeClass(mode: string | undefined): string {
-  switch (mode) {
-    case 'LIVE':  return 'mode-badge mode-live';
-    case 'PAPER': return 'mode-badge mode-paper';
-    case 'DEV':   return 'mode-badge mode-dev';
-    default:      return 'mode-badge';
-  }
+function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) {
+  return (
+    <div className="section-header">
+      <div>
+        <h2>{title}</h2>
+        {subtitle ? <p>{subtitle}</p> : null}
+      </div>
+      {action}
+    </div>
+  );
 }
 
-type VerdictFilter = 'ALL' | 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'VETO';
-const VERDICT_FILTERS: VerdictFilter[] = ['ALL', 'BULLISH', 'BEARISH', 'NEUTRAL', 'VETO'];
-
-// ─── App ─────────────────────────────────────────────────────────────────────
-
-const App: React.FC = () => {
+function App() {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('token') ?? '';
 
   const { data, error } = useDashboardStream(token);
   const { isConnected, risk, thoughts, botState } = useTelemetry(token);
 
-  const [terminalOpen, setTerminalOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [approvalThreshold, setApprovalThreshold] = useState<number | string>('');
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-  const [terminalInput, setTerminalInput] = useState('');
-  const [verdictFilter, setVerdictFilter] = useState<VerdictFilter>('ALL');
-  const [, setNowTick] = useState(0); // forces uptime re-render every 30s
-  const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set());
-  const [pendingApprovalId, setPendingApprovalId] = useState<string | null>(null);
-  const terminalEndRef = useRef<HTMLDivElement>(null);
+  const [page, setPage] = useState<Page>('overview');
+  const [summary, setSummary] = useState<SummaryResponse | null>(null);
+  const [profitChart, setProfitChart] = useState<ChartResponse | null>(null);
+  const [winLossChart, setWinLossChart] = useState<ChartResponse | null>(null);
+  const [tradeHistory, setTradeHistory] = useState<TradeHistoryResponse | null>(null);
+  const [tradeSearch, setTradeSearch] = useState('');
+  const [tradeStatus, setTradeStatus] = useState('');
+  const [tradeVenue, setTradeVenue] = useState('');
+  const [tradePage, setTradePage] = useState(1);
+  const [positions, setPositions] = useState<OpenPosition[]>([]);
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [logs, setLogs] = useState<LogsResponse | null>(null);
+  const [config, setConfig] = useState<ConfigResponse | null>(null);
+  const [configForm, setConfigForm] = useState<Record<string, string>>({});
+  const [otpToken, setOtpToken] = useState('');
+  const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorInitiateResponse | null>(null);
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [systemMessage, setSystemMessage] = useState<string | null>(null);
+  const [systemError, setSystemError] = useState<string | null>(null);
+  const [isBusy, setIsBusy] = useState(false);
 
-  useEffect(() => {
-    if (settingsOpen) {
-      if (data?.runtime?.approval_threshold !== undefined) {
-        setApprovalThreshold(data.runtime.approval_threshold);
-      } else {
-        fetchSettings(token)
-          .then(res => setApprovalThreshold(res.approval_threshold))
-          .catch(err => console.error(err));
-      }
-    }
-  }, [settingsOpen, data?.runtime?.approval_threshold, token]);
-
-  const handleSaveSettings = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSettingsError(null);
-    const val = Number(approvalThreshold);
-    if (isNaN(val) || val < 0) {
-      setSettingsError('Please enter a valid positive number');
-      return;
-    }
+  const refreshDashboard = async () => {
+    if (!token) return;
     try {
-      await updateSettings(token, val);
-      setSettingsOpen(false);
+      const [summaryData, profitData, winLossData, positionsData] = await Promise.all([
+        fetchSummary(token),
+        fetchChartMetric(token, 'cumulative_profit'),
+        fetchChartMetric(token, 'win_loss'),
+        fetchOpenPositions(token),
+      ]);
+      setSummary(summaryData);
+      setProfitChart(profitData);
+      setWinLossChart(winLossData);
+      setPositions(positionsData.positions);
     } catch (err: any) {
-      setSettingsError(err.message || 'Failed to save settings');
+      setSystemError(err.message || 'Failed to load dashboard data.');
     }
   };
 
-  // Auto-scroll terminal
-  useEffect(() => {
-    if (terminalEndRef.current && terminalOpen) {
-      terminalEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [data?.terminal_messages, terminalOpen]);
-
-  // Re-render uptime every 30s
-  useEffect(() => {
-    const id = setInterval(() => setNowTick((n) => n + 1), 30000);
-    return () => clearInterval(id);
-  }, []);
-
-  const filteredThoughts = useMemo(() => {
-    if (verdictFilter === 'ALL') return thoughts;
-    return thoughts.filter((t) => t.verdict === verdictFilter);
-  }, [thoughts, verdictFilter]);
-
-  const handleSend = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    if (!terminalInput.trim()) return;
+  const refreshTradeHistory = async () => {
+    if (!token) return;
     try {
-      await sendTerminalCommand(terminalInput, token);
-      setTerminalInput('');
-    } catch (err) {
-      console.error('Command failed:', err);
+      const history = await fetchTradeHistory(token, {
+        page: tradePage,
+        pageSize: 12,
+        search: tradeSearch || undefined,
+        status: tradeStatus || undefined,
+        venue: tradeVenue || undefined,
+      });
+      setTradeHistory(history);
+    } catch (err: any) {
+      setSystemError(err.message || 'Failed to load trade history.');
     }
   };
 
-  // ── Guards ────────────────────────────────────────────────────────────────
+  const refreshHealth = async () => {
+    if (!token) return;
+    try {
+      const [healthData, logData] = await Promise.all([fetchSystemHealth(token), fetchSystemLogs(token, 80)]);
+      setHealth(healthData);
+      setLogs(logData);
+    } catch (err: any) {
+      setSystemError(err.message || 'Failed to load system health.');
+    }
+  };
+
+  const refreshConfig = async () => {
+    if (!token) return;
+    try {
+      const configData = await fetchConfig(token);
+      setConfig(configData);
+      setConfigForm(
+        Object.fromEntries(configData.items.map((item) => [item.key, String(item.value)])),
+      );
+    } catch (err: any) {
+      setSystemError(err.message || 'Failed to load config.');
+    }
+  };
+
+  useEffect(() => {
+    refreshDashboard();
+    refreshTradeHistory();
+    refreshHealth();
+    refreshConfig();
+    const interval = window.setInterval(() => {
+      refreshDashboard();
+      refreshHealth();
+    }, 15000);
+    return () => window.clearInterval(interval);
+  }, [token]);
+
+  useEffect(() => {
+    refreshTradeHistory();
+  }, [tradePage, tradeStatus, tradeVenue]);
+
+  const recentThoughts = useMemo(() => [...thoughts].reverse().slice(0, 6), [thoughts]);
+  const terminalMessages = useMemo(
+    () => (data?.terminal_messages ?? []).slice(-8).reverse(),
+    [data?.terminal_messages],
+  );
+  const currentMode = data?.runtime?.mode ?? summary?.mode ?? '—';
+  const currentStage = data?.stage ?? summary?.stage ?? botState ?? 'Initializing';
+  const currentBotState = data?.runtime?.desired_bot_state ?? summary?.bot_status ?? 'RUNNING';
+
+  const handleBotAction = async (action: 'start' | 'stop' | 'restart') => {
+    setIsBusy(true);
+    setSystemError(null);
+    setSystemMessage(null);
+    try {
+      const result = await controlBot(token, action);
+      setSystemMessage(`Bot ${result.action} request accepted.`);
+      await refreshDashboard();
+    } catch (err: any) {
+      setSystemError(err.message || `Failed to ${action} bot.`);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleSaveConfig = async () => {
+    if (!config) return;
+    setIsBusy(true);
+    setSystemError(null);
+    setSystemMessage(null);
+    try {
+      const updates = Object.fromEntries(
+        config.items
+          .filter((item) => configForm[item.key] !== String(item.value))
+          .map((item) => [item.key, configForm[item.key]]),
+      );
+      if (!Object.keys(updates).length) {
+        setSystemMessage('No settings changed.');
+        return;
+      }
+      const response = await updateConfig(token, updates, 'dashboard', otpToken || undefined);
+      setConfig(response);
+      setConfigForm(Object.fromEntries(response.items.map((item) => [item.key, String(item.value)])));
+      setOtpToken('');
+      setSystemMessage('Configuration updated.');
+    } catch (err: any) {
+      setSystemError(err.message || 'Failed to update configuration.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleInitiate2FA = async () => {
+    setIsBusy(true);
+    setSystemError(null);
+    setSystemMessage(null);
+    try {
+      const result = await initiateTwoFactor(token);
+      setTwoFactorSetup(result);
+      setSystemMessage('2FA setup secret generated. Verify with your authenticator code to enable it.');
+    } catch (err: any) {
+      setSystemError(err.message || 'Failed to initiate 2FA.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleVerify2FA = async () => {
+    setIsBusy(true);
+    setSystemError(null);
+    setSystemMessage(null);
+    try {
+      await verifyTwoFactor(token, twoFactorCode);
+      setTwoFactorCode('');
+      setTwoFactorSetup(null);
+      await refreshConfig();
+      setSystemMessage('2FA verification succeeded.');
+    } catch (err: any) {
+      setSystemError(err.message || 'Invalid 2FA code.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   if (!token) {
     return (
-      <div className="access-denied">
-        <Shield size={32} style={{ color: 'var(--text-subtle)' }} />
-        <span>Access denied — no <code>?token=</code> parameter provided.</span>
+      <div className="locked-screen">
+        <Shield size={28} />
+        <h1>Dashboard access denied</h1>
+        <p>Add a valid `?token=` query parameter to open the dashboard.</p>
       </div>
     );
   }
 
-  // ── Derived values ────────────────────────────────────────────────────────
-  const stage           = data?.stage ?? botState ?? 'Initializing';
-  const usagePct        = data?.metrics?.daily_usage_pct;
-  const dailyProfit     = data?.metrics?.daily_profit;
-  const accuracy        = data?.global_accuracy ?? 0;
-  const regime          = data?.market_regime?.regime ?? 'STABLE';
-  const regimeConf      = data?.market_regime?.confidence ?? 0;
-  const regimeStyle     = getRegimeStyle(regime);
-  const accuracyColor   = accuracy > 0.6 ? 'var(--green)' : accuracy < 0.4 ? 'var(--red)' : 'var(--yellow)';
-  const mode            = data?.runtime?.mode;
-  const botStartTime    = data?.runtime?.bot_start_time ?? data?.bot_start_time;
-  const uptime          = formatUptime(botStartTime);
-
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="app">
-
-      {/* ── HEADER ──────────────────────────────────────────────────────── */}
-      <header className="header">
-        <div className="header-left">
-          <div className="logo">
-            <div className="logo-mark">
-              <Activity size={14} color="white" />
-            </div>
-            Alpha Arbitrage Elite
+    <div className="dashboard-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">
+            <Activity size={16} />
           </div>
-
-          <div className="stage-badge">
-            <span className={`pulse-dot ${getStageDotColor(stage)}`} />
-            {stage.toUpperCase()}
+          <div>
+            <strong>Alpha Arbitrage</strong>
+            <span>Operations Console</span>
           </div>
+        </div>
 
-          {mode && (
-            <span
-              className={getModeBadgeClass(mode)}
-              title={
-                data?.runtime?.live_capital_danger
-                  ? 'LIVE CAPITAL DANGER is enabled'
-                  : `${mode} mode`
-              }
+        <div className="mode-card">
+          <span className={`status-dot ${isConnected ? 'live' : 'warn'}`} />
+          <div>
+            <strong>{currentStage}</strong>
+            <span>{currentMode} mode · {currentBotState}</span>
+          </div>
+        </div>
+
+        <nav className="nav">
+          {NAV_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              className={`nav-item ${page === item.key ? 'active' : ''}`}
+              onClick={() => setPage(item.key)}
             >
-              {mode}
-            </span>
-          )}
+              {item.icon}
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="mini-stat">
+            <span>Signals</span>
+            <strong>{summary?.open_signals ?? data?.active_signals?.length ?? 0}</strong>
+          </div>
+          <div className="mini-stat">
+            <span>Positions</span>
+            <strong>{summary?.open_positions ?? positions.length}</strong>
+          </div>
         </div>
+      </aside>
 
-        <div className="header-right">
-          <div className="status-pill" title={botStartTime ?? ''}>
-            <Clock size={11} />
-            {uptime}
+      <main className="workspace">
+        <header className="topbar">
+          <div>
+            <h1>{NAV_ITEMS.find((item) => item.key === page)?.label}</h1>
+            <p>Live trading intelligence, controls, and audit visibility in one place.</p>
           </div>
-
-          <div className="divider" />
-
-          <div className="status-pill">
-            <span className={`pulse-dot ${isConnected ? 'green' : 'yellow'}`} />
-            {isConnected ? 'Live' : 'Reconnecting'}
-          </div>
-
-          <div className="divider" />
-
-          <button className="btn btn-default" onClick={() => setSettingsOpen(true)}>
-            <SettingsIcon size={12} />
-            Settings
+          <button className="ghost-btn" onClick={() => { refreshDashboard(); refreshTradeHistory(); refreshHealth(); refreshConfig(); }}>
+            <RefreshCw size={14} />
+            Refresh
           </button>
-          <button className="btn btn-default" onClick={() => setTerminalOpen(true)}>
-            <TerminalIcon size={12} />
-            Terminal
-          </button>
-        </div>
-      </header>
+        </header>
 
-      {/* ── KPI STRIP ───────────────────────────────────────────────────── */}
-      <div className="kpi-strip">
-        {/* T212 Budget */}
-        <div className="kpi-item">
-          <div className="kpi-label">
-            <span className="venue-pill venue-t212">T212</span>
-            Budget
-          </div>
-          <div className="kpi-value">{fmtCurrency(data?.metrics?.t212?.daily_budget)}</div>
-          <div className="progress-bar">
-            <div
-              className="progress-fill"
-              style={{
-                width: `${Math.min(data?.metrics?.t212?.daily_usage_pct ?? 0, 100)}%`,
-                background:
-                  (data?.metrics?.t212?.daily_usage_pct ?? 0) > 90
-                    ? 'var(--red)'
-                    : (data?.metrics?.t212?.daily_usage_pct ?? 0) > 70
-                    ? 'var(--yellow)'
-                    : 'var(--accent)',
-              }}
-            />
-          </div>
-          <div className="kpi-sub">
-            {data?.metrics?.t212?.daily_usage_pct == null
-              ? 'Usage unavailable'
-              : `${data.metrics.t212.daily_usage_pct.toFixed(1)}% utilized`}
-          </div>
-        </div>
+        {systemMessage ? <div className="banner success">{systemMessage}</div> : null}
+        {systemError || error ? <div className="banner error">{systemError || error}</div> : null}
 
-        {/* WEB3 Budget */}
-        <div className="kpi-item">
-          <div className="kpi-label">
-            <span className="venue-pill venue-web3">WEB3</span>
-            Budget
-          </div>
-          <div className="kpi-value">{fmtCurrency(data?.metrics?.web3?.daily_budget)}</div>
-          <div className="progress-bar">
-            <div
-              className="progress-fill"
-              style={{
-                width: `${Math.min(data?.metrics?.web3?.daily_usage_pct ?? 0, 100)}%`,
-                background:
-                  (data?.metrics?.web3?.daily_usage_pct ?? 0) > 90
-                    ? 'var(--red)'
-                    : (data?.metrics?.web3?.daily_usage_pct ?? 0) > 70
-                    ? 'var(--yellow)'
-                    : '#8b5cf6',
-              }}
-            />
-          </div>
-          <div className="kpi-sub">
-            {data?.metrics?.web3?.daily_usage_pct == null
-              ? 'Usage unavailable'
-              : `${data.metrics.web3.daily_usage_pct.toFixed(1)}% utilized`}
-          </div>
-        </div>
-
-        {/* Capital Deployed (per-venue breakdown) */}
-        <div className="kpi-item">
-          <div className="kpi-label">Capital Deployed</div>
-          <div className="kpi-value">{fmtCurrency(data?.metrics?.total_invested)}</div>
-          <div className="kpi-sub venue-breakdown">
-            <span>
-              <span className="venue-dot venue-dot-t212" />
-              T212: {fmtCurrency(data?.metrics?.t212?.total_invested)}
-            </span>
-            <span>
-              <span className="venue-dot venue-dot-web3" />
-              WEB3: {fmtCurrency(data?.metrics?.web3?.total_invested)}
-            </span>
-          </div>
-        </div>
-
-        {/* Daily P&L (per-venue breakdown) */}
-        <div className="kpi-item">
-          <div className="kpi-label">Daily P&L</div>
-          <div
-            className={`kpi-value ${
-              dailyProfit == null ? 'muted' : dailyProfit >= 0 ? 'positive' : 'negative'
-            }`}
-          >
-            {fmtCurrency(dailyProfit)}
-          </div>
-          <div className="kpi-sub venue-breakdown">
-            <span>
-              <span className="venue-dot venue-dot-t212" />
-              {fmtCurrency(data?.metrics?.t212?.daily_profit)}
-            </span>
-            <span>
-              <span className="venue-dot venue-dot-web3" />
-              {fmtCurrency(data?.metrics?.web3?.daily_profit)}
-            </span>
-          </div>
-        </div>
-
-        {/* Strategy Accuracy (global) */}
-        <div className="kpi-item">
-          <div className="kpi-label">Strategy Accuracy</div>
-          <div
-            className={`kpi-value ${
-              accuracy > 0.6 ? 'positive' : accuracy < 0.4 ? 'negative' : ''
-            }`}
-          >
-            {(accuracy * 100).toFixed(1)}%
-          </div>
-          <div className="kpi-sub">
-            {accuracy > 0.6 ? 'Optimal' : accuracy < 0.4 ? 'Caution active' : 'Nominal'}
-          </div>
-        </div>
-      </div>
-
-      {/* ── MAIN ────────────────────────────────────────────────────────── */}
-      <div className="main">
-
-        {/* ── SIDEBAR ─────────────────────────────────────────────────── */}
-        <aside className="sidebar">
-
-          {/* Risk Telemetry */}
-          <div className="section">
-            <div className="section-title">
-              <Shield size={12} />
-              Risk Telemetry
+        {page === 'overview' && (
+          <>
+            <SectionHeader title="Real-Time Overview" subtitle="Core trading and runtime indicators." />
+            <div className="card-grid metrics">
+              <div className="metric-card">
+                <span>Current Balance</span>
+                <strong>{formatCurrency(summary?.current_balance)}</strong>
+                <small>Spendable cash across venues</small>
+              </div>
+              <div className="metric-card">
+                <span>Trades Today</span>
+                <strong>{summary?.trades_today ?? 0}</strong>
+                <small>{summary?.closed_trades ?? 0} closed lifetime</small>
+              </div>
+              <div className="metric-card">
+                <span>Win Rate</span>
+                <strong>{formatPercent(summary?.win_rate)}</strong>
+                <small>{summary?.wins ?? 0} wins / {summary?.losses ?? 0} losses</small>
+              </div>
+              <div className="metric-card">
+                <span>System Uptime</span>
+                <strong>{summary?.system_uptime_human ?? '—'}</strong>
+                <small>{summary?.cpu_pct?.toFixed(1) ?? '—'}% CPU · {summary?.memory_pct?.toFixed(1) ?? '—'}% memory</small>
+              </div>
             </div>
-            <div className="risk-grid">
-              <div className="risk-item">
-                <div className="risk-label">Risk Mult.</div>
-                <div
-                  className="risk-value"
-                  style={{ color: (risk?.risk_multiplier ?? 1) < 0.5 ? 'var(--yellow)' : 'var(--text)' }}
-                >
-                  {(risk?.risk_multiplier ?? 1).toFixed(2)}×
+
+            <div className="card-grid two-up">
+              <section className="panel">
+                <SectionHeader title="Profit Trajectory" subtitle="Cumulative realized profit from closed trades." />
+                {profitChart?.points?.length ? (
+                  <LineMiniChart points={profitChart.points} color="var(--emerald)" />
+                ) : (
+                  <div className="empty">No chart data yet.</div>
+                )}
+                <div className="panel-footer">
+                  <span className={getTrendClass(summary?.profit_today)}>{formatCurrency(summary?.profit_today)}</span>
+                  <span>Today’s realized P&L</span>
                 </div>
-              </div>
-              <div className="risk-item">
-                <div className="risk-label">Max Drawdown</div>
-                <div
-                  className="risk-value"
-                  style={{ color: (risk?.max_drawdown_pct ?? 0) > 0.1 ? 'var(--red)' : 'var(--text)' }}
-                >
-                  {((risk?.max_drawdown_pct ?? 0) * 100).toFixed(1)}%
-                </div>
-              </div>
-              <div className="risk-item">
-                <div className="risk-label">L2 Entropy</div>
-                <div
-                  className="risk-value"
-                  style={{ color: (risk?.l2_entropy ?? 0) > 0.7 ? 'var(--yellow)' : 'var(--text)' }}
-                >
-                  {(risk?.l2_entropy ?? 0).toFixed(3)}
-                </div>
-              </div>
-              <div className="risk-item">
-                <div className="risk-label">Volatility</div>
-                <div
-                  className="risk-value"
-                  style={{
-                    fontSize: '13px',
-                    color: risk?.volatility_status === 'HIGH_VOLATILITY' ? 'var(--red)' : 'var(--green)',
-                  }}
-                >
-                  {risk?.volatility_status === 'HIGH_VOLATILITY' ? 'High' : 'Normal'}
-                </div>
-              </div>
-            </div>
-          </div>
+              </section>
 
-          {/* Market Regime */}
-          <div className="section">
-            <div className="section-title">
-              <Radio size={12} />
-              Market Regime
-            </div>
-            <div className="regime-card">
-              <div
-                className="regime-icon"
-                style={{ background: regimeStyle.bg, color: regimeStyle.color }}
-              >
-                {getRegimeIcon(regime)}
-              </div>
-              <div>
-                <div className="regime-name">
-                  {regime.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
-                </div>
-                <div className="regime-confidence">
-                  Confidence: {(regimeConf * 100).toFixed(1)}%
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Model Intelligence */}
-          <div className="section">
-            <div className="section-title">
-              <Brain size={12} />
-              Model Intelligence
-            </div>
-            <div className="accuracy-row">
-              <span>Historical accuracy</span>
-              <span className="accuracy-value" style={{ color: accuracyColor }}>
-                {(accuracy * 100).toFixed(1)}%
-              </span>
-            </div>
-            <div className="progress-bar" style={{ height: '6px' }}>
-              <div
-                className="progress-fill"
-                style={{ width: `${accuracy * 100}%`, background: accuracyColor }}
-              />
-            </div>
-            <div className="kpi-sub" style={{ marginTop: '8px' }}>
-              {accuracy > 0.6
-                ? '✓ Optimal — full Kelly sizing active'
-                : accuracy < 0.4
-                ? '⚠ Caution — penalty multiplier engaged'
-                : 'Nominal operating range'}
-            </div>
-          </div>
-
-        </aside>
-
-        {/* ── CONTENT ─────────────────────────────────────────────────── */}
-        <div className="content">
-          <div className="content-grid">
-
-            {/* Top-left: Active Signals */}
-            <div className="panel">
-              <div className="panel-header">
-                <Zap size={12} />
-                Active Signals
-                <span className="panel-count">{data?.active_signals?.length ?? 0}</span>
-              </div>
-              <div className="panel-body">
-                <AnimatePresence>
-                  {data?.active_signals && data.active_signals.length > 0 ? (
-                    data.active_signals.map((sig, idx) => (
-                      <motion.div
-                        key={`${sig.ticker_a}-${sig.ticker_b}-${idx}`}
-                        className="signal-card"
-                        initial={{ opacity: 0, y: -6 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0 }}
-                        layout
-                      >
-                        <div className="signal-top">
-                          <span className="signal-pair">
-                            {sig.ticker_a} / {sig.ticker_b}
-                          </span>
-                          <span className={`badge ${getSignalBadge(sig.status)}`}>
-                            {sig.status}
-                          </span>
-                        </div>
-                        <div className="signal-meta">
-                          <span>
-                            Z-score:{' '}
-                            <span className="z-score-value">{sig.z_score.toFixed(3)}</span>
-                          </span>
-                        </div>
-                      </motion.div>
-                    ))
-                  ) : (
-                    <div className="empty-state">
-                      <Radio size={28} style={{ opacity: 0.3 }} />
-                      <span>Scanning market for signals…</span>
+              <section className="panel">
+                <SectionHeader title="Open Positions" subtitle="Live mark-to-market snapshot." />
+                <div className="list">
+                  {positions.length ? positions.slice(0, 5).map((position) => (
+                    <div className="list-row" key={position.signal_id}>
+                      <div>
+                        <strong>{position.ticker_a} / {position.ticker_b}</strong>
+                        <span>{formatDateTime(position.opened_at)}</span>
+                      </div>
+                      <div className={`value ${getTrendClass(position.pnl)}`}>
+                        {formatCurrency(position.pnl)}
+                      </div>
                     </div>
-                  )}
-                </AnimatePresence>
-              </div>
+                  )) : <div className="empty">No open positions.</div>}
+                </div>
+              </section>
             </div>
 
-            {/* Top-right: Open Positions */}
-            <PositionsPanel token={token} />
+            <div className="card-grid two-up">
+              <section className="panel">
+                <SectionHeader title="Risk Telemetry" subtitle="Live guardrails from the telemetry stream." />
+                <div className="risk-grid">
+                  <div><span>Risk Mult.</span><strong>{formatCompact(risk?.risk_multiplier)}</strong></div>
+                  <div><span>Drawdown</span><strong>{formatPercent(risk?.max_drawdown_pct)}</strong></div>
+                  <div><span>L2 Entropy</span><strong>{formatCompact(risk?.l2_entropy)}</strong></div>
+                  <div><span>Volatility</span><strong>{risk?.volatility_status ?? '—'}</strong></div>
+                </div>
+              </section>
 
-            {/* Bottom (full width): Agent Reasoning Log */}
-            <div className="panel grid-span-2">
-              <div className="panel-header">
-                <Brain size={12} />
-                Agent Reasoning Log
-                <span className="panel-count">{filteredThoughts.length}</span>
-                <div className="verdict-filter">
-                  <Filter size={11} />
-                  {VERDICT_FILTERS.map((v) => (
-                    <button
-                      key={v}
-                      className={`verdict-chip ${verdictFilter === v ? 'active' : ''}`}
-                      style={
-                        verdictFilter === v && v !== 'ALL'
-                          ? {
-                              color: getVerdictColor(v),
-                              borderColor: getVerdictColor(v),
-                            }
-                          : undefined
-                      }
-                      onClick={() => setVerdictFilter(v)}
-                    >
-                      {v}
-                    </button>
+              <section className="panel">
+                <SectionHeader title="Agent Reasoning" subtitle="Most recent model-side commentary." />
+                <div className="feed">
+                  {recentThoughts.length ? recentThoughts.map((thought, index) => (
+                    <div className="feed-item" key={`${thought.signal_id ?? 'thought'}-${index}`}>
+                      <strong>{thought.agent_name}</strong>
+                      <span>{thought.verdict}</span>
+                      <p>{thought.thought}</p>
+                    </div>
+                  )) : <div className="empty">No recent reasoning events.</div>}
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+
+        {page === 'analytics' && (
+          <>
+            <SectionHeader title="Performance Analytics" subtitle="Trade performance and realized outcome trends." />
+            <div className="card-grid two-up">
+              <section className="panel">
+                <SectionHeader title="Cumulative Profit" subtitle="Line view of total realized P&L." />
+                {profitChart?.points?.length ? <LineMiniChart points={profitChart.points} color="var(--gold)" /> : <div className="empty">No data yet.</div>}
+              </section>
+              <section className="panel">
+                <SectionHeader title="Win / Loss by Day" subtitle="Daily distribution of positive and negative closes." />
+                {winLossChart?.points?.length ? <DualBarChart points={winLossChart.points} /> : <div className="empty">No data yet.</div>}
+              </section>
+            </div>
+            <div className="card-grid metrics">
+              <div className="metric-card">
+                <span>Total Closed Trades</span>
+                <strong>{summary?.closed_trades ?? 0}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Capital Deployed</span>
+                <strong>{formatCurrency(summary?.capital_deployed)}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Open Signals</span>
+                <strong>{summary?.open_signals ?? 0}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Open Positions</span>
+                <strong>{summary?.open_positions ?? 0}</strong>
+              </div>
+            </div>
+          </>
+        )}
+
+        {page === 'trades' && (
+          <>
+            <SectionHeader title="Trade History" subtitle="Search and filter executed trade groups." />
+            <div className="toolbar">
+              <label className="search-box">
+                <Search size={14} />
+                <input
+                  value={tradeSearch}
+                  onChange={(event) => setTradeSearch(event.target.value)}
+                  placeholder="Search ticker or signal id"
+                />
+              </label>
+              <select value={tradeStatus} onChange={(event) => { setTradePage(1); setTradeStatus(event.target.value); }}>
+                <option value="">All statuses</option>
+                <option value="OPEN">Open</option>
+                <option value="CLOSED">Closed</option>
+                <option value="COMPLETED">Completed</option>
+              </select>
+              <select value={tradeVenue} onChange={(event) => { setTradePage(1); setTradeVenue(event.target.value); }}>
+                <option value="">All venues</option>
+                <option value="T212">T212</option>
+                <option value="WEB3">WEB3</option>
+              </select>
+              <button className="ghost-btn" onClick={() => { setTradePage(1); refreshTradeHistory(); }}>Apply</button>
+            </div>
+            <section className="panel">
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Pair</th>
+                      <th>Status</th>
+                      <th>Venue</th>
+                      <th>Opened</th>
+                      <th>Notional</th>
+                      <th>P&L</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tradeHistory?.items?.length ? tradeHistory.items.map((trade) => (
+                      <tr key={trade.signal_id}>
+                        <td>
+                          <strong>{trade.pair}</strong>
+                          <div className="muted">#{trade.signal_id.slice(0, 8)}</div>
+                        </td>
+                        <td>{trade.status}</td>
+                        <td>{trade.venue}</td>
+                        <td>{formatDateTime(trade.opened_at)}</td>
+                        <td>{formatCurrency(trade.notional)}</td>
+                        <td className={getTrendClass(trade.pnl)}>{formatCurrency(trade.pnl)}</td>
+                      </tr>
+                    )) : (
+                      <tr>
+                        <td colSpan={6} className="empty-row">No trades matched the current filters.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              <div className="table-footer">
+                <span>{tradeHistory?.total ?? 0} results</span>
+                <div className="pager">
+                  <button className="ghost-btn" disabled={tradePage === 1} onClick={() => setTradePage((current) => Math.max(1, current - 1))}>Previous</button>
+                  <span>Page {tradePage}</span>
+                  <button
+                    className="ghost-btn"
+                    disabled={!!tradeHistory && tradeHistory.page * tradeHistory.page_size >= tradeHistory.total}
+                    onClick={() => setTradePage((current) => current + 1)}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </section>
+          </>
+        )}
+
+        {page === 'control' && (
+          <>
+            <SectionHeader title="Bot Control" subtitle="Operational state, restart queueing, and recent terminal activity." />
+            <div className="card-grid metrics">
+              <div className="metric-card">
+                <span>Bot Status</span>
+                <strong>{currentBotState}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Runtime Stage</span>
+                <strong>{currentStage}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Mode</span>
+                <strong>{currentMode}</strong>
+              </div>
+              <div className="metric-card">
+                <span>Connection</span>
+                <strong>{isConnected ? 'Live' : 'Reconnecting'}</strong>
+              </div>
+            </div>
+            <div className="control-strip">
+              <button className="primary-btn" disabled={isBusy} onClick={() => handleBotAction('start')}>
+                <Play size={14} />
+                Start
+              </button>
+              <button className="ghost-btn" disabled={isBusy} onClick={() => handleBotAction('stop')}>
+                <Square size={14} />
+                Stop
+              </button>
+              <button className="ghost-btn" disabled={isBusy} onClick={() => handleBotAction('restart')}>
+                <RefreshCw size={14} />
+                Restart
+              </button>
+            </div>
+            <div className="card-grid two-up">
+              <section className="panel">
+                <SectionHeader title="Terminal Feed" subtitle="Most recent dashboard terminal messages." />
+                <div className="terminal-feed">
+                  {terminalMessages.length ? terminalMessages.map((message, index) => (
+                    <TerminalLine key={`${message.timestamp}-${index}`} message={message} />
+                  )) : <div className="empty">No terminal activity yet.</div>}
+                </div>
+              </section>
+              <section className="panel">
+                <SectionHeader title="Recent Logs" subtitle="Latest file-backed log lines." />
+                <div className="log-feed">
+                  {logs?.lines?.length ? logs.lines.slice(-12).map((line, index) => (
+                    <code key={`${line}-${index}`}>{line}</code>
+                  )) : <div className="empty">No recent log lines.</div>}
+                </div>
+              </section>
+            </div>
+          </>
+        )}
+
+        {page === 'settings' && (
+          <>
+            <SectionHeader title="Configuration" subtitle="Dashboard-editable runtime values with 2FA for sensitive changes." />
+            <div className="card-grid two-up">
+              <section className="panel">
+                <SectionHeader title="Editable Variables" subtitle="Sensitive changes require a current OTP or backup code." />
+                <div className="settings-grid">
+                  {config?.items.map((item) => (
+                    <label key={item.key} className="setting-field">
+                      <span>{item.key}{item.sensitive ? ' · 2FA' : ''}</span>
+                      <input
+                        value={configForm[item.key] ?? ''}
+                        onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                      />
+                    </label>
                   ))}
                 </div>
-              </div>
-              <div className="panel-body">
-                <AnimatePresence initial={false}>
-                  {filteredThoughts.length > 0 ? (
-                    [...filteredThoughts]
-                      .reverse()
-                      .slice(0, 60)
-                      .map((t, idx) => (
-                        <motion.div
-                          key={`${t.signal_id ?? 'x'}-${idx}`}
-                          className="thought-item"
-                          style={{ borderLeftColor: getVerdictColor(t.verdict) }}
-                          initial={{ opacity: 0, x: -6 }}
-                          animate={{ opacity: 1, x: 0 }}
-                          exit={{ opacity: 0 }}
-                        >
-                          <div className="thought-header">
-                            <span
-                              className="thought-agent"
-                              style={{ color: getVerdictColor(t.verdict) }}
-                            >
-                              {t.agent_name}
-                            </span>
-                            <span
-                              className="thought-verdict"
-                              style={{
-                                background: `${getVerdictColor(t.verdict)}20`,
-                                color: getVerdictColor(t.verdict),
-                              }}
-                            >
-                              {t.verdict}
-                            </span>
-                            {t.signal_id && (
-                              <span className="thought-id">
-                                {t.signal_id.slice(0, 8)}
-                              </span>
-                            )}
-                          </div>
-                          <div className="thought-text">{t.thought}</div>
-                        </motion.div>
-                      ))
-                  ) : (
-                    <div className="empty-state">
-                      <Brain size={28} style={{ opacity: 0.3 }} />
-                      <span>
-                        {thoughts.length > 0
-                          ? `No thoughts match filter "${verdictFilter}"`
-                          : 'No agent activity yet'}
-                      </span>
+                <label className="setting-field">
+                  <span>OTP / Backup Code</span>
+                  <input
+                    value={otpToken}
+                    onChange={(event) => setOtpToken(event.target.value)}
+                    placeholder="Required for sensitive changes"
+                  />
+                </label>
+                <div className="inline-actions">
+                  <button className="primary-btn" disabled={isBusy} onClick={handleSaveConfig}>Save Changes</button>
+                </div>
+              </section>
+
+              <section className="panel">
+                <SectionHeader title="Two-Factor Auth" subtitle="Authenticator-based gate for sensitive config writes." />
+                <div className="twofa-status">
+                  <div><span>Enabled</span><strong>{config?.two_factor.enabled ? 'Yes' : 'No'}</strong></div>
+                  <div><span>Pending Setup</span><strong>{config?.two_factor.pending_setup ? 'Yes' : 'No'}</strong></div>
+                  <div><span>Backup Codes Left</span><strong>{config?.two_factor.backup_codes_remaining ?? 0}</strong></div>
+                </div>
+                <div className="inline-actions">
+                  <button className="ghost-btn" disabled={isBusy} onClick={handleInitiate2FA}>Generate Setup Secret</button>
+                </div>
+                {twoFactorSetup ? (
+                  <div className="twofa-setup">
+                    <p>Secret: <code>{twoFactorSetup.secret}</code></p>
+                    <p>otpauth URI:</p>
+                    <code className="block-code">{twoFactorSetup.otpauth_url}</code>
+                    <p>Backup codes:</p>
+                    <div className="code-grid">
+                      {twoFactorSetup.backup_codes.map((code) => <code key={code}>{code}</code>)}
                     </div>
-                  )}
-                </AnimatePresence>
+                    <div className="inline-actions">
+                      <input
+                        value={twoFactorCode}
+                        onChange={(event) => setTwoFactorCode(event.target.value)}
+                        placeholder="Enter authenticator code"
+                      />
+                      <button className="primary-btn" disabled={isBusy} onClick={handleVerify2FA}>Verify & Enable</button>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            </div>
+            <section className="panel">
+              <SectionHeader title="Audit Log" subtitle="Recent configuration changes and 2FA usage." />
+              <div className="list">
+                {config?.audit_log?.length ? config.audit_log.map((entry, index) => (
+                  <div className="list-row audit-row" key={`${entry.key}-${entry.timestamp}-${index}`}>
+                    <div>
+                      <strong>{entry.key}</strong>
+                      <span>{entry.actor} · {formatDateTime(entry.timestamp)}</span>
+                    </div>
+                    <div className="audit-values">
+                      <span>{String(entry.old_value)}</span>
+                      <span>→</span>
+                      <span>{String(entry.new_value)}</span>
+                      {entry.requires_2fa ? <em>2FA</em> : null}
+                    </div>
+                  </div>
+                )) : <div className="empty">No config changes recorded yet.</div>}
+              </div>
+            </section>
+          </>
+        )}
+
+        {page === 'health' && (
+          <>
+            <SectionHeader title="System Health" subtitle="CPU, memory, network, and event visibility." />
+            <div className="card-grid metrics">
+              <div className="metric-card">
+                <span>CPU</span>
+                <strong>{health?.current.cpu_pct?.toFixed(1) ?? '—'}%</strong>
+              </div>
+              <div className="metric-card">
+                <span>System Memory</span>
+                <strong>{health?.current.system_memory_pct?.toFixed(1) ?? '—'}%</strong>
+              </div>
+              <div className="metric-card">
+                <span>Process RSS</span>
+                <strong>{health?.current.rss_mb?.toFixed(1) ?? '—'} MB</strong>
+              </div>
+              <div className="metric-card">
+                <span>Threads</span>
+                <strong>{health?.current.threads ?? '—'}</strong>
               </div>
             </div>
-
-          </div>
-        </div>
-
-        {/* ── PAIRS RAIL (right) ──────────────────────────────────────── */}
-        <aside className="pairs-rail">
-          <PairsPanel token={token} />
-        </aside>
-      </div>
-
-      {/* Terminal Modal */}
-      <AnimatePresence>
-        {terminalOpen && (
-          <motion.div
-            className="overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={(e) => e.target === e.currentTarget && setTerminalOpen(false)}
-          >
-            <motion.div
-              className="terminal-window"
-              initial={{ scale: 0.96, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.96, opacity: 0, y: 10 }}
-              transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-            >
-              <div className="terminal-header">
-                <div className="terminal-dots">
-                  <span className="td-red" onClick={() => setTerminalOpen(false)} />
-                  <span className="td-yellow" />
-                  <span className="td-green" />
-                </div>
-                <span className="terminal-title">arbi_elite — terminal</span>
-                <button className="terminal-close-btn" onClick={() => setTerminalOpen(false)}>
-                  <X size={14} />
-                </button>
-              </div>
-
-              <div className="terminal-body">
-                {data?.terminal_messages?.map((msg, idx) => (
-                  <React.Fragment key={idx}>
-                    <div className="terminal-line">
-                      <span
-                        className="terminal-line-type"
-                        style={{
-                          color:
-                            msg.type === 'BOT'
-                              ? 'var(--accent)'
-                              : msg.type === 'USER'
-                              ? 'var(--green)'
-                              : 'var(--text-muted)',
-                        }}
-                      >
-                        [{msg.type}]
-                      </span>
-                      <span className="terminal-line-text">{msg.text}</span>
-                    </div>
-                    {msg.metadata?.type === 'approval' && (() => {
-                      const cid: string = msg.metadata.correlation_id;
-                      const isApproved = approvedIds.has(cid);
-                      const isPending = pendingApprovalId === cid;
-                      return (
-                        <button
-                          className={`approval-btn${isApproved ? ' approved' : ''}`}
-                          disabled={isApproved || isPending}
-                          onClick={async () => {
-                            if (isApproved || isPending) return;
-                            setPendingApprovalId(cid);
-                            try {
-                              await sendTerminalCommand(`/approve ${cid}`, token);
-                              setApprovedIds((prev) => new Set(prev).add(cid));
-                            } catch {
-                              // Expired / already used — mark it consumed so it
-                              // stops showing as clickable.
-                              setApprovedIds((prev) => new Set(prev).add(cid));
-                            } finally {
-                              setPendingApprovalId(null);
-                            }
-                          }}
-                        >
-                          <CheckCircle size={12} />
-                          {isApproved ? `Approved ${cid}` : isPending ? 'Approving…' : `Approve ${cid}`}
-                        </button>
-                      );
-                    })()}
-                  </React.Fragment>
-                ))}
-                <div ref={terminalEndRef} />
-              </div>
-
-              <form className="terminal-footer" onSubmit={handleSend}>
-                <span className="terminal-prompt">$</span>
-                <input
-                  className="terminal-input"
-                  value={terminalInput}
-                  onChange={(e) => setTerminalInput(e.target.value)}
-                  placeholder="Enter command..."
-                  autoFocus
-                />
-                <button type="submit" className="terminal-send-btn">
-                  <Send size={14} />
-                </button>
-              </form>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Settings Modal */}
-      <AnimatePresence>
-        {settingsOpen && (
-          <motion.div
-            className="overlay"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={(e) => e.target === e.currentTarget && setSettingsOpen(false)}
-          >
-            <motion.div
-              className="editor-window settings-window"
-              initial={{ scale: 0.96, opacity: 0, y: 10 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.96, opacity: 0, y: 10 }}
-              transition={{ type: 'spring', stiffness: 320, damping: 32 }}
-            >
-              <div className="panel-header">
-                <SettingsIcon size={14} />
-                Bot Settings
-              </div>
-              <div className="editor-body">
-                <form onSubmit={handleSaveSettings}>
-                  <div className="settings-input-group">
-                    <label className="settings-label">Auto-Trade Threshold (EUR)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      className="settings-input"
-                      value={approvalThreshold}
-                      onChange={(e) => setApprovalThreshold(e.target.value)}
-                      placeholder="e.g. 100.0"
-                    />
-                    <div className="settings-help">
-                      Trades below this amount execute automatically. Trades at or above this amount require your manual approval.
-                    </div>
+            <div className="card-grid two-up">
+              <section className="panel">
+                <SectionHeader title="CPU History" subtitle="Recent process and host samples." />
+                {health?.history?.length ? (
+                  <LineMiniChart
+                    points={health.history.map((point) => ({ timestamp: point.timestamp, value: point.cpu_pct ?? 0 }))}
+                    color="var(--crimson)"
+                  />
+                ) : <div className="empty">No health samples yet.</div>}
+              </section>
+              <section className="panel">
+                <SectionHeader title="Memory History" subtitle="Recent host memory utilization." />
+                {health?.history?.length ? (
+                  <LineMiniChart
+                    points={health.history.map((point) => ({ timestamp: point.timestamp, value: point.system_memory_pct ?? 0 }))}
+                    color="var(--teal)"
+                  />
+                ) : <div className="empty">No health samples yet.</div>}
+              </section>
+            </div>
+            <section className="panel">
+              <SectionHeader title="Recent Events" subtitle={logs?.file ? `Log source: ${logs.file}` : 'SQLite event feed'} />
+              <div className="feed">
+                {logs?.events?.length ? logs.events.slice(0, 10).map((event, index) => (
+                  <div className="feed-item" key={`${event.timestamp}-${index}`}>
+                    <strong>{event.source}</strong>
+                    <span>{event.level} · {formatDateTime(event.timestamp)}</span>
+                    <p>{event.message}</p>
                   </div>
-                  {settingsError && <div className="editor-msg error">{settingsError}</div>}
-                  <div className="editor-footer" style={{ padding: '16px 0 0', border: 'none', background: 'none' }}>
-                    <div className="editor-footer-spacer" />
-                    <button type="button" className="btn btn-default" onClick={() => setSettingsOpen(false)}>Cancel</button>
-                    <button type="submit" className="btn btn-primary">Save Settings</button>
-                  </div>
-                </form>
+                )) : <div className="empty">No recent events captured.</div>}
               </div>
-            </motion.div>
-          </motion.div>
+            </section>
+          </>
         )}
-      </AnimatePresence>
-
-      {/* Error Toast */}
-      <AnimatePresence>
-        {error && (
-          <motion.div
-            className="toast-error"
-            initial={{ x: 80, opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: 80, opacity: 0 }}
-          >
-            <AlertTriangle size={14} />
-            {error}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      </main>
     </div>
   );
-};
+}
+
+function TerminalLine({ message }: { message: TerminalMessage }) {
+  return (
+    <div className="terminal-line">
+      <div>
+        <strong>[{message.type}]</strong>
+        <span>{formatDateTime(message.timestamp)}</span>
+      </div>
+      <p>{message.text}</p>
+    </div>
+  );
+}
 
 export default App;
