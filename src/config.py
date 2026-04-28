@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, model_validator
 
 load_dotenv()
 
@@ -93,6 +93,7 @@ class Settings(BaseSettings):
     TRADING_212_MODE: str = "demo"
     DEV_MODE: bool = False
     PAPER_TRADING: bool = True
+    PAPER_TRADING_STARTING_CASH: float = Field(default=10000.0, validation_alias="PAPER_TRADING_STARTING_CASH")
     T212_BUDGET_USD: float = Field(default=0.0, validation_alias="T212_BUDGET_USD")
     WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 10.0
@@ -586,6 +587,15 @@ class Settings(BaseSettings):
             and self.WEB3_PRIVATE_KEY.strip()
             and self.WEB3_ROUTER_ADDRESS.strip()
         )
+
+    @model_validator(mode="after")
+    def validate_secrets(self):
+        if not self.POSTGRES_PASSWORD or self.POSTGRES_PASSWORD == "bot_pass":
+            raise ValueError("POSTGRES_PASSWORD must be set to a non-default secret")
+        dashboard_token = self.DASHBOARD_TOKEN.strip().strip('"').strip("'")
+        if not dashboard_token or dashboard_token == "arbi-elite-2026":
+            raise ValueError("DASHBOARD_TOKEN must be set to a non-default secret")
+        return self
 
 settings = Settings()
 
