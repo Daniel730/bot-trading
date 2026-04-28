@@ -40,6 +40,6 @@ describe('Telemetry Memory Stability', () => {
     });
 
     expect(result.current.thoughts.length).toBe(100);
-    expect(result.current.thoughts.slice(-1)[0]).toBe(100);
+    expect(result.current.thoughts.at(-1)?.thought).toBe('Msg 4999');
   });
 });

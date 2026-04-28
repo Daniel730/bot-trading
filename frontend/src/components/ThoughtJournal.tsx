@@ -25,6 +25,7 @@ const ThoughtJournal: React.FC<ThoughtJournalProps> = ({ thoughts }) => {
         {[...displayThoughts].reverse().map((thought, idx) => (
           <motion.div
             key={`${thought.signal_id}-${idx}`}
+            className="thought-journal-item"
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0 }}
