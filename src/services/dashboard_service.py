@@ -730,20 +730,38 @@ class DashboardService:
             "history": list(self.health_history),
         }
 
+    def _tail_log_file(self, path: Path, limit: int) -> List[str]:
+        max_bytes = 1024 * 1024
+        limit = max(1, limit)
+        try:
+            with path.open("rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - max_bytes))
+                data = fh.read()
+        except Exception as exc:
+            logger.warning("DASHBOARD: Could not read logs from %s: %s", path, exc)
+            return []
+
+        text = data.decode("utf-8", errors="replace")
+        if text and not text.startswith("\n") and size > max_bytes:
+            text = text.split("\n", 1)[-1]
+        return text.splitlines()[-limit:]
+
     def read_recent_logs(self, limit: int = 200) -> dict:
         log_dir = Path("logs")
-        files = sorted([path for path in log_dir.glob("*.log") if path.is_file()], key=lambda path: path.stat().st_mtime, reverse=True)
+        try:
+            files = sorted([path for path in log_dir.glob("*.log") if path.is_file()], key=lambda path: path.stat().st_mtime, reverse=True)
+        except Exception as exc:
+            logger.warning("DASHBOARD: Could not list log files from %s: %s", log_dir, exc)
+            files = []
         selected = files[0] if files else None
         lines: List[str] = []
         if selected:
-            try:
-                with selected.open("r", encoding="utf-8", errors="replace") as fh:
-                    lines = fh.readlines()[-limit:]
-            except Exception as exc:
-                logger.warning("DASHBOARD: Could not read logs from %s: %s", selected, exc)
+            lines = self._tail_log_file(selected, limit)
         return {
             "file": str(selected) if selected else None,
-            "lines": [line.rstrip("\n") for line in lines],
+            "lines": lines,
             "events": self.persistence.get_recent_events(limit=min(limit, 100)),
         }
 
