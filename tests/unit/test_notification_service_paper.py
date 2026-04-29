@@ -84,3 +84,32 @@ async def test_request_approval_paper_survives_dashboard_failure():
     finally:
         settings.PAPER_TRADING = original_paper
         notification_service.pending_approvals.clear()
+
+
+@pytest.mark.asyncio
+async def test_request_approval_live_without_telegram_fails_closed():
+    original_paper = settings.PAPER_TRADING
+    original_override = settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM
+    original_threshold = settings.APPROVAL_THRESHOLD
+    original_telegram_enabled = notification_service._telegram_enabled
+    notification_service.pending_approvals.clear()
+
+    try:
+        settings.PAPER_TRADING = False
+        settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = False
+        settings.APPROVAL_THRESHOLD = 1000.0
+        notification_service._telegram_enabled = False
+
+        result = await notification_service.request_approval(
+            "live trade without approval channel",
+            trade_value=1.0,
+        )
+
+        assert result is False
+        assert notification_service.pending_approvals == {}
+    finally:
+        settings.PAPER_TRADING = original_paper
+        settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = original_override
+        settings.APPROVAL_THRESHOLD = original_threshold
+        notification_service._telegram_enabled = original_telegram_enabled
+        notification_service.pending_approvals.clear()

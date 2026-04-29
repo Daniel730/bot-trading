@@ -1,8 +1,8 @@
 package com.arbitrage.engine;
 
 import com.arbitrage.engine.api.ExecutionServiceImpl;
-import com.arbitrage.engine.api.L2FeedService;
 import com.arbitrage.engine.api.LatencyInterceptor;
+import com.arbitrage.engine.api.RedisL2FeedService;
 import com.arbitrage.engine.broker.Broker;
 import com.arbitrage.engine.broker.BrokerageRouter;
 import com.arbitrage.engine.config.EnvironmentConfig;
@@ -29,6 +29,11 @@ public class Application {
         if (EnvironmentConfig.isLiveCapitalDanger()) {
             verifyEntropyBaselines();
         }
+        if (!EnvironmentConfig.isDryRun()) {
+            throw new IllegalStateException(
+                    "Execution engine live brokerage is not implemented. Set DRY_RUN=true or wire a real LiveBroker before enabling live mode."
+            );
+        }
 
         var executor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -43,7 +48,7 @@ public class Application {
         );
         TradeLedgerRepository repository = new TradeLedgerRepository(connectionFactory);
         RedisOrderSync redisSync = new RedisOrderSync(redisUri());
-        L2FeedService l2FeedService = ticker -> null;
+        RedisL2FeedService l2FeedService = new RedisL2FeedService(redisUri());
         Broker broker = BrokerageRouter.getBroker(l2FeedService);
 
         Server server = ServerBuilder.forPort(PORT)
@@ -61,6 +66,7 @@ public class Application {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutting down gRPC server...");
             redisSync.close();
+            l2FeedService.close();
             server.shutdown();
         }));
 

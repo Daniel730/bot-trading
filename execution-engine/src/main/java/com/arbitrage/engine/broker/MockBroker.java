@@ -1,6 +1,7 @@
 package com.arbitrage.engine.broker;
 
 import com.arbitrage.engine.api.L2FeedService;
+import com.arbitrage.engine.config.EnvironmentConfig;
 import com.arbitrage.engine.core.VwapCalculator;
 import com.arbitrage.engine.core.models.L2OrderBook;
 import org.slf4j.Logger;
@@ -31,6 +32,11 @@ public class MockBroker implements Broker {
                 for (BrokerLeg leg : request.legs()) {
                     L2OrderBook book = l2FeedService.getLatestBook(leg.ticker());
                     if (book == null) {
+                        if (EnvironmentConfig.isDryRun() && leg.vwap() != null && leg.vwap().signum() > 0) {
+                            logger.warn("No L2 data for {}. Using pre-validated dry-run VWAP {}.", leg.ticker(), leg.vwap());
+                            fillPrices.add(leg.vwap());
+                            continue;
+                        }
                         logger.error("NO L2 DATA for {}", leg.ticker());
                         return new BrokerExecutionResponse(false, "No L2 book for " + leg.ticker(), null);
                     }

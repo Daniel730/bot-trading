@@ -35,3 +35,13 @@ def test_trade_allowed_limits():
     res = risk.is_trade_allowed(10.0, 0.02)
     assert res['allowed'] == False
     assert "exceeds limit" in res['reason'].lower()
+
+
+def test_validate_trade_checks_fees_on_final_sized_amount():
+    risk = RiskService()
+
+    result = risk.validate_trade("AAPL", total_portfolio_cash=500.0, amount_fiat=500.0)
+
+    assert result["is_acceptable"] is False
+    assert result["final_amount"] == 0.0
+    assert "friction" in result["rejection_reason"].lower()
