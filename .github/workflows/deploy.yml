@@ -304,11 +304,7 @@ jobs:
         run: ln -sf /home/danrasp3/.env.trading .env
 
       - name: Validate deploy environment
-        run: |
-          if ! grep -Eq '^POSTGRES_PASSWORD=.+$' .env; then
-            echo "POSTGRES_PASSWORD missing or empty in linked .env"
-            exit 1
-          fi
+        run: python3 scripts/validate_deploy_env.py .env
 
       - name: Log in to GHCR (for private image pulls)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -347,3 +343,7 @@ jobs:
 
       - name: Verify deployment
         run: docker compose --env-file .env -f infra/docker-compose.yml ps
+
+      - name: Dump container logs on deployment failure
+        if: failure()
+        run: docker compose --env-file .env -f infra/docker-compose.yml logs --tail=120 bot mcp-server execution-engine postgres redis || true
