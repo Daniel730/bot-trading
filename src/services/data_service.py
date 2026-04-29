@@ -26,6 +26,42 @@ class DataService:
         self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY)
         self._ws_client: Optional[WebSocketClient] = None
 
+    @staticmethod
+    def _extract_latest_close(df: pd.DataFrame, ticker: str) -> Optional[float]:
+        """Return the newest non-null close price from flat or MultiIndex yfinance data."""
+        if df.empty:
+            return None
+
+        close_data = None
+        if isinstance(df.columns, pd.MultiIndex):
+            if "Close" in df.columns.get_level_values(0):
+                close_data = df["Close"]
+            elif "Close" in df.columns.get_level_values(-1):
+                close_data = df.xs("Close", axis=1, level=-1)
+        elif "Close" in df.columns:
+            close_data = df["Close"]
+
+        if close_data is None:
+            return None
+
+        if isinstance(close_data, pd.DataFrame):
+            if ticker in close_data.columns:
+                series = close_data[ticker]
+            elif len(close_data.columns) == 1:
+                series = close_data.iloc[:, 0]
+            else:
+                last_row = close_data.iloc[-1].dropna()
+                if last_row.empty:
+                    return None
+                return float(last_row.iloc[0])
+        else:
+            series = close_data
+
+        series = series.dropna()
+        if series.empty:
+            return None
+        return float(series.iloc[-1])
+
     @agent_trace("DataService.get_historical_data")
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
         """
@@ -110,14 +146,13 @@ class DataService:
         for ticker in tickers:
             try:
                 df = yf.download(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
-                if not df.empty:
-                    val = df['Close'].iloc[-1]
-                    if not pd.isna(val):
-                        # Apply DEV_MODE randomization if active
-                        if settings.DEV_MODE:
-                            import random
-                            val = float(val) * (1 + random.uniform(-0.015, 0.015))
-                        results[ticker] = float(val)
+                val = self._extract_latest_close(df, ticker)
+                if val is not None:
+                    # Apply DEV_MODE randomization if active
+                    if settings.DEV_MODE:
+                        import random
+                        val = val * (1 + random.uniform(-0.015, 0.015))
+                    results[ticker] = val
                 # Small delay to prevent Yahoo from flagging the IP
                 time.sleep(0.5)
             except Exception as e:
