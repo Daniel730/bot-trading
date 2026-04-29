@@ -214,6 +214,17 @@ class Settings(BaseSettings):
     ORCH_ACCURACY_LOW_MULTIPLIER: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_LOW_MULTIPLIER")
     ORCH_ACCURACY_HIGH_MULTIPLIER: float = Field(default=1.1, validation_alias="ORCH_ACCURACY_HIGH_MULTIPLIER")
     GLOBAL_STRATEGY_ACCURACY_DEFAULT: float = Field(default=0.5, validation_alias="GLOBAL_STRATEGY_ACCURACY_DEFAULT")
+
+    WHALE_WATCHER_ENABLED: bool = Field(default=True, validation_alias="WHALE_WATCHER_ENABLED")
+    WHALE_WATCHER_ROLLING_WINDOW_SECONDS: int = Field(default=1800, validation_alias="WHALE_WATCHER_ROLLING_WINDOW_SECONDS")
+    WHALE_WATCHER_CACHE_TTL_SECONDS: int = Field(default=3600, validation_alias="WHALE_WATCHER_CACHE_TTL_SECONDS")
+    WHALE_WATCHER_MAX_EVENTS_PER_SYMBOL: int = Field(default=250, validation_alias="WHALE_WATCHER_MAX_EVENTS_PER_SYMBOL")
+    WHALE_WATCHER_MIN_VALUE_USD: float = Field(default=5_000_000.0, validation_alias="WHALE_WATCHER_MIN_VALUE_USD")
+    WHALE_WATCHER_EXTREME_VALUE_USD: float = Field(default=50_000_000.0, validation_alias="WHALE_WATCHER_EXTREME_VALUE_USD")
+    WHALE_WATCHER_VETO_SCORE: float = Field(default=0.85, validation_alias="WHALE_WATCHER_VETO_SCORE")
+    WHALE_WATCHER_VETO_MIN_EVENTS: int = Field(default=2, validation_alias="WHALE_WATCHER_VETO_MIN_EVENTS")
+    WHALE_WATCHER_RISK_MULTIPLIER: float = Field(default=0.85, validation_alias="WHALE_WATCHER_RISK_MULTIPLIER")
+    WHALE_WATCHER_SUPPORT_MULTIPLIER: float = Field(default=1.05, validation_alias="WHALE_WATCHER_SUPPORT_MULTIPLIER")
     COINTEGRATION_MIN_OBSERVATIONS: int = Field(default=20, validation_alias="COINTEGRATION_MIN_OBSERVATIONS")
     COINTEGRATION_PVALUE_THRESHOLD: float = Field(default=0.05, validation_alias="COINTEGRATION_PVALUE_THRESHOLD")
 

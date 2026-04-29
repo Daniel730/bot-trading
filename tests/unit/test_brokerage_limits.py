@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.services.brokerage_service import BrokerageService
 
@@ -34,3 +34,27 @@ async def test_quantity_rounding_and_limits():
                     assert result["status"] == "error"
                     assert "minTradeQuantity" in result["message"]
                     mock_place.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_available_quantity_uses_positions_endpoint():
+    service = BrokerageService()
+    response = MagicMock(
+        status_code=200,
+        json=lambda: [
+            {
+                "instrument": {"ticker": "AAPL_US_EQ"},
+                "quantity": 5.0,
+                "quantityAvailableForTrading": 3.5,
+                "averagePricePaid": 100.0,
+            }
+        ],
+    )
+
+    with patch.object(service, "_http_get", return_value=response) as mock_get:
+        available = await service.get_available_quantity("AAPL")
+
+    assert available == 3.5
+    args, kwargs = mock_get.call_args
+    assert args[0].endswith("/equity/positions")
+    assert kwargs["params"] == {"ticker": "AAPL_US_EQ"}
