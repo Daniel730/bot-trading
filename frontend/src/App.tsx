@@ -213,12 +213,22 @@ function App() {
 
   const refreshHealth = async () => {
     if (!isAuthenticated) return;
-    try {
-      const [healthData, logData] = await Promise.all([fetchSystemHealth(securityToken, sessionToken), fetchSystemLogs(securityToken, sessionToken, 80)]);
+    const [healthResult, logsResult] = await Promise.allSettled([
+      fetchSystemHealth(securityToken, sessionToken),
+      fetchSystemLogs(securityToken, sessionToken, 80),
+    ]);
+
+    if (healthResult.status === 'fulfilled') {
+      const healthData = healthResult.value;
       setHealth(healthData);
-      setLogs(logData);
-    } catch (err: any) {
-      setSystemError(err.message || 'Failed to load system health.');
+    } else {
+      setSystemError(healthResult.reason?.message || 'Failed to load system health.');
+    }
+
+    if (logsResult.status === 'fulfilled') {
+      setLogs(logsResult.value);
+    } else if (healthResult.status === 'fulfilled') {
+      setLogs({ file: null, lines: [], events: [] });
     }
   };
 
@@ -866,19 +876,19 @@ function App() {
             <div className="card-grid metrics">
               <div className="metric-card">
                 <span>CPU</span>
-                <strong>{health?.current.cpu_pct?.toFixed(1) ?? '—'}%</strong>
+                <strong>{health?.current?.cpu_pct?.toFixed(1) ?? '—'}%</strong>
               </div>
               <div className="metric-card">
                 <span>System Memory</span>
-                <strong>{health?.current.system_memory_pct?.toFixed(1) ?? '—'}%</strong>
+                <strong>{health?.current?.system_memory_pct?.toFixed(1) ?? '—'}%</strong>
               </div>
               <div className="metric-card">
                 <span>Process RSS</span>
-                <strong>{health?.current.rss_mb?.toFixed(1) ?? '—'} MB</strong>
+                <strong>{health?.current?.rss_mb?.toFixed(1) ?? '—'} MB</strong>
               </div>
               <div className="metric-card">
                 <span>Threads</span>
-                <strong>{health?.current.threads ?? '—'}</strong>
+                <strong>{health?.current?.threads ?? '—'}</strong>
               </div>
             </div>
             <div className="card-grid two-up">
