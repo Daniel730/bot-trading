@@ -12,6 +12,8 @@ def monitor():
         # Ensure the instance created inside __init__ is our mock
         m.brokerage = mock_broker_class.return_value
         m.brokerage.get_venue.side_effect = lambda ticker: "WEB3" if "-USD" in ticker else "T212"
+        m.brokerage.get_available_quantity = AsyncMock(return_value=1_000_000.0)
+        m.brokerage.get_pending_orders_value.return_value = 0.0
         return m
 
 @pytest.mark.asyncio
@@ -42,6 +44,39 @@ async def test_execute_trade_success(monitor):
         assert monitor.brokerage.place_value_order.call_count == 2
         assert mock_log_trade.call_count == 2
         mock_log_journal.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_execute_trade_skips_t212_sell_when_not_owned(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 150.0,
+            "kelly_fraction": 0.1,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        monitor.brokerage.get_account_cash.return_value = 10000.0
+        monitor.brokerage.get_available_quantity.return_value = 0.0
+        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "orderId": "123"})
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        monitor.brokerage.place_value_order.assert_not_called()
+        mock_log_trade.assert_not_called()
+        mock_log_journal.assert_not_called()
+        mock_notify.assert_awaited_once()
+        assert "selling more than owned" in mock_notify.call_args.args[0]
 
 @pytest.mark.asyncio
 async def test_close_position_success(monitor):
