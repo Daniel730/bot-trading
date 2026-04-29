@@ -269,6 +269,42 @@ class NotificationService:
         except Exception as e:
             print(f"TELEGRAM ERROR (send_message): {e}")
 
+    async def send_dashboard_login_approval(self, correlation_id: str, summary: str) -> bool:
+        """Send an interactive dashboard-login approval request."""
+        text = f"🔐 *Dashboard Login Approval*\n\n{summary}\n\nApprove this login?"
+        try:
+            from src.services.dashboard_service import dashboard_state
+            await dashboard_state.add_message(
+                "BOT",
+                text,
+                metadata={"correlation_id": correlation_id, "type": "dashboard_login_approval"},
+            )
+        except Exception as e:
+            print(f"DASHBOARD ERROR (login approval): {e}")
+
+        if not self._telegram_enabled:
+            print(f"[LOGIN APPROVAL] Telegram not configured. Challenge {correlation_id}: {summary}")
+            return False
+
+        keyboard = [
+            [
+                InlineKeyboardButton("Approve Login", callback_data=f"approve:{correlation_id}"),
+                InlineKeyboardButton("Reject", callback_data=f"reject:{correlation_id}"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        try:
+            await self.app.bot.send_message(
+                chat_id=self.chat_id,
+                text=text,
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
+            )
+            return True
+        except Exception as e:
+            print(f"TELEGRAM ERROR (login approval): {e}")
+            return False
+
     async def _paper_notify(self, trade_summary: str) -> None:
         """Fire-and-forget notification for paper-mode auto-approvals.
 

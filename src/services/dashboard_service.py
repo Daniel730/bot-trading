@@ -228,6 +228,83 @@ class DashboardSessionManager:
 session_manager = DashboardSessionManager()
 
 
+class DashboardLoginChallengeManager:
+    def __init__(self, ttl_seconds: int = 5 * 60):
+        self.ttl_seconds = ttl_seconds
+        self._challenges: Dict[str, dict] = {}
+
+    async def create(self, actor: str, request: Request) -> dict:
+        from src.services.notification_service import notification_service
+
+        challenge_id = secrets.token_urlsafe(9)
+        expires_at = _utcnow() + timedelta(seconds=self.ttl_seconds)
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self._challenges[challenge_id] = {
+            "actor": actor,
+            "expires_at": expires_at,
+            "future": future,
+        }
+        notification_service.pending_approvals[challenge_id] = future
+        summary = self._summary(actor, request, expires_at)
+        sent = await notification_service.send_dashboard_login_approval(challenge_id, summary)
+        if not sent:
+            self.discard(challenge_id)
+            raise HTTPException(
+                status_code=503,
+                detail="Login approval notifications are not configured. Use an authenticator or backup code.",
+            )
+        return {
+            "status": "pending",
+            "challenge_id": challenge_id,
+            "expires_at": expires_at.isoformat(),
+            "message": "Approval notification sent.",
+        }
+
+    def complete(self, challenge_id: str) -> dict:
+        challenge = self._challenges.get(challenge_id)
+        if not challenge:
+            raise HTTPException(status_code=404, detail="Invalid or expired login challenge.")
+        if challenge["expires_at"] <= _utcnow():
+            self.discard(challenge_id)
+            raise HTTPException(status_code=410, detail="Login challenge expired.")
+        future = challenge["future"]
+        if not future.done():
+            return {
+                "status": "pending",
+                "challenge_id": challenge_id,
+                "expires_at": challenge["expires_at"].isoformat(),
+            }
+        approved = bool(future.result())
+        actor = challenge["actor"]
+        self.discard(challenge_id)
+        if not approved:
+            raise HTTPException(status_code=403, detail="Login approval was rejected.")
+        return {"status": "approved", **session_manager.create(actor=actor)}
+
+    def discard(self, challenge_id: str) -> None:
+        self._challenges.pop(challenge_id, None)
+        try:
+            from src.services.notification_service import notification_service
+            notification_service.pending_approvals.pop(challenge_id, None)
+        except Exception:
+            pass
+
+    def _summary(self, actor: str, request: Request, expires_at: datetime) -> str:
+        forwarded = request.headers.get("x-forwarded-for")
+        client = forwarded.split(",")[0].strip() if forwarded else (request.client.host if request.client else "unknown")
+        user_agent = request.headers.get("user-agent", "unknown")
+        return (
+            f"*Actor*: `{actor}`\n"
+            f"*IP*: `{client}`\n"
+            f"*User-Agent*: `{user_agent[:120]}`\n"
+            f"*Expires*: `{expires_at.isoformat()}`"
+        )
+
+
+login_challenge_manager = DashboardLoginChallengeManager()
+
+
 def verify_security_token(token: str = Query(None)):
     secret = settings.DASHBOARD_TOKEN.strip().strip('"').strip("'")
     if token != secret:
@@ -424,6 +501,10 @@ class DashboardLoginRequest(BaseModel):
     security_token: str
     otp_token: Optional[str] = None
     actor: str = "dashboard"
+
+
+class DashboardLoginCompleteRequest(BaseModel):
+    challenge_id: str
 
 
 class TOTPVerifyRequest(BaseModel):
@@ -851,15 +932,33 @@ class DashboardService:
 dashboard_service = DashboardService()
 
 
-async def _login(request: DashboardLoginRequest):
-    verify_security_token(request.security_token)
+async def _login(payload: DashboardLoginRequest, request: Request):
+    verify_security_token(payload.security_token)
     status = dashboard_service.totp.public_status()
-    if status["enabled"]:
-        if not request.otp_token or not dashboard_service.totp.verify_token_or_backup(request.otp_token):
-            raise HTTPException(status_code=403, detail="A valid 2FA token is required to log in.")
-    session = session_manager.create(actor=request.actor)
-    await dashboard_state.add_message("SYSTEM", "Dashboard login succeeded.", metadata={"type": "dashboard_login", "actor": request.actor})
-    return {"status": "ok", **session, "two_factor": dashboard_service.totp.public_status()}
+    if payload.otp_token:
+        if not status["enabled"] or not dashboard_service.totp.verify_token_or_backup(payload.otp_token):
+            raise HTTPException(status_code=403, detail="Invalid authenticator or backup code.")
+        session = session_manager.create(actor=payload.actor)
+        await dashboard_state.add_message(
+            "SYSTEM",
+            "Dashboard login succeeded with fallback code.",
+            metadata={"type": "dashboard_login", "actor": payload.actor, "method": "otp"},
+        )
+        return {"status": "ok", **session, "two_factor": dashboard_service.totp.public_status()}
+
+    try:
+        challenge = await login_challenge_manager.create(payload.actor, request)
+        return {**challenge, "two_factor": dashboard_service.totp.public_status()}
+    except HTTPException:
+        if status["enabled"]:
+            raise
+        session = session_manager.create(actor=payload.actor)
+        await dashboard_state.add_message(
+            "SYSTEM",
+            "Dashboard login succeeded without notification approval because notifications are unavailable.",
+            metadata={"type": "dashboard_login", "actor": payload.actor, "method": "token_only_fallback"},
+        )
+        return {"status": "ok", **session, "two_factor": dashboard_service.totp.public_status()}
 
 
 @app.options("/api/auth/login")
@@ -870,8 +969,29 @@ async def login_preflight():
 
 @app.post("/api/auth/login")
 @app.post("/api/auth/login/")
-async def login(request: DashboardLoginRequest):
-    return await _login(request)
+async def login(payload: DashboardLoginRequest, request: Request):
+    return await _login(payload, request)
+
+
+@app.options("/api/auth/login/complete")
+@app.options("/api/auth/login/complete/")
+async def login_complete_preflight():
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/login/complete")
+@app.post("/api/auth/login/complete/")
+async def login_complete(request: DashboardLoginCompleteRequest):
+    result = login_challenge_manager.complete(request.challenge_id)
+    if result["status"] == "approved":
+        await dashboard_state.add_message(
+            "SYSTEM",
+            "Dashboard login approved by notification.",
+            metadata={"type": "dashboard_login", "actor": result.get("actor"), "method": "notification"},
+        )
+        result["status"] = "ok"
+        return {**result, "two_factor": dashboard_service.totp.public_status()}
+    return {**result, "two_factor": dashboard_service.totp.public_status()}
 
 
 @app.options("/api/auth/logout")

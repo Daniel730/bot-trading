@@ -26,6 +26,7 @@ import {
   type TerminalMessage,
   type TradeHistoryResponse,
   type TwoFactorInitiateResponse,
+  completeLogin,
   controlBot,
   fetchChartMetric,
   fetchConfig,
@@ -147,6 +148,8 @@ function App() {
   const [sessionToken, setSessionToken] = useState(() => sessionStorage.getItem('dashboardSessionToken') ?? '');
   const [loginToken, setLoginToken] = useState(() => tokenFromUrl);
   const [loginOtp, setLoginOtp] = useState('');
+  const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   const isAuthenticated = Boolean(securityToken && sessionToken);
@@ -343,6 +346,11 @@ function App() {
     setSystemError(null);
     try {
       const result = await login(loginToken.trim(), loginOtp.trim() || undefined);
+      if (result.status === 'pending') {
+        setLoginChallengeId(result.challenge_id);
+        setLoginNotice('Approval notification sent. Waiting for confirmation.');
+        return;
+      }
       sessionStorage.setItem('dashboardSecurityToken', loginToken.trim());
       sessionStorage.setItem('dashboardSessionToken', result.session_token);
       setSecurityToken(loginToken.trim());
@@ -355,6 +363,35 @@ function App() {
       setIsBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!loginChallengeId) return;
+    let cancelled = false;
+    const interval = window.setInterval(async () => {
+      try {
+        const result = await completeLogin(loginChallengeId);
+        if (cancelled || result.status === 'pending') return;
+        sessionStorage.setItem('dashboardSecurityToken', loginToken.trim());
+        sessionStorage.setItem('dashboardSessionToken', result.session_token);
+        setSecurityToken(loginToken.trim());
+        setSessionToken(result.session_token);
+        setLoginChallengeId(null);
+        setLoginNotice(null);
+        setLoginOtp('');
+        setSystemMessage('Dashboard login approved.');
+      } catch (err: any) {
+        if (!cancelled) {
+          setLoginChallengeId(null);
+          setLoginNotice(null);
+          setLoginError(err.message || 'Login approval failed.');
+        }
+      }
+    }, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [loginChallengeId, loginToken]);
 
   const handleLogout = async () => {
     try {
@@ -382,6 +419,7 @@ function App() {
             <h1>Alpha Arbitrage</h1>
             <p>Operations Console</p>
           </div>
+          {loginNotice ? <div className="banner success">{loginNotice}</div> : null}
           {loginError ? <div className="banner error">{loginError}</div> : null}
           <label className="setting-field">
             <span>Security Token</span>
@@ -401,9 +439,9 @@ function App() {
               autoComplete="one-time-code"
             />
           </label>
-          <button className="primary-btn" disabled={isBusy} type="submit">
+          <button className="primary-btn" disabled={isBusy || Boolean(loginChallengeId)} type="submit">
             <Shield size={14} />
-            Login
+            {loginChallengeId ? 'Waiting Approval' : 'Login'}
           </button>
         </form>
       </div>
