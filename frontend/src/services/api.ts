@@ -266,11 +266,22 @@ export interface TwoFactorInitiateResponse {
 }
 
 export interface AuthSession {
+  status: 'ok';
   session_token: string;
   expires_at: string;
   actor: string;
   two_factor: TwoFactorStatus;
 }
+
+export interface AuthChallenge {
+  status: 'pending';
+  challenge_id: string;
+  expires_at: string;
+  message?: string;
+  two_factor: TwoFactorStatus;
+}
+
+export type AuthLoginResponse = AuthSession | AuthChallenge;
 
 const getApiBase = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
@@ -338,11 +349,18 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
   return { data, error };
 };
 
-export const login = async (securityToken: string, otpToken?: string): Promise<AuthSession> =>
-  requestJson<AuthSession>('/api/auth/login/', null, {
+export const login = async (securityToken: string, otpToken?: string): Promise<AuthLoginResponse> =>
+  requestJson<AuthLoginResponse>('/api/auth/login/', null, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ security_token: securityToken, otp_token: otpToken || undefined, actor: 'dashboard' }),
+  });
+
+export const completeLogin = async (challengeId: string): Promise<AuthLoginResponse> =>
+  requestJson<AuthLoginResponse>('/api/auth/login/complete/', null, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challenge_id: challengeId }),
   });
 
 export const logout = async (token: string | null, sessionToken: string | null) =>
