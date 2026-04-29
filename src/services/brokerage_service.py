@@ -161,6 +161,9 @@ class BrokerageService:
             # Treat any 2xx as success
             if 200 <= response.status_code < 300:
                 logger.info(f"T212: Order SUCCESS ({response.status_code}, local-id: {client_order_id[:8]})")
+                for key in list(self._cache):
+                    if key == "portfolio" or key.startswith("positions:") or key == "orders":
+                        self._cache.pop(key, None)
                 try:
                     return response.json()
                 except Exception:
@@ -444,6 +447,66 @@ class BrokerageService:
         except:
             raise
         return AwaitableList()
+
+    def _normalize_position(self, position: Dict[str, Any]) -> Dict[str, Any]:
+        instrument = position.get("instrument") or {}
+        ticker = (
+            position.get("ticker")
+            or position.get("instrumentCode")
+            or instrument.get("ticker")
+            or ""
+        )
+        quantity = position.get("quantity", 0.0)
+        available = position.get("quantityAvailableForTrading", quantity)
+        average_price = position.get("averagePricePaid", position.get("averagePrice", 0.0))
+
+        return {
+            **position,
+            "ticker": ticker,
+            "quantity": float(quantity or 0.0),
+            "quantityAvailableForTrading": float(available or 0.0),
+            "averagePrice": float(average_price or 0.0),
+        }
+
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        reraise=True
+    )
+    def get_positions(self, ticker: str = None) -> List[Dict[str, Any]]:
+        t212_ticker = self._format_ticker(ticker) if ticker else None
+        cache_key = f"positions:{t212_ticker or 'all'}"
+        now = time.time()
+        if cache_key in self._cache:
+            data, timestamp = self._cache[cache_key]
+            if now - timestamp < self._cache_ttl:
+                return AwaitableList(data)
+
+        url = f"{self.base_url}/equity/positions"
+        params = {"ticker": t212_ticker} if t212_ticker else None
+        try:
+            response = self._http_get(url, headers=self.headers, params=params, timeout=10)
+            if response.status_code == 200:
+                data = [self._normalize_position(pos) for pos in response.json()]
+                self._cache[cache_key] = (data, now)
+                return AwaitableList(data)
+            if response.status_code == 401:
+                logger.error(f"T212 Auth Error (401) on {url}: {response.text}")
+                raise requests.exceptions.HTTPError("401 Unauthorized")
+            logger.warning(f"T212: Failed to fetch positions ({response.status_code}): {response.text}")
+        except Exception as e:
+            if isinstance(e, requests.exceptions.HTTPError):
+                raise
+            logger.error(f"T212: Error fetching positions: {e}")
+        return AwaitableList()
+
+    async def get_available_quantity(self, ticker: str) -> float:
+        positions = await asyncio.to_thread(self.get_positions, ticker)
+        t212_ticker = self._format_ticker(ticker)
+        for pos in positions:
+            if pos.get("ticker") == t212_ticker:
+                return float(pos.get("quantityAvailableForTrading", pos.get("quantity", 0.0)) or 0.0)
+        return 0.0
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),

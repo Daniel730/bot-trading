@@ -149,6 +149,39 @@ class ArbitrageMonitor:
                 f"Next NYSE open: {next_open.strftime('%Y-%m-%d %H:%M %Z')}"
             )
 
+    async def _preflight_live_sell_inventory(self, legs: list[dict]) -> bool:
+        """Fail closed if a live T212 sell leg tries to sell more than owned."""
+        for leg in legs:
+            if leg["side"].upper() != "SELL":
+                continue
+
+            ticker = leg["ticker"]
+            required = float(leg["quantity"])
+            try:
+                maybe_available = self.brokerage.get_available_quantity(ticker)
+                available = await maybe_available if inspect.isawaitable(maybe_available) else maybe_available
+                available = float(available or 0.0)
+            except Exception as e:
+                msg = (
+                    f"Execution skipped before broker for {leg['display_ticker']}: "
+                    f"could not verify available shares for SELL leg ({e})."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return False
+
+            if available + 1e-9 < required:
+                msg = (
+                    f"Execution skipped before broker for {leg['display_ticker']}: "
+                    f"SELL leg requires {required:.6f} shares, but Trading212 reports "
+                    f"{available:.6f} available. This prevents 'selling more than owned'."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return False
+
+        return True
+
     async def verify_entropy_baselines(self):
         """
         US1: Enforce mandatory startup check against Redis L2 entropy baselines.
@@ -616,6 +649,8 @@ class ArbitrageMonitor:
         # Determina a direcao (Side) para cada perna
         side_a = "SELL" if direction == "Short-Long" else "BUY"
         side_b = "BUY" if direction == "Short-Long" else "SELL"
+        exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
+        exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
 
         # Feature 037: only paper mode is forced to shadow execution.
         # In live mode, crypto routes through the brokerage dispatcher to Web3.
@@ -634,9 +669,23 @@ class ArbitrageMonitor:
             return
 
         # Chamada ao broker (T212 via Fractional Engine)
-
-        exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
-        exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
+        if venue == "T212":
+            can_execute = await self._preflight_live_sell_inventory([
+                {
+                    "ticker": exec_t_a,
+                    "display_ticker": t_a,
+                    "side": side_a,
+                    "quantity": size_a,
+                },
+                {
+                    "ticker": exec_t_b,
+                    "display_ticker": t_b,
+                    "side": side_b,
+                    "quantity": size_b,
+                },
+            ])
+            if not can_execute:
+                return
 
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
 
