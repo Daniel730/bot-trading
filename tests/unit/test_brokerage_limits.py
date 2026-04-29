@@ -37,6 +37,25 @@ async def test_quantity_rounding_and_limits():
 
 
 @pytest.mark.asyncio
+async def test_missing_quantity_increment_uses_t212_safe_precision():
+    service = BrokerageService()
+
+    with patch.object(service, "get_symbol_metadata", return_value={}):
+        with patch("src.services.data_service.data_service.get_latest_price", new_callable=AsyncMock) as mock_price:
+            mock_price.return_value = {"DUK": 127.78}
+            with patch("src.services.risk_service.risk_service.calculate_friction") as mock_friction:
+                mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}
+                with patch.object(service.session, "post") as mock_post:
+                    mock_post.return_value = MagicMock(status_code=200, json=lambda: {"orderId": "ok"})
+
+                    result = await service.place_value_order("DUK", 420.39, "BUY")
+
+    assert result["orderId"] == "ok"
+    _, kwargs = mock_post.call_args
+    assert kwargs["json"]["quantity"] == 3.28
+
+
+@pytest.mark.asyncio
 async def test_get_available_quantity_uses_positions_endpoint():
     service = BrokerageService()
     response = MagicMock(

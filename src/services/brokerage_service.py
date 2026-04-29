@@ -9,7 +9,7 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 import requests
 import logging
 import base64
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, ROUND_HALF_UP
 from unittest.mock import Mock
 
 logger = logging.getLogger(__name__)
@@ -96,6 +96,25 @@ class BrokerageService:
         return f"{ticker}_US_EQ"
 
     @staticmethod
+    def _metadata_decimal(metadata: Dict[str, Any], key: str, default: str) -> Decimal:
+        try:
+            value = Decimal(str(metadata.get(key, default)))
+        except (InvalidOperation, TypeError, ValueError):
+            value = Decimal(default)
+        return value
+
+    def _quantity_increment(self, metadata: Dict[str, Any]) -> Decimal:
+        increment = self._metadata_decimal(metadata, "quantityIncrement", "0.01")
+        if increment <= 0:
+            increment = Decimal("0.01")
+        return increment
+
+    def _round_t212_quantity(self, quantity: float | Decimal, metadata: Dict[str, Any]) -> Decimal:
+        quantity_dec = Decimal(str(abs(quantity)))
+        increment = self._quantity_increment(metadata)
+        return (quantity_dec / increment).to_integral_value(rounding=ROUND_DOWN) * increment
+
+    @staticmethod
     def _is_crypto_ticker(ticker: str) -> bool:
         return "-USD" in ticker.upper()
 
@@ -107,17 +126,12 @@ class BrokerageService:
         # P-03: Method is async so _recover_timeout_order can be awaited.
         t212_ticker = self._format_ticker(ticker)
 
-        # Bug M-13: Tick Size & Increment Validation using Decimal
         metadata = self.get_symbol_metadata(ticker)
-        qty_incr = Decimal(str(metadata.get("quantityIncrement", "0.000001")))
-        tick_size = Decimal(str(metadata.get("tickSize", "0.01")))
-        if qty_incr <= 0:
-            qty_incr = Decimal("0.000001")
+        tick_size = self._metadata_decimal(metadata, "tickSize", "0.01")
         if tick_size <= 0:
             tick_size = Decimal("0.01")
 
-        decimal_qty = Decimal(str(quantity))
-        final_qty_dec = (decimal_qty / qty_incr).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * qty_incr
+        final_qty_dec = self._round_t212_quantity(quantity, metadata)
         if final_qty_dec <= 0:
             return {
                 "status": "error",
@@ -145,7 +159,7 @@ class BrokerageService:
 
         if limit_price:
             decimal_limit = Decimal(str(limit_price))
-            rounded_limit = (decimal_limit / tick_size).quantize(Decimal("1"), rounding="ROUND_HALF_UP") * tick_size
+            rounded_limit = (decimal_limit / tick_size).to_integral_value(rounding=ROUND_HALF_UP) * tick_size
             payload["limitPrice"] = float(rounded_limit)
             payload["timeValidity"] = "DAY"
             url = f"{self.base_url}/equity/orders/limit"
@@ -353,28 +367,25 @@ class BrokerageService:
         if price <= 0:
             return {"status": "error", "message": f"Invalid price ({price}) for {ticker}. Rejecting order."}
 
-        raw_quantity = amount / price
+        raw_quantity = Decimal(str(amount)) / Decimal(str(price))
 
         metadata = self.get_symbol_metadata(ticker)
-        min_qty = float(metadata.get("minTradeQuantity", 0.0))
-        qty_incr = float(metadata.get("quantityIncrement", 1e-6))
+        min_qty = self._metadata_decimal(metadata, "minTradeQuantity", "0")
+        final_quantity_dec = self._round_t212_quantity(raw_quantity, metadata)
 
-        if min_qty > 0 and raw_quantity < min_qty:
+        if min_qty > 0 and final_quantity_dec < min_qty:
             return {
                 "status": "error",
-                "message": f"Quantity {raw_quantity:.6f} below minTradeQuantity {min_qty} for {ticker}"
+                "message": f"Quantity {final_quantity_dec} below minTradeQuantity {min_qty} for {ticker}"
             }
 
-        final_quantity = raw_quantity
-        if qty_incr > 0:
-            final_quantity = round(raw_quantity / qty_incr) * qty_incr
-            final_quantity = float(round(final_quantity, 6))
-        if final_quantity <= 0:
+        if final_quantity_dec <= 0:
             return {
                 "status": "error",
                 "message": f"Quantity rounds to zero for {ticker}; amount={amount:.2f}, price={price:.6f}",
             }
 
+        final_quantity = float(final_quantity_dec)
         logger.info(f"T212: Value order {ticker}: ${amount} / ${price:.2f} = {final_quantity:.6f} shares")
 
         # Feature 018: Slippage-capped limitPrice driven by configuration.
