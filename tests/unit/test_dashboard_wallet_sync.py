@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -38,10 +39,28 @@ def wallet_sync_context(monkeypatch):
     monkeypatch.setattr(dashboard_module.brokerage_service, "get_pending_orders_value", AsyncMock(return_value=0.0))
     monkeypatch.setattr(dashboard_module.brokerage_service, "get_positions", lambda: [])
     monkeypatch.setattr(dashboard_module.brokerage_service, "get_pending_orders", AsyncMock(return_value=[]))
-    monkeypatch.setattr(dashboard_module.brokerage_service, "place_value_order", AsyncMock(return_value={"order_id": "ok"}))
     monkeypatch.setattr(dashboard_state, "add_message", AsyncMock())
 
-    yield dashboard_module.brokerage_service
+    submitted_orders = []
+    metadata = {
+        f"{ticker}_US_EQ": {"ticker": f"{ticker}_US_EQ", "minTradeQuantity": "0", "tickSize": "0.01"}
+        for ticker in ("AAPL", "MSFT", "GOOG", "GOOGL")
+    }
+
+    def fake_http_json(method, url, headers=None, payload=None, params=None, timeout=20.0):
+        submitted_orders.append({"method": method, "url": url, "payload": payload})
+        return {"orderId": f"order-{len(submitted_orders)}"}
+
+    monkeypatch.setattr(dashboard_module.wallet_seed, "t212_config", lambda: ("https://example.test/api/v0", {}))
+    monkeypatch.setattr(dashboard_module.wallet_seed, "preflight_t212_access", lambda base_url, headers: None)
+    monkeypatch.setattr(dashboard_module.wallet_seed, "fetch_t212_metadata", lambda base_url, headers: metadata)
+    monkeypatch.setattr(dashboard_module.wallet_seed, "yahoo_latest_price", lambda ticker: Decimal("100"))
+    monkeypatch.setattr(dashboard_module.wallet_seed, "http_json", fake_http_json)
+
+    yield SimpleNamespace(
+        brokerage=dashboard_module.brokerage_service,
+        submitted_orders=submitted_orders,
+    )
 
     dashboard_state.monitor = original_monitor
     settings.T212_API_KEY = original_key
@@ -52,12 +71,12 @@ def wallet_sync_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_wallet_sync_buys_missing_coint_t212_tickers(wallet_sync_context, monkeypatch):
     monkeypatch.setattr(
-        wallet_sync_context,
+        wallet_sync_context.brokerage,
         "get_positions",
         lambda: [{"ticker": "AAPL_US_EQ", "quantity": 2.0}],
     )
     monkeypatch.setattr(
-        wallet_sync_context,
+        wallet_sync_context.brokerage,
         "get_pending_orders",
         AsyncMock(return_value=[{"ticker": "MSFT_US_EQ", "quantity": 1.0}]),
     )
@@ -73,14 +92,17 @@ async def test_wallet_sync_buys_missing_coint_t212_tickers(wallet_sync_context, 
         {"ticker": "MSFT", "reason": "pending_buy"},
     ]
     assert [order["amount"] for order in result["orders"]] == [10.0, 10.0]
-    assert wallet_sync_context.place_value_order.await_count == 2
-    assert all(call.args[2] == "BUY" for call in wallet_sync_context.place_value_order.await_args_list)
+    assert [order["status"] for order in result["orders"]] == ["ok", "ok"]
+    assert len(wallet_sync_context.submitted_orders) == 2
+    assert all(call["method"] == "POST" for call in wallet_sync_context.submitted_orders)
+    assert all(call["url"].endswith("/equity/orders/limit") for call in wallet_sync_context.submitted_orders)
+    assert all(call["payload"]["quantity"] > 0 for call in wallet_sync_context.submitted_orders)
 
 
 @pytest.mark.asyncio
 async def test_wallet_sync_noops_when_every_coint_ticker_is_already_owned(wallet_sync_context, monkeypatch):
     monkeypatch.setattr(
-        wallet_sync_context,
+        wallet_sync_context.brokerage,
         "get_positions",
         lambda: [
             {"ticker": "AAPL_US_EQ", "quantity": 1.0},
@@ -97,7 +119,7 @@ async def test_wallet_sync_noops_when_every_coint_ticker_is_already_owned(wallet
     assert result["status"] == "ok"
     assert result["target_tickers"] == []
     assert result["orders"] == []
-    wallet_sync_context.place_value_order.assert_not_awaited()
+    assert wallet_sync_context.submitted_orders == []
 
 
 @pytest.mark.asyncio
@@ -109,4 +131,4 @@ async def test_wallet_sync_rejects_budget_above_spendable(wallet_sync_context):
 
     assert exc.value.status_code == 400
     assert "exceeds spendable" in exc.value.detail
-    wallet_sync_context.place_value_order.assert_not_awaited()
+    assert wallet_sync_context.submitted_orders == []

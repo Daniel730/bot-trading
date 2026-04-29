@@ -30,9 +30,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 METADATA_CACHE_PATH = REPO_ROOT / "data" / "t212_instruments_cache.json"
 
 STOCK_TICKERS = (
-    "KO", "PEP", "MA", "V", "XOM", "CVX", "JPM", "BAC", "WMT", "TGT",
+    "KO", "SO", "DUK", "PYPL", "AFRM", "PEP", "MA", "V", "XOM", "CVX", "JPM", "BAC", "WMT", "TGT",
     "GOOGL", "GOOG", "MSFT", "AAPL", "DAL", "UAL", "UPS", "FDX", "HD",
-    "LOW", "GM", "F", "INTC", "AMD", "PYPL", "AFRM", "NKE", "ADS.DE",
+    "LOW", "GM", "F", "INTC", "AMD", "NKE", "ADS.DE",
     "PG", "CL", "BA", "AIR.PA", "T", "VZ", "VLO", "MPC", "COF", "SYF",
     "GS", "MS", "BTCE.DE", "ZETH.DE", "NVDA", "TSLA", "RIVN", "COIN",
     "MSTR", "META", "SNAP", "NFLX", "DIS", "UBER", "LYFT", "MU", "SMCI",
@@ -55,7 +55,7 @@ STOCK_TICKERS = (
     "VMC", "MLM", "GE", "HON", "PFE", "MRK", "JNJ", "ABBV", "LLY",
     "NVO", "UNH", "ELV", "CI", "HUM", "ISRG", "SYK", "BSX", "MDT",
     "TMO", "A", "AMGN", "GILD", "ZTS", "IDXX", "REGN", "VRTX", "MCK",
-    "COR", "AMT", "CCI", "PLD", "PSA", "O", "ADC", "DUK", "SO", "NEE",
+    "COR", "AMT", "CCI", "PLD", "PSA", "O", "ADC", "NEE",
     "D", "AEP", "SRE", "CMCSA", "CHTR", "SPOT", "WMG",
 )
 

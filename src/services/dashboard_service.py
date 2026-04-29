@@ -11,6 +11,7 @@ import socket
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Literal, Optional
 from urllib.parse import quote
@@ -25,6 +26,11 @@ import uvicorn
 from src.config import save_pairs_override, save_settings_override, settings
 from src.models.persistence import PersistenceManager
 from src.services.brokerage_service import brokerage_service
+
+try:
+    from scripts import seed_equal_wallet as wallet_seed
+except Exception:  # pragma: no cover - surfaced as an endpoint error if unavailable.
+    wallet_seed = None
 
 logger = logging.getLogger(__name__)
 
@@ -587,6 +593,128 @@ class DashboardService:
 
         return coint_pairs, tickers
 
+    async def _place_wallet_seed_orders(
+        self,
+        plan: list[tuple[str, Decimal]],
+        delay_seconds: float,
+    ) -> tuple[list[dict], int, list[dict]]:
+        if wallet_seed is None:
+            raise RuntimeError("scripts/seed_equal_wallet.py could not be loaded.")
+
+        base_url, headers = wallet_seed.t212_config()
+        await asyncio.to_thread(wallet_seed.preflight_t212_access, base_url, headers)
+        metadata = await asyncio.to_thread(wallet_seed.fetch_t212_metadata, base_url, headers)
+
+        total_budget = sum(amount for _, amount in plan)
+        resolved: dict[str, str] = {}
+        skipped: list[dict] = []
+
+        for ticker, _ in plan:
+            t212_ticker = wallet_seed.resolve_t212_ticker(ticker, metadata)
+            if not t212_ticker:
+                skipped.append({
+                    "ticker": ticker,
+                    "reason": "not_supported",
+                    "message": "not found in Trading212 instruments",
+                })
+                continue
+            if not wallet_seed.is_metadata_tradeable(metadata.get(t212_ticker, {})):
+                skipped.append({
+                    "ticker": ticker,
+                    "reason": "not_tradeable",
+                    "message": f"{t212_ticker} is not tradeable",
+                })
+                continue
+            resolved[ticker] = t212_ticker
+
+        if not resolved:
+            return [], len(plan), skipped
+
+        working_plan = plan
+        if len(resolved) != len(plan):
+            working_plan = wallet_seed.build_equal_plan(total_budget, list(resolved))
+
+        orders: list[dict] = []
+        failures = 0
+        slippage = Decimal(str(max(0.0, settings.T212_LIMIT_SLIPPAGE_PCT)))
+        quantity_decimals = 2
+        rate_limit_wait = 5.0
+        max_retries = 2
+
+        for idx, (ticker, amount) in enumerate(working_plan, start=1):
+            t212_ticker = resolved[ticker]
+            order = {
+                "ticker": ticker,
+                "t212_ticker": t212_ticker,
+                "amount": float(amount),
+                "status": "pending",
+            }
+            try:
+                price = await asyncio.to_thread(wallet_seed.yahoo_latest_price, ticker)
+                payload = wallet_seed.build_t212_buy_payload(
+                    ticker,
+                    t212_ticker,
+                    amount,
+                    price,
+                    metadata,
+                    slippage,
+                    quantity_decimals,
+                )
+                result = None
+                for attempt in range(max_retries + 1):
+                    result = await asyncio.to_thread(
+                        wallet_seed.http_json,
+                        "POST",
+                        f"{base_url}/equity/orders/limit",
+                        headers,
+                        payload,
+                    )
+                    wallet_seed.raise_for_t212_access(result, f"place BUY order for {ticker}")
+                    if not wallet_seed.is_too_many_requests(result):
+                        break
+                    if attempt >= max_retries:
+                        break
+                    await asyncio.sleep(rate_limit_wait * (attempt + 1))
+            except Exception as exc:
+                failures += 1
+                order.update({"status": "error", "message": str(exc)})
+            else:
+                result_dict = result if isinstance(result, dict) else {"raw": result}
+                if result_dict.get("status") == "error":
+                    message = result_dict.get("message") or json.dumps(result_dict)
+                    if wallet_seed.is_entity_not_found(result_dict) or wallet_seed.is_instrument_disabled(result_dict):
+                        order.update({
+                            "status": "skipped",
+                            "message": message,
+                            "payload": payload,
+                        })
+                        skipped.append({
+                            "ticker": ticker,
+                            "reason": "instrument_unavailable",
+                            "message": message,
+                        })
+                    else:
+                        failures += 1
+                        order.update({
+                            "status": "error",
+                            "message": message,
+                            "http_status": result_dict.get("http_status"),
+                            "payload": payload,
+                        })
+                else:
+                    order.update({
+                        "status": "ok",
+                        "order_id": result_dict.get("orderId") or result_dict.get("order_id") or result_dict.get("id"),
+                        "payload": payload,
+                        "price": float(price),
+                    })
+            orders.append(order)
+
+            if idx < len(working_plan) and delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+
+        return orders, failures, skipped
+
     async def sync_t212_wallet_for_coint(self, request: T212WalletSyncRequest) -> dict:
         if not settings.has_t212_key:
             raise HTTPException(status_code=400, detail="Trading 212 API key is not configured.")
@@ -662,69 +790,40 @@ class DashboardService:
                 ),
             )
 
-        cents = int(round(budget * 100))
-        min_order_cents = max(1, int(round(settings.MIN_TRADE_VALUE * 100)))
-        if cents < len(target_tickers) * min_order_cents:
+        if wallet_seed is None:
             raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Budget {budget:.2f} is too small for {len(target_tickers)} tickers; "
-                    f"each needs at least {settings.MIN_TRADE_VALUE:.2f}."
-                ),
+                status_code=500,
+                detail="The Trading212 seed wallet script could not be loaded.",
             )
 
-        base_cents = cents // len(target_tickers)
-        extra_cents = cents % len(target_tickers)
-        plan = [
-            {
-                "ticker": ticker,
-                "amount": (base_cents + (1 if idx < extra_cents else 0)) / 100,
-            }
-            for idx, ticker in enumerate(target_tickers)
-        ]
+        try:
+            seed_plan = wallet_seed.build_equal_plan(Decimal(str(budget)), target_tickers)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        orders: list[dict] = []
-        failures = 0
-        for idx, item in enumerate(plan):
-            ticker = item["ticker"]
-            amount = item["amount"]
-            try:
-                response = await brokerage_service.place_value_order(
-                    ticker,
-                    amount,
-                    "BUY",
-                    client_order_id=f"dashboard-wallet-sync-{int(time.time())}-{idx}",
-                )
-            except Exception as exc:
-                failures += 1
-                orders.append({"ticker": ticker, "amount": amount, "status": "error", "message": str(exc)})
-            else:
-                status = "error" if response.get("status") == "error" else "ok"
-                if status == "error":
-                    failures += 1
-                orders.append(
-                    {
-                        "ticker": ticker,
-                        "amount": amount,
-                        "status": status,
-                        "order_id": response.get("order_id") or response.get("orderId") or response.get("id"),
-                        "message": response.get("message"),
-                    }
-                )
+        try:
+            orders, failures, seed_skipped = await self._place_wallet_seed_orders(
+                seed_plan,
+                request.delay_seconds,
+            )
+        except Exception as exc:
+            logger.error("DASHBOARD: T212 wallet sync seed order placement failed: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Could not buy COINT tickers via seed script: {exc}") from exc
 
-            if idx < len(plan) - 1 and request.delay_seconds > 0:
-                await asyncio.sleep(request.delay_seconds)
+        skipped.extend(seed_skipped)
+        submitted = sum(1 for order in orders if order.get("status") == "ok")
+        planned = len(seed_plan)
 
         await dashboard_state.add_message(
             "SYSTEM",
-            f"T212 wallet sync submitted {len(plan) - failures}/{len(plan)} BUY orders for COINT tickers.",
+            f"T212 wallet sync submitted {submitted}/{planned} BUY orders for COINT tickers via seed script.",
             metadata={"type": "t212_wallet_sync", "failures": failures, "tickers": target_tickers},
         )
 
         return {
             "status": "ok" if failures == 0 else "partial",
             "mode": "demo" if settings.is_t212_demo else "live",
-            "message": f"Submitted {len(plan) - failures}/{len(plan)} BUY orders.",
+            "message": f"Submitted {submitted}/{planned} BUY orders via seed script.",
             "coint_pairs": coint_pair_count,
             "candidate_tickers": candidate_tickers,
             "target_tickers": target_tickers,
@@ -732,8 +831,8 @@ class DashboardService:
             "budget": budget,
             "spendable_cash": _safe_float(spendable_cash),
             "effective_cash": _safe_float(effective_cash),
-            "per_ticker_min": min(item["amount"] for item in plan),
-            "per_ticker_max": max(item["amount"] for item in plan),
+            "per_ticker_min": float(min(amount for _, amount in seed_plan)),
+            "per_ticker_max": float(max(amount for _, amount in seed_plan)),
             "orders": orders,
             "failures": failures,
         }
