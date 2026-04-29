@@ -118,6 +118,31 @@ export interface PairsResponse {
   dev_mode: boolean;
 }
 
+export interface T212WalletSyncOrder {
+  ticker: string;
+  amount: number;
+  status: 'ok' | 'error';
+  order_id?: string | null;
+  message?: string | null;
+}
+
+export interface T212WalletSyncResponse {
+  status: 'ok' | 'partial';
+  mode: 'demo' | 'live';
+  message: string;
+  coint_pairs: number;
+  candidate_tickers: string[];
+  target_tickers: string[];
+  skipped: { ticker: string; reason: string }[];
+  budget: number;
+  spendable_cash: number | null;
+  effective_cash?: number | null;
+  per_ticker_min?: number;
+  per_ticker_max?: number;
+  orders: T212WalletSyncOrder[];
+  failures: number;
+}
+
 export interface OpenPosition {
   signal_id: string;
   ticker_a: string;
@@ -390,6 +415,17 @@ export const updatePairs = async (
       crypto_pairs: options.cryptoPairs,
       apply_now: options.applyNow ?? true,
     }),
+  }, sessionToken);
+
+export const syncT212Wallet = async (
+  token: string | null,
+  sessionToken: string | null,
+  budget: number,
+): Promise<T212WalletSyncResponse> =>
+  requestJson('/api/t212/wallet/sync', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ budget }),
   }, sessionToken);
 
 export const fetchOpenPositions = async (token: string | null, sessionToken?: string | null): Promise<{ positions: OpenPosition[] }> =>

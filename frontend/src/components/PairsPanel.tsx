@@ -13,9 +13,12 @@ import {
   Bitcoin,
   TrendingUp,
   ChevronDown,
+  Wallet,
+  ShoppingCart,
 } from 'lucide-react';
 import {
   fetchPairs,
+  syncT212Wallet,
   updatePairs,
   type PairInfo,
   type PairConfigEntry,
@@ -27,7 +30,7 @@ interface PairsPanelProps {
 }
 
 type EditorTab = 'stocks' | 'crypto';
-type ListFilter = 'all' | 'stocks' | 'crypto';
+type ListFilter = 'all' | 'stocks' | 'crypto' | 'coint' | 'broken';
 
 const formatNum = (val: number | null | undefined, decimals = 3): string => {
   if (val === null || val === undefined || Number.isNaN(val)) return '—';
@@ -166,6 +169,10 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
   const [applyNow, setApplyNow] = useState(true);
+  const [walletBudget, setWalletBudget] = useState('100');
+  const [walletSyncing, setWalletSyncing] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
+  const [walletOk, setWalletOk] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -191,6 +198,8 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
     let list = activePairs;
     if (filter === 'crypto') list = list.filter((p) => p.is_crypto);
     else if (filter === 'stocks') list = list.filter((p) => !p.is_crypto);
+    else if (filter === 'coint') list = list.filter((p) => p.is_cointegrated === true);
+    else if (filter === 'broken') list = list.filter((p) => p.is_cointegrated !== true);
     // Sort: cointegrated pairs first, then by |z-score| descending so the
     // most actionable signals bubble to the top. Pairs without a z-score
     // (Kalman still warming up) sort to the bottom of their group.
@@ -206,6 +215,17 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
 
   const stockCount = activePairs.filter((p) => !p.is_crypto).length;
   const cryptoCount = activePairs.filter((p) => p.is_crypto).length;
+  const cointCount = activePairs.filter((p) => p.is_cointegrated === true).length;
+  const brokenCount = activePairs.filter((p) => p.is_cointegrated !== true).length;
+  const cointEquityPairs = activePairs.filter((p) => p.is_cointegrated === true && !p.is_crypto);
+  const cointEquityTickers = useMemo(() => {
+    const tickers: string[] = [];
+    for (const pair of cointEquityPairs) {
+      if (!tickers.includes(pair.ticker_a)) tickers.push(pair.ticker_a);
+      if (!tickers.includes(pair.ticker_b)) tickers.push(pair.ticker_b);
+    }
+    return tickers;
+  }, [cointEquityPairs]);
 
   const openEditor = () => {
     setDraftStocks(configuredStocks.map((p) => ({ ...p })));
@@ -257,6 +277,42 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
     }
   };
 
+  const handleWalletSync = async () => {
+    const budget = Number(walletBudget);
+    setWalletError(null);
+    setWalletOk(null);
+
+    if (!Number.isFinite(budget) || budget <= 0) {
+      setWalletError('Enter a positive budget.');
+      return;
+    }
+
+    if (cointEquityTickers.length === 0) {
+      setWalletError('No COINT T212 tickers are active.');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Place Trading 212 BUY orders for missing COINT tickers with a ${budget.toFixed(2)} budget?`,
+    );
+    if (!confirmed) return;
+
+    setWalletSyncing(true);
+    try {
+      const result = await syncT212Wallet(token, sessionToken, budget);
+      const okOrders = result.orders.filter((order) => order.status === 'ok').length;
+      setWalletOk(
+        `${result.message} ${okOrders} orders, ${result.skipped.length} skipped.`,
+      );
+      await refresh();
+    } catch (err) {
+      const e = err as Error;
+      setWalletError(e.message || 'Failed to sync T212 wallet');
+    } finally {
+      setWalletSyncing(false);
+    }
+  };
+
   const placeholderA = editorTab === 'crypto' ? 'BTC-USD' : 'KO';
   const placeholderB = editorTab === 'crypto' ? 'ETH-USD' : 'PEP';
 
@@ -289,6 +345,20 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
             >
               <Bitcoin size={10} /> Crypto ({cryptoCount})
             </button>
+            <button
+              data-kind="coint"
+              className={`pair-filter-chip ${filter === 'coint' ? 'active' : ''}`}
+              onClick={() => setFilter('coint')}
+            >
+              COINT ({cointCount})
+            </button>
+            <button
+              data-kind="broken"
+              className={`pair-filter-chip ${filter === 'broken' ? 'active' : ''}`}
+              onClick={() => setFilter('broken')}
+            >
+              BROKEN ({brokenCount})
+            </button>
           </div>
           <button
             className="panel-action-btn"
@@ -307,6 +377,48 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
           </button>
         </div>
         <div className="panel-body">
+          <div className="wallet-sync-strip">
+            <div className="wallet-sync-meta">
+              <Wallet size={16} />
+              <div>
+                <strong>T212 Wallet</strong>
+                <span>{cointEquityPairs.length} COINT pairs / {cointEquityTickers.length} tickers</span>
+              </div>
+            </div>
+            <div className="wallet-sync-controls">
+              <label className="wallet-budget-field">
+                <span>Budget</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={walletBudget}
+                  onChange={(e) => setWalletBudget(e.target.value)}
+                />
+              </label>
+              <button
+                className="wallet-sync-btn"
+                disabled={walletSyncing || cointEquityTickers.length === 0}
+                onClick={handleWalletSync}
+                title="Buy missing COINT T212 tickers"
+              >
+                <ShoppingCart size={13} />
+                {walletSyncing ? 'Buying...' : 'Buy COINT'}
+              </button>
+            </div>
+          </div>
+
+          {walletError && (
+            <div className="editor-msg error">
+              <AlertTriangle size={12} /> {walletError}
+            </div>
+          )}
+          {walletOk && (
+            <div className="editor-msg ok">
+              <CheckCircle2 size={12} /> {walletOk}
+            </div>
+          )}
+
           {filteredActive.length === 0 ? (
             <div className="empty-state">
               <Layers size={28} style={{ opacity: 0.3 }} />

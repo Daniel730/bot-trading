@@ -94,12 +94,35 @@ async def test_close_position_success(monitor):
     from src.services.persistence_service import ExitReason
     with patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close, \
          patch.object(settings, "PAPER_TRADING", False):
-        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success"})
+        monitor.brokerage.place_market_order = AsyncMock(return_value={"status": "success"})
         
         await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
         
-        assert monitor.brokerage.place_value_order.call_count == 2
+        assert monitor.brokerage.place_market_order.call_count == 2
         mock_close.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_close_position_skips_t212_sell_when_broker_has_no_shares(monitor):
+    signal = {
+        "signal_id": str(uuid.uuid4()),
+        "legs": [
+            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
+            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0}
+        ]
+    }
+
+    from src.services.persistence_service import ExitReason
+    with patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close, \
+         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch.object(settings, "PAPER_TRADING", False):
+        monitor.brokerage.get_available_quantity.return_value = 0.0
+        monitor.brokerage.place_market_order = AsyncMock(return_value={"status": "success"})
+
+        await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
+
+        monitor.brokerage.place_market_order.assert_not_called()
+        mock_close.assert_not_called()
+        mock_notify.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_execute_trade_crypto_live_uses_broker(monitor):
