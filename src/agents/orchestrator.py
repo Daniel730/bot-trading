@@ -5,6 +5,7 @@ import logging
 from types import SimpleNamespace
 from src.agents.bull_agent import bull_agent
 from src.agents.bear_agent import bear_agent
+from src.agents.whale_watcher_agent import whale_watcher_agent
 from src.agents.portfolio_manager_agent import portfolio_manager_agent
 from src.agents.macro_economic_agent import macro_economic_agent
 from src.services.redis_service import redis_service
@@ -27,6 +28,7 @@ class AgentState(TypedDict):
     bull_verdict: dict
     bear_verdict: dict
     fundamental_verdict: dict
+    whale_verdict: dict
     final_confidence: float
     final_verdict: str
 
@@ -73,6 +75,7 @@ class Orchestrator:
             "bull_verdict": {},
             "bear_verdict": {},
             "fundamental_verdict": {},
+            "whale_verdict": {},
             "final_confidence": 0.0,
             "final_verdict": ""
         }
@@ -112,10 +115,11 @@ class Orchestrator:
             bear_agent.evaluate(state['signal_context']),
             redis_service.get_fundamental_score(ticker_a),
             redis_service.get_fundamental_score(ticker_b),
+            whale_watcher_agent.evaluate(state['signal_context']),
             return_exceptions=True
         )
 
-        bull_results, bear_results, score_data_a, score_data_b = results
+        bull_results, bear_results, score_data_a, score_data_b, whale_results = results
 
         # Broadcast intermediate agent thoughts
         sig_id = state['signal_context'].get('signal_id', 'N/A')
@@ -140,6 +144,27 @@ class Orchestrator:
             else "NEUTRAL"
         })
 
+        telemetry_service.broadcast("thought", {
+            "agent_name": "WHALE_WATCHER",
+            "signal_id": sig_id,
+            "thought": str(whale_results.get("reasoning", "Whale context read complete"))
+            if not isinstance(whale_results, Exception)
+            else f"Error: {whale_results}",
+            "verdict": "VETO"
+            if not isinstance(whale_results, Exception) and whale_results.get("veto")
+            else (
+                "SUPPORT"
+                if not isinstance(whale_results, Exception)
+                and whale_results.get("confidence_delta", 0.0) > 0
+                else (
+                    "RISK"
+                    if not isinstance(whale_results, Exception)
+                    and whale_results.get("confidence_delta", 0.0) < 0
+                    else "NEUTRAL"
+                )
+            )
+        })
+
         # Track if any major API timeout occurred for circuit breaker
         timeout_occurred = False
 
@@ -158,6 +183,19 @@ class Orchestrator:
             state['bear_verdict'] = {"confidence": 0.0, "error": str(bear_results)}
         else:
             state['bear_verdict'] = bear_results
+
+        if isinstance(whale_results, Exception):
+            logger.warning("Orchestrator Whale Watcher failed: %s", whale_results)
+            if isinstance(whale_results, asyncio.TimeoutError): timeout_occurred = True
+            state['whale_verdict'] = {
+                "confidence_delta": 0.0,
+                "confidence_multiplier": 1.0,
+                "veto": False,
+                "whale_score": 0.0,
+                "error": str(whale_results),
+            }
+        else:
+            state['whale_verdict'] = whale_results
 
         # Handle Fundamental Score A (Redis)
         score_a = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
@@ -234,6 +272,12 @@ class Orchestrator:
             state["final_confidence"] = 0.0
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason
+        elif state["whale_verdict"].get("veto"):
+            state["final_confidence"] = 0.0
+            state["final_verdict"] = state["whale_verdict"].get(
+                "reasoning",
+                "VETO: Whale watcher flagged conflicting exchange flow.",
+            )
         else:
             # --- PHASE 2: MULTI-ARMED BANDIT (ADAPTIVE LEARNING) ---
             bull_s, bull_f = await self._get_agent_metrics("BULL_AGENT")
@@ -274,7 +318,22 @@ class Orchestrator:
                 state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({w_sec:.2f}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
 
-            state["final_confidence"] = final_conf
+            whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))
+            whale_delta = float(state["whale_verdict"].get("confidence_delta", 0.0))
+            whale_score = float(state["whale_verdict"].get("whale_score", 0.0))
+            if whale_multiplier != 1.0 or whale_delta != 0.0 or whale_score != 0.0:
+                final_conf *= whale_multiplier
+                state["final_verdict"] += (
+                    f" | WHALE score={whale_score:.2f} delta={whale_delta:+.2f}"
+                )
+                logger.info(
+                    "[ORCHESTRATOR] %s - Whale watcher multiplier applied: %.2f (score=%.2f)",
+                    pair_id,
+                    whale_multiplier,
+                    whale_score,
+                )
+
+            state["final_confidence"] = max(0.0, min(1.0, final_conf))
 
         # FR-004, US2: Broadcast final verdict to Telemetry
         mood = "IDLE"
