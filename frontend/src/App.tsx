@@ -6,6 +6,7 @@ import {
   Cpu,
   Gauge,
   History,
+  Layers,
   LogOut,
   Play,
   RefreshCw,
@@ -15,6 +16,7 @@ import {
   Square,
 } from 'lucide-react';
 import './App.css';
+import PairsPanel from './components/PairsPanel';
 import {
   type ChartPoint,
   type ChartResponse,
@@ -44,10 +46,11 @@ import {
 } from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
 
-type Page = 'overview' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
+type Page = 'overview' | 'pairs' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
 
 const NAV_ITEMS: { key: Page; label: string; icon: React.ReactNode }[] = [
   { key: 'overview', label: 'Overview', icon: <Gauge size={16} /> },
+  { key: 'pairs', label: 'Pairs', icon: <Layers size={16} /> },
   { key: 'analytics', label: 'Analytics', icon: <BarChart3 size={16} /> },
   { key: 'trades', label: 'Trade History', icon: <History size={16} /> },
   { key: 'control', label: 'Bot Control', icon: <Bot size={16} /> },
@@ -595,6 +598,13 @@ function App() {
                 </div>
               </section>
             </div>
+          </>
+        )}
+
+        {page === 'pairs' && (
+          <>
+            <SectionHeader title="Pair Universe" subtitle="Cointegration status, pair editing, and T212 wallet seeding." />
+            <PairsPanel token={securityToken} sessionToken={sessionToken} />
           </>
         )}
 
