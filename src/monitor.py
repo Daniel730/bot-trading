@@ -1089,16 +1089,59 @@ class ArbitrageMonitor:
         sig_id = signal["signal_id"]
         logger.info(f"Closing position {sig_id} Reason: {reason.value}")
 
+        close_orders = []
         for leg in signal["legs"]:
             ticker = leg["ticker"]
-            qty = leg["quantity"]
-            # Close order side is the opposite of the open side
+            qty = float(leg["quantity"])
             side = "SELL" if leg["side"] == "BUY" else "BUY"
-
             exec_t = settings.DEV_EXECUTION_TICKERS.get(ticker, ticker) if settings.DEV_MODE else ticker
-            if not settings.PAPER_TRADING:
-                p = price_a if ticker == signal["legs"][0]["ticker"] else price_b
-                await self.brokerage.place_value_order(exec_t, float(qty * p), side)
+            price = price_a if ticker == signal["legs"][0]["ticker"] else price_b
+            close_orders.append({
+                "ticker": exec_t,
+                "display_ticker": ticker,
+                "side": side,
+                "quantity": qty,
+                "price": float(price),
+            })
+
+        if not settings.PAPER_TRADING:
+            t212_sell_orders = [
+                order for order in close_orders
+                if self.brokerage.get_venue(order["ticker"]) == "T212" and order["side"] == "SELL"
+            ]
+            if t212_sell_orders and not await self._preflight_live_sell_inventory(t212_sell_orders):
+                return
+
+            for order in close_orders:
+                if self.brokerage.get_venue(order["ticker"]) == "T212":
+                    slip = settings.T212_LIMIT_SLIPPAGE_PCT
+                    limit_price = (
+                        order["price"] * (1 + slip)
+                        if order["side"] == "BUY"
+                        else order["price"] * (1 - slip)
+                    )
+                    res = await self.brokerage.place_market_order(
+                        order["ticker"],
+                        order["quantity"],
+                        order["side"],
+                        limit_price=limit_price,
+                        client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
+                    )
+                else:
+                    res = await self.brokerage.place_value_order(
+                        order["ticker"],
+                        float(order["quantity"] * order["price"]),
+                        order["side"],
+                    )
+
+                if res.get("status") == "error":
+                    msg = (
+                        f"Close aborted for {sig_id}: {order['display_ticker']} "
+                        f"{order['side']} failed. Broker response: {res}"
+                    )
+                    logger.error(msg)
+                    await notification_service.send_message(msg)
+                    return
 
         # M-04: Compute realized PnL from entry vs exit price per leg
         leg_a, leg_b = signal["legs"][0], signal["legs"][1]
