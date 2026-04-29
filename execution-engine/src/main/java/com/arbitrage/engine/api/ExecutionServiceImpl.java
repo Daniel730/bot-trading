@@ -121,6 +121,10 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
                     }
 
                     L2OrderBook book = l2FeedService.getLatestBook(protoLeg.getTicker());
+                    if (book == null && EnvironmentConfig.isDryRun()) {
+                        book = syntheticBook(protoLeg.getTicker(), targetPrice, requestedQty);
+                        logger.warn("No L2 book for {}. Using synthetic dry-run book at target price {}.", protoLeg.getTicker(), targetPrice);
+                    }
                     if (book == null) {
                         return Mono.error(new VwapCalculator.InsufficientMarketDepthException("No L2 Book data available for " + protoLeg.getTicker()));
                     }
@@ -268,6 +272,12 @@ public class ExecutionServiceImpl extends ExecutionServiceGrpc.ExecutionServiceI
         } catch (Exception e) {
             return ExecutionStatus.STATUS_BROKER_ERROR;
         }
+    }
+
+    private L2OrderBook syntheticBook(String ticker, BigDecimal targetPrice, BigDecimal requestedQty) {
+        BigDecimal depth = requestedQty.max(BigDecimal.ONE).multiply(new BigDecimal("10"));
+        L2OrderBook.Level level = new L2OrderBook.Level(targetPrice, depth);
+        return new L2OrderBook(ticker, System.currentTimeMillis(), List.of(level), List.of(level));
     }
 
     private void sendOnce(AtomicBoolean responded, StreamObserver<ExecutionResponse> responseObserver, ExecutionResponse response) {
