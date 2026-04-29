@@ -491,6 +491,13 @@ class PairsUpdateRequest(BaseModel):
     apply_now: bool = True
 
 
+class T212WalletSyncRequest(BaseModel):
+    budget: float = Field(..., gt=0)
+    skip_owned: bool = True
+    skip_pending: bool = True
+    delay_seconds: float = Field(default=0.5, ge=0, le=10)
+
+
 class DashboardConfigUpdateRequest(BaseModel):
     actor: str = "dashboard"
     updates: Dict[str, Any]
@@ -556,6 +563,180 @@ class DashboardService:
 
     def attach_monitor(self, monitor):
         dashboard_state.monitor = monitor
+
+    def _coint_t212_tickers(self) -> tuple[int, list[str]]:
+        monitor = dashboard_state.monitor
+        if monitor is None:
+            raise HTTPException(status_code=409, detail="The bot monitor is not attached yet. Start the bot before syncing T212.")
+
+        tickers: list[str] = []
+        coint_pairs = 0
+        for pair in monitor.active_pairs:
+            if pair.get("is_cointegrated") is not True:
+                continue
+            ticker_a = str(pair.get("ticker_a") or "").strip().upper()
+            ticker_b = str(pair.get("ticker_b") or "").strip().upper()
+            if not ticker_a or not ticker_b:
+                continue
+            if "-USD" in ticker_a or "-USD" in ticker_b:
+                continue
+            coint_pairs += 1
+            for ticker in (ticker_a, ticker_b):
+                if brokerage_service.get_venue(ticker) == "T212" and ticker not in tickers:
+                    tickers.append(ticker)
+
+        return coint_pairs, tickers
+
+    async def sync_t212_wallet_for_coint(self, request: T212WalletSyncRequest) -> dict:
+        if not settings.has_t212_key:
+            raise HTTPException(status_code=400, detail="Trading 212 API key is not configured.")
+
+        coint_pair_count, candidate_tickers = self._coint_t212_tickers()
+        if not candidate_tickers:
+            raise HTTPException(status_code=400, detail="No COINT equity tickers are active for T212.")
+
+        try:
+            positions = await asyncio.to_thread(brokerage_service.get_positions)
+            pending_orders = await brokerage_service.get_pending_orders()
+            account_cash = await asyncio.to_thread(brokerage_service.get_account_cash)
+            pending_value = float(await brokerage_service.get_pending_orders_value())
+        except Exception as exc:
+            logger.error("DASHBOARD: T212 wallet sync preflight failed: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Could not read Trading 212 wallet state: {exc}") from exc
+
+        owned_tickers: list[str] = []
+        for position in positions:
+            ticker = str(position.get("ticker") or "").upper()
+            quantity = _safe_float(position.get("quantity"))
+            if ticker and quantity is not None and quantity > 0:
+                owned_tickers.append(ticker)
+
+        pending_buy_tickers: list[str] = []
+        for order in pending_orders:
+            ticker = str(order.get("ticker") or "").upper()
+            quantity = _safe_float(order.get("quantity"))
+            if ticker and quantity is not None and quantity > 0:
+                pending_buy_tickers.append(ticker)
+
+        target_tickers: list[str] = []
+        skipped: list[dict] = []
+        for ticker in candidate_tickers:
+            t212_ticker = brokerage_service._format_ticker(ticker)
+            if request.skip_owned and t212_ticker in owned_tickers:
+                skipped.append({"ticker": ticker, "reason": "owned"})
+                continue
+            if request.skip_pending and t212_ticker in pending_buy_tickers:
+                skipped.append({"ticker": ticker, "reason": "pending_buy"})
+                continue
+            target_tickers.append(ticker)
+
+        if not target_tickers:
+            result = {
+                "status": "ok",
+                "mode": "demo" if settings.is_t212_demo else "live",
+                "message": "All COINT T212 tickers are already owned or pending.",
+                "coint_pairs": coint_pair_count,
+                "candidate_tickers": candidate_tickers,
+                "target_tickers": [],
+                "skipped": skipped,
+                "budget": float(request.budget),
+                "spendable_cash": _safe_float((account_cash or 0.0) - pending_value),
+                "orders": [],
+                "failures": 0,
+            }
+            await dashboard_state.add_message("SYSTEM", "T212 wallet sync skipped: every COINT ticker is already owned or pending.")
+            return result
+
+        from src.services.budget_service import budget_service
+
+        raw_cash = float(account_cash or 0.0)
+        spendable_cash = max(0.0, raw_cash - max(0.0, pending_value))
+        effective_cash = budget_service.get_effective_cash("T212", spendable_cash)
+        budget = float(request.budget)
+        if budget > effective_cash + 1e-9:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Requested wallet sync budget {budget:.2f} exceeds spendable T212 cash/budget "
+                    f"{effective_cash:.2f}."
+                ),
+            )
+
+        cents = int(round(budget * 100))
+        min_order_cents = max(1, int(round(settings.MIN_TRADE_VALUE * 100)))
+        if cents < len(target_tickers) * min_order_cents:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Budget {budget:.2f} is too small for {len(target_tickers)} tickers; "
+                    f"each needs at least {settings.MIN_TRADE_VALUE:.2f}."
+                ),
+            )
+
+        base_cents = cents // len(target_tickers)
+        extra_cents = cents % len(target_tickers)
+        plan = [
+            {
+                "ticker": ticker,
+                "amount": (base_cents + (1 if idx < extra_cents else 0)) / 100,
+            }
+            for idx, ticker in enumerate(target_tickers)
+        ]
+
+        orders: list[dict] = []
+        failures = 0
+        for idx, item in enumerate(plan):
+            ticker = item["ticker"]
+            amount = item["amount"]
+            try:
+                response = await brokerage_service.place_value_order(
+                    ticker,
+                    amount,
+                    "BUY",
+                    client_order_id=f"dashboard-wallet-sync-{int(time.time())}-{idx}",
+                )
+            except Exception as exc:
+                failures += 1
+                orders.append({"ticker": ticker, "amount": amount, "status": "error", "message": str(exc)})
+            else:
+                status = "error" if response.get("status") == "error" else "ok"
+                if status == "error":
+                    failures += 1
+                orders.append(
+                    {
+                        "ticker": ticker,
+                        "amount": amount,
+                        "status": status,
+                        "order_id": response.get("order_id") or response.get("orderId") or response.get("id"),
+                        "message": response.get("message"),
+                    }
+                )
+
+            if idx < len(plan) - 1 and request.delay_seconds > 0:
+                await asyncio.sleep(request.delay_seconds)
+
+        await dashboard_state.add_message(
+            "SYSTEM",
+            f"T212 wallet sync submitted {len(plan) - failures}/{len(plan)} BUY orders for COINT tickers.",
+            metadata={"type": "t212_wallet_sync", "failures": failures, "tickers": target_tickers},
+        )
+
+        return {
+            "status": "ok" if failures == 0 else "partial",
+            "mode": "demo" if settings.is_t212_demo else "live",
+            "message": f"Submitted {len(plan) - failures}/{len(plan)} BUY orders.",
+            "coint_pairs": coint_pair_count,
+            "candidate_tickers": candidate_tickers,
+            "target_tickers": target_tickers,
+            "skipped": skipped,
+            "budget": budget,
+            "spendable_cash": _safe_float(spendable_cash),
+            "effective_cash": _safe_float(effective_cash),
+            "per_ticker_min": min(item["amount"] for item in plan),
+            "per_ticker_max": max(item["amount"] for item in plan),
+            "orders": orders,
+            "failures": failures,
+        }
 
     def _coerce_config_value(self, key: str, value: Any) -> Any:
         spec = self.editable_config.get(key)
@@ -1331,6 +1512,12 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
         "reloaded": reloaded,
         "reload_error": reload_error,
     }
+
+
+@app.post("/api/t212/wallet/sync")
+async def sync_t212_wallet(request: T212WalletSyncRequest, token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
+    return await dashboard_service.sync_t212_wallet_for_coint(request)
 
 
 @app.get("/api/positions")
