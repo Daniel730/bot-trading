@@ -18,7 +18,6 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
@@ -852,8 +851,7 @@ class DashboardService:
 dashboard_service = DashboardService()
 
 
-@app.post("/api/auth/login")
-async def login(request: DashboardLoginRequest):
+async def _login(request: DashboardLoginRequest):
     verify_security_token(request.security_token)
     status = dashboard_service.totp.public_status()
     if status["enabled"]:
@@ -864,7 +862,26 @@ async def login(request: DashboardLoginRequest):
     return {"status": "ok", **session, "two_factor": dashboard_service.totp.public_status()}
 
 
+@app.options("/api/auth/login")
+@app.options("/api/auth/login/")
+async def login_preflight():
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/login")
+@app.post("/api/auth/login/")
+async def login(request: DashboardLoginRequest):
+    return await _login(request)
+
+
+@app.options("/api/auth/logout")
+@app.options("/api/auth/logout/")
+async def logout_preflight():
+    return {"status": "ok"}
+
+
 @app.post("/api/auth/logout")
+@app.post("/api/auth/logout/")
 async def logout(token: str = Query(None), session: str = Query(None)):
     verify_token(token, session)
     session_manager.revoke(session)
@@ -1252,13 +1269,23 @@ async def list_open_positions(token: str = Query(None), session: str = Query(Non
 frontend_path = "frontend/dist" if os.path.exists("frontend/dist") else "dashboard"
 
 
-@app.get("/")
-async def get_dashboard():
+def _frontend_index_response():
     index_file = os.path.join(frontend_path, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
     return HTMLResponse(content="<h1>Dashboard Error</h1><p>index.html not found.</p>", status_code=404)
 
 
-if os.path.exists(frontend_path):
-    app.mount("/", StaticFiles(directory=frontend_path), name="ui")
+@app.get("/")
+async def get_dashboard():
+    return _frontend_index_response()
+
+
+@app.get("/{full_path:path}")
+async def get_dashboard_asset_or_spa(full_path: str):
+    if full_path.startswith(("api/", "stream", "ws/")):
+        raise HTTPException(status_code=404, detail="Not found")
+    candidate = os.path.join(frontend_path, full_path)
+    if os.path.exists(candidate) and os.path.isfile(candidate):
+        return FileResponse(candidate)
+    return _frontend_index_response()

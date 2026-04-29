@@ -339,7 +339,7 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
 };
 
 export const login = async (securityToken: string, otpToken?: string): Promise<AuthSession> =>
-  requestJson<AuthSession>('/api/auth/login', null, {
+  requestJson<AuthSession>('/api/auth/login/', null, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ security_token: securityToken, otp_token: otpToken || undefined, actor: 'dashboard' }),
