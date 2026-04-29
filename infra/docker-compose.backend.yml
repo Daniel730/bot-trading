@@ -40,9 +40,9 @@ services:
     ports:
       - "8080:8080"
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     volumes:
-      - ../.env:/app/.env
+      - ${APP_ENV_FILE:-../.env}:/app/.env:ro
     restart: always
     depends_on:
       redis:
@@ -63,9 +63,9 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     volumes:
-      - ../.env:/app/.env
+      - ${APP_ENV_FILE:-../.env}:/app/.env:ro
     restart: always
     depends_on:
       redis:
@@ -87,7 +87,7 @@ services:
     ports:
       - "50051:50051"
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     restart: always
     # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
     # dependent services (bot, mcp-server) start sending gRPC calls.
@@ -104,9 +104,9 @@ services:
     container_name: sec-fundamental-worker
     command: python src/daemons/sec_fundamental_worker.py
     env_file:
-      - ../.env
+      - ${APP_ENV_FILE:-../.env}
     volumes:
-      - ../.env:/app/.env
+      - ${APP_ENV_FILE:-../.env}:/app/.env:ro
     restart: always
     depends_on:
       redis:
