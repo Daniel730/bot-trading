@@ -43,7 +43,8 @@ async def test_circuit_breaker_tripping():
     db.set_system_state("consecutive_api_timeouts", "0")
 
     with patch('src.models.persistence.PersistenceManager', return_value=db), \
-         _route_system_state_to(db):
+         _route_system_state_to(db), \
+         patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="BULLISH"):
         orchestrator = Orchestrator()
 
         input_data = {
@@ -76,7 +77,8 @@ async def test_circuit_breaker_reset():
     db.set_system_state("consecutive_api_timeouts", "2")
 
     with patch('src.models.persistence.PersistenceManager', return_value=db), \
-         _route_system_state_to(db):
+         _route_system_state_to(db), \
+         patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="BULLISH"):
         orchestrator = Orchestrator()
 
         with patch('src.agents.orchestrator.bull_agent.evaluate', return_value={"confidence": 0.5}):

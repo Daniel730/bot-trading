@@ -22,7 +22,11 @@ async def test_orchestrator_resilience_to_agent_failure():
         }
     }
 
-    with patch('src.agents.orchestrator.bull_agent.evaluate', return_value=mock_bull_result):
+    # Mock the macro regime check — otherwise Phase 0 makes a real yfinance
+    # call for the sector beacon (NVDA) and can short-circuit with a
+    # CRITICAL VETO state dict that omits bull_verdict / bear_verdict.
+    with patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="BULLISH"), \
+         patch('src.agents.orchestrator.bull_agent.evaluate', return_value=mock_bull_result):
         with patch('src.agents.orchestrator.bear_agent.evaluate', side_effect=Exception("Bear Agent Crash!")):
             # If implementation is correct (return_exceptions=True), this should not raise Exception
             try:
