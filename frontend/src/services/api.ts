@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getRuntimeApiBase } from './runtimeUrl';
 
 export interface VenueMetrics {
   available_cash: number | null;
@@ -384,17 +385,7 @@ export class ApiError extends Error {
   }
 }
 
-const getApiBase = () => {
-  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
-  const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-  const isFrontendPort = window.location.port === '3000';
-  if ((isLocalHost || isFrontendPort) && window.location.port !== '8080') {
-    return `${window.location.protocol}//${window.location.hostname}:8080`;
-  }
-  return window.location.origin;
-};
-
-const API_BASE = getApiBase();
+const API_BASE = getRuntimeApiBase(import.meta.env.VITE_API_URL);
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS);
 const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
