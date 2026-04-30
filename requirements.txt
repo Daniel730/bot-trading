@@ -36,4 +36,4 @@ grpcio-tools>=1.59.0
 web3>=6.20.0
 psutil
 rich>=13.0.0
-rich>=13.0.0
+alpaca-trade-api>=3.0.0
