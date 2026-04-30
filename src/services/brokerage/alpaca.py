@@ -9,6 +9,17 @@ logger = logging.getLogger(__name__)
 
 class AlpacaProvider(AbstractBrokerageProvider):
     def __init__(self, api_key: str = None, api_secret: str = None, base_url: str = None):
+        """
+        Initialize the provider with Alpaca API credentials and create the Alpaca REST client.
+        
+        Parameters:
+            api_key (str, optional): Alpaca API key. If omitted, loaded from settings.ALPACA_API_KEY and stripped.
+            api_secret (str, optional): Alpaca API secret. If omitted, loaded from settings.ALPACA_API_SECRET and stripped.
+            base_url (str, optional): Alpaca base URL. If omitted, loaded from settings.ALPACA_BASE_URL and stripped.
+        
+        Side effects:
+            Sets self.api_key, self.api_secret, self.base_url and instantiates self.api as a configured Alpaca REST client.
+        """
         self.api_key = api_key or settings.ALPACA_API_KEY.strip()
         self.api_secret = api_secret or settings.ALPACA_API_SECRET.strip()
         self.base_url = base_url or settings.ALPACA_BASE_URL.strip()
@@ -21,6 +32,12 @@ class AlpacaProvider(AbstractBrokerageProvider):
         )
 
     def test_connection(self) -> bool:
+        """
+        Check whether the configured Alpaca API credentials and endpoint are reachable.
+        
+        Returns:
+            bool: `true` if the account could be retrieved from Alpaca, `false` otherwise.
+        """
         try:
             self.api.get_account()
             return True
@@ -29,6 +46,23 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return False
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
+        """
+        Place a market order or a limit order (when a limit price is provided) for the specified ticker.
+        
+        Parameters:
+            limit_price (float, optional): If provided, submits a limit order at this price; otherwise a market order is submitted.
+            client_order_id (str, optional): Optional client-specified identifier to attach to the order.
+        
+        Returns:
+            dict: On success, contains:
+                - "status": "success"
+                - "order_id": the broker-assigned order identifier
+                - "broker": "ALPACA"
+                - "client_order_id": the order's client-provided identifier (if any)
+            On failure, contains:
+                - "status": "error"
+                - "message": a human-readable error message
+        """
         try:
             order_type = 'limit' if limit_price else 'market'
             params = {
@@ -55,6 +89,20 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return {"status": "error", "message": str(e)}
 
     async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
+        """
+        Places a value (notional) market order for a ticker, falling back to a quantity-based market order if notional submission fails.
+        
+        Parameters:
+            ticker (str): Symbol to trade.
+            amount (float): Notional value (in account currency) to allocate to the order.
+            side (str): Order side, e.g., 'buy' or 'sell'.
+            price (float, optional): Price to use for fallback quantity calculation; if omitted, the latest price will be fetched.
+            client_order_id (str, optional): Client-provided identifier to attach to the order.
+        
+        Returns:
+            dict: On success: {"status": "success", "order_id": <broker order id>, "broker": "ALPACA", "client_order_id": <client id or None>}.
+                  On error: {"status": "error", "message": <error message>}.
+        """
         try:
             # Alpaca supports notional orders (value-based) natively for many assets
             params = {
@@ -89,6 +137,12 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return await self.place_market_order(ticker, quantity, side, client_order_id=client_order_id)
 
     def get_portfolio(self) -> List[Dict[str, Any]]:
+        """
+        Fetches the current account portfolio and returns it as a list of normalized position dictionaries.
+        
+        Returns:
+            List[Dict[str, Any]]: A list of position dictionaries normalized for internal use. Returns an empty list if the portfolio cannot be retrieved.
+        """
         try:
             positions = self.api.list_positions()
             return [self._normalize_position(p) for p in positions]
@@ -97,6 +151,15 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return []
 
     def get_positions(self, ticker: str = None) -> List[Dict[str, Any]]:
+        """
+        Retrieve current positions from the brokerage; returns either all positions or the position for a single ticker.
+        
+        Parameters:
+            ticker (str, optional): Ticker symbol to fetch. If provided, returns a single-item list with the normalized position for that ticker, or an empty list if the position is not found.
+        
+        Returns:
+            List[Dict[str, Any]]: A list of normalized position dictionaries. Returns an empty list if no positions are available or if an error occurs.
+        """
         try:
             if ticker:
                 try:
@@ -111,6 +174,12 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return []
 
     def get_account_cash(self) -> float:
+        """
+        Retrieve the account cash balance from the connected Alpaca account.
+        
+        Returns:
+            float: The account cash balance. Returns 0.0 if the balance cannot be fetched.
+        """
         try:
             account = self.api.get_account()
             return float(account.cash)
@@ -119,6 +188,12 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return 0.0
 
     def get_pending_orders(self) -> List[Dict[str, Any]]:
+        """
+        Fetch open orders from Alpaca and return them in normalized dictionary form.
+        
+        Returns:
+            List[Dict[str, Any]]: A list of normalized order dictionaries (keys include `ticker`, `quantity`, `side`, `status`, `limitPrice`, `id`). Returns an empty list if fetching orders fails.
+        """
         try:
             orders = self.api.list_orders(status='open')
             return [self._normalize_order(o) for o in orders]
@@ -127,6 +202,21 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return []
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
+        """
+        Return normalized metadata for a tradable symbol from Alpaca.
+        
+        Parameters:
+            ticker (str): The asset symbol or identifier to query.
+        
+        Returns:
+            dict: A mapping with keys:
+                - "ticker": asset symbol string.
+                - "minTradeQuantity": minimum tradable quantity (0.0001 for fractionable assets, 1.0 otherwise).
+                - "quantityIncrement": smallest quantity increment (0.0001 for fractionable assets, 1.0 otherwise).
+                - "tickSize": minimum price increment (0.01).
+                - "status": asset status string.
+            Returns an empty dict if metadata cannot be retrieved.
+        """
         try:
             asset = self.api.get_asset(ticker)
             return {
@@ -141,6 +231,21 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return {}
 
     def _normalize_position(self, p) -> Dict[str, Any]:
+        """
+        Normalize an Alpaca position object into a standardized dictionary.
+        
+        Parameters:
+            p: An Alpaca position-like object providing attributes `symbol`, `qty`, `avg_entry_price`, `current_price`, and `market_value`. May optionally provide `qty_available`.
+        
+        Returns:
+            dict: A normalized position with the following keys:
+                - ticker (str): Position symbol.
+                - quantity (float): Total quantity held.
+                - quantityAvailableForTrading (float): Quantity available for trading (uses `qty_available` when present, otherwise `qty`).
+                - averagePrice (float): Average entry price.
+                - currentPrice (float): Current market price.
+                - marketValue (float): Market value of the position.
+        """
         return {
             "ticker": p.symbol,
             "quantity": float(p.qty),
@@ -151,6 +256,21 @@ class AlpacaProvider(AbstractBrokerageProvider):
         }
 
     def _normalize_order(self, o) -> Dict[str, Any]:
+        """
+        Normalize an Alpaca order object into a standardized dictionary.
+        
+        Parameters:
+            o (object): Alpaca order object returned by the Alpaca REST client.
+        
+        Returns:
+            dict: A dictionary with the following keys:
+                - ticker (str): Order symbol.
+                - quantity (float): Quantity as a float (0.0 if not present).
+                - side (str): Order side in uppercase (e.g., "BUY", "SELL").
+                - status (str): Order status string from Alpaca.
+                - limitPrice (float|None): Limit price as a float, or None if not set.
+                - id (str): Broker order identifier.
+        """
         return {
             "ticker": o.symbol,
             "quantity": float(o.qty) if o.qty else 0.0,
