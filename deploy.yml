@@ -227,6 +227,22 @@ jobs:
         if: needs.build.outputs.frontend_changed == 'true'
         run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull frontend
 
+      # Older deploys used explicit container_name values such as
+      # trading-redis and execution-engine. Compose cannot adopt those
+      # containers after switching to a fixed project name, so remove only the
+      # legacy containers before recreating the project. Named volumes survive.
+      - name: Remove legacy fixed-name containers
+        run: |
+          docker rm -f \
+            trading-redis \
+            trading-postgres \
+            trading-bot \
+            mcp-server \
+            execution-engine \
+            sec-fundamental-worker \
+            trading-frontend \
+            2>/dev/null || true
+
       - name: Apply / restart services
         run: |
           docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml config --quiet
