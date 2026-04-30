@@ -5,7 +5,7 @@ from src.services.dca_service import dca_service
 from src.agents.portfolio_manager_agent import portfolio_manager
 from src.models.persistence import PersistenceManager
 from src.config import settings
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 def test_portfolio_allocation_flow():
     persistence = PersistenceManager(settings.DB_PATH)
@@ -43,7 +43,7 @@ def test_dca_reinvest_logic():
     # Define 'safe' strategy for DRIP
     persistence.save_portfolio_strategy("safe", "SPY", 1.0, "Conservative")
     
-    with patch('src.services.brokerage_service.BrokerageService.get_account_cash') as mock_cash:
+    with patch('src.services.brokerage_service.BrokerageService.get_account_cash', new_callable=AsyncMock) as mock_cash:
         mock_cash.return_value = 10.0 # Above $5 threshold
         
         with patch.object(dca_service, 'execute_dca') as mock_exec:

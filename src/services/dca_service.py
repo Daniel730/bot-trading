@@ -101,7 +101,7 @@ class DCAService:
         if db.get_fee_config("drip_enabled", 0.0) != 1.0:
             return {"status": "disabled"}
 
-        cash = BrokerageService().get_account_cash()
+        cash = await BrokerageService().get_account_cash()
         min_trade_value = db.get_fee_config("min_trade_value", settings.MIN_TRADE_VALUE)
         if cash < min_trade_value:
             return {"status": "skipped", "reason": "below_min_trade_value"}
