@@ -249,7 +249,7 @@ class Web3BrokerageService:
 
         try:
             from src.services.data_service import data_service
-            prices = await data_service.get_latest_price([spot_ticker])
+            prices = await data_service.get_latest_price_async([spot_ticker])
             spot_price = prices.get(spot_ticker)
             if spot_price is not None and float(spot_price) > 0:
                 return float(spot_price)

@@ -3,12 +3,14 @@ import yfinance as yf
 import pandas as pd
 import requests
 from polygon import RESTClient
-from typing import List, Optional
+from typing import Callable, List, Optional, TypeVar
 from src.config import settings
 import asyncio
+import inspect
 from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 class AwaitableDict(dict):
     def __await__(self):
@@ -25,6 +27,60 @@ class DataService:
     def __init__(self):
         self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY)
         self._ws_client: Optional[WebSocketClient] = None
+
+    def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
+        kwargs.setdefault("timeout", settings.MARKET_DATA_TIMEOUT_SECONDS)
+        try:
+            return yf.download(*args, **kwargs)
+        except TypeError as exc:
+            if "timeout" not in str(exc):
+                raise
+            kwargs.pop("timeout", None)
+            return yf.download(*args, **kwargs)
+
+    async def _run_sync_backend(
+        self,
+        func: Callable[..., T],
+        *args,
+        timeout: Optional[float] = None,
+        label: str = "backend request",
+        fallback: Optional[T] = None,
+        **kwargs,
+    ) -> T:
+        deadline = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS
+
+        async def runner():
+            if inspect.iscoroutinefunction(func):
+                result = func(*args, **kwargs)
+            else:
+                result = await asyncio.to_thread(func, *args, **kwargs)
+            if inspect.isawaitable(result):
+                return await result
+            return result
+
+        try:
+            return await asyncio.wait_for(runner(), timeout=deadline)
+        except asyncio.TimeoutError:
+            logger.warning("DataService: %s timed out after %.1fs", label, deadline)
+            return fallback
+
+    @agent_trace("DataService.get_historical_data_async")
+    async def get_historical_data_async(
+        self,
+        tickers: List[str],
+        period: str = "30d",
+        interval: str = "1h",
+        timeout: Optional[float] = None,
+    ) -> pd.DataFrame:
+        return await self._run_sync_backend(
+            self.get_historical_data,
+            tickers,
+            period,
+            interval,
+            timeout=timeout,
+            label=f"historical data for {tickers}",
+            fallback=pd.DataFrame(),
+        )
 
     @staticmethod
     def _extract_latest_close(df: pd.DataFrame, ticker: str) -> Optional[float]:
@@ -69,7 +125,7 @@ class DataService:
         """
         try:
             # Bug 1.2: Enforce auto_adjust=True to handle splits and dividends correctly
-            df = yf.download(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
+            df = self._download_yfinance(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
             if df.empty:
                 raise ValueError(f"No data returned for {tickers}")
             
@@ -131,6 +187,17 @@ class DataService:
             
         return AwaitableDict(latest)
 
+    @agent_trace("DataService.get_latest_price_async")
+    async def get_latest_price_async(self, tickers: List[str], timeout: Optional[float] = None) -> dict:
+        prices = await self._run_sync_backend(
+            self.get_latest_price,
+            tickers,
+            timeout=timeout,
+            label=f"latest prices for {tickers}",
+            fallback={},
+        )
+        return AwaitableDict(prices or {})
+
     @retry(
         wait=wait_exponential(multiplier=1, min=1, max=4), 
         stop=stop_after_attempt(3),
@@ -145,7 +212,7 @@ class DataService:
         import time
         for ticker in tickers:
             try:
-                df = yf.download(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
+                df = self._download_yfinance(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
                 val = self._extract_latest_close(df, ticker)
                 if val is not None:
                     # Apply DEV_MODE randomization if active
@@ -175,9 +242,14 @@ class DataService:
                 # Fallback to currentPrice if bid/ask is missing (e.g. after hours)
                 if bid == 0.0 or ask == 0.0:
                     current = info.get('currentPrice', info.get('previousClose', 1.0))
-                    return current, current 
+                    return current, current
                 return bid, ask
-            return await asyncio.to_thread(fetch)
+            return await self._run_sync_backend(
+                fetch,
+                timeout=settings.MARKET_DATA_TIMEOUT_SECONDS,
+                label=f"bid/ask for {ticker}",
+                fallback=(0.0, 0.0),
+            )
         except Exception as e:
             import logging
             logging.getLogger(__name__).warning(f"Failed to fetch Bid/Ask for {ticker}: {e}")

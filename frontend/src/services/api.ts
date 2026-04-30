@@ -319,6 +319,11 @@ const getApiBase = () => {
 };
 
 const API_BASE = getApiBase();
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS);
+const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+  ? configuredTimeout
+  : DEFAULT_REQUEST_TIMEOUT_MS;
 
 const apiUrl = (path: string) => new URL(path, API_BASE);
 
@@ -328,6 +333,31 @@ const authHeaders = (token: string | null, sessionToken?: string | null, initHea
   if (sessionToken) headers.set('X-Dashboard-Session', sessionToken);
   return headers;
 };
+
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const callerSignal = init?.signal;
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  const abortFromCaller = () => controller.abort();
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Backend request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+  }
+}
 
 async function requestJson<T>(
   path: string,
@@ -402,7 +432,10 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
       }
     };
 
-    void connect();
+    eventSource.onerror = (err) => {
+      console.error('SSE Error:', err);
+      setError('Connection to backend lost. Retrying...');
+    };
 
     return () => {
       controller.abort();
@@ -497,7 +530,7 @@ export const fetchTradeHistory = async (
   if (params.search) url.searchParams.set('search', params.search);
   if (params.status) url.searchParams.set('status', params.status);
   if (params.venue) url.searchParams.set('venue', params.venue);
-  const response = await fetch(url.toString(), { headers: authHeaders(token, sessionToken) });
+  const response = await fetchWithTimeout(url);
   if (!response.ok) throw new Error(`Failed to fetch trade history (${response.status})`);
   return response.json();
 };
