@@ -1,3 +1,7 @@
+# Historical Audit Note
+
+This register captures an older multi-environment audit and is preserved for traceability. Several findings have since been fixed or changed. Use `docs/tofix.md` plus current source/tests as the active backlog.
+
 # Bug & Error Register — Full Multi-Environment Audit
 **Last updated**: 2026-04-12 | Audited: Python async, Java engine, trading logic, security/infra
 

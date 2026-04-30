@@ -1,0 +1,18 @@
+# GitHub Sponsors configuration for Alpha Arbitrage Bot.
+# Documentation: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/displaying-a-sponsor-button-in-your-repository
+
+github: [Daniel730]
+
+# To enable additional platforms, uncomment and fill in the relevant lines below:
+# patreon: your-patreon-username
+# open_collective: your-collective-name
+# ko_fi: your-ko-fi-username
+# tidelift: npm/your-package-name
+# community_bridge: your-project-name
+# liberapay: your-liberapay-username
+# issuehunt: your-issuehunt-username
+# lfx_crowdfunding: your-lfx-id
+# polar: your-polar-username
+# buy_me_a_coffee: your-bmc-username
+# thanks_dev: your-thanks-dev-username
+# custom: ['https://example.com/donate']
