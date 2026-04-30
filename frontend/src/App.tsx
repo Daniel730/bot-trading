@@ -14,9 +14,11 @@ import {
   Settings as SettingsIcon,
   Shield,
   Square,
+  Wallet,
 } from 'lucide-react';
 import './App.css';
 import PairsPanel from './components/PairsPanel';
+import WalletPanel from './components/WalletPanel';
 import {
   ApiError,
   type AuthSession,
@@ -48,10 +50,11 @@ import {
 } from './services/api';
 import { useTelemetry } from './hooks/useTelemetry';
 
-type Page = 'overview' | 'pairs' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
+type Page = 'overview' | 'wallet' | 'pairs' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
 
 const NAV_ITEMS: { key: Page; label: string; icon: React.ReactNode }[] = [
   { key: 'overview', label: 'Overview', icon: <Gauge size={16} /> },
+  { key: 'wallet', label: 'Wallet', icon: <Wallet size={16} /> },
   { key: 'pairs', label: 'Pairs', icon: <Layers size={16} /> },
   { key: 'analytics', label: 'Analytics', icon: <BarChart3 size={16} /> },
   { key: 'trades', label: 'Trade History', icon: <History size={16} /> },
@@ -717,6 +720,13 @@ function App() {
           <>
             <SectionHeader title="Pair Universe" subtitle="Cointegration status, pair editing, and T212 wallet seeding." />
             <PairsPanel token={securityToken} sessionToken={sessionToken} />
+          </>
+        )}
+
+        {page === 'wallet' && (
+          <>
+            <SectionHeader title="Wallet" subtitle="Daily T212 stock recommendations and direct buy execution." />
+            <WalletPanel token={securityToken} sessionToken={sessionToken} />
           </>
         )}
 
