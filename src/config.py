@@ -357,6 +357,113 @@ class Settings(BaseSettings):
         'MC.PA_RMS.PA': 'Luxury',          # French luxury
         '9988.HK_0700.HK': 'Technology',    # HK Big Tech (Alibaba/Tencent)
         '3690.HK_9999.HK': 'Technology',    # HK Consumer Tech
+        # --- Extended Equity Pairs (backfill 2026-04-30) ---
+        # Bug fix: previously these pairs were missing from PAIR_SECTORS, causing
+        # monitor.py to fall back to "Technology" -> NVDA beacon, which vetoed
+        # every signal whenever NVDA had >3% drawdown.
+        # German Automotive / Consumer
+        'BMW.DE_MBG.DE': 'Consumer Discretionary',
+        'VOW3.DE_PAH3.DE': 'Consumer Discretionary',
+        'CON.DE_PUM.DE': 'Consumer Discretionary',
+        # European Banking
+        'DBK.DE_CBK.DE': 'Financials',
+        'BNP.PA_GLE.PA': 'Financials',
+        'ACA.PA_BNP.PA': 'Financials',
+        # French Luxury
+        'MC.PA_KER.PA': 'Luxury',
+        'OR.PA_EL.PA': 'Luxury',
+        # European Energy & Utilities
+        'RWE.DE_EOAN.DE': 'Utilities',
+        'ENGI.PA_ORA.PA': 'Utilities',
+        # UK Energy & Mining
+        'RIO.L_BHP.L': 'Materials',
+        'AAL.L_GLEN.L': 'Materials',
+        # UK Banking & Insurance
+        'LLOY.L_BARC.L': 'Financials',
+        'HSBA.L_STAN.L': 'Financials',
+        'AV.L_LGEN.L': 'Financials',
+        # UK Consumer & Retail
+        'TSCO.L_SBRY.L': 'Consumer Staples',
+        'ULVR.L_RKT.L': 'Consumer Staples',
+        'BATS.L_IMB.L': 'Consumer Staples',
+        # Semiconductors (Technology)
+        'ASML.AS_ASM.AS': 'Technology',
+        'LRCX_AMAT': 'Technology',
+        'AVGO_QCOM': 'Technology',
+        'AMAT_LRCX': 'Technology',
+        'KLAC_ASML': 'Technology',
+        'TXN_ADI': 'Technology',
+        'MCHP_NXPI': 'Technology',
+        'WDC_STX': 'Technology',
+        'HPQ_HPE': 'Technology',
+        # Big Tech Proxies (Technology)
+        'GOOGL_META': 'Technology',
+        # SaaS & Cloud Software (Technology)
+        'CRM_ADBE': 'Technology',
+        'NOW_TEAM': 'Technology',
+        'SNOW_PLTR': 'Technology',
+        'WDAY_SAP': 'Technology',
+        'ADSK_PTC': 'Technology',
+        'ZS_CRWD': 'Technology',
+        'PANW_FTNT': 'Technology',
+        'DDOG_NET': 'Technology',
+        'OKTA_MDB': 'Technology',
+        # US Fintech & Banking
+        'C_WFC': 'Financials',
+        'BLK_TROW': 'Financials',
+        'SCHW_IBKR': 'Financials',
+        'PNC_USB': 'Financials',
+        'BX_KKR': 'Financials',
+        'SPGI_MCO': 'Financials',
+        'CME_ICE': 'Financials',
+        'MET_PRU': 'Financials',
+        'AIG_TRV': 'Financials',
+        # Consumer Retail & Luxury (US)
+        'COST_BJ': 'Consumer Staples',
+        'LULU_NKE': 'Consumer Discretionary',
+        'DG_DLTR': 'Consumer Staples',
+        'TJX_ROST': 'Consumer Discretionary',
+        'EL_ULTA': 'Consumer Discretionary',
+        'BKNG_EXPE': 'Consumer Discretionary',
+        'MAR_HLT': 'Consumer Discretionary',
+        'YUM_QSR': 'Consumer Discretionary',
+        'MDLZ_HSY': 'Consumer Staples',
+        'CL_KMB': 'Consumer Staples',
+        # Energy & Industrials
+        'PSX_VLO': 'Energy',
+        'COP_EOG': 'Energy',
+        'CAT_DE': 'Industrials',
+        'LMT_NOC': 'Industrials',
+        'GD_RTX': 'Industrials',
+        'WM_RSG': 'Industrials',
+        'UNP_NSC': 'Industrials',
+        'CSX_CP': 'Industrials',
+        'ETN_EMR': 'Industrials',
+        'URI_HRI': 'Industrials',
+        'VMC_MLM': 'Materials',
+        'GE_HON': 'Industrials',
+        # Pharma & Healthcare
+        'PFE_MRK': 'Healthcare',
+        'JNJ_ABBV': 'Healthcare',
+        'LLY_NVO': 'Healthcare',
+        'UNH_ELV': 'Healthcare',
+        'CI_HUM': 'Healthcare',
+        'ISRG_SYK': 'Healthcare',
+        'BSX_MDT': 'Healthcare',
+        'TMO_A': 'Healthcare',
+        'AMGN_GILD': 'Healthcare',
+        'ZTS_IDXX': 'Healthcare',
+        'REGN_VRTX': 'Healthcare',
+        'MCK_COR': 'Healthcare',
+        # REITs, Utilities, Telecom
+        'AMT_CCI': 'Real Estate',
+        'PLD_PSA': 'Real Estate',
+        'O_ADC': 'Real Estate',
+        'DUK_SO': 'Utilities',
+        'NEE_D': 'Utilities',
+        'AEP_SRE': 'Utilities',
+        'CMCSA_CHTR': 'Telecommunications',
+        'SPOT_WMG': 'Telecommunications',
         # --- Crypto: Layer 1 / Smart-contract platforms ---
         'ETH-USD_BTC-USD': 'Crypto L1',     'BTC-USD_ETH-USD': 'Crypto L1',
         'ETH-USD_SOL-USD': 'Crypto L1',     'SOL-USD_ETH-USD': 'Crypto L1',

@@ -747,6 +747,7 @@ class DashboardService:
         z_scores = await self._wallet_pair_z_scores(pair_ids)
         counts = {"coint": 0, "broken_eligible": 0}
         candidates: dict[str, dict] = {}
+        logged_non_coint_candidates: set[str] = set()
 
         for pair in monitor.active_pairs:
             ticker_a = str(pair.get("ticker_a") or "").strip().upper()
@@ -759,8 +760,6 @@ class DashboardService:
             is_coint = pair.get("is_cointegrated") is True
             category = "coint" if is_coint else "broken_eligible"
             counts[category] += 1
-            if category == "broken_eligible" and not include_broken:
-                continue
 
             pair_id = str(pair.get("id") or f"{ticker_a}_{ticker_b}")
             sector = settings.PAIR_SECTORS.get(
@@ -782,6 +781,16 @@ class DashboardService:
             for ticker in (ticker_a, ticker_b):
                 if brokerage_service.get_venue(ticker) != "T212":
                     continue
+                if (
+                    category == "broken_eligible"
+                    and not include_broken
+                    and ticker not in logged_non_coint_candidates
+                ):
+                    logger.warning(
+                        "DASHBOARD: P-04 including non-COINT ticker %s in candidates",
+                        ticker,
+                    )
+                    logged_non_coint_candidates.add(ticker)
                 entry = candidates.setdefault(
                     ticker,
                     {
@@ -931,11 +940,21 @@ class DashboardService:
 
         budget = float(request.budget)
         effective_cash = float(wallet_state["effective_cash"])
-        # P-04 (2026-04-30): User wants to override validation. 
+        # P-04 (2026-04-30): User wants to override validation.
         # We still calculate usable_budget for the plan but won't block the button.
-        usable_budget = budget 
+        usable_budget = budget
         cash_limited = budget > effective_cash + 1e-9
         warning = None
+        if cash_limited:
+            logger.warning(
+                "DASHBOARD: P-04 wallet recommendation budget %.2f exceeds effective T212 cash %.2f; deferring to broker.",
+                budget,
+                effective_cash,
+            )
+            warning = (
+                f"Budget {budget:.2f} exceeds spendable Trading 212 cash/budget {effective_cash:.2f}; "
+                "the broker will be the final gate."
+            )
         can_buy = bool(recommendations)
 
         if recommendations and can_buy:
@@ -986,8 +1005,17 @@ class DashboardService:
 
         plan_snapshot = await self.calculate_t212_wallet_recommendations(request)
         budget = float(request.budget)
-        # P-04: Removed hard error on budget > effective_cash.
-        
+        # P-04 (2026-04-30): Removed hard error on budget > effective_cash.
+        # The recommendation plan above already logs a warning when cash_limited;
+        # we surface it again here so the buy step is visible too.
+        if plan_snapshot.get("cash_limited"):
+            logger.warning(
+                "DASHBOARD: P-04 proceeding with wallet recommendation BUY despite cash_limited=true (budget=%.2f, effective_cash=%.2f).",
+                budget,
+                float(plan_snapshot.get("effective_cash") or 0.0),
+            )
+
+
         recommendations = plan_snapshot.get("recommendations") or []
         selected_tickers = None
         if request.tickers:
@@ -995,8 +1023,42 @@ class DashboardService:
             known_tickers = {item["ticker"] for item in recommendations}
             unknown = sorted(selected_tickers - known_tickers)
             if unknown:
-                # Still keep this check as it's about existence in the active pair list
-                raise HTTPException(status_code=400, detail=f"Tickers are not in the current recommendation plan: {', '.join(unknown)}")
+                # P-04 (2026-04-30): Previously this was a hard 400. Now we synthesize
+                # a minimal recommendation entry for any "unknown" ticker that *does*
+                # appear somewhere in the active pair list (e.g. it was filtered out
+                # because it's already owned, pending, or in a non-COINT pair). Only
+                # tickers that aren't in any active T212 equity pair still raise 400.
+                _, active_universe = self._coint_t212_tickers()
+                active_universe_set = set(active_universe)
+                truly_unknown = [t for t in unknown if t not in active_universe_set]
+                if truly_unknown:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Tickers are not in any active T212 equity pair: "
+                            f"{', '.join(truly_unknown)}"
+                        ),
+                    )
+                manual_overrides = [t for t in unknown if t in active_universe_set]
+                logger.warning(
+                    "DASHBOARD: P-04 manual override buy for non-recommended ticker %s",
+                    ", ".join(manual_overrides),
+                )
+                for ticker in manual_overrides:
+                    recommendations.append({
+                        "ticker": ticker,
+                        "t212_ticker": _format_t212_ticker(ticker),
+                        "category": "manual_override",
+                        "categories": ["manual_override"],
+                        "pairs": [],
+                        "sectors": [],
+                        "score": 1.0,
+                        "max_abs_z_score": 0.0,
+                        "estimated_cost_pct": 0.0,
+                        "rank": None,
+                        "suggested_amount": 0.0,
+                        "status": "manual_override",
+                    })
             recommendations = [item for item in recommendations if item["ticker"] in selected_tickers]
 
         if not recommendations:
@@ -1047,25 +1109,41 @@ class DashboardService:
         )
 
     def _coint_t212_tickers(self) -> tuple[int, list[str]]:
+        # P-04 (2026-04-30): Previously this only returned tickers from COINT pairs.
+        # Now it returns ALL active T212 equity tickers (regardless of cointegration
+        # status) so the Pairs Panel "Buy All" button can buy any active ticker
+        # and let Trading 212 be the final gate. The first element of the tuple
+        # remains the count of *cointegrated* pairs (for telemetry); the second
+        # is the full list of active T212 equity tickers.
         monitor = dashboard_state.monitor
         if monitor is None:
             raise HTTPException(status_code=409, detail="The bot monitor is not attached yet. Start the bot before syncing T212.")
 
         tickers: list[str] = []
         coint_pairs = 0
+        broken_included: list[str] = []
         for pair in monitor.active_pairs:
-            if pair.get("is_cointegrated") is not True:
-                continue
             ticker_a = str(pair.get("ticker_a") or "").strip().upper()
             ticker_b = str(pair.get("ticker_b") or "").strip().upper()
             if not ticker_a or not ticker_b:
                 continue
             if "-USD" in ticker_a or "-USD" in ticker_b:
                 continue
-            coint_pairs += 1
+            is_coint = pair.get("is_cointegrated") is True
+            if is_coint:
+                coint_pairs += 1
             for ticker in (ticker_a, ticker_b):
                 if brokerage_service.get_venue(ticker) == "T212" and ticker not in tickers:
                     tickers.append(ticker)
+                    if not is_coint:
+                        broken_included.append(ticker)
+
+        if broken_included:
+            logger.warning(
+                "DASHBOARD: P-04 wallet sync including %d non-COINT ticker(s): %s",
+                len(broken_included),
+                ", ".join(sorted(broken_included)),
+            )
 
         return coint_pairs, tickers
 
@@ -1200,7 +1278,10 @@ class DashboardService:
 
         coint_pair_count, candidate_tickers = self._coint_t212_tickers()
         if not candidate_tickers:
-            raise HTTPException(status_code=400, detail="No COINT equity tickers are active for T212.")
+            # P-04: Only block when there are zero active T212 equity tickers at all
+            # (not merely zero COINT ones). This message is updated to reflect the
+            # relaxed behaviour.
+            raise HTTPException(status_code=400, detail="No active T212 equity tickers are configured.")
 
         try:
             positions = await asyncio.to_thread(brokerage_service.get_positions)
@@ -1260,13 +1341,14 @@ class DashboardService:
         spendable_cash = max(0.0, raw_cash - max(0.0, pending_value))
         effective_cash = budget_service.get_effective_cash("T212", spendable_cash)
         budget = float(request.budget)
+        # P-04 (2026-04-30): Previously this was a hard 400. Trading 212 is now the
+        # final authority on whether an order can be placed; we just warn loudly so
+        # the bypass is visible in logs.
         if budget > effective_cash + 1e-9:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Requested wallet sync budget {budget:.2f} exceeds spendable T212 cash/budget "
-                    f"{effective_cash:.2f}."
-                ),
+            logger.warning(
+                "DASHBOARD: P-04 wallet sync budget %.2f exceeds spendable T212 cash/budget %.2f; deferring to broker.",
+                budget,
+                effective_cash,
             )
 
         if wallet_seed is None:

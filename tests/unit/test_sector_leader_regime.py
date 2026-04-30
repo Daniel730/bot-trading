@@ -49,7 +49,12 @@ async def test_regime_extreme_volatility():
 async def test_orchestrator_sector_veto():
     """Test H4: Orchestrator veto when sector leader is in panic"""
     state = {
-        'signal_context': {'ticker_a': 'AMD', 'ticker_b': 'TSMC', 'signal_id': 'IA_SCAN_001'},
+        'signal_context': {
+            'ticker_a': 'AMD',
+            'ticker_b': 'TSMC',
+            'signal_id': 'IA_SCAN_001',
+            'sector': 'Technology',
+        },
         'bull_verdict': {'confidence': 0.9},
         'bear_verdict': {'confidence': 0.1},
         'system_state': {'consecutive_api_timeouts': '0'}
@@ -69,3 +74,22 @@ async def test_orchestrator_sector_veto():
         assert final_state['final_confidence'] == 0.0
         assert "CRITICAL VETO" in final_state['final_verdict']
         assert "NVDA" in final_state['final_verdict']
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_missing_sector_defaults_to_spy():
+    """Unmapped pairs should use SPY, not the Technology/NVDA beacon."""
+    state = {
+        'signal_context': {'ticker_a': 'PNC', 'ticker_b': 'USB', 'signal_id': 'IA_SCAN_002'},
+    }
+
+    with patch('src.agents.macro_economic_agent.macro_economic_agent.get_ticker_regime', return_value="EXTREME_VOLATILITY") as mock_regime, \
+         patch('src.services.persistence_service.persistence_service.get_system_state', new_callable=AsyncMock, return_value="0"), \
+         patch('src.services.telemetry_service.telemetry_service.broadcast', return_value=None):
+
+        final_state = await orchestrator.ainvoke(state)
+
+        mock_regime.assert_awaited_once_with("SPY")
+        assert final_state['final_confidence'] == 0.0
+        assert "CRITICAL VETO" in final_state['final_verdict']
+        assert "SPY" in final_state['final_verdict']

@@ -446,15 +446,6 @@ class ArbitrageMonitor:
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
 
-            # Sprint J: Heartbeat log for pair health
-            # US-033: Increased precision and diagnostic visibility
-            z_color = "yellow" if abs(z_score) > entry_zscore * 0.8 else "cyan"
-            logger.info(f"SCAN [{t_a}/{t_b}] Z-Score: [bold {z_color}]{z_score:.4f}[/] | Beta: {state_vec[1]:.4f}")
-            
-            # Log raw diagnostics for the first few pairs to debug "zero-drift"
-            if pair['id'] in [p['id'] for p in self.active_pairs[:5]]:
-                 logger.debug(f"DEBUG [{t_a}/{t_b}] spread={spread:.6f} inv_var={innovation_var:.6f}")
-
             # Signal Generation - Spec 038: optionally scale the entry z-score
             # by this pair's round-trip cost so that high-friction pairs (HK,
             # Swiss, cross-currency) require more statistical edge before
@@ -470,6 +461,16 @@ class ArbitrageMonitor:
                         float(settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP),
                     )
                     entry_zscore = settings.MONITOR_ENTRY_ZSCORE * scale
+
+            # Sprint J: Heartbeat log for pair health
+            # US-033: Increased precision and diagnostic visibility
+            z_color = "yellow" if abs(z_score) > entry_zscore * 0.8 else "cyan"
+            logger.info(f"SCAN [{t_a}/{t_b}] Z-Score: [bold {z_color}]{z_score:.4f}[/] | Beta: {state_vec[1]:.4f}")
+
+            # Log raw diagnostics for the first few pairs to debug "zero-drift"
+            if pair['id'] in [p['id'] for p in self.active_pairs[:5]]:
+                 logger.debug(f"DEBUG [{t_a}/{t_b}] spread={spread:.6f} inv_var={innovation_var:.6f}")
+
             if abs(z_score) > entry_zscore:
                 signal_id = str(uuid.uuid4())
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
@@ -483,9 +484,13 @@ class ArbitrageMonitor:
 
                 # AI Validation
                 # Look up this pair's sector so the orchestrator uses the right beacon asset.
+                # IMPORTANT: default is "Unassigned" (not "Technology"). The orchestrator
+                # maps "Unassigned" -> SPY (market-wide beacon) via BEACON_ASSETS.get(...).
+                # Defaulting to "Technology" caused NVDA's 4.63% drop on 2026-04-30
+                # to veto every unmapped pair (PNC/USB, healthcare, energy, etc.).
                 pair_sector = settings.PAIR_SECTORS.get(
                     pair['id'],
-                    settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "Technology")
+                    settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "Unassigned")
                 )
                 signal_context = {
                     "ticker_a": t_a, "ticker_b": t_b,
@@ -652,7 +657,7 @@ class ArbitrageMonitor:
         # signals in the same scan window from independently passing the 30 % cap
         # and then together pushing the sector to 60 %.
         pair_sector = settings.PAIR_SECTORS.get(
-            pair['id'], settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "General")
+            pair['id'], settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "Unassigned")
         )
         current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
         if current_portfolio:
