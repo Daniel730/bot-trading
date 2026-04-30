@@ -217,17 +217,24 @@ class DashboardSessionManager:
     def __init__(self, ttl_seconds: int = 12 * 60 * 60):
         self.ttl_seconds = ttl_seconds
         self._sessions: Dict[str, dict] = {}
+        self._revoked: Dict[str, datetime] = {}
 
     def create(self, actor: str = "dashboard") -> dict:
-        raw = secrets.token_urlsafe(32)
-        digest = self._hash(raw)
         expires_at = _utcnow() + timedelta(seconds=self.ttl_seconds)
-        self._sessions[digest] = {"actor": actor, "expires_at": expires_at}
-        return {"session_token": raw, "expires_at": expires_at.isoformat(), "actor": actor}
+        payload = {
+            "actor": actor,
+            "exp": int(expires_at.timestamp()),
+            "iat": int(_utcnow().timestamp()),
+            "nonce": secrets.token_urlsafe(16),
+        }
+        session_token = self._encode_signed(payload)
+        return {"session_token": session_token, "expires_at": expires_at.isoformat(), "actor": actor}
 
     def verify(self, session_token: Optional[str]) -> dict:
         if not session_token:
             raise HTTPException(status_code=401, detail="Dashboard login is required.")
+        if session_token.startswith("v1."):
+            return self._verify_signed(session_token)
         digest = self._hash(session_token)
         session = self._sessions.get(digest)
         if not session:
@@ -238,11 +245,81 @@ class DashboardSessionManager:
         return session
 
     def revoke(self, session_token: Optional[str]) -> None:
-        if session_token:
-            self._sessions.pop(self._hash(session_token), None)
+        if not session_token:
+            return
+        digest = self._hash(session_token)
+        self._sessions.pop(digest, None)
+        if session_token.startswith("v1."):
+            try:
+                session = self._verify_signed(session_token, check_revoked=False)
+                self._revoked[digest] = session["expires_at"]
+                self._prune_revoked()
+            except HTTPException:
+                pass
 
     def _hash(self, value: str) -> str:
         return hmac.new(_dashboard_secret().encode("utf-8"), value.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _encode_signed(self, payload: dict) -> str:
+        payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        payload_b64 = self._b64encode(payload_json)
+        signature = hmac.new(
+            _dashboard_secret().encode("utf-8"),
+            payload_b64.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return f"v1.{payload_b64}.{self._b64encode(signature)}"
+
+    def _verify_signed(self, session_token: str, check_revoked: bool = True) -> dict:
+        try:
+            version, payload_b64, signature_b64 = session_token.split(".", 2)
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+        if version != "v1":
+            raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+
+        expected_signature = hmac.new(
+            _dashboard_secret().encode("utf-8"),
+            payload_b64.encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        try:
+            received_signature = self._b64decode(signature_b64)
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+        if not hmac.compare_digest(received_signature, expected_signature):
+            raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+        if check_revoked and self._hash(session_token) in self._revoked:
+            self._prune_revoked()
+            if self._hash(session_token) in self._revoked:
+                raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+
+        try:
+            payload = json.loads(self._b64decode(payload_b64).decode("utf-8"))
+            expires_at = datetime.fromtimestamp(int(payload["exp"]), tz=timezone.utc)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raise HTTPException(status_code=401, detail="Invalid or expired dashboard session.")
+        if expires_at <= _utcnow():
+            raise HTTPException(status_code=401, detail="Dashboard session expired.")
+        return {"actor": str(payload.get("actor") or "dashboard"), "expires_at": expires_at}
+
+    def _prune_revoked(self) -> None:
+        now = _utcnow()
+        expired = [digest for digest, expires_at in self._revoked.items() if expires_at <= now]
+        for digest in expired:
+            self._revoked.pop(digest, None)
+
+    @staticmethod
+    def _b64encode(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _b64decode(value: str) -> bytes:
+        try:
+            padding = "=" * (-len(value) % 4)
+            return base64.urlsafe_b64decode(f"{value}{padding}".encode("ascii"))
+        except Exception as exc:
+            raise ValueError("Invalid base64 value") from exc
 
 
 session_manager = DashboardSessionManager()
@@ -340,9 +417,11 @@ def verify_security_token(token: Optional[str] = None):
 
 def verify_token(token: Optional[str] = None, session: Optional[str] = None):
     session = session or _dashboard_auth_session.get()
-    verified_token = verify_security_token(token)
+    token = token or _dashboard_auth_token.get()
     session_manager.verify(session)
-    return verified_token
+    if token:
+        return verify_security_token(token)
+    return session
 
 
 def _serialize_pair(active_pair: dict) -> dict:
@@ -1334,7 +1413,7 @@ async def logout_preflight():
 @app.post("/api/auth/logout/")
 async def logout(token: str = Query(None), session: str = Query(None)):
     verify_token(token, session)
-    session_manager.revoke(session)
+    session_manager.revoke(session or _dashboard_auth_session.get())
     return {"status": "ok"}
 
 
@@ -1400,8 +1479,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None), ses
             auth_payload = json.loads(raw_auth)
             if auth_payload.get("type") != "auth":
                 raise ValueError("First WebSocket message must authenticate.")
-            verify_security_token(auth_payload.get("token"))
-            session_manager.verify(auth_payload.get("session"))
+            verify_token(auth_payload.get("token"), auth_payload.get("session"))
         except Exception as exc:
             logger.warning("WebSocket auth failed: %s", exc)
             await websocket.close(code=4003)
