@@ -1,7 +1,5 @@
 import logging
-import asyncio
 import pandas as pd
-import inspect
 from typing import Dict, Literal
 from src.services.data_service import DataService
 
@@ -31,7 +29,7 @@ class MacroEconomicAgent:
         """
         try:
             # Fetch 60d to ensure we have enough for SMA 50
-            df = await asyncio.to_thread(self.data_service.get_historical_data, [ticker], "60d", "1d")
+            df = await self.data_service.get_historical_data_async([ticker], "60d", "1d")
             if isinstance(df, pd.Series):
                 df = df.to_frame(name=ticker)
                 
@@ -74,12 +72,8 @@ class MacroEconomicAgent:
     async def get_macro_summary(self) -> dict:
         from src.services.data_service import data_service
 
-        prices = data_service.get_latest_price(["^TNX", "^VIX", "SPY", "QQQ"])
-        if inspect.isawaitable(prices):
-            prices = await prices
-        hist = data_service.get_historical_data(["SPY"], "200d", "1d")
-        if inspect.isawaitable(hist):
-            hist = await hist
+        prices = await data_service.get_latest_price_async(["^TNX", "^VIX", "SPY", "QQQ"])
+        hist = await data_service.get_historical_data_async(["SPY"], "200d", "1d")
         if isinstance(hist, pd.DataFrame) and "Close" in hist.columns:
             spy_50d = float(hist["Close"].tail(50).mean())
         elif hasattr(hist, "tail"):

@@ -7,7 +7,7 @@ from unittest.mock import patch, AsyncMock
 async def test_value_order_flow_success():
     brokerage = BrokerageService()
     
-    with patch('src.services.data_service.data_service.get_latest_price', new_callable=AsyncMock) as mock_price:
+    with patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock) as mock_price:
         mock_price.return_value = {"AAPL": 150.0}
         with patch('src.services.risk_service.risk_service.calculate_friction') as mock_friction:
             mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}
