@@ -10,7 +10,7 @@ Alpha Arbitrage is a statistical-arbitrage bot with:
 - a React operations console;
 - a Java gRPC dry-run execution sidecar;
 - Redis, PostgreSQL, and SQLite state;
-- Trading 212 and Web3 brokerage paths from Python;
+- Trading 212, Alpaca, and Web3 brokerage paths from Python;
 - Telegram/dashboard approval and audit paths.
 
 Default to paper mode while changing execution logic.
@@ -104,7 +104,7 @@ docker compose \
 4. The orchestrator validates signals with macro, bull/bear, SEC cache, whale watcher, portfolio, and accuracy logic.
 5. Approval is requested.
 6. Paper mode uses `shadow_service`.
-7. Live mode uses Python `BrokerageService` for T212/Web3.
+7. Live mode uses Python `BrokerageService` for T212/Alpaca/Web3.
 8. Java gRPC is available for dry-run execution/audit paths.
 
 ## Documentation Pointers

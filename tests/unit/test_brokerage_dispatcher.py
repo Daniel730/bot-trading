@@ -34,6 +34,19 @@ def _make_service(provider_name: str = "T212") -> BrokerageService:
     return svc
 
 
+def test_default_provider_uses_settings_brokerage_provider():
+    """The default BrokerageService constructor should honor BROKERAGE_PROVIDER."""
+    with patch("src.services.brokerage_service.settings.BROKERAGE_PROVIDER", "ALPACA"), \
+         patch("src.services.brokerage_service.T212Provider") as mock_t212, \
+         patch("src.services.brokerage_service.AlpacaProvider") as mock_alpaca:
+        svc = BrokerageService()
+
+    assert svc.provider_name == "ALPACA"
+    assert svc.provider is mock_alpaca.return_value
+    mock_alpaca.assert_called_once_with()
+    mock_t212.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # Routing tests
 # ---------------------------------------------------------------------------
@@ -94,10 +107,43 @@ async def test_equity_routes_to_alpaca_provider():
         result = await svc.place_value_order("MSFT", 500.0, "BUY")
 
     assert result["order_id"] == "alpaca_order"
+    assert result["venue"] == "ALPACA"
     svc.provider.place_value_order.assert_awaited_once_with(
         "MSFT", 500.0, "BUY", None, None
     )
     svc.web3.place_value_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_alpaca_live_success_updates_alpaca_budget():
+    """Successful live Alpaca value orders update the ALPACA venue budget key."""
+    svc = _make_service(provider_name="ALPACA")
+    svc.provider.place_value_order = AsyncMock(
+        return_value={"status": "success", "order_id": "alpaca_order"}
+    )
+
+    with patch("src.services.brokerage_service.settings.PAPER_TRADING", False), \
+         patch("src.services.brokerage_service.budget_service.update_used_budget") as mock_budget:
+        result = await svc.place_value_order("MSFT", 500.0, "BUY")
+
+    assert result["venue"] == "ALPACA"
+    mock_budget.assert_called_once_with("ALPACA", 500.0)
+
+
+@pytest.mark.asyncio
+async def test_alpaca_live_error_does_not_update_budget():
+    """Failed Alpaca orders must not consume venue budget."""
+    svc = _make_service(provider_name="ALPACA")
+    svc.provider.place_value_order = AsyncMock(
+        return_value={"status": "error", "message": "broker rejected"}
+    )
+
+    with patch("src.services.brokerage_service.settings.PAPER_TRADING", False), \
+         patch("src.services.brokerage_service.budget_service.update_used_budget") as mock_budget:
+        result = await svc.place_value_order("MSFT", 500.0, "BUY")
+
+    assert result["venue"] == "ALPACA"
+    mock_budget.assert_not_called()
 
 
 @pytest.mark.asyncio

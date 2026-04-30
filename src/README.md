@@ -19,7 +19,7 @@
 4. Each scan computes a z-score from the prior Kalman state, persists filter state to Redis, and compares against the entry threshold.
 5. High z-score signals pass through the orchestrator: macro beacon veto, bull/bear agents, Redis SEC scores, whale watcher, portfolio/risk confidence, and historical accuracy scaling.
 6. Approved signals request human approval through Telegram/dashboard before execution.
-7. `PAPER_TRADING=true` routes to `shadow_service`; live mode routes through `BrokerageService` to Trading 212 or Web3 depending on ticker venue.
+7. `PAPER_TRADING=true` routes to `shadow_service`; live mode routes through `BrokerageService` to the active equity broker (Trading 212 or Alpaca) or Web3 depending on ticker venue.
 
 ## Runtime State
 
