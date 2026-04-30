@@ -7,6 +7,8 @@ from fastapi import HTTPException
 
 from src.config import settings
 from src.services.dashboard_service import (
+    T212WalletRecommendationBuyRequest,
+    T212WalletRecommendationRequest,
     T212WalletSyncRequest,
     dashboard_service,
     dashboard_state,
@@ -44,7 +46,7 @@ def wallet_sync_context(monkeypatch):
     submitted_orders = []
     metadata = {
         f"{ticker}_US_EQ": {"ticker": f"{ticker}_US_EQ", "minTradeQuantity": "0", "tickSize": "0.01"}
-        for ticker in ("AAPL", "MSFT", "GOOG", "GOOGL")
+        for ticker in ("AAPL", "MSFT", "GOOG", "GOOGL", "KO", "PEP")
     }
 
     def fake_http_json(method, url, headers=None, payload=None, params=None, timeout=20.0):
@@ -132,3 +134,66 @@ async def test_wallet_sync_rejects_budget_above_spendable(wallet_sync_context):
     assert exc.value.status_code == 400
     assert "exceeds spendable" in exc.value.detail
     assert wallet_sync_context.submitted_orders == []
+
+
+@pytest.mark.asyncio
+async def test_wallet_recommendations_default_to_coint_only(wallet_sync_context, monkeypatch):
+    monkeypatch.setattr(
+        dashboard_service,
+        "_wallet_pair_z_scores",
+        AsyncMock(return_value={"AAPL_MSFT": 2.4, "KO_PEP": 3.1, "GOOG_GOOGL": 1.2}),
+    )
+
+    result = await dashboard_service.calculate_t212_wallet_recommendations(
+        T212WalletRecommendationRequest(budget=40.0, include_broken=False)
+    )
+
+    assert result["status"] == "ok"
+    assert result["coint_pairs"] == 2
+    assert result["broken_eligible_pairs"] == 1
+    assert result["recommended_tickers"] == ["AAPL", "MSFT", "GOOG", "GOOGL"]
+    assert {item["category"] for item in result["recommendations"]} == {"coint"}
+    assert sum(item["suggested_amount"] for item in result["recommendations"]) == 40.0
+
+
+@pytest.mark.asyncio
+async def test_wallet_recommendations_can_include_broken_eligible(wallet_sync_context, monkeypatch):
+    monkeypatch.setattr(
+        dashboard_service,
+        "_wallet_pair_z_scores",
+        AsyncMock(return_value={"AAPL_MSFT": 2.4, "KO_PEP": 3.1, "GOOG_GOOGL": 1.2}),
+    )
+
+    result = await dashboard_service.calculate_t212_wallet_recommendations(
+        T212WalletRecommendationRequest(budget=60.0, include_broken=True)
+    )
+
+    assert result["recommended_tickers"][:4] == ["AAPL", "MSFT", "GOOG", "GOOGL"]
+    assert set(result["recommended_tickers"]) == {"AAPL", "MSFT", "GOOG", "GOOGL", "KO", "PEP"}
+    broken = [item for item in result["recommendations"] if item["category"] == "broken_eligible"]
+    assert [item["ticker"] for item in broken] == ["KO", "PEP"]
+    assert sum(item["suggested_amount"] for item in result["recommendations"]) == 60.0
+
+
+@pytest.mark.asyncio
+async def test_buy_wallet_recommendations_submits_selected_broken_tickers(wallet_sync_context, monkeypatch):
+    monkeypatch.setattr(
+        dashboard_service,
+        "_wallet_pair_z_scores",
+        AsyncMock(return_value={"AAPL_MSFT": 2.4, "KO_PEP": 3.1, "GOOG_GOOGL": 1.2}),
+    )
+
+    result = await dashboard_service.buy_t212_wallet_recommendations(
+        T212WalletRecommendationBuyRequest(
+            budget=20.0,
+            include_broken=True,
+            tickers=["KO", "PEP"],
+            delay_seconds=0,
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["target_tickers"] == ["KO", "PEP"]
+    assert [order["ticker"] for order in result["orders"]] == ["KO", "PEP"]
+    assert [order["amount"] for order in result["orders"]] == [10.0, 10.0]
+    assert len(wallet_sync_context.submitted_orders) == 2
