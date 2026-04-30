@@ -1,7 +1,8 @@
 import React from 'react';
 import { Play, Square, RefreshCw } from 'lucide-react';
 import type { LogsResponse, TerminalMessage } from '../services/api';
-import { SectionHeader, formatDateTime } from '../components/UIHelpers';
+import { SectionHeader } from '../components/UIHelpers';
+import { formatDateTime } from '../utils/formatters';
 
 interface BotControlPageProps {
   currentBotState: string;

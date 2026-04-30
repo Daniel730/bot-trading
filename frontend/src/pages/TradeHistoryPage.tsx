@@ -1,12 +1,8 @@
 import React from 'react';
 import { Search } from 'lucide-react';
 import type { TradeHistoryResponse } from '../services/api';
-import { 
-  formatCurrency, 
-  formatDateTime, 
-  getTrendClass, 
-  SectionHeader 
-} from '../components/UIHelpers';
+import { SectionHeader } from '../components/UIHelpers';
+import { formatCurrency, formatDateTime, getTrendClass } from '../utils/formatters';
 
 interface TradeHistoryPageProps {
   tradeHistory: TradeHistoryResponse | null;

@@ -1,11 +1,7 @@
 import React from 'react';
 import type { SummaryResponse, ChartResponse } from '../services/api';
-import { 
-  formatCurrency, 
-  LineMiniChart, 
-  DualBarChart, 
-  SectionHeader 
-} from '../components/UIHelpers';
+import { LineMiniChart, DualBarChart, SectionHeader } from '../components/UIHelpers';
+import { formatCurrency } from '../utils/formatters';
 
 interface AnalyticsPageProps {
   summary: SummaryResponse | null;
