@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   BarChart3,
@@ -18,6 +18,8 @@ import {
 import './App.css';
 import PairsPanel from './components/PairsPanel';
 import {
+  ApiError,
+  type AuthSession,
   type ChartPoint,
   type ChartResponse,
   type ConfigResponse,
@@ -57,6 +59,71 @@ const NAV_ITEMS: { key: Page; label: string; icon: React.ReactNode }[] = [
   { key: 'settings', label: 'Settings', icon: <SettingsIcon size={16} /> },
   { key: 'health', label: 'System Health', icon: <Cpu size={16} /> },
 ];
+
+const DASHBOARD_SESSION_STORAGE_KEY = 'alpha-arbitrage.dashboardSession';
+
+interface StoredDashboardSession {
+  sessionToken: string;
+  expiresAt: string;
+  actor?: string;
+}
+
+function clearStoredDashboardSession() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(DASHBOARD_SESSION_STORAGE_KEY);
+  } catch {
+    // Storage can be disabled by browser privacy settings.
+  }
+}
+
+function readStoredDashboardSession(): StoredDashboardSession | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredDashboardSession>;
+    if (!parsed.sessionToken || !parsed.expiresAt) {
+      clearStoredDashboardSession();
+      return null;
+    }
+    const expiresAtMs = Date.parse(parsed.expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+      clearStoredDashboardSession();
+      return null;
+    }
+    return {
+      sessionToken: parsed.sessionToken,
+      expiresAt: parsed.expiresAt,
+      actor: parsed.actor,
+    };
+  } catch {
+    clearStoredDashboardSession();
+    return null;
+  }
+}
+
+function writeStoredDashboardSession(session: AuthSession) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      DASHBOARD_SESSION_STORAGE_KEY,
+      JSON.stringify({
+        sessionToken: session.session_token,
+        expiresAt: session.expires_at,
+        actor: session.actor,
+      } satisfies StoredDashboardSession),
+    );
+  } catch {
+    // The in-memory session still works for this tab.
+  }
+}
+
+function isDashboardAuthError(err: unknown) {
+  const message = err instanceof Error ? err.message : String(err ?? '');
+  if (err instanceof ApiError && err.status === 401) return true;
+  return /dashboard session|dashboard login is required|invalid dashboard token/i.test(message);
+}
 
 function formatCurrency(value: number | null | undefined) {
   if (value === null || value === undefined) return '—';
@@ -145,17 +212,19 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: 
 }
 
 function App() {
+  const [storedSession] = useState<StoredDashboardSession | null>(() => readStoredDashboardSession());
   const [securityToken, setSecurityToken] = useState('');
-  const [sessionToken, setSessionToken] = useState('');
+  const [sessionToken, setSessionToken] = useState(() => storedSession?.sessionToken ?? '');
   const [loginToken, setLoginToken] = useState('');
   const [loginOtp, setLoginOtp] = useState('');
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [loginNotice, setLoginNotice] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  const isAuthenticated = Boolean(securityToken && sessionToken);
-  const { data, error } = useDashboardStream(isAuthenticated ? securityToken : null, sessionToken);
-  const { isConnected, risk, thoughts, botState } = useTelemetry(isAuthenticated ? securityToken : null, sessionToken);
+  const isAuthenticated = Boolean(sessionToken);
+  const authToken = securityToken || null;
+  const { data, error } = useDashboardStream(isAuthenticated ? authToken : null, sessionToken);
+  const { isConnected, risk, thoughts, botState } = useTelemetry(isAuthenticated ? authToken : null, sessionToken);
 
   const [page, setPage] = useState<Page>('overview');
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -177,6 +246,40 @@ function App() {
   const [systemMessage, setSystemMessage] = useState<string | null>(null);
   const [systemError, setSystemError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  const clearAuthenticatedSession = useCallback((message?: string) => {
+    clearStoredDashboardSession();
+    setSecurityToken('');
+    setSessionToken('');
+    setSummary(null);
+    setConfig(null);
+    setLoginToken('');
+    setLoginOtp('');
+    setLoginChallengeId(null);
+    setLoginNotice(null);
+    setSystemMessage(null);
+    setSystemError(message ?? null);
+  }, []);
+
+  const handleAuthFailure = useCallback((err: unknown) => {
+    if (!isDashboardAuthError(err)) return false;
+    const message = err instanceof Error ? err.message : 'Dashboard session expired. Please log in again.';
+    clearAuthenticatedSession(message);
+    return true;
+  }, [clearAuthenticatedSession]);
+
+  const establishAuthenticatedSession = useCallback((session: AuthSession, message: string) => {
+    writeStoredDashboardSession(session);
+    setSecurityToken('');
+    setSessionToken(session.session_token);
+    setLoginToken('');
+    setLoginOtp('');
+    setLoginChallengeId(null);
+    setLoginNotice(null);
+    setLoginError(null);
+    setSystemError(null);
+    setSystemMessage(message);
+  }, []);
 
   useEffect(() => {
     const currentUrl = new URL(window.location.href);
@@ -200,6 +303,7 @@ function App() {
       setWinLossChart(winLossData);
       setPositions(positionsData.positions);
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to load dashboard data.');
     }
   };
@@ -216,6 +320,7 @@ function App() {
       });
       setTradeHistory(history);
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to load trade history.');
     }
   };
@@ -230,12 +335,16 @@ function App() {
     if (healthResult.status === 'fulfilled') {
       const healthData = healthResult.value;
       setHealth(healthData);
+    } else if (handleAuthFailure(healthResult.reason)) {
+      return;
     } else {
       setSystemError(healthResult.reason?.message || 'Failed to load system health.');
     }
 
     if (logsResult.status === 'fulfilled') {
       setLogs(logsResult.value);
+    } else if (handleAuthFailure(logsResult.reason)) {
+      return;
     } else if (healthResult.status === 'fulfilled') {
       setLogs({ file: null, lines: [], events: [] });
     }
@@ -250,6 +359,7 @@ function App() {
         Object.fromEntries(configData.items.map((item) => [item.key, String(item.value)])),
       );
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to load config.');
     }
   };
@@ -293,6 +403,7 @@ function App() {
       setSystemMessage(`Bot ${result.action} request accepted.`);
       await refreshDashboard();
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || `Failed to ${action} bot.`);
     } finally {
       setIsBusy(false);
@@ -320,6 +431,7 @@ function App() {
       setOtpToken('');
       setSystemMessage('Configuration updated.');
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to update configuration.');
     } finally {
       setIsBusy(false);
@@ -335,6 +447,7 @@ function App() {
       setTwoFactorSetup(result);
       setSystemMessage('2FA setup secret generated. Verify with your authenticator code to enable it.');
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to initiate 2FA.');
     } finally {
       setIsBusy(false);
@@ -352,6 +465,7 @@ function App() {
       await refreshConfig();
       setSystemMessage('2FA verification succeeded.');
     } catch (err: any) {
+      if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Invalid 2FA code.');
     } finally {
       setIsBusy(false);
@@ -370,10 +484,7 @@ function App() {
         setLoginNotice('Approval notification sent. Waiting for confirmation.');
         return;
       }
-      setSecurityToken(loginToken.trim());
-      setSessionToken(result.session_token);
-      setLoginOtp('');
-      setSystemMessage('Dashboard login succeeded.');
+      establishAuthenticatedSession(result, 'Dashboard login succeeded.');
     } catch (err: any) {
       setLoginError(err.message || 'Login failed.');
     } finally {
@@ -388,12 +499,7 @@ function App() {
       try {
         const result = await completeLogin(loginChallengeId);
         if (cancelled || result.status === 'pending') return;
-        setSecurityToken(loginToken.trim());
-        setSessionToken(result.session_token);
-        setLoginChallengeId(null);
-        setLoginNotice(null);
-        setLoginOtp('');
-        setSystemMessage('Dashboard login approved.');
+        establishAuthenticatedSession(result, 'Dashboard login approved.');
       } catch (err: any) {
         if (!cancelled) {
           setLoginChallengeId(null);
@@ -406,19 +512,15 @@ function App() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [loginChallengeId, loginToken]);
+  }, [loginChallengeId, establishAuthenticatedSession]);
 
   const handleLogout = async () => {
     try {
-      await logout(securityToken, sessionToken);
+      await logout(authToken, sessionToken);
     } catch {
       // The local session is cleared either way.
     }
-    setSecurityToken('');
-    setSessionToken('');
-    setSummary(null);
-    setConfig(null);
-    setLoginToken('');
+    clearAuthenticatedSession();
   };
 
   if (!isAuthenticated) {

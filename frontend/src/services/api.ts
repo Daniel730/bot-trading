@@ -308,6 +308,18 @@ export interface AuthChallenge {
 
 export type AuthLoginResponse = AuthSession | AuthChallenge;
 
+export class ApiError extends Error {
+  status: number;
+  detail: unknown;
+
+  constructor(status: number, message: string, detail?: unknown) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 const getApiBase = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
   const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
@@ -371,7 +383,7 @@ async function requestJson<T>(
   });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.detail || `Request failed (${response.status})`);
+    throw new ApiError(response.status, errorData.detail || `Request failed (${response.status})`, errorData);
   }
   return response.json();
 }
@@ -381,7 +393,7 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token || !sessionToken) return;
+    if (!sessionToken) return;
     const controller = new AbortController();
     let retryCount = 0;
 
@@ -530,7 +542,10 @@ export const fetchTradeHistory = async (
   const response = await fetchWithTimeout(url, {
     headers: authHeaders(token, sessionToken),
   });
-  if (!response.ok) throw new Error(`Failed to fetch trade history (${response.status})`);
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorData.detail || `Failed to fetch trade history (${response.status})`, errorData);
+  }
   return response.json();
 };
 

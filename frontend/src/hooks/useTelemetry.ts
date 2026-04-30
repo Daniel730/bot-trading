@@ -25,7 +25,7 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
   const connectRef = useRef<() => void>(() => {});
 
   const connect = useCallback(() => {
-    if (!token || !sessionToken) return;
+    if (!sessionToken) return;
 
     const url = new URL('/ws/telemetry', WS_BASE);
     const socket = new WebSocket(url.toString());
@@ -33,7 +33,7 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
     socket.onopen = () => {
       console.log('Telemetry WebSocket Connected');
       if (typeof socket.send === 'function') {
-        socket.send(JSON.stringify({ type: 'auth', token, session: sessionToken }));
+        socket.send(JSON.stringify({ type: 'auth', token: token || undefined, session: sessionToken }));
       }
       setIsConnected(true);
       retryCount.current = 0;
