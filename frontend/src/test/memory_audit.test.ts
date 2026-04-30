@@ -8,6 +8,7 @@ class MockWebSocket {
   onmessage: any;
   onclose: any;
   onerror: any;
+  send = vi.fn();
   close = vi.fn();
   url: string;
   constructor(url: string) {
@@ -18,6 +19,18 @@ class MockWebSocket {
 (globalThis as any).WebSocket = MockWebSocket;
 
 describe('Telemetry Memory Stability', () => {
+  it('authenticates with the approved session when the dashboard token is not retained', async () => {
+    const { result } = renderHook(() => useTelemetry(null, 'persisted-session'));
+
+    await new Promise(r => setTimeout(r, 10));
+
+    const wsInstance = (result.current as any).ws?.current;
+    expect(wsInstance.send).toHaveBeenCalledWith(JSON.stringify({
+      type: 'auth',
+      session: 'persisted-session',
+    }));
+  });
+
   it('strictly enforces 100-entry limit under extreme burst', async () => {
     const { result } = renderHook(() => useTelemetry('fake-token', 'fake-session'));
     
