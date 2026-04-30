@@ -329,27 +329,27 @@ class DataService:
         return results
 
     @retry(
-        wait=wait_exponential(multiplier=1, min=1, max=4), 
+        wait=wait_exponential(multiplier=1, min=1, max=4),
         stop=stop_after_attempt(3),
         retry=retry_if_exception_type(Exception),
         reraise=True
     )
     def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
-        """Internal helper to fetch prices from yfinance with tenacity retries."""
+        """Internal helper to fetch prices from yfinance with tenacity retries.
+
+        Batch failures are allowed to propagate so tenacity can apply the
+        exponential backoff between attempts (T013). The per-ticker fallback
+        below only runs when the batch call *partially* succeeded — i.e. some
+        tickers came back missing from an otherwise-successful response.
+        """
         tickers = self._dedupe_tickers(tickers)
-        results = {}
-        try:
-            results.update(self._get_latest_price_yfinance_batch(tickers))
-        except Exception as e:
-            logger.warning(
-                "DataService: batch latest-price fetch failed for %s: %s",
-                self._summarize_tickers(tickers),
-                e,
-            )
-        
-        # US-035 fallback: per-ticker fetch is more robust against crumb/auth errors.
+        # Let batch exceptions propagate to tenacity so retries with backoff actually happen.
+        results = self._get_latest_price_yfinance_batch(tickers)
+
+        # US-035 fallback: per-ticker fetch for tickers missing from a partial batch response.
         import time
-        for ticker in [t for t in tickers if t not in results]:
+        missing = [t for t in tickers if t not in results]
+        for ticker in missing:
             try:
                 df = self._download_yfinance(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
                 val = self._extract_latest_close(df, ticker)
@@ -360,10 +360,10 @@ class DataService:
             except Exception as e:
                 logger.warning(f"DataService: Error fetching {ticker} specifically: {e}")
                 continue
-                    
+
         if not results:
             raise ValueError(f"No valid prices found in yfinance response for {tickers}")
-            
+
         return results
 
     @agent_trace("DataService.get_bid_ask")
