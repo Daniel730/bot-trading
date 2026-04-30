@@ -931,10 +931,12 @@ class DashboardService:
 
         budget = float(request.budget)
         effective_cash = float(wallet_state["effective_cash"])
-        usable_budget = min(budget, effective_cash)
+        # P-04 (2026-04-30): User wants to override validation. 
+        # We still calculate usable_budget for the plan but won't block the button.
+        usable_budget = budget 
         cash_limited = budget > effective_cash + 1e-9
         warning = None
-        can_buy = bool(recommendations) and usable_budget > 0
+        can_buy = bool(recommendations)
 
         if recommendations and can_buy:
             try:
@@ -983,17 +985,9 @@ class DashboardService:
             )
 
         plan_snapshot = await self.calculate_t212_wallet_recommendations(request)
-        effective_cash = float(plan_snapshot.get("effective_cash") or 0.0)
         budget = float(request.budget)
-        if budget > effective_cash + 1e-9:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Requested wallet recommendation budget {budget:.2f} exceeds spendable T212 cash/budget "
-                    f"{effective_cash:.2f}."
-                ),
-            )
-
+        # P-04: Removed hard error on budget > effective_cash.
+        
         recommendations = plan_snapshot.get("recommendations") or []
         selected_tickers = None
         if request.tickers:
@@ -1001,6 +995,7 @@ class DashboardService:
             known_tickers = {item["ticker"] for item in recommendations}
             unknown = sorted(selected_tickers - known_tickers)
             if unknown:
+                # Still keep this check as it's about existence in the active pair list
                 raise HTTPException(status_code=400, detail=f"Tickers are not in the current recommendation plan: {', '.join(unknown)}")
             recommendations = [item for item in recommendations if item["ticker"] in selected_tickers]
 
@@ -1011,6 +1006,7 @@ class DashboardService:
             seed_plan = self._build_weighted_wallet_plan(budget, recommendations)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 
         try:
             orders, failures, seed_skipped = await self._place_wallet_seed_orders(
