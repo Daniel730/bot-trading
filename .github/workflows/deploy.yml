@@ -11,35 +11,168 @@ on:
       - ".gemini/**"
       - ".vscode/**"
       - ".specify/**"
-  # Manual trigger. Use `force_all: true` once after switching to the registry-
-  # based deploy so every image is pushed at least once. After that, normal
-  # pushes run paths-filter and only rebuild what actually changed.
   workflow_dispatch:
     inputs:
       force_all:
-        description: "Rebuild & push all images (bootstrap / disaster-recover)"
+        description: "Rebuild & deploy every image"
+        type: boolean
+        default: false
+      force_python:
+        description: "Rebuild & deploy Python services only"
+        type: boolean
+        default: false
+      force_java:
+        description: "Rebuild & deploy execution engine only"
+        type: boolean
+        default: false
+      force_frontend:
+        description: "Rebuild & deploy frontend only"
         type: boolean
         default: false
 
-# Serialize deploys on the self-hosted Pi. Interrupting `docker compose up` can
-# leave the local project half-applied, so newer commits wait for the active
-# deploy to finish instead of canceling it mid-restart.
+# Keep full workflow runs ordered on the Pi. Individual deploy jobs are also
+# chained below so they do not run docker compose against the same project at
+# the same time.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
-  # GHCR requires the owner segment to be lowercase. github.repository_owner
-  # preserves the original case (e.g. "Daniel730"), so each job lowercases it
-  # into IMAGE_OWNER via a setup step before any docker command runs.
-  # Stable tag the Pi pulls. Also tagged with the commit SHA for traceability.
   IMAGE_TAG: latest
 
 jobs:
-  quality:
+  detect_changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 5
+    outputs:
+      python_quality: ${{ steps.flags.outputs.python_quality }}
+      java_quality: ${{ steps.flags.outputs.java_quality }}
+      frontend_quality: ${{ steps.flags.outputs.frontend_quality }}
+      python_image: ${{ steps.flags.outputs.python_image }}
+      java_image: ${{ steps.flags.outputs.java_image }}
+      frontend_image: ${{ steps.flags.outputs.frontend_image }}
+      proto: ${{ steps.flags.outputs.proto }}
+      backend_compose: ${{ steps.flags.outputs.backend_compose }}
+      frontend_compose: ${{ steps.flags.outputs.frontend_compose }}
+      python_deploy: ${{ steps.flags.outputs.python_deploy }}
+      java_deploy: ${{ steps.flags.outputs.java_deploy }}
+      frontend_deploy: ${{ steps.flags.outputs.frontend_deploy }}
+      any_deploy: ${{ steps.flags.outputs.any_deploy }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            python_image:
+              - 'src/**'
+              - 'scripts/**'
+              - 'legacy/dashboard/**'
+              - 'requirements.txt'
+              - 'infra/Dockerfile'
+              - 'infra/entrypoint.sh'
+              - '.dockerignore'
+              - 'execution-engine/src/main/proto/**'
+            python_tests:
+              - 'tests/**'
+            java_image:
+              - 'execution-engine/**'
+            frontend_image:
+              - 'frontend/**'
+            proto:
+              - 'execution-engine/src/main/proto/**'
+            backend_compose:
+              - 'infra/docker-compose.yml'
+              - 'infra/docker-compose.backend.yml'
+            frontend_compose:
+              - 'infra/docker-compose.yml'
+              - 'infra/docker-compose.frontend.yml'
+
+      - name: Compute workflow flags
+        id: flags
+        run: |
+          force_all='${{ inputs.force_all }}'
+          force_python='${{ inputs.force_python }}'
+          force_java='${{ inputs.force_java }}'
+          force_frontend='${{ inputs.force_frontend }}'
+
+          python_image='${{ steps.changes.outputs.python_image }}'
+          python_tests='${{ steps.changes.outputs.python_tests }}'
+          java_image='${{ steps.changes.outputs.java_image }}'
+          frontend_image='${{ steps.changes.outputs.frontend_image }}'
+          proto='${{ steps.changes.outputs.proto }}'
+          backend_compose='${{ steps.changes.outputs.backend_compose }}'
+          frontend_compose='${{ steps.changes.outputs.frontend_compose }}'
+
+          if [ "$force_all" = "true" ] || [ "$force_python" = "true" ]; then
+            python_image='true'
+          fi
+          if [ "$force_all" = "true" ] || [ "$force_java" = "true" ]; then
+            java_image='true'
+          fi
+          if [ "$force_all" = "true" ] || [ "$force_frontend" = "true" ]; then
+            frontend_image='true'
+          fi
+
+          python_quality='false'
+          java_quality='false'
+          frontend_quality='false'
+          python_deploy='false'
+          java_deploy='false'
+          frontend_deploy='false'
+
+          if [ "$python_image" = "true" ] || [ "$python_tests" = "true" ]; then
+            python_quality='true'
+          fi
+          if [ "$java_image" = "true" ]; then
+            java_quality='true'
+          fi
+          if [ "$frontend_image" = "true" ]; then
+            frontend_quality='true'
+          fi
+
+          if [ "$python_image" = "true" ] || [ "$backend_compose" = "true" ]; then
+            python_deploy='true'
+          fi
+          if [ "$java_image" = "true" ] || [ "$backend_compose" = "true" ]; then
+            java_deploy='true'
+          fi
+          if [ "$frontend_image" = "true" ] || [ "$frontend_compose" = "true" ]; then
+            frontend_deploy='true'
+          fi
+
+          any_deploy='false'
+          if [ "$python_deploy" = "true" ] || [ "$java_deploy" = "true" ] || [ "$frontend_deploy" = "true" ]; then
+            any_deploy='true'
+          fi
+
+          {
+            echo "python_quality=$python_quality"
+            echo "java_quality=$java_quality"
+            echo "frontend_quality=$frontend_quality"
+            echo "python_image=$python_image"
+            echo "java_image=$java_image"
+            echo "frontend_image=$frontend_image"
+            echo "proto=$proto"
+            echo "backend_compose=$backend_compose"
+            echo "frontend_compose=$frontend_compose"
+            echo "python_deploy=$python_deploy"
+            echo "java_deploy=$java_deploy"
+            echo "frontend_deploy=$frontend_deploy"
+            echo "any_deploy=$any_deploy"
+          } >> "$GITHUB_OUTPUT"
+
+  quality_python:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.python_quality == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       redis:
         image: redis:7-alpine
@@ -97,13 +230,6 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -r requirements.txt
 
-      # The Postgres service container starts empty — no schema, no tables. The
-      # SQLAlchemy models in src/services/persistence_service.py (TradeLedger,
-      # SystemState, AgentPerformance, etc.) are only created when init_db() is
-      # invoked, so without this step every test that touches PersistenceService
-      # blows up with "relation ... does not exist". scripts/init_db.py calls
-      # Base.metadata.create_all and is idempotent, so it's safe to run on every
-      # CI invocation.
       - name: Initialize Postgres schema
         run: python scripts/init_db.py
 
@@ -112,6 +238,15 @@ jobs:
 
       - name: Run Python integration tests
         run: python -m pytest tests/integration -v --asyncio-mode=auto
+
+  quality_java:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.java_quality == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -127,6 +262,15 @@ jobs:
       - name: Run Java tests and build execution engine
         working-directory: execution-engine
         run: gradle test shadowJar --no-daemon
+
+  quality_frontend:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.frontend_quality == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       - name: Set up Node
         uses: actions/setup-node@v4
@@ -151,101 +295,49 @@ jobs:
         working-directory: frontend
         run: npm run test -- --run
 
-  # -----------------------------------------------------------------------
-  # 1. BUILD on a GitHub-hosted x86 runner with buildx + QEMU, push linux/arm64
-  #    images to GHCR. This replaces the 30-90 minute native Pi build with a
-  #    ~3-5 minute cross-build that benefits from a real CPU and registry cache.
-  # -----------------------------------------------------------------------
-  build:
-    needs: quality
+  build_python:
+    needs:
+      - detect_changes
+      - quality_python
+      - quality_java
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.python_image == 'true' &&
+        needs.quality_python.result == 'success' &&
+        (
+          needs.detect_changes.outputs.proto != 'true' ||
+          needs.quality_java.result == 'success'
+        )
+      }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: write
-    outputs:
-      python_changed: ${{ steps.flags.outputs.python }}
-      java_changed: ${{ steps.flags.outputs.java }}
-      frontend_changed: ${{ steps.flags.outputs.frontend }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          # paths-filter needs history to diff against the previous commit.
-          fetch-depth: 0
 
       - name: Compute lowercase image owner
         run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
-      - name: Detect changed paths
-        uses: dorny/paths-filter@v3
-        id: changes
-        with:
-          filters: |
-            python:
-              - 'src/**'
-              - 'scripts/**'
-              - 'legacy/dashboard/**'
-              - 'requirements.txt'
-              - 'infra/Dockerfile'
-              - 'infra/entrypoint.sh'
-              - '.dockerignore'
-              - 'execution-engine/src/main/proto/**'
-            java:
-              - 'execution-engine/**'
-            frontend:
-              - 'frontend/**'
-
-      # Effective build flags = paths-filter result OR the manual force_all input.
-      # The deploy job reads these, so a force_all run rebuilds AND re-pulls
-      # every service even if nothing in source actually changed.
-      - name: Compute build flags
-        id: flags
-        run: |
-          force='${{ inputs.force_all }}'
-          for f in python java frontend; do
-            case "$f" in
-              python)   changed='${{ steps.changes.outputs.python }}'   ;;
-              java)     changed='${{ steps.changes.outputs.java }}'     ;;
-              frontend) changed='${{ steps.changes.outputs.frontend }}' ;;
-            esac
-            if [ "$force" = "true" ] || [ "$changed" = "true" ]; then
-              echo "$f=true"  >> "$GITHUB_OUTPUT"
-            else
-              echo "$f=false" >> "$GITHUB_OUTPUT"
-            fi
-          done
-
       - name: Set up QEMU (arm64 emulation)
-        if: |
-          steps.flags.outputs.python == 'true' ||
-          steps.flags.outputs.java == 'true' ||
-          steps.flags.outputs.frontend == 'true'
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
 
       - name: Set up Docker Buildx
-        if: |
-          steps.flags.outputs.python == 'true' ||
-          steps.flags.outputs.java == 'true' ||
-          steps.flags.outputs.frontend == 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
-        if: |
-          steps.flags.outputs.python == 'true' ||
-          steps.flags.outputs.java == 'true' ||
-          steps.flags.outputs.frontend == 'true'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # ---- Python image (bot / mcp-server / sec-worker share this) ----
       - name: Build & push python image
-        if: steps.flags.outputs.python == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -258,8 +350,44 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache,mode=max
 
+  build_java:
+    needs:
+      - detect_changes
+      - quality_java
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.java_image == 'true' &&
+        needs.quality_java.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build & push execution-engine image
-        if: steps.flags.outputs.java == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./execution-engine
@@ -272,8 +400,44 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache,mode=max
 
+  build_frontend:
+    needs:
+      - detect_changes
+      - quality_frontend
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.frontend_image == 'true' &&
+        needs.quality_frontend.result == 'success'
+      }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build & push frontend image
-        if: steps.flags.outputs.frontend == 'true'
         uses: docker/build-push-action@v6
         with:
           context: ./frontend
@@ -286,15 +450,24 @@ jobs:
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache,mode=max
 
-  # -----------------------------------------------------------------------
-  # 2. DEPLOY on the Pi: pull the freshly-built arm64 images and `up -d`.
-  #    No compilation happens here. Capped at 15 minutes so a stuck pull
-  #    or restart fails fast instead of hanging for 6 hours.
-  # -----------------------------------------------------------------------
-  deploy:
-    needs: build
+  deploy_frontend:
+    needs:
+      - detect_changes
+      - build_frontend
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.frontend_deploy == 'true' &&
+        (
+          needs.detect_changes.outputs.frontend_image != 'true' ||
+          needs.build_frontend.result == 'success'
+        )
+      }}
     runs-on: self-hosted
-    timeout-minutes: 15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
     env:
       APP_ENV_FILE: /home/danrasp3/.env.trading
       DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
@@ -311,61 +484,253 @@ jobs:
       - name: Log in to GHCR (for private image pulls)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Reset any leftover BuildKit state from previously-cancelled runs.
-      # Cheap insurance against the `sharing=locked` cache hangs we saw before.
-      - name: Reset stale BuildKit state
-        run: docker builder prune -af || true
+      - name: Pull frontend image
+        if: ${{ needs.detect_changes.outputs.frontend_image == 'true' }}
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.frontend.yml pull frontend
 
-      # Always pull the public base images (redis, postgres). They're cheap,
-      # and `up -d` would otherwise pull them on first run anyway.
-      - name: Pull base images (redis, postgres)
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull redis postgres
+      - name: Remove legacy frontend container
+        run: docker rm -f trading-frontend 2>/dev/null || true
 
-      # Pull each app image ONLY if the build job rebuilt it. Skipping a pull
-      # leaves the previous local image in place, which `up -d` will reuse.
-      # This is what keeps incremental deploys from failing on `manifest unknown`
-      # for services whose source didn't change this run.
-      - name: Pull python image (bot, mcp-server, sec-worker)
-        if: needs.build.outputs.python_changed == 'true'
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull bot mcp-server sec-worker
+      - name: Apply / restart frontend
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.frontend.yml config --quiet
+          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.frontend.yml up -d frontend
+
+      - name: Verify frontend deployment
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.frontend.yml ps frontend
+
+      - name: Dump frontend logs on deployment failure
+        if: failure()
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.frontend.yml ps frontend || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.frontend.yml logs --tail=120 frontend || true
+
+  deploy_execution_engine:
+    needs:
+      - detect_changes
+      - build_java
+      - deploy_frontend
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.java_deploy == 'true' &&
+        (
+          needs.detect_changes.outputs.java_image != 'true' ||
+          needs.build_java.result == 'success'
+        )
+      }}
+    runs-on: self-hosted
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    env:
+      APP_ENV_FILE: /home/danrasp3/.env.trading
+      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Validate deploy environment
+        run: python3 scripts/validate_deploy_env.py "$DEPLOY_ENV_FILE"
+
+      - name: Log in to GHCR (for private image pulls)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Pull execution-engine image
-        if: needs.build.outputs.java_changed == 'true'
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull execution-engine
+        if: ${{ needs.detect_changes.outputs.java_image == 'true' }}
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull execution-engine
 
-      - name: Pull frontend image
-        if: needs.build.outputs.frontend_changed == 'true'
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull frontend
+      - name: Remove legacy execution-engine container
+        run: docker rm -f execution-engine 2>/dev/null || true
 
-      # Older deploys used explicit container_name values such as
-      # trading-redis and execution-engine. Compose cannot adopt those
-      # containers after switching to a fixed project name, so remove only the
-      # legacy containers before recreating the project. Named volumes survive.
-      - name: Remove legacy fixed-name containers
+      - name: Apply / restart execution engine
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
+          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d execution-engine
+
+      - name: Verify execution-engine deployment
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps execution-engine
+
+      - name: Dump execution-engine logs on deployment failure
+        if: failure()
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps execution-engine || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml logs --tail=120 execution-engine || true
+
+  deploy_sec_worker:
+    needs:
+      - detect_changes
+      - build_python
+      - deploy_execution_engine
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.python_deploy == 'true' &&
+        (
+          needs.detect_changes.outputs.python_image != 'true' ||
+          needs.build_python.result == 'success'
+        )
+      }}
+    runs-on: self-hosted
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      APP_ENV_FILE: /home/danrasp3/.env.trading
+      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Validate deploy environment
+        run: python3 scripts/validate_deploy_env.py "$DEPLOY_ENV_FILE"
+
+      - name: Log in to GHCR (for private image pulls)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Pull base images (redis, postgres)
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull redis postgres
+
+      - name: Pull python image (bot, mcp-server, sec-worker)
+        if: ${{ needs.detect_changes.outputs.python_image == 'true' }}
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot mcp-server sec-worker
+
+      - name: Remove legacy sec-worker and base containers
         run: |
           docker rm -f \
             trading-redis \
             trading-postgres \
-            trading-bot \
-            mcp-server \
-            execution-engine \
             sec-fundamental-worker \
-            trading-frontend \
             2>/dev/null || true
 
-      - name: Apply / restart services
+      - name: Apply / restart base services
         run: |
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml config --quiet
-          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml up -d --remove-orphans
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
+          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d redis postgres
+
+      - name: Apply / restart sec-worker
+        run: timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d sec-worker
 
       - name: Cleanup dangling images
         run: docker image prune -f
 
-      - name: Verify deployment
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml ps
+      - name: Verify sec-worker deployment
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps sec-worker redis postgres
 
-      - name: Dump container logs on deployment failure
+      - name: Dump sec-worker logs on deployment failure
         if: failure()
         run: |
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml ps || true
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml logs --tail=120 bot mcp-server execution-engine postgres redis frontend || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml logs --tail=120 sec-worker postgres redis || true
+
+  deploy_python_services:
+    needs:
+      - detect_changes
+      - build_python
+      - deploy_execution_engine
+      - deploy_sec_worker
+    if: >-
+      ${{
+        always() &&
+        needs.detect_changes.outputs.python_deploy == 'true' &&
+        (
+          needs.detect_changes.outputs.python_image != 'true' ||
+          needs.build_python.result == 'success'
+        ) &&
+        needs.deploy_sec_worker.result == 'success' &&
+        (
+          needs.detect_changes.outputs.java_deploy != 'true' ||
+          needs.deploy_execution_engine.result == 'success'
+        )
+      }}
+    runs-on: self-hosted
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+    env:
+      APP_ENV_FILE: /home/danrasp3/.env.trading
+      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Compute lowercase image owner
+        run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - name: Validate deploy environment
+        run: python3 scripts/validate_deploy_env.py "$DEPLOY_ENV_FILE"
+
+      - name: Log in to GHCR (for private image pulls)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Pull python image (bot, mcp-server)
+        if: ${{ needs.detect_changes.outputs.python_image == 'true' }}
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot mcp-server
+
+      - name: Remove legacy bot and mcp-server containers
+        run: docker rm -f trading-bot mcp-server 2>/dev/null || true
+
+      - name: Apply / restart bot and mcp-server
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
+          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d bot mcp-server
+
+      - name: Cleanup dangling images
+        run: docker image prune -f
+
+      - name: Verify bot and mcp-server deployment
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps bot mcp-server
+
+      - name: Dump bot and mcp-server logs on deployment failure
+        if: failure()
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml logs --tail=120 bot mcp-server execution-engine postgres redis || true
+
+  deployment_summary:
+    needs:
+      - detect_changes
+      - quality_python
+      - quality_java
+      - quality_frontend
+      - build_python
+      - build_java
+      - build_frontend
+      - deploy_frontend
+      - deploy_execution_engine
+      - deploy_sec_worker
+      - deploy_python_services
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Write deployment summary
+        run: |
+          {
+            echo "## Deployment summary"
+            echo
+            echo "| Lane | Quality | Build | Deploy |"
+            echo "| --- | --- | --- | --- |"
+            echo "| SEC worker | ${{ needs.quality_python.result }} | ${{ needs.build_python.result }} | ${{ needs.deploy_sec_worker.result }} |"
+            echo "| Bot / MCP server | ${{ needs.quality_python.result }} | ${{ needs.build_python.result }} | ${{ needs.deploy_python_services.result }} |"
+            echo "| Execution engine | ${{ needs.quality_java.result }} | ${{ needs.build_java.result }} | ${{ needs.deploy_execution_engine.result }} |"
+            echo "| Frontend | ${{ needs.quality_frontend.result }} | ${{ needs.build_frontend.result }} | ${{ needs.deploy_frontend.result }} |"
+            echo
+            echo "### Change flags"
+            echo
+            echo "- python_image: ${{ needs.detect_changes.outputs.python_image }}"
+            echo "- java_image: ${{ needs.detect_changes.outputs.java_image }}"
+            echo "- frontend_image: ${{ needs.detect_changes.outputs.frontend_image }}"
+            echo "- backend_compose: ${{ needs.detect_changes.outputs.backend_compose }}"
+            echo "- frontend_compose: ${{ needs.detect_changes.outputs.frontend_compose }}"
+            echo "- proto: ${{ needs.detect_changes.outputs.proto }}"
+          } >> "$GITHUB_STEP_SUMMARY"
