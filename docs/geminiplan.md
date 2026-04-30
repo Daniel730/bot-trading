@@ -1,3 +1,7 @@
+# Historical Planning Note
+
+This long-form report is preserved as the original design/research plan. Current runtime docs live in `README.md`, `docs/README.md`, and the per-project READMEs.
+
 # **Arquitetura de Sistemas Autônomos para Arbitragem Estatística e Tomada de Decisão Financeira via Gemini CLI e Trading 212**
 
 A evolução das interfaces de programação de aplicações e a democratização de modelos de linguagem de grande escala permitiram o surgimento de uma nova classe de ferramentas de investimento pessoal. A convergência entre a inteligência artificial generativa, especificamente através do Google Gemini, e plataformas de corretagem de varejo como a Trading 212, possibilita a construção de sistemas que transcendem a execução algorítmica tradicional, alcançando um patamar de análise estratégica e tomada de decisão informada. Este relatório detalha a estrutura técnica, os fundamentos matemáticos e os requisitos operacionais para a implementação de um agente autônomo projetado para monitorar oscilações de mercado entre empresas concorrentes, operando dentro das janelas de negociação dos Estados Unidos a partir de uma perspectiva baseada em Portugal.

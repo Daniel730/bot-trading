@@ -1,47 +1,129 @@
-# 📊 Estratégia e Alpha: Alpha Arbitrage
+# Strategy And Risk Logic
 
-A inteligência do Alpha Arbitrage baseia-se na exploração de ineficiências de reversão à média (Mean Reversion) validadas por contexto macroeconómico.
+The strategy is pairs trading with multiple layers of economic, statistical, and operational filtering. The bot is built to prefer fewer, explainable signals over broad brute-force scanning.
 
-## 1. Fundamentos Quânticos
+## Pair Admission
 
-### Cointegração vs Correlação
-O bot não procura ativos que apenas se movam na mesma direção (correlação). Ele procura ativos que mantenham uma **relação de equilíbrio de longo prazo** (cointegração).
-- Se dois ativos são cointegrados, qualquer divergência no seu diferencial de preço (spread) tende a ser temporária.
-- Utilizamos o **Teste de Engle-Granger** para verificar a cointegração antes de adicionar qualquer par à lista ativa.
+Candidate pairs are first filtered by `src/services/pair_eligibility_service.py`.
 
-### Cálculo do Spread (Kalman)
-O spread é calculado como:
-`Spread = Preço_A - (Hedge_Ratio * Preço_B + Intercept)`
+A pair can be rejected before any Kalman state is allocated when:
 
-O Filtro de Kalman ajusta o `Hedge_Ratio` e o `Intercept` a cada novo tick de mercado, permitindo que o bot entenda se o "preço justo" da relação mudou ou se há uma oportunidade de arbitragem.
+- it mixes crypto and equity tickers;
+- the two tickers trade in different sessions;
+- the pair crosses settlement currencies while cross-currency blocking is enabled;
+- an LSE ticker is present while short-hold LSE pairs are blocked;
+- estimated round-trip cost exceeds `PAIR_MAX_ROUND_TRIP_COST_PCT`.
 
----
+Crypto pairs are admitted as 24/7 same-session pairs and use the Web3/T212 venue dispatcher rules later.
 
-## 2. Filtros Macro e Narrativa
+## Cointegration
 
-### Beacon Assets (Faróis de Setor)
-Para evitar "Value Traps" e contágio de mercado, utilizamos o conceito de **Beacon Assets**. Cada setor tem um líder institucional que serve como barómetro de saúde:
-- **Tecnologia**: NVIDIA (NVDA)
-- **Finanças**: JP Morgan (JPM)
-- **Energia**: Exxon Mobil (XOM)
-- **Consumo**: Coca-Cola (KO)
+The monitor uses historical prices to check cointegration before activating a pair:
 
-**Lógica de Veto**:
-Se o Beacon Asset de um setor cair mais de 3.5% (Sigma-3) ou entrar num regime de "Extreme Volatility", o bot veta automaticamente qualquer entrada em pares desse setor, mesmo que o Z-Score sugira um trade. Isto protege o capital contra correlações espúrias em momentos de pânico.
+- Static Engle-Granger/ADF logic in `arbitrage_service`.
+- Optional rolling-window stability with `COINTEGRATION_ROLLING_ENABLED`.
+- Daily re-checks can suspend a pair when cointegration breaks and reactivate it when restored.
 
----
+Rolling settings:
 
-## 3. Seleção de Pares (Setorial)
-Rejeitamos abordagens de "Força Bruta" (testar todos contra todos). A nossa seleção foca-se em pares com fundamentação económica real:
-- **Líderes vs Alternativos** (ex: AMD/NVDA)
-- **Duenopólios** (ex: V/MA, KO/PEP)
-- **ETFs vs Componentes** (ex: XLK/AAPL)
+| Setting | Meaning |
+|---|---|
+| `COINTEGRATION_ROLLING_WINDOW` | Window size used for stability checks |
+| `COINTEGRATION_ROLLING_STEP` | Rolling stride |
+| `COINTEGRATION_ROLLING_PASS_RATE` | Minimum passing-window rate |
 
-Esta restrição garante que a reversão à média seja ancorada em forças macroeconómicas reais, e não apenas em variações estatísticas aleatórias nos dados passados (*Data Mining Bias*).
+## Kalman Spread Model
 
----
+For each active pair, a Kalman filter estimates the dynamic relationship:
 
-## 4. Otimização Sortino
-O bot utiliza o **Rácio de Sortino** para decidir a alocação. Ao contrário do Rácio de Sharpe, o Sortino foca-se apenas no **Desvio Descendente** (Downside Risk).
-- Se o trade proposto aumentar o risco de queda do portefólio de forma desproporcional ao lucro esperado, a confiança do sinal é penalizada.
-- Isto garante que o bot prefira trades estáveis a trades altamente voláteis, mesmo que o retorno esperado seja maior nestes últimos.
+```text
+spread = price_a - (alpha + beta * price_b)
+```
+
+Signals use the z-score computed from the prior state before the current tick is absorbed. This avoids treating the new observation as already mean-reverted.
+
+Session-boundary handling:
+
+- `KALMAN_USE_Q_INFLATION=true` inflates process noise for the first bars after an equity session opens.
+- If disabled, the monitor can fall back to a covariance uncertainty bump.
+
+## Entry Gate
+
+Base entry threshold:
+
+```text
+abs(z_score) > MONITOR_ENTRY_ZSCORE
+```
+
+Optional cost scaling:
+
+```text
+entry_threshold = MONITOR_ENTRY_ZSCORE * min(pair_cost / baseline, cap)
+```
+
+controlled by:
+
+- `MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED`
+- `MONITOR_ENTRY_ZSCORE_COST_BASELINE`
+- `MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP`
+
+## Orchestrator Validation
+
+The orchestrator is an async Python ensemble, not a required LangGraph runtime path. It validates a z-score signal with:
+
+1. `DEGRADED_MODE` circuit-breaker check.
+2. Macro beacon fail-fast veto by sector.
+3. Bull and bear agent evaluation.
+4. Cached SEC/fundamental integrity scores from Redis.
+5. Whale watcher context for crypto-sensitive flows.
+6. Portfolio manager confidence adjustment.
+7. Historical global accuracy multiplier.
+8. Per-ticker beacon flash-crash veto.
+
+Hard veto examples:
+
+- sector beacon is in `EXTREME_VOLATILITY`;
+- fundamental score is below `ORCH_FUNDAMENTAL_VETO_SCORE`;
+- whale watcher returns a veto;
+- operational status is `DEGRADED_MODE`.
+
+## Risk Guards
+
+| Guard | Purpose |
+|---|---|
+| Spread guard | Rejects trades when combined bid/ask spread exceeds `SPREAD_GUARD_MAX_PCT`. |
+| Cluster guard | Prevents projected sector exposure above `MAX_SECTOR_EXPOSURE`. |
+| Friction guard | Rejects trades whose estimated fee/spread friction exceeds venue thresholds. |
+| Budget guard | Caps spend by venue using `T212_BUDGET_USD` and `WEB3_BUDGET_USD`. |
+| Live sell preflight | Blocks Trading 212 sell legs when available shares are insufficient. |
+| Atomic leg guard | Aborts after leg A failure; emergency-closes leg A when leg B fails. |
+| Kill switch | Closes positions when current value breaches `FINANCIAL_KILL_SWITCH_PCT`. |
+| Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE`; stop loss at `STOP_LOSS_ZSCORE`. |
+
+## Execution Direction
+
+When z-score is positive:
+
+```text
+Short A / Long B
+```
+
+When z-score is negative:
+
+```text
+Long A / Short B
+```
+
+In paper mode the shadow service records simulated fills. In live mode the Python brokerage dispatcher routes:
+
+- equity/non-crypto tickers to Trading 212;
+- `*-USD` crypto tickers to Web3 when Web3 is enabled and paper mode is off.
+
+## Position Exit
+
+Open positions are evaluated each loop:
+
+- financial kill switch first;
+- then Kalman-based take profit or stop loss;
+- paper exits also call `shadow_service.close_simulated_trade()` for shadow ledger consistency;
+- realized P&L is directional per leg.

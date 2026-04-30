@@ -1,82 +1,95 @@
 # bot-trading Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-04-12
+Last refreshed: 2026-04-30
+
+This file orients Gemini-style assistant sessions. For the full current docs, start at `README.md` and `docs/README.md`.
 
 ## Active Technologies
-- Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity`, `grpcio`, `grpcio-tools`, `numpy`, `scipy` (028-dynamic-risk-and-volatility-switch)
-- SQLite (Arbitrage pairs, Signal records, Virtual Pie state, Trade Ledger, DCA Schedules, Portfolio Strategies, System State / Budgets) (014-low-budget-investor-suite)
-- PostgreSQL (R2DBC) (028-dynamic-risk-and-volatility-switch)
-- Redis (Idempotency, Entropy, Latency Telemetry) (028-dynamic-risk-and-volatility-switch)
-- gRPC (Python/Java with Nanosecond Interceptors) (027-model-calibration)
+
+- Python 3.11
+- FastAPI, FastMCP, SSE, WebSocket telemetry
+- pandas, numpy, scipy, statsmodels, yfinance, Polygon client
+- Pydantic v2 settings
+- Redis, PostgreSQL, SQLite
+- gRPC Python stubs and Java gRPC service
+- Java 21 with Gradle
+- React 19, Vite 8, TypeScript, Vitest
+- Docker Compose and GHCR images
 
 ## Project Structure
 
 ```text
 src/
-  agents/
-    portfolio_manager_agent.py (Feature 014)
-    macro_economic_agent.py (Feature 014)
-  services/
-    budget_service.py (Unified Budgeting)
-    dca_service.py (Feature 014)
-    performance_service.py (Feature 028)
-    volatility_service.py (Feature 028)
-    execution_service_client.py (Feature 027)
-    calibration_service.py (Feature 027)
+  monitor.py                    # main trading loop and dashboard startup
+  mcp_server.py                 # optional FastMCP SSE tool server
+  agents/                       # signal validation ensemble
+  daemons/                      # background workers
+  services/                     # risk, broker, dashboard, data, persistence
+frontend/                       # React operations console
+execution-engine/               # Java gRPC execution engine
+infra/                          # Docker/deploy wiring
+docs/                           # current docs and historical audits
+tests/                          # Python tests
 ```
 
-## Recent Changes
-- 028-dynamic-risk-and-volatility-switch: Added Performance Service (Sharpe/Drawdown) and Volatility Switch (L2 Entropy).
-- 027-model-calibration: Added gRPC Latency Monitoring (Nanosecond Interceptors), Redis Idempotency hardening, and Shadow Mode Fill Realism Audit (Walk-the-Book VWAP).
-- 014-low-budget-investor-suite: Added Fractional Engine, DCA Service, Portfolio Manager, and Macro Agent.
+## Current Runtime Notes
 
-### Senior Developer (Elite Software Engineer)
-- **Rigor:** Zero-tolerance for unhandled exceptions or missing type hints.
-- **Async:** Use `asyncio` and `FastMCP` for all I/O bound operations.
-- **Testing:** New features MUST include unit and integration tests. (MANDATORY for 027)
-- **Patterns:** Favor `src/services/` singleton exports and `pydantic` models.
-- **Fractional Precision:** Use 6 decimal places for fractional share calculations (Feature 014).
-- **Latency Monitoring:** Sub-millisecond gRPC RTT is a hard requirement. `LATENCY_ALARM` triggers if >10% of samples exceed 1ms.
-
-### Senior Investor (Quantitative Analyst)
-- **Alpha Verification:** "Achievable Alpha" must be verified via `CalibrationService` audits against L2 snapshots.
-- **Simulation Fidelity:** Shadow Mode must penalize trade size via 0.5bps impact per 10% depth consumed.
-- **Clock Sync:** Clock drift between environments must remain <100μs (enforced via `chrony`).
-
-### Senior Investor (Quantitative Analyst)
-- **Risk:** No pair > 5% equity. Max 15% strategy drawdown.
-- **Alpha:** Cointegration (p < 0.05) and Correlation (> 0.85) are mandatory for new pairs.
-- **Verification:** Dynamic Kalman Filter for spread and Z-score calculations.
-- **SEC Integration:** Fundamental analysis must include SEC filing checks.
-- **Retail Optimization:** Maintain < 1.5% friction for micro-investments (Feature 014).
+- `PAPER_TRADING=true` is the safe default and routes fills through the shadow service.
+- `DEV_MODE=true` is for crypto-only 24/7 development behavior and should not be used for production decisions.
+- `DRY_RUN=true` is required for the Java engine because live Java brokerage is intentionally blocked.
+- Dashboard API runs on port `8080`; optional FastMCP runs on port `8000`.
+- Dashboard auth uses `DASHBOARD_TOKEN` plus a dashboard session; sensitive config writes require 2FA after setup.
+- Pair universe and settings can be overridden at runtime through `data/pairs.json` and `data/bot_settings.json`.
 
 ## Commands
 
-# /invest.set_goal name="Goal" amount=X date=YYYY-MM-DD risk=Level - Configure a long-term financial target.
-# /invest.dca amount=X frequency=Interval strategy=ID - Setup automated recurring micro-investments.
-# /invest.life_event event="Name" date=YYYY-MM-DD - Report life changes to adjust your investment horizon.
-# /invest.why_buy TICKER - Returns the detailed "Investment Thesis" for a recent trade.
-# /invest.monitor_stops - Check current synthetic stops for fractional positions.
-# /invest.analyze [ticker_a] [ticker_b] - Pair cointegration & correlation.
-# /dev.audit - Project health & pattern check.
-# /speckit.* - Custom workflow commands.
+```bash
+pip install -r requirements.txt
+python scripts/init_db.py
+python src/monitor.py
+python src/mcp_server.py
+pytest tests/ -v --asyncio-mode=auto
+```
 
-## Code Style
+```bash
+cd frontend
+npm install
+npm run dev
+npm run lint
+npm run test
+npm run build
+```
 
-: Follow standard conventions
+```bash
+cd execution-engine
+gradle generateProto --no-daemon
+gradle shadowJar --no-daemon
+gradle test --no-daemon
+```
 
-## Recent Changes
-- 014-low-budget-investor-suite: Added Fractional Engine, DCA Service, Portfolio Manager, and Macro Agent.
-- 004-strategic-arbitrage-engine: Added Python 3.11 + `FastMCP`, `pandas`, `statsmodels`, `python-telegram-bot`, `requests`, `yfinance`, `tenacity`
+```bash
+docker compose -f infra/docker-compose.yml up -d
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml up -d --build
+```
 
-- 003-strategic-arbitrage-engine: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
-- 003-strategic-arbitrage-engine: Added [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
+## Development Rules
 
+- Preserve `signal_id` through signal evaluation, approval, execution, journal, and close paths.
+- Keep venue routing centralized in `BrokerageService.get_venue()`.
+- Use async I/O or `asyncio.to_thread` around blocking APIs.
+- Keep secrets out of docs, logs, and committed env files.
+- When touching execution paths, run focused brokerage, risk, and persistence tests.
+- When touching frontend auth/telemetry, run `npm run test` and `npm run build`.
+- When touching proto or Java execution code, run `gradle generateProto`, `gradle shadowJar`, and `gradle test`.
 
-<!-- MANUAL ADDITIONS START -->
-## Development Mode (24/7 Testing)
-To test the bot during weekends or outside NYSE/NASDAQ hours:
-1. Set `DEV_MODE=true` in your `.env` file.
-2. The bot will automatically use crypto pairs (BTC-USD, ETH-USD) and bypass hour restrictions.
-3. Check logs for the `!!! DEVELOPMENT MODE ACTIVE !!!` warning.
-<!-- MANUAL ADDITIONS END -->
+## Assistant Commands And Skills
+
+The `.gemini/commands/` and `.gemini/skills/` trees are retained for Gemini workflows. Speckit templates live in `.specify/`; feature artifacts live in `specs/`.
+
+Useful project commands:
+
+- `/dev.audit`
+- `/invest.analyze [ticker_a] [ticker_b]`
+- `/speckit.*`
+
+Historical docs such as `docs/bugs.md`, `docs/MONDAY_READINESS_AUDIT.md`, and `docs/geminiplan.md` should be checked against current source before being treated as active findings.
