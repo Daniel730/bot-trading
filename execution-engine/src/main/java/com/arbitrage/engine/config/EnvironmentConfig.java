@@ -21,7 +21,7 @@ public class EnvironmentConfig {
             logger.warn("!!! SHADOW MODE ACTIVE: DRY_RUN=true !!!");
             logger.warn("BrokerageRouter will intercept all live trades and route to MockBroker.");
         } else {
-            logger.info("Live Mode Active (DRY_RUN=false). Trades will hit external APIs.");
+            logger.error("Live Mode requested (DRY_RUN=false), but Java live brokerage is not implemented.");
         }
 
         if (isLiveCapitalDanger) {

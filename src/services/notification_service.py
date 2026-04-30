@@ -311,7 +311,7 @@ class NotificationService:
         Failures here must never propagate to the caller -- paper trades
         must simulate regardless of Telegram or dashboard health (FR-002).
         """
-        text = "Paper trade auto-approved\n" + trade_summary
+        text = "Trade auto-approved\n" + trade_summary
         if self._telegram_enabled:
             try:
                 await self.app.bot.send_message(chat_id=self.chat_id, text=text)
@@ -345,11 +345,6 @@ class NotificationService:
         under 100ms and dispatches a fire-and-forget notification so the
         operator still has visibility (spec FR-001..FR-003).
         """
-        # Threshold auto-approval fast path.
-        if trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
-            self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
-            return True
-
         # Paper-mode fast path.
         if settings.PAPER_TRADING:
             self._schedule_paper_notify(trade_summary)
@@ -357,8 +352,16 @@ class NotificationService:
 
         if not self._telegram_enabled:
             # Without Telegram, live trades cannot be human-gated.
-            # Log clearly and auto-approve so the bot doesn't silently stall.
-            print(f"[APPROVAL] Telegram not configured. Auto-approving live trade: {trade_summary}")
+            if settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM:
+                print(f"[APPROVAL] Telegram not configured. Explicit override auto-approving live trade: {trade_summary}")
+                return True
+            print(f"[APPROVAL] Telegram not configured. Rejecting live trade: {trade_summary}")
+            return False
+
+        # Threshold auto-approval fast path. In live mode this is only allowed
+        # after the operator's approval channel has been configured.
+        if trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
+            self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
             return True
 
         correlation_id = str(uuid.uuid4())[:8]
