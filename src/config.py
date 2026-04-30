@@ -139,6 +139,7 @@ class Settings(BaseSettings):
     )
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     DASHBOARD_ALLOWED_ORIGINS: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGINS")
+    DASHBOARD_ALLOWED_ORIGIN_REGEX: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGIN_REGEX")
 
     START_HOUR: int = 9
     START_MINUTE: int = 30
@@ -647,10 +648,27 @@ class Settings(BaseSettings):
             return [
                 "http://localhost:3000",
                 "http://127.0.0.1:3000",
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
                 "http://localhost:8080",
                 "http://127.0.0.1:8080",
             ]
         return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+    @property
+    def dashboard_allowed_origin_regex(self) -> str | None:
+        raw = self.DASHBOARD_ALLOWED_ORIGIN_REGEX.strip()
+        if raw:
+            return raw
+        return (
+            r"^https?://("
+            r"localhost|127\.0\.0\.1|\[::1\]|"
+            r"10\.\d{1,3}\.\d{1,3}\.\d{1,3}|"
+            r"192\.168\.\d{1,3}\.\d{1,3}|"
+            r"172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|"
+            r"[A-Za-z0-9-]+(?:\.local)?"
+            r")(?::\d{1,5})?$"
+        )
 
     @model_validator(mode="after")
     def validate_secrets(self):
