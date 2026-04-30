@@ -268,7 +268,7 @@ class DataService:
         async def fetch_chunk(chunk: List[str]) -> dict:
             async with semaphore:
                 return await self._run_sync_backend(
-                    self._get_latest_price_yfinance_batch,
+                    self.get_latest_price,
                     chunk,
                     timeout=per_batch_timeout,
                     label=f"latest price chunk {self._summarize_tickers(chunk)}",
@@ -349,17 +349,28 @@ class DataService:
         # US-035 fallback: per-ticker fetch for tickers missing from a partial batch response.
         import time
         missing = [t for t in tickers if t not in results]
-        for ticker in missing:
-            try:
-                df = self._download_yfinance(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
-                val = self._extract_latest_close(df, ticker)
-                if val is not None:
-                    results[ticker] = self._maybe_randomize_price(val)
-                # Small delay to prevent Yahoo from flagging the IP
-                time.sleep(0.5)
-            except Exception as e:
-                logger.warning(f"DataService: Error fetching {ticker} specifically: {e}")
-                continue
+        
+        # T014: Cap sequential fallback to avoid 120s timeouts on large partial failures.
+        # If > 10 tickers are missing, we likely hit a rate limit or massive batch failure;
+        # doing 10+ sequential requests with 0.5s sleeps is too slow.
+        if 0 < len(missing) <= 10:
+            for ticker in missing:
+                try:
+                    df = self._download_yfinance(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
+                    val = self._extract_latest_close(df, ticker)
+                    if val is not None:
+                        results[ticker] = self._maybe_randomize_price(val)
+                    # Small delay to prevent Yahoo from flagging the IP
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.warning(f"DataService: Error fetching {ticker} specifically: {e}")
+                    continue
+        elif len(missing) > 10:
+            logger.warning(
+                "DataService: %d tickers missing from batch, skipping individual fallback to avoid timeout. Missing: %s",
+                len(missing),
+                self._summarize_tickers(missing)
+            )
 
         if not results:
             raise ValueError(f"No valid prices found in yfinance response for {tickers}")
