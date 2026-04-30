@@ -28,13 +28,13 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
     if (!token || !sessionToken) return;
 
     const url = new URL('/ws/telemetry', WS_BASE);
-    url.searchParams.set('token', token);
-    url.searchParams.set('session', sessionToken);
-
     const socket = new WebSocket(url.toString());
 
     socket.onopen = () => {
       console.log('Telemetry WebSocket Connected');
+      if (typeof socket.send === 'function') {
+        socket.send(JSON.stringify({ type: 'auth', token, session: sessionToken }));
+      }
       setIsConnected(true);
       retryCount.current = 0;
     };

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Any, Literal
 from dotenv import load_dotenv
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, EnvSettingsSource, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic import Field, model_validator
 
 load_dotenv()
@@ -30,6 +30,22 @@ def save_settings_override(new_settings: dict) -> None:
     existing.update(new_settings)
     with BOT_SETTINGS_OVERRIDE_PATH.open("w", encoding="utf-8") as fh:
         json.dump(existing, fh, indent=2)
+
+
+def _strip_wrapping_quotes(value: str) -> str:
+    stripped = value.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        return stripped[1:-1].strip()
+    return stripped
+
+
+class _DockerEnvSettingsSource(EnvSettingsSource):
+    """Accept JSON values passed through Docker env_file with literal quotes."""
+
+    def prepare_field_value(self, field_name: str, field, value: Any, value_is_complex: bool) -> Any:
+        if isinstance(value, str) and field_name in {"CRYPTO_TOKEN_MAPPING"}:
+            value = _strip_wrapping_quotes(value)
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
 
 
 
@@ -63,6 +79,22 @@ class Settings(BaseSettings):
         extra='ignore',
         env_prefix=''
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        return (
+            init_settings,
+            _DockerEnvSettingsSource(settings_cls),
+            dotenv_settings,
+            file_secret_settings,
+        )
 
     POLYGON_API_KEY: str = Field(default="", validation_alias="POLYGON_API_KEY")
     OPENAI_API_KEY: str = Field(default="", validation_alias="OPENAI_API_KEY")
@@ -101,7 +133,12 @@ class Settings(BaseSettings):
     SGOV_SWEEP_TICKER: str = "SGOV"
     MIN_SWEEP_THRESHOLD: float = 10.0
     LIVE_CAPITAL_DANGER: bool = Field(default=False, validation_alias="LIVE_CAPITAL_DANGER")
+    ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM: bool = Field(
+        default=False,
+        validation_alias="ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM",
+    )
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
+    DASHBOARD_ALLOWED_ORIGINS: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGINS")
 
     START_HOUR: int = 9
     START_MINUTE: int = 30
@@ -603,6 +640,18 @@ class Settings(BaseSettings):
             and self.WEB3_ROUTER_ADDRESS.strip()
         )
 
+    @property
+    def dashboard_allowed_origins(self) -> list[str]:
+        raw = self.DASHBOARD_ALLOWED_ORIGINS.strip()
+        if not raw:
+            return [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:8080",
+                "http://127.0.0.1:8080",
+            ]
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
     @model_validator(mode="after")
     def validate_secrets(self):
         if not self.POSTGRES_PASSWORD or self.POSTGRES_PASSWORD == "bot_pass":
@@ -610,6 +659,8 @@ class Settings(BaseSettings):
         dashboard_token = self.DASHBOARD_TOKEN.strip().strip('"').strip("'")
         if not dashboard_token or dashboard_token == "arbi-elite-2026":
             raise ValueError("DASHBOARD_TOKEN must be set to a non-default secret")
+        if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
+            raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
         return self
 
 settings = Settings()
