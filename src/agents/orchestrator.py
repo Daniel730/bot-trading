@@ -91,7 +91,10 @@ class Orchestrator:
 
         # --- PHASE 0: MACRO REGIME CHECK (FAIL-FAST) ---
         # If the Sector Leader is in a panic state, we abort before firing up the LLM Agents
-        sector = state['signal_context'].get('sector', 'Technology')
+        # Default sector is "Unassigned" -> SPY (market-wide beacon). Previously defaulted
+        # to "Technology" -> NVDA, which silently vetoed every unmapped pair on NVDA panic
+        # days (incident: 2026-04-30 NVDA -4.63%).
+        sector = state['signal_context'].get('sector', 'Unassigned')
         beacon = BEACON_ASSETS.get(sector, "SPY")
 
         # R3 fix (2026-04-19): get_ticker_regime returns a bare string literal

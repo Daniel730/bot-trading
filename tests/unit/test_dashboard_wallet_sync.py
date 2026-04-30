@@ -3,7 +3,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
 
 from src.config import settings
 from src.services.dashboard_service import (
@@ -71,7 +70,8 @@ def wallet_sync_context(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_wallet_sync_buys_missing_coint_t212_tickers(wallet_sync_context, monkeypatch):
+async def test_wallet_sync_buys_missing_active_t212_tickers(wallet_sync_context, monkeypatch):
+    """P-04: wallet sync now includes ALL active T212 equity tickers, not only COINT ones."""
     monkeypatch.setattr(
         wallet_sync_context.brokerage,
         "get_positions",
@@ -88,27 +88,32 @@ async def test_wallet_sync_buys_missing_coint_t212_tickers(wallet_sync_context, 
     )
 
     assert result["status"] == "ok"
-    assert result["target_tickers"] == ["GOOG", "GOOGL"]
+    # Non-COINT KO/PEP are now included alongside COINT GOOG/GOOGL.
+    assert result["target_tickers"] == ["KO", "PEP", "GOOG", "GOOGL"]
     assert result["skipped"] == [
         {"ticker": "AAPL", "reason": "owned"},
         {"ticker": "MSFT", "reason": "pending_buy"},
     ]
-    assert [order["amount"] for order in result["orders"]] == [10.0, 10.0]
-    assert [order["status"] for order in result["orders"]] == ["ok", "ok"]
-    assert len(wallet_sync_context.submitted_orders) == 2
+    # $20 budget split across 4 tickers => $5 each.
+    assert [order["amount"] for order in result["orders"]] == [5.0, 5.0, 5.0, 5.0]
+    assert [order["status"] for order in result["orders"]] == ["ok", "ok", "ok", "ok"]
+    assert len(wallet_sync_context.submitted_orders) == 4
     assert all(call["method"] == "POST" for call in wallet_sync_context.submitted_orders)
     assert all(call["url"].endswith("/equity/orders/limit") for call in wallet_sync_context.submitted_orders)
     assert all(call["payload"]["quantity"] > 0 for call in wallet_sync_context.submitted_orders)
 
 
 @pytest.mark.asyncio
-async def test_wallet_sync_noops_when_every_coint_ticker_is_already_owned(wallet_sync_context, monkeypatch):
+async def test_wallet_sync_noops_when_every_active_ticker_is_already_owned(wallet_sync_context, monkeypatch):
+    """P-04: noop case must also account for the now-included non-COINT tickers."""
     monkeypatch.setattr(
         wallet_sync_context.brokerage,
         "get_positions",
         lambda: [
             {"ticker": "AAPL_US_EQ", "quantity": 1.0},
             {"ticker": "MSFT_US_EQ", "quantity": 1.0},
+            {"ticker": "KO_US_EQ", "quantity": 1.0},
+            {"ticker": "PEP_US_EQ", "quantity": 1.0},
             {"ticker": "GOOG_US_EQ", "quantity": 1.0},
             {"ticker": "GOOGL_US_EQ", "quantity": 1.0},
         ],
@@ -125,35 +130,58 @@ async def test_wallet_sync_noops_when_every_coint_ticker_is_already_owned(wallet
 
 
 @pytest.mark.asyncio
-async def test_wallet_sync_rejects_budget_above_spendable(wallet_sync_context):
-    with pytest.raises(HTTPException) as exc:
-        await dashboard_service.sync_t212_wallet_for_coint(
+async def test_wallet_sync_warns_but_proceeds_when_budget_above_spendable(
+    wallet_sync_context, caplog
+):
+    """P-04: budget > spendable is now a warning, not a hard 400; broker is final gate."""
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING):
+        result = await dashboard_service.sync_t212_wallet_for_coint(
             T212WalletSyncRequest(budget=101.0, delay_seconds=0)
         )
 
-    assert exc.value.status_code == 400
-    assert "exceeds spendable" in exc.value.detail
-    assert wallet_sync_context.submitted_orders == []
+    assert result["status"] == "ok"
+    # 6 active T212 equity tickers, one order each.
+    assert len(wallet_sync_context.submitted_orders) == 6
+    assert any(
+        "P-04 wallet sync budget" in record.getMessage()
+        and "exceeds spendable" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
-async def test_wallet_recommendations_default_to_coint_only(wallet_sync_context, monkeypatch):
+async def test_wallet_recommendations_include_all_active_tickers_by_default(
+    wallet_sync_context, monkeypatch, caplog
+):
     monkeypatch.setattr(
         dashboard_service,
         "_wallet_pair_z_scores",
         AsyncMock(return_value={"AAPL_MSFT": 2.4, "KO_PEP": 3.1, "GOOG_GOOGL": 1.2}),
     )
+    import logging as _logging
 
-    result = await dashboard_service.calculate_t212_wallet_recommendations(
-        T212WalletRecommendationRequest(budget=40.0, include_broken=False)
-    )
+    with caplog.at_level(_logging.WARNING):
+        result = await dashboard_service.calculate_t212_wallet_recommendations(
+            T212WalletRecommendationRequest(budget=40.0, include_broken=False)
+        )
 
     assert result["status"] == "ok"
     assert result["coint_pairs"] == 2
     assert result["broken_eligible_pairs"] == 1
-    assert result["recommended_tickers"] == ["AAPL", "MSFT", "GOOG", "GOOGL"]
-    assert {item["category"] for item in result["recommendations"]} == {"coint"}
+    assert result["recommended_tickers"][:4] == ["AAPL", "MSFT", "GOOG", "GOOGL"]
+    assert set(result["recommended_tickers"]) == {"AAPL", "MSFT", "GOOG", "GOOGL", "KO", "PEP"}
+    assert {item["category"] for item in result["recommendations"]} == {"coint", "broken_eligible"}
     assert sum(item["suggested_amount"] for item in result["recommendations"]) == 40.0
+    assert [
+        record.getMessage()
+        for record in caplog.records
+        if "P-04 including non-COINT ticker" in record.getMessage()
+    ] == [
+        "DASHBOARD: P-04 including non-COINT ticker KO in candidates",
+        "DASHBOARD: P-04 including non-COINT ticker PEP in candidates",
+    ]
 
 
 @pytest.mark.asyncio
@@ -197,3 +225,40 @@ async def test_buy_wallet_recommendations_submits_selected_broken_tickers(wallet
     assert [order["ticker"] for order in result["orders"]] == ["KO", "PEP"]
     assert [order["amount"] for order in result["orders"]] == [10.0, 10.0]
     assert len(wallet_sync_context.submitted_orders) == 2
+
+
+@pytest.mark.asyncio
+async def test_buy_wallet_recommendations_manual_override_for_skipped_ticker(
+    wallet_sync_context, monkeypatch, caplog
+):
+    monkeypatch.setattr(
+        dashboard_service,
+        "_wallet_pair_z_scores",
+        AsyncMock(return_value={"AAPL_MSFT": 2.4, "KO_PEP": 3.1, "GOOG_GOOGL": 1.2}),
+    )
+    monkeypatch.setattr(
+        wallet_sync_context.brokerage,
+        "get_positions",
+        lambda: [{"ticker": "KO_US_EQ", "quantity": 1.0}],
+    )
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING):
+        result = await dashboard_service.buy_t212_wallet_recommendations(
+            T212WalletRecommendationBuyRequest(
+                budget=10.0,
+                include_broken=False,
+                tickers=["KO"],
+                delay_seconds=0,
+            )
+        )
+
+    assert result["status"] == "ok"
+    assert result["target_tickers"] == ["KO"]
+    assert result["recommendations"][0]["category"] == "manual_override"
+    assert [order["ticker"] for order in result["orders"]] == ["KO"]
+    assert len(wallet_sync_context.submitted_orders) == 1
+    assert any(
+        "P-04 manual override buy for non-recommended ticker KO" in record.getMessage()
+        for record in caplog.records
+    )

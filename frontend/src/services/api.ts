@@ -159,8 +159,8 @@ export interface T212WalletRecommendationPair {
 export interface T212WalletRecommendation {
   ticker: string;
   t212_ticker: string;
-  category: 'coint' | 'broken_eligible';
-  categories: Array<'coint' | 'broken_eligible'>;
+  category: 'coint' | 'broken_eligible' | 'manual_override';
+  categories: Array<'coint' | 'broken_eligible' | 'manual_override'>;
   pairs: T212WalletRecommendationPair[];
   sectors: string[];
   score: number;
@@ -168,7 +168,7 @@ export interface T212WalletRecommendation {
   estimated_cost_pct: number;
   rank: number | null;
   suggested_amount: number;
-  status: 'ready';
+  status: 'ready' | 'manual_override';
 }
 
 export interface T212WalletRecommendationSkip extends Omit<T212WalletRecommendation, 'rank' | 'suggested_amount' | 'status'> {
