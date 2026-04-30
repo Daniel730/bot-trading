@@ -21,10 +21,12 @@ on:
         type: boolean
         default: false
 
-# Cancel any in-flight deploy when a newer commit lands.
+# Serialize deploys on the self-hosted Pi. Interrupting `docker compose up` can
+# leave the local project half-applied, so newer commits wait for the active
+# deploy to finish instead of canceling it mid-restart.
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -226,7 +228,9 @@ jobs:
         run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull frontend
 
       - name: Apply / restart services
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml up -d --remove-orphans
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml config --quiet
+          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml up -d --remove-orphans
 
       - name: Cleanup dangling images
         run: docker image prune -f
@@ -236,4 +240,6 @@ jobs:
 
       - name: Dump container logs on deployment failure
         if: failure()
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml logs --tail=120 bot mcp-server execution-engine postgres redis || true
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml ps || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml logs --tail=120 bot mcp-server execution-engine postgres redis frontend || true

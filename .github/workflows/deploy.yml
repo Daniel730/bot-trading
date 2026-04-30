@@ -21,10 +21,12 @@ on:
         type: boolean
         default: false
 
-# Cancel any in-flight deploy when a newer commit lands.
+# Serialize deploys on the self-hosted Pi. Interrupting `docker compose up` can
+# leave the local project half-applied, so newer commits wait for the active
+# deploy to finish instead of canceling it mid-restart.
 concurrency:
   group: deploy-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -317,7 +319,7 @@ jobs:
       # Always pull the public base images (redis, postgres). They're cheap,
       # and `up -d` would otherwise pull them on first run anyway.
       - name: Pull base images (redis, postgres)
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml pull redis postgres
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull redis postgres
 
       # Pull each app image ONLY if the build job rebuilt it. Skipping a pull
       # leaves the previous local image in place, which `up -d` will reuse.
@@ -325,25 +327,29 @@ jobs:
       # for services whose source didn't change this run.
       - name: Pull python image (bot, mcp-server, sec-worker)
         if: needs.build.outputs.python_changed == 'true'
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml pull bot mcp-server sec-worker
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull bot mcp-server sec-worker
 
       - name: Pull execution-engine image
         if: needs.build.outputs.java_changed == 'true'
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml pull execution-engine
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull execution-engine
 
       - name: Pull frontend image
         if: needs.build.outputs.frontend_changed == 'true'
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml pull frontend
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml pull frontend
 
       - name: Apply / restart services
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml up -d --remove-orphans
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml config --quiet
+          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml up -d --remove-orphans
 
       - name: Cleanup dangling images
         run: docker image prune -f
 
       - name: Verify deployment
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml ps
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml ps
 
       - name: Dump container logs on deployment failure
         if: failure()
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -f infra/docker-compose.yml logs --tail=120 bot mcp-server execution-engine postgres redis || true
+        run: |
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml ps || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.yml logs --tail=120 bot mcp-server execution-engine postgres redis frontend || true
