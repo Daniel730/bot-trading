@@ -38,6 +38,36 @@ class DataService:
             kwargs.pop("timeout", None)
             return yf.download(*args, **kwargs)
 
+    @staticmethod
+    def _dedupe_tickers(tickers: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for ticker in tickers:
+            if ticker and ticker not in seen:
+                seen.add(ticker)
+                result.append(ticker)
+        return result
+
+    @staticmethod
+    def _chunks(items: List[str], size: int):
+        size = max(1, int(size or 1))
+        for idx in range(0, len(items), size):
+            yield items[idx: idx + size]
+
+    @staticmethod
+    def _summarize_tickers(tickers: List[str]) -> str:
+        if len(tickers) <= 8:
+            return str(tickers)
+        head = ", ".join(tickers[:8])
+        return f"[{head}, ...] ({len(tickers)} tickers)"
+
+    @staticmethod
+    def _maybe_randomize_price(value: float) -> float:
+        if settings.DEV_MODE:
+            import random
+            return value * (1 + random.uniform(-0.015, 0.015))
+        return value
+
     async def _run_sync_backend(
         self,
         func: Callable[..., T],
@@ -83,7 +113,11 @@ class DataService:
         )
 
     @staticmethod
-    def _extract_latest_close(df: pd.DataFrame, ticker: str) -> Optional[float]:
+    def _extract_latest_close(
+        df: pd.DataFrame,
+        ticker: str,
+        allow_single_column_fallback: bool = True,
+    ) -> Optional[float]:
         """Return the newest non-null close price from flat or MultiIndex yfinance data."""
         if df.empty:
             return None
@@ -103,13 +137,10 @@ class DataService:
         if isinstance(close_data, pd.DataFrame):
             if ticker in close_data.columns:
                 series = close_data[ticker]
-            elif len(close_data.columns) == 1:
+            elif allow_single_column_fallback and len(close_data.columns) == 1:
                 series = close_data.iloc[:, 0]
             else:
-                last_row = close_data.iloc[-1].dropna()
-                if last_row.empty:
-                    return None
-                return float(last_row.iloc[0])
+                return None
         else:
             series = close_data
 
@@ -149,6 +180,7 @@ class DataService:
         Tries Redis shadow book first, falls back to yfinance with retries.
         Decision 1: Uses tenacity for 3-attempt exponential backoff.
         """
+        tickers = self._dedupe_tickers(tickers)
         latest = {}
         remaining_tickers = []
 
@@ -189,14 +221,112 @@ class DataService:
 
     @agent_trace("DataService.get_latest_price_async")
     async def get_latest_price_async(self, tickers: List[str], timeout: Optional[float] = None) -> dict:
-        prices = await self._run_sync_backend(
-            self.get_latest_price,
-            tickers,
-            timeout=timeout,
-            label=f"latest prices for {tickers}",
-            fallback={},
+        tickers = self._dedupe_tickers(tickers)
+        if not tickers:
+            return AwaitableDict({})
+
+        batch_size = max(1, int(settings.MARKET_DATA_BATCH_SIZE))
+        if len(tickers) <= batch_size:
+            prices = await self._run_sync_backend(
+                self.get_latest_price,
+                tickers,
+                timeout=timeout,
+                label=f"latest prices for {self._summarize_tickers(tickers)}",
+                fallback={},
+            )
+            return AwaitableDict(prices or {})
+
+        latest = {}
+        remaining_tickers = []
+
+        async def read_cached_price(ticker: str):
+            try:
+                return ticker, await redis_service.get_price(ticker)
+            except Exception:
+                return ticker, None
+
+        cached = await asyncio.gather(
+            *(read_cached_price(ticker) for ticker in tickers),
+            return_exceptions=True,
         )
-        return AwaitableDict(prices or {})
+        for item in cached:
+            if isinstance(item, Exception):
+                continue
+            ticker, price = item
+            if price:
+                latest[ticker] = price
+            else:
+                remaining_tickers.append(ticker)
+
+        if not remaining_tickers:
+            return AwaitableDict(latest)
+
+        per_batch_timeout = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS
+        concurrency = max(1, int(settings.MARKET_DATA_BATCH_CONCURRENCY))
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def fetch_chunk(chunk: List[str]) -> dict:
+            async with semaphore:
+                return await self._run_sync_backend(
+                    self._get_latest_price_yfinance_batch,
+                    chunk,
+                    timeout=per_batch_timeout,
+                    label=f"latest price chunk {self._summarize_tickers(chunk)}",
+                    fallback={},
+                )
+
+        chunk_results = await asyncio.gather(
+            *(fetch_chunk(chunk) for chunk in self._chunks(remaining_tickers, batch_size)),
+            return_exceptions=True,
+        )
+
+        cache_writes = []
+        for result in chunk_results:
+            if isinstance(result, Exception) or not result:
+                continue
+            latest.update(result)
+            for ticker, price in result.items():
+                cache_writes.append(redis_service.set_price(ticker, price))
+
+        if cache_writes:
+            await asyncio.gather(*cache_writes, return_exceptions=True)
+
+        missing_count = len(tickers) - len(latest)
+        if missing_count:
+            logger.warning(
+                "DataService: missing latest prices for %d/%d tickers after chunked fetch",
+                missing_count,
+                len(tickers),
+            )
+
+        return AwaitableDict(latest)
+
+    def _get_latest_price_yfinance_batch(self, tickers: List[str]) -> dict:
+        """Fetch latest prices for a chunk of tickers in one yfinance request."""
+        tickers = self._dedupe_tickers(tickers)
+        if not tickers:
+            return {}
+
+        download_arg = tickers[0] if len(tickers) == 1 else tickers
+        df = self._download_yfinance(
+            download_arg,
+            period="1d",
+            interval="1m",
+            progress=False,
+            auto_adjust=True,
+            threads=True,
+        )
+
+        results = {}
+        for ticker in tickers:
+            val = self._extract_latest_close(
+                df,
+                ticker,
+                allow_single_column_fallback=len(tickers) == 1,
+            )
+            if val is not None:
+                results[ticker] = self._maybe_randomize_price(val)
+        return results
 
     @retry(
         wait=wait_exponential(multiplier=1, min=1, max=4), 
@@ -206,20 +336,25 @@ class DataService:
     )
     def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
         """Internal helper to fetch prices from yfinance with tenacity retries."""
+        tickers = self._dedupe_tickers(tickers)
         results = {}
+        try:
+            results.update(self._get_latest_price_yfinance_batch(tickers))
+        except Exception as e:
+            logger.warning(
+                "DataService: batch latest-price fetch failed for %s: %s",
+                self._summarize_tickers(tickers),
+                e,
+            )
         
-        # US-035: Per-ticker fetch is more robust against crumb/auth errors than batch download
+        # US-035 fallback: per-ticker fetch is more robust against crumb/auth errors.
         import time
-        for ticker in tickers:
+        for ticker in [t for t in tickers if t not in results]:
             try:
                 df = self._download_yfinance(ticker, period="1d", interval="1m", progress=False, auto_adjust=True)
                 val = self._extract_latest_close(df, ticker)
                 if val is not None:
-                    # Apply DEV_MODE randomization if active
-                    if settings.DEV_MODE:
-                        import random
-                        val = val * (1 + random.uniform(-0.015, 0.015))
-                    results[ticker] = val
+                    results[ticker] = self._maybe_randomize_price(val)
                 # Small delay to prevent Yahoo from flagging the IP
                 time.sleep(0.5)
             except Exception as e:
