@@ -133,7 +133,22 @@ select {
 
 .nav {
   display: grid;
-  gap: 8px;
+  gap: 16px;
+}
+
+.nav-group {
+  display: grid;
+  gap: 4px;
+}
+
+.nav-group-label {
+  padding: 0 14px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
 }
 
 .nav-item {
@@ -141,12 +156,18 @@ select {
   align-items: center;
   gap: 10px;
   border: 1px solid transparent;
-  padding: 12px 14px;
-  border-radius: 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
   background: transparent;
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  transition: all 0.2s ease;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .nav-item:hover,
