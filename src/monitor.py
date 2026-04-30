@@ -988,11 +988,23 @@ class ArbitrageMonitor:
                 except Exception as e:
                     logger.error(f"Error evaluating open signals for exits: {e}")
 
+                scan_pairs = []
                 all_tickers = []
                 for p in self.active_pairs:
-                    all_tickers.extend([p['ticker_a'], p['ticker_b']])
+                    t_a, t_b = p['ticker_a'], p['ticker_b']
+                    is_crypto = "-USD" in t_a or "-USD" in t_b
+                    if not p.get('is_cointegrated', True):
+                        continue
+                    if not is_crypto and not self.is_market_open(t_a):
+                        continue
+                    scan_pairs.append(p)
+                    all_tickers.extend([t_a, t_b])
 
-                latest_prices = await data_service.get_latest_price_async(list(set(all_tickers)))
+                latest_prices = (
+                    await data_service.get_latest_price_async(list(set(all_tickers)))
+                    if all_tickers
+                    else {}
+                )
 
                 # Daily Global Reset
                 today = datetime.now().date()
@@ -1011,7 +1023,7 @@ class ArbitrageMonitor:
                         self.last_cointegration_check[pair['id']] = today
 
                 tasks = []
-                for pair in self.active_pairs:
+                for pair in scan_pairs:
                     # Process pairs sequentially or with a delay to avoid 429
                     res = await self.process_pair(pair, latest_prices)
                     tasks.append(res)
@@ -1027,7 +1039,7 @@ class ArbitrageMonitor:
                 ]
                 vetoed = [r for r in results if r and r.get('vetoed')]
                 logger.info(
-                    f"--- Iteration: {len(self.active_pairs)} pairs scanned | "
+                    f"--- Iteration: {len(scan_pairs)}/{len(self.active_pairs)} pairs scanned | "
                     f"{len(active_signals)} signals above threshold | "
                     f"{len(vetoed)} vetoed | "
                     f"{len(open_signals)} open positions ---"
