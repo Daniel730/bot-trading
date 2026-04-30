@@ -365,7 +365,7 @@ async function requestJson<T>(
   init?: RequestInit,
   sessionToken?: string | null,
 ): Promise<T> {
-  const response = await fetch(apiUrl(path).toString(), {
+  const response = await fetchWithTimeout(apiUrl(path), {
     ...init,
     headers: authHeaders(token, sessionToken, init?.headers),
   });
@@ -432,10 +432,7 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
       }
     };
 
-    eventSource.onerror = (err) => {
-      console.error('SSE Error:', err);
-      setError('Connection to backend lost. Retrying...');
-    };
+    void connect();
 
     return () => {
       controller.abort();
@@ -530,7 +527,9 @@ export const fetchTradeHistory = async (
   if (params.search) url.searchParams.set('search', params.search);
   if (params.status) url.searchParams.set('status', params.status);
   if (params.venue) url.searchParams.set('venue', params.venue);
-  const response = await fetchWithTimeout(url);
+  const response = await fetchWithTimeout(url, {
+    headers: authHeaders(token, sessionToken),
+  });
   if (!response.ok) throw new Error(`Failed to fetch trade history (${response.status})`);
   return response.json();
 };
