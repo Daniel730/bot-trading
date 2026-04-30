@@ -254,8 +254,7 @@ class ArbitrageMonitor:
         for pair_config in pairs_to_init:
             ticker_a, ticker_b = pair_config['ticker_a'], pair_config['ticker_b']
             try:
-                # Wrap sync historical data fetch
-                hist_data = await asyncio.to_thread(data_service.get_historical_data, [ticker_a, ticker_b])
+                hist_data = await data_service.get_historical_data_async([ticker_a, ticker_b])
                 if hist_data is None or hist_data.empty:
                     logger.warning(f"No historical data for {ticker_a}/{ticker_b}")
                     continue
@@ -993,7 +992,7 @@ class ArbitrageMonitor:
                 for p in self.active_pairs:
                     all_tickers.extend([p['ticker_a'], p['ticker_b']])
 
-                latest_prices = await data_service.get_latest_price(list(set(all_tickers)))
+                latest_prices = await data_service.get_latest_price_async(list(set(all_tickers)))
 
                 # Daily Global Reset
                 today = datetime.now().date()
@@ -1053,7 +1052,7 @@ class ArbitrageMonitor:
         t_a, t_b = leg_a["ticker"], leg_b["ticker"]
 
         # Get real-time prices
-        prices = await data_service.get_latest_price([t_a, t_b])
+        prices = await data_service.get_latest_price_async([t_a, t_b])
         if t_a not in prices or t_b not in prices: return
 
         p_a, p_b = prices[t_a], prices[t_b]

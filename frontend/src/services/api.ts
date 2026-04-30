@@ -319,6 +319,11 @@ const getApiBase = () => {
 };
 
 const API_BASE = getApiBase();
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS);
+const REQUEST_TIMEOUT_MS = Number.isFinite(configuredTimeout) && configuredTimeout > 0
+  ? configuredTimeout
+  : DEFAULT_REQUEST_TIMEOUT_MS;
 
 const withToken = (path: string, token: string | null, sessionToken?: string | null) => {
   const url = new URL(path, API_BASE);
@@ -327,13 +332,38 @@ const withToken = (path: string, token: string | null, sessionToken?: string | n
   return url;
 };
 
+async function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const callerSignal = init?.signal;
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  const abortFromCaller = () => controller.abort();
+  if (callerSignal?.aborted) {
+    controller.abort();
+  } else {
+    callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error(`Backend request timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s`);
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timeoutId);
+    callerSignal?.removeEventListener('abort', abortFromCaller);
+  }
+}
+
 async function requestJson<T>(
   path: string,
   token: string | null,
   init?: RequestInit,
   sessionToken?: string | null,
 ): Promise<T> {
-  const response = await fetch(withToken(path, token, sessionToken).toString(), init);
+  const response = await fetchWithTimeout(withToken(path, token, sessionToken), init);
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.detail || `Request failed (${response.status})`);
@@ -363,7 +393,6 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
     eventSource.onerror = (err) => {
       console.error('SSE Error:', err);
       setError('Connection to backend lost. Retrying...');
-      eventSource.close();
     };
 
     return () => {
@@ -459,7 +488,7 @@ export const fetchTradeHistory = async (
   if (params.search) url.searchParams.set('search', params.search);
   if (params.status) url.searchParams.set('status', params.status);
   if (params.venue) url.searchParams.set('venue', params.venue);
-  const response = await fetch(url.toString());
+  const response = await fetchWithTimeout(url);
   if (!response.ok) throw new Error(`Failed to fetch trade history (${response.status})`);
   return response.json();
 };

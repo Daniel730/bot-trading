@@ -1,6 +1,8 @@
 from unittest.mock import patch
+import time
 
 import pandas as pd
+import pytest
 
 from src.services.data_service import DataService
 
@@ -38,3 +40,19 @@ def test_get_latest_price_yfinance_retry_does_not_check_series_truthiness():
                 assert service._get_latest_price_yfinance_with_retry(["MSFT"]) == {
                     "MSFT": 151.25
                 }
+
+
+@pytest.mark.asyncio
+async def test_get_latest_price_async_times_out_without_blocking_loop():
+    service = DataService()
+
+    def slow_price_fetch(_tickers):
+        time.sleep(0.2)
+        return {"MSFT": 151.25}
+
+    with patch.object(service, "get_latest_price", side_effect=slow_price_fetch):
+        start = time.perf_counter()
+        prices = await service.get_latest_price_async(["MSFT"], timeout=0.01)
+
+    assert prices == {}
+    assert time.perf_counter() - start < 0.15

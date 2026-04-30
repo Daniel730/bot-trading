@@ -11,7 +11,7 @@ async def test_fractional_quantity_precision():
     amount = 10.0
     price = 173.50
     
-    with patch('src.services.data_service.data_service.get_latest_price', new_callable=AsyncMock) as mock_price:
+    with patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock) as mock_price:
         mock_price.return_value = {"AAPL": 173.50}
         with patch('src.services.risk_service.risk_service.calculate_friction') as mock_friction:
             mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}
@@ -33,7 +33,7 @@ async def test_micro_budget_quantity():
     amount = 1.0
     price = 3500.0
     
-    with patch('src.services.data_service.data_service.get_latest_price', new_callable=AsyncMock) as mock_price:
+    with patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock) as mock_price:
         mock_price.return_value = {"AMZN": 3500.0}
         with patch('src.services.risk_service.risk_service.calculate_friction') as mock_friction:
             mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}

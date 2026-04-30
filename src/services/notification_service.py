@@ -167,7 +167,7 @@ class NotificationService:
                 # v0 doesn't always have current value, but we can approximate or use DataService
                 qty = sweep_pos.get('quantity', 0.0)
                 from src.services.data_service import data_service
-                prices = await data_service.get_latest_price([sweep_ticker])
+                prices = await data_service.get_latest_price_async([sweep_ticker])
                 price = prices.get(sweep_ticker, 0.0)
                 sweep_value = qty * price
 

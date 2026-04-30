@@ -27,7 +27,7 @@ async def test_liquidate_for_trade_fixed():
     """
     mock_portfolio = [{"ticker": "SGOV", "quantity": 10, "averagePrice": 100}]
     with patch("src.services.cash_management_service.brokerage_service") as mock_broker, \
-         patch("src.services.data_service.data_service.get_latest_price", new_callable=AsyncMock) as mock_prices:
+         patch("src.services.data_service.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices:
         
         mock_broker.get_portfolio = AsyncMock(return_value=mock_portfolio)
         mock_broker._format_ticker = lambda x: x 

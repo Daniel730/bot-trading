@@ -12,7 +12,7 @@ async def test_quantity_rounding_and_limits():
     mock_prices = {"AAPL": 100.0}
 
     with patch.object(service, "get_symbol_metadata", return_value=mock_metadata):
-        with patch("src.services.data_service.data_service.get_latest_price", new_callable=AsyncMock) as mock_price:
+        with patch("src.services.data_service.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_price:
             mock_price.return_value = mock_prices
             with patch("src.services.risk_service.risk_service.calculate_friction") as mock_friction:
                 mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}
@@ -41,7 +41,7 @@ async def test_missing_quantity_increment_uses_t212_safe_precision():
     service = BrokerageService()
 
     with patch.object(service, "get_symbol_metadata", return_value={}):
-        with patch("src.services.data_service.data_service.get_latest_price", new_callable=AsyncMock) as mock_price:
+        with patch("src.services.data_service.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_price:
             mock_price.return_value = {"DUK": 127.78}
             with patch("src.services.risk_service.risk_service.calculate_friction") as mock_friction:
                 mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}

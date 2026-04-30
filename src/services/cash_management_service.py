@@ -43,7 +43,7 @@ class CashManagementService:
         current_price = sweep_pos.get('averagePrice', 0.0) # Simplified fallback
         # Ideally we'd get the latest price from DataService
         from src.services.data_service import data_service
-        prices = await data_service.get_latest_price([self.sweep_ticker])
+        prices = await data_service.get_latest_price_async([self.sweep_ticker])
         if self.sweep_ticker in prices:
             current_price = prices[self.sweep_ticker]
             
