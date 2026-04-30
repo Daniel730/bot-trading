@@ -10,7 +10,7 @@ class TestBrokerageServiceIntegration(unittest.IsolatedAsyncioTestCase):
         self.patcher_mode = patch.object(settings, 'TRADING_212_MODE', 'demo')
         self.patcher_key.start()
         self.patcher_mode.start()
-        self.service = BrokerageService()
+        self.service = BrokerageService("T212")
 
     async def asyncTearDown(self):
         self.patcher_key.stop()
@@ -21,8 +21,8 @@ class TestBrokerageServiceIntegration(unittest.IsolatedAsyncioTestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "success", "orderId": "123"}
 
-        with patch.object(self.service.session, "post", return_value=mock_response) as mock_post:
-            with patch.object(self.service, "get_symbol_metadata", return_value={}):
+        with patch.object(self.service.provider.session, "post", return_value=mock_response) as mock_post:
+            with patch.object(self.service.provider, "get_symbol_metadata", return_value={}):
                 result = await self.service.place_market_order("KO", 1.0, "BUY")
 
         self.assertEqual(result["status"], "success")
@@ -34,7 +34,7 @@ class TestBrokerageServiceIntegration(unittest.IsolatedAsyncioTestCase):
         mock_response.status_code = 200
         mock_response.json.return_value = [{"ticker": "KO", "quantity": 10.0}]
         
-        with patch.object(self.service.session, 'get', return_value=mock_response) as mock_get:
+        with patch.object(self.service.provider.session, 'get', return_value=mock_response) as mock_get:
             # S-08 Fix: Added await
             result = await self.service.get_portfolio()
             
