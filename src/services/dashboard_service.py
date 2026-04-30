@@ -548,6 +548,7 @@ class DashboardService:
         self.editable_config: Dict[str, dict] = {
             "APPROVAL_THRESHOLD": {"type": "float", "sensitive": False},
             "SCAN_INTERVAL_SECONDS": {"type": "int", "sensitive": False},
+            "MARKET_DATA_TIMEOUT_SECONDS": {"type": "float", "sensitive": False},
             "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
             "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True},
             "MAX_DRAWDOWN": {"type": "float", "sensitive": True},
@@ -1641,7 +1642,7 @@ async def list_open_positions(token: str = Query(None), session: str = Query(Non
     latest_prices: dict = {}
     try:
         if all_tickers:
-            latest_prices = await data_service.get_latest_price(list(set(all_tickers)))
+            latest_prices = await data_service.get_latest_price_async(list(set(all_tickers)))
     except Exception as exc:
         logger.warning("DASHBOARD: Could not fetch latest prices for positions: %s", exc)
 

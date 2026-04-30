@@ -284,7 +284,7 @@ class BrokerageService:
         # quote/swap math, so a transient yfinance miss must not block routing.
         raw_quantity = 0.0
         try:
-            prices = await data_service.get_latest_price([ticker])
+            prices = await data_service.get_latest_price_async([ticker])
             price = float(prices.get(ticker, 0.0))
             if price > 0:
                 raw_quantity = amount / price
@@ -359,7 +359,7 @@ class BrokerageService:
         friction = friction_res["friction_pct"]
 
         if price is None:
-            prices = await data_service.get_latest_price([ticker])
+            prices = await data_service.get_latest_price_async([ticker])
             if ticker not in prices:
                 return {"status": "error", "message": f"Could not retrieve latest price for {ticker}"}
             price = prices[ticker]
@@ -417,7 +417,7 @@ class BrokerageService:
             url = f"{self.base_url}/equity/metadata/instruments"
             try:
                 logger.info("T212: Refreshing instrument metadata cache...")
-                response = self.session.get(url)
+                response = self.session.get(url, timeout=10)
                 if response.status_code == 200:
                     instruments = response.json()
                     self._metadata_cache = {inst.get('ticker'): inst for inst in instruments}

@@ -118,7 +118,7 @@ class PortfolioManagerAgent:
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
             
-            response = await asyncio.to_thread(requests.get, url, headers=headers)
+            response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=10)
             response.raise_for_status()
             
             tables = await asyncio.to_thread(pd.read_html, response.text)
@@ -188,7 +188,15 @@ class PortfolioManagerAgent:
             return {}
 
         # 1. Fetch historical data (1 year)
-        df = await asyncio.to_thread(self.data_service.get_historical_data, tickers, "1y", "1d")
+        df = await self.data_service.get_historical_data_async(
+            tickers,
+            "1y",
+            "1d",
+            timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
+        )
+        if df is None or df.empty:
+            logger.warning(f"No historical data for optimization: {tickers}")
+            return {t: 1.0/len(tickers) for t in tickers}
         returns = df.pct_change().dropna()
         
         if returns.empty:
@@ -265,7 +273,12 @@ class PortfolioManagerAgent:
                 continue
 
             try:
-                df = await asyncio.to_thread(self.data_service.get_historical_data, [t_a, t_b], "1y", "1d")
+                df = await self.data_service.get_historical_data_async(
+                    [t_a, t_b],
+                    "1y",
+                    "1d",
+                    timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
+                )
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
                 
                 if is_coint:
@@ -309,8 +322,19 @@ class PortfolioManagerAgent:
         all_tickers = list(set(current_tickers + [new_ticker]))
         
         # Fetch data for all
-        df = await asyncio.to_thread(self.data_service.get_historical_data, all_tickers, "1y", "1d")
+        df = await self.data_service.get_historical_data_async(
+            all_tickers,
+            "1y",
+            "1d",
+            timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
+        )
+        if df is None or df.empty:
+            logger.warning("Portfolio optimization advice skipped: historical data unavailable for %s", all_tickers)
+            return {"is_recommended": True, "improvement": 0.0, "target_weight": 0.20}
         returns = df.pct_change().dropna()
+        if returns.empty or any(ticker not in returns.columns for ticker in current_tickers):
+            logger.warning("Portfolio optimization advice skipped: returns unavailable for %s", all_tickers)
+            return {"is_recommended": True, "improvement": 0.0, "target_weight": 0.20}
         
         # Calculate current Sortino (equal weight for simplicity or fetch stored)
         curr_w = np.array([1.0/len(current_tickers)] * len(current_tickers))

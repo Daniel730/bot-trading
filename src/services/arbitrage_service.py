@@ -1,6 +1,5 @@
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller
-import asyncio
 import statsmodels.api as sm
 from typing import Optional, Tuple, Dict
 from src.services.kalman_service import KalmanFilter
@@ -42,7 +41,7 @@ class ArbitrageService:
                     t_a, t_b = pair_id.split('_')
                     ds = DataService()
                     logger.info(f"[ArbitrageService] No Redis state for {pair_id}. Initiating 30d historical pre-warming...")
-                    df = await asyncio.to_thread(ds.get_historical_data, [t_a, t_b], "30d", "1h")
+                    df = await ds.get_historical_data_async([t_a, t_b], "30d", "1h")
                     for i in range(len(df)):
                         price_a = float(df[t_a].iloc[i])
                         price_b = float(df[t_b].iloc[i])

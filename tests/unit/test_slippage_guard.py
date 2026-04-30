@@ -10,7 +10,7 @@ class TestSlippageGuard(unittest.IsolatedAsyncioTestCase):
             mock_settings.TRADING_212_MODE = "demo"
             self.service = BrokerageService()
 
-    @patch('src.services.data_service.data_service.get_latest_price', new_callable=AsyncMock)
+    @patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock)
     @patch('src.services.brokerage_service.BrokerageService.get_symbol_metadata')
     async def test_place_value_order_buy_slippage(self, mock_metadata, mock_price):
         mock_price.return_value = {"AAPL": 100.0}
@@ -27,7 +27,7 @@ class TestSlippageGuard(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(payload['limitPrice'], 101.0)
             self.assertIn("/orders/limit", args[0])
 
-    @patch('src.services.data_service.data_service.get_latest_price', new_callable=AsyncMock)
+    @patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock)
     @patch('src.services.brokerage_service.BrokerageService.get_symbol_metadata')
     async def test_place_value_order_sell_slippage(self, mock_metadata, mock_price):
         mock_price.return_value = {"AAPL": 100.0}
