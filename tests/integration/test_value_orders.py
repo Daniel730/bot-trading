@@ -5,13 +5,13 @@ from unittest.mock import patch, AsyncMock
 
 @pytest.mark.asyncio
 async def test_value_order_flow_success():
-    brokerage = BrokerageService()
+    brokerage = BrokerageService("T212")
     
     with patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock) as mock_price:
         mock_price.return_value = {"AAPL": 150.0}
         with patch('src.services.risk_service.risk_service.calculate_friction') as mock_friction:
             mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}
-            with patch.object(brokerage, 'place_market_order', new_callable=AsyncMock) as mock_market:
+            with patch.object(brokerage.provider, 'place_market_order', new_callable=AsyncMock) as mock_market:
                 mock_market.return_value = {"status": "success", "orderId": "12345"}
             
                 # $15 of AAPL @ $150 = 0.1 shares
