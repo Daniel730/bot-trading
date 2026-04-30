@@ -1,72 +1,124 @@
-# 🏛️ Architecture: Alpha Arbitrage Elite
+# Architecture
 
-This document describes the high-fidelity interaction between the various components of the Alpha Arbitrage system.
+Alpha Arbitrage is a multi-service trading research stack. The Python backend owns strategy, orchestration, risk, dashboard APIs, and brokerage dispatch. The Java execution engine provides a gRPC execution/audit sidecar for low-latency dry-run execution. The React frontend is the operator console.
 
-## 1. System Overview
-
-The project is structured as a **Multi-Service Containerized Ecosystem** managed by Docker Compose.
+## System Diagram
 
 ```mermaid
-graph TD
-    User([User/Telegram]) <--> Notification[Notification Service]
-    Notification <--> Bot[Alpha Bot - Python]
-    Dashboard[Intelligence Dashboard - React] <--> Bot
-    Bot -- gRPC --> Exec[Execution Engine - Java]
-    Bot <--> PG[(PostgreSQL - Ledger)]
-    Bot <--> Redis[(Redis - Telemetry)]
-    Bot -- API --> T212[Trading 212]
-    Bot -- API --> Web3[MetaMask/Web3]
-    Bot <--> Budget[Budget Service]
-    Bot -- API --> Data[Polygon/Yahoo Finance]
+flowchart TD
+    Operator["Operator / Dashboard User"]
+    Frontend["React Operations Console\nfrontend/"]
+    Dashboard["Python Dashboard API\nsrc/services/dashboard_service.py\n:8080"]
+    Monitor["Arbitrage Monitor\nsrc/monitor.py"]
+    MCP["FastMCP Tool Server\nsrc/mcp_server.py\n:8000"]
+    Redis[("Redis\nprices, Kalman state, telemetry, L2, idempotency")]
+    Postgres[("PostgreSQL\ntrade ledger, audits, reasoning")]
+    SQLite[("SQLite\nruntime state, budgets, config audit")]
+    Java["Java gRPC Execution Engine\nexecution-engine/ :50051"]
+    SEC["SEC Fundamental Worker\nsrc/daemons/sec_fundamental_worker.py"]
+    T212["Trading 212 API"]
+    Web3["Web3 wallet / router"]
+    Data["Market data providers\nyfinance / Polygon"]
+    Telegram["Telegram approvals"]
+
+    Operator --> Frontend
+    Frontend --> Dashboard
+    Frontend <--> Dashboard
+    Dashboard <--> Monitor
+    Dashboard <--> SQLite
+    Monitor <--> Redis
+    Monitor <--> Postgres
+    Monitor <--> SQLite
+    Monitor --> Java
+    Java <--> Redis
+    Java <--> Postgres
+    SEC <--> Redis
+    SEC <--> Postgres
+    Monitor <--> Data
+    Monitor <--> T212
+    Monitor <--> Web3
+    Monitor <--> Telegram
+    MCP <--> Redis
+    MCP --> Java
+    MCP --> Postgres
 ```
 
-## 2. Component Roles
+## Components
 
-### 🐍 Alpha Bot (Python 3.11)
-The "Brain" of the operation.
-- **Core Orchestration**: Manages the Kalman Filter engine and the AI Agent Swarm.
-- **Portfolio Management**: Tracks allocations, targets, and DCA schedules.
-- **Budget Management**: Enforces persistent caps across venues (T212, WEB3) via `BudgetService`.
-- **SSE Server**: Streams real-time telemetry to the dashboard via FastAPI.
+### Python Backend
 
-### ☕ Execution Engine (Java)
-The "Hands" of the operation.
-- **gRPC Server**: Receives high-speed execution requests from the Python bot.
-- **Latency Monitoring**: Uses nanosecond interceptors to audit Round-Trip Time (RTT).
-- **Hardened Execution**: Implements idempotency keys and shadow-mode fill realism.
+The Python backend is the control plane and strategy runtime.
 
-### ⚛️ Intelligence Dashboard (React/Vite)
-The "Face" of the operation.
-- **Adaptive UI**: Displays the `PixelBot` emotional state.
-- **Telemetry Loop**: Subscribes to SSE events for real-time Z-Score and Market Regime visualization.
-- **Terminal Hub**: Allows direct command execution via a secure authenticated bridge.
+- `src/monitor.py` runs the scan loop, initializes pairs, computes signals, requests approvals, and submits paper/live executions.
+- `src/services/dashboard_service.py` starts the operator API on port `8080`, serves the SPA when available, streams SSE telemetry, handles WebSocket telemetry, and exposes authenticated config/pair/trade/health routes.
+- `src/mcp_server.py` is a separate optional FastMCP SSE server on port `8000` for assistant/tool workflows.
+- `src/services/brokerage_service.py` routes non-crypto tickers to Trading 212 and crypto tickers to Web3 when not in paper mode.
+- `src/services/pair_eligibility_service.py` rejects unsupported or high-friction pairs before Kalman state is allocated.
 
-## 3. Data Flow & Communication
+### Java Execution Engine
 
-### Real-Time Telemetry (SSE/WebSocket)
-1. **Bot** pushes state updates to **Redis**.
-2. **Dashboard Service** (FastAPI) polls metrics or detects events.
-3. **EventSource (SSE)** broadcasts updates to the **React Frontend**.
-4. **WebSocket** handles low-latency telemetry like nanosecond gRPC RTT spikes.
+The Java service exposes `ExecutionService` over gRPC:
 
-### Authentication (Basic Auth)
-The bot uses a **Key:Secret** pair for Trading 212.
-- **Header**: `Authorization: Basic Base64(KEY:SECRET)`
-- **Fallback**: Automatically falls back to `/api/v1` endpoints if `/api/v0` returns a 401 Unauthorized error.
+- `ExecuteTrade`
+- `GetTradeStatus`
+- `TriggerKillSwitch`
 
-## 4. Adaptive Intelligence Logic
+It wires `ExecutionServiceImpl`, `TradeLedgerRepository`, `RedisOrderSync`, `RedisL2FeedService`, and a broker router at startup. It uses Java 21 virtual threads. Today it must run in `DRY_RUN=true`; live Java brokerage is intentionally blocked until a production broker implementation exists.
 
-The `PixelBot` emotional state is derived from system telemetry:
-- **IDLE**: No active signals, market is horizontal.
-- **ANALYZING**: AI Agents (Bull/Bear) are currently debating a signal.
-- **EXECUTING**: Orders are being sent to the Execution Engine.
-- **GLITCH**: L2 Entropy is high or Volatility Switch is triggered (High Danger).
-- **DOUBT**: Strategy accuracy is low (< 40%) or Risk Multiplier is heavily capped.
+### Frontend
 
----
+The React console provides:
 
-## 5. Security & Risk Guards
+- login/session flow
+- overview and runtime telemetry
+- pair universe editing and hot reload
+- trade history and open positions
+- bot start/stop/restart requests
+- config editing with 2FA for sensitive values
+- CPU, memory, network, and log/event views
 
-- **Cluster Guard**: Prevents over-exposure to single sectors (e.g., tech-heavy portfolios).
-- **Spread Guard**: Ensures execution only happens when the bid-ask spread is tight (<1.5%).
-- **Financial Kill Switch**: Immediately closes positions if a strategy drawdown exceeds 15%.
+### Persistence
+
+| Store | Role |
+|---|---|
+| Redis | Fast state: Kalman filters, latest prices, L2 books, telemetry, fundamental-score cache, Java idempotency helpers |
+| PostgreSQL | Durable trading/audit data: ledger, fills, reasoning, journal, market regime |
+| SQLite | Local runtime state: budgets, system state, dashboard 2FA/config audit, fallback history |
+| `data/pairs.json` | Dashboard-edited pair universe override |
+| `data/bot_settings.json` | Dashboard-edited setting override |
+
+## Signal Flow
+
+1. Candidate pairs are loaded from `settings.ARBITRAGE_PAIRS` plus `settings.CRYPTO_TEST_PAIRS`, or crypto-only in `DEV_MODE`.
+2. Pair eligibility rejects mixed crypto/equity, cross-session, cross-currency, high-cost, and short-hold LSE pairs according to config.
+3. Historical prices warm Kalman filters and run static plus optional rolling cointegration checks.
+4. The monitor fetches latest prices and updates each Kalman filter.
+5. The entry z-score threshold is checked. Optional cost scaling raises the threshold for high-friction pairs.
+6. The orchestrator validates the signal through macro beacon checks, bull/bear agents, Redis SEC scores, whale watcher context, portfolio logic, and global accuracy scaling.
+7. If confidence exceeds `MONITOR_MIN_AI_CONFIDENCE`, the operator approval path is triggered.
+8. Paper mode calls `shadow_service.execute_simulated_trade()` with the original `signal_id`.
+9. Live mode submits both legs through `BrokerageService`, preflighting sell inventory for Trading 212 and emergency-closing leg A if leg B fails.
+10. Trade ledger and journal rows are persisted for auditability.
+
+## Security Model
+
+- `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` are required and must be non-default.
+- Dashboard API calls use `Authorization: Bearer <DASHBOARD_TOKEN>` plus `X-Dashboard-Session`.
+- Login can be approved by Telegram notification; TOTP/backup codes protect sensitive config writes after setup.
+- CORS origins are controlled by `DASHBOARD_ALLOWED_ORIGINS`; wildcard origins are only accepted in `DEV_MODE=true`.
+- WebSocket telemetry requires either query/session auth or an initial auth message.
+- Live approvals are blocked unless Telegram is configured, unless `ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM=true`.
+
+## Deployment Shape
+
+The Docker stack is split into:
+
+- `bot`: Python monitor and dashboard API
+- `mcp-server`: optional FastMCP server command using the same Python image
+- `sec-worker`: background SEC scoring worker
+- `execution-engine`: Java gRPC sidecar
+- `frontend`: nginx static React app
+- `redis`
+- `postgres`
+
+See `infra/README.md` for concrete Compose commands.

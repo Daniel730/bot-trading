@@ -1,26 +1,84 @@
-# Agent Hierarchy
+# Agent Ensemble
 
-## Orchestrator (Multi-Agent Debate)
-Coordinates adversarial signals from Bull, Bear, and Fundamental agents.
-- **Responsibilities**: Parallel signal evaluation, SEC-based veto logic, consensus aggregation.
-- **Resilience**: Implements `return_exceptions=True` in concurrent execution to ensure system uptime during individual agent or API failures.
-- **Compliance**: Integrates region-aware hedging (DEFCON 1) with UCITS fallback support for EU regulated environments.
+The agent layer validates statistical signals before the monitor asks for approval or execution. It is intentionally async and fault-tolerant: individual agent failures should veto or degrade a signal, not stop the whole scan loop.
 
-## PortfolioManagerAgent (Robo-Advisor)
+## Orchestrator
 
-## MacroEconomicAgent (Environment Monitor)
-Provides global market context.
-- **Responsibilities**: Monitoring interest rates (^TNX) and inflation data.
-- **Logic**: RISK_ON / RISK_OFF state detection for allocation guidance.
+`src/agents/orchestrator.py`
 
-## ReflectionAgent (Learning Loop)
-Handles post-trade evaluation and self-correction.
-- **Responsibilities**: Vectorized trade post-mortems, agent weight updates.
-- **Logic**: 30-day performance review, dynamic confidence adjustment.
+Responsibilities:
 
-## Decoupled Fundamental RAG (Asynchronous SEC Analysis)
-Separates high-latency financial statement analysis from the real-time signal evaluation path.
-- **Process Isolation**: A standalone background daemon (`src/daemons/sec_fundamental_worker.py`) executes in a dedicated Docker container to prevent GIL stalls in the main trading loop.
-- **Materialized View**: Fundamental integrity scores are cached in Redis with a 24-hour TTL, enabling sub-millisecond retrieval during signal debates.
-- **Deterministic Universe**: The background worker automatically analyzes all tickers defined in the `active_pairs` database, ensuring cache readiness before signals fire.
-- **Resilience**: The worker implements exponential backoff for SEC EDGAR API rate limits, while the Orchestrator provides a safe default (50) and high-priority telemetry alerts on cache misses.
+- blocks new entries while `operational_status=DEGRADED_MODE`;
+- performs macro beacon fail-fast checks;
+- runs bull, bear, fundamental-cache, and whale watcher reads concurrently;
+- broadcasts intermediate thoughts to telemetry;
+- applies fundamental hard vetoes;
+- applies whale watcher veto or multiplier;
+- adjusts confidence with portfolio logic and global strategy accuracy;
+- resets `DEGRADED_MODE` back to normal after successful agent loops.
+
+The orchestrator is currently a direct async Python coordinator. It does not require LangGraph at runtime even though `langgraph` is present in dependencies.
+
+## Bull Agent
+
+`src/agents/bull_agent.py`
+
+Looks for upside/mean-reversion support in the signal context and returns a confidence/verdict payload used by the orchestrator.
+
+## Bear Agent
+
+`src/agents/bear_agent.py`
+
+Looks for downside, structural-break, and risk arguments against the signal. Its confidence is combined adversarially with the bull agent.
+
+## Macro Economic Agent
+
+`src/agents/macro_economic_agent.py`
+
+Provides ticker/sector regime labels such as:
+
+- `BULLISH`
+- `BEARISH`
+- `EXTREME_VOLATILITY`
+
+The orchestrator treats `EXTREME_VOLATILITY` on a beacon asset as a hard veto.
+
+## Portfolio Manager Agent
+
+`src/agents/portfolio_manager_agent.py`
+
+Evaluates whether a signal improves the portfolio from an allocation/risk perspective. The orchestrator can boost or dampen confidence from this result.
+
+## Whale Watcher Agent
+
+`src/agents/whale_watcher_agent.py`
+
+Crypto/context risk filter that reads cached flow summaries and can:
+
+- veto conflicting flow;
+- reduce confidence;
+- slightly support signals when flow aligns.
+
+Config is controlled by `WHALE_WATCHER_*` settings.
+
+## Fundamental Analyst And SEC Worker
+
+The hot path does not run slow SEC analysis directly. Instead:
+
+- `src/daemons/sec_fundamental_worker.py` refreshes structural/fundamental scores in the background.
+- The orchestrator reads cached scores from Redis.
+- Cache misses default to `ORCH_FUNDAMENTAL_DEFAULT_SCORE` and emit high-priority telemetry.
+- Scores below `ORCH_FUNDAMENTAL_VETO_SCORE` veto the signal.
+
+## Reflection / Learning
+
+`src/agents/reflection_agent.py`
+
+Handles post-trade learning and confidence adjustment inputs. The orchestrator also reads `global_strategy_accuracy` from persistence to scale future confidence.
+
+## Operational Notes
+
+- Agent timeouts are bounded by `ORCHESTRATOR_TIMEOUT_SECONDS`.
+- Agent failures are collected with `return_exceptions=True`.
+- Telemetry thought events feed the dashboard's Agent Reasoning panel.
+- Keep new agents side-effect-light; use services for I/O and persistence.

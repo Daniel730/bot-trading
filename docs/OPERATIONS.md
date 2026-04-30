@@ -1,49 +1,148 @@
-# 🎮 Guia de Operações: Alpha Arbitrage
+# Operations Guide
 
-Este guia explica como interagir com o bot diariamente e como interpretar os seus sinais.
+This is the day-to-day guide for running the bot locally or through Docker.
 
-## 1. Comandos Telegram (Controlo Remoto)
+## First-Time Setup
 
-O bot responde a comandos no Telegram para fornecer visibilidade instantânea.
+```bash
+cp .env.template .env
+```
 
-| Comando | Descrição | Pro-Tip |
-| :--- | :--- | :--- |
-| `/status` | Mostra a fase atual do bot (Scanning, Booting, etc). | Útil para verificar se o bot está "preso". |
-| `/exposure` | Exibe a percentagem de capital alocado por setor. | Verifica se estás perto do limite de 15%. |
-| `/cash` | Balanço total e quanto está investido em SGOV. | Garante que tens liquidez para novas oportunidades. |
-| `/macro` | Resumo do regime (BULL/BEAR) dos líderes de setor. | Verifica se o "filtro de pânico" está ativo. |
-| `/why TICKER` | Gera a tese de investimento atual para um ativo. | Usa isto antes de aprovar um trade manual. |
+Set these before starting anything:
 
-## 2. Aprovação de Trades
+| Variable | Why it matters |
+|---|---|
+| `POSTGRES_PASSWORD` | Required. The app refuses default/blank database secrets. |
+| `DASHBOARD_TOKEN` | Required. Used for dashboard login, session signing, and secret protection. |
+| `DASHBOARD_ALLOWED_ORIGINS` | Keep this scoped to the origins you actually use. |
+| `PAPER_TRADING=true` | Recommended default while validating the stack. |
+| `DRY_RUN=true` | Required for the Java engine today. |
 
-Se o bot identificar um sinal de alta confiança (>0.5), ele enviará um pedido de aprovação:
-- **Botão Approve**: Executa a ordem (ou simula em Shadow Mode).
-- **Botão Reject**: Descarta o sinal e loga o motivo.
+Optional but useful:
 
-*Nota: Podes automatizar isto removendo o `request_approval` no monitor.py, mas em modo institucional recomendamos o modelo "Centauro" (aprovação humana).*
+- `POLYGON_API_KEY` for market data.
+- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for approvals and login approval notifications.
+- `T212_API_KEY`, `T212_API_SECRET`, and `TRADING_212_MODE` for Trading 212.
+- `WEB3_*` variables for on-chain crypto execution in live mode.
+- `OPENAI_API_KEY` and/or `GEMINI_API_KEY` for model-backed analysis paths.
 
-## 3. Gestão de Pares
+## Local Run
 
-Os pares de ativos são configurados no `src/monitor.py` ou via Base de Dados (`trading_bot.db`).
-Para adicionar um novo par:
-1.  Verifica se são **cointegrados**.
-2.  Associa o par a um **setor** para que o filtro macro funcione.
-3.  Reinicia o bot para inicializar o Filtro de Kalman do novo par.
+Backend:
 
-## 5. Configurações de Segurança e Infraestrutura
+```bash
+pip install -r requirements.txt
+python scripts/init_db.py
+python src/monitor.py
+```
 
-O bot agora exige a configuração de variáveis de ambiente obrigatórias para garantir a segurança e o roteamento correto.
+Frontend:
 
-### Variáveis de Ambiente Obrigatórias
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-| Variável | Descrição | Importância |
-| :--- | :--- | :--- |
-| `POSTGRES_PASSWORD` | Senha para a base de dados PostgreSQL. | **Crítica**: O bot não inicia sem esta variável (removido default hardcoded). |
-| `DASHBOARD_TOKEN` | Token de autenticação para o Dashboard. | **Crítica**: Exigido mesmo em `DEV_MODE=True`. |
-| `REGION` | Região de execução (`US` ou `EU`). | Garante que os endpoints de hedge corretos são utilizados. |
+Java engine:
 
-### Verificação de Saúde (Docker)
+```bash
+cd execution-engine
+gradle shadowJar --no-daemon
+DRY_RUN=true gradle run --no-daemon
+```
 
-O Docker Healthcheck agora monitoriza o endpoint `/` do `mcp-server` para garantir que o motor de execução está pronto para receber sinais.
+Optional FastMCP tool server:
 
-## 6. Troubleshooting nos Logs
+```bash
+python src/mcp_server.py
+```
+
+## Docker Run
+
+Production image mode:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
+
+Local build mode:
+
+```bash
+docker compose \
+  -f infra/docker-compose.yml \
+  -f infra/docker-compose.local.yml \
+  up -d --build --remove-orphans
+```
+
+Check status and logs:
+
+```bash
+docker compose -f infra/docker-compose.yml ps
+docker compose -f infra/docker-compose.yml logs -f bot
+docker compose -f infra/docker-compose.yml logs -f execution-engine
+docker compose -f infra/docker-compose.yml logs -f frontend
+```
+
+## Dashboard Login
+
+1. Open `http://localhost:3000` in Docker or the Vite dev URL locally.
+2. Enter `DASHBOARD_TOKEN`.
+3. If Telegram notifications are configured, approve the login notification.
+4. If TOTP is enabled, provide an authenticator or backup code when needed.
+
+The dashboard removes old `token`/`session` query params from the URL. API auth is header-based.
+
+## Operating Modes
+
+| Mode | Settings | Notes |
+|---|---|---|
+| Paper | `PAPER_TRADING=true` | Shadow service simulates entries/exits and persists auditable rows. |
+| Live T212/Web3 | `PAPER_TRADING=false` | Python brokerage dispatcher submits live orders. Confirm all secrets and approvals first. |
+| Dev | `DEV_MODE=true` | Crypto test universe, 24/7 scan, equity-hour bypass. Do not use for production decisions. |
+| Java dry run | `DRY_RUN=true` | Required. The Java engine rejects live-broker mode today. |
+
+## Daily Checks
+
+- Confirm dashboard mode shows the expected `PAPER`, `LIVE`, or `DEV` state.
+- Confirm Redis and PostgreSQL are healthy.
+- Confirm the scan loop logs `SCAN [A/B]` lines.
+- Confirm pair rejections are expected when eligibility filtering is enabled.
+- Watch `/api/system/health` or the System Health dashboard page for CPU/memory pressure.
+- In paper mode, verify `signal_id` joins across reasoning, journal, and trade ledger.
+- In live mode, confirm Telegram approval and sell-inventory preflight before enabling unattended execution.
+
+## Telegram And Dashboard Commands
+
+Telegram handlers include:
+
+| Command | Purpose |
+|---|---|
+| `/exposure` | Sector exposure summary |
+| `/invest` | Investment helper entrypoint |
+| `/cash` | Account cash and sweep status |
+| `/portfolio` | Portfolio view |
+| `/why TICKER` | Current thesis/explanation for a ticker |
+| `/macro` | Macro/regime summary |
+
+Dashboard terminal handlers include:
+
+| Command | Purpose |
+|---|---|
+| `/status` | Send current dashboard state |
+| `/approve <id>` | Approve a pending dashboard/Telegram correlation id |
+| `/set_threshold <amount>` | Update auto-trade approval threshold |
+| `/exposure` | Dashboard exposure summary |
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| App refuses to boot | `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` must be non-default. |
+| Dashboard cannot connect | Backend dashboard API must be listening on `:8080`; check CORS origins. |
+| SSE reconnect loop | Confirm `/stream` is reachable and both auth headers are present. |
+| WebSocket disconnects | Confirm the initial auth message includes token and session. |
+| Java engine exits | Set `DRY_RUN=true`; confirm Redis/Postgres env vars. |
+| No equity scans | Check market hours and `DEV_MODE`; crypto pairs run 24/7, equity pairs are gated. |
+| Many pairs rejected | Review `BLOCK_CROSS_CURRENCY_PAIRS`, `BLOCK_LSE_PAIRS_FOR_SHORT_HOLD`, `PAIR_MAX_ROUND_TRIP_COST_PCT`, and `ALLOW_EU_CONTINENTAL_OVERLAP`. |
+| Live sell leg rejected before broker | The preflight inventory guard found insufficient available shares. |

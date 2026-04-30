@@ -1,73 +1,71 @@
-# React + TypeScript + Vite
+# Alpha Arbitrage Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The frontend is a React 19 + TypeScript operations console for the trading bot. It is not a marketing site: the first screen is the authenticated console used to inspect runtime state, pair eligibility, positions, trade history, bot controls, configuration, and system health.
 
-Currently, two official plugins are available:
+## Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- React 19
+- Vite 8
+- TypeScript 5
+- lucide-react icons
+- Vitest + Testing Library
+- nginx static serving in Docker
 
-## React Compiler
+## Local Development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Vite serves the app on `http://localhost:5173` unless another port is selected. When the app runs on localhost and not on port `8080`, API calls are sent to `http://localhost:8080`.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Optional environment variables:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+VITE_API_URL=http://localhost:8080
+VITE_API_TIMEOUT_MS=15000
 ```
+
+## Commands
+
+```bash
+npm run dev      # Vite dev server
+npm run build    # TypeScript build + Vite bundle
+npm run lint     # ESLint
+npm run test     # Vitest
+npm run preview  # preview built bundle
+```
+
+## Authentication Flow
+
+1. The user enters `DASHBOARD_TOKEN`.
+2. The backend creates a dashboard session after notification approval, or falls back to token-only when notifications are unavailable and 2FA is not enabled.
+3. API requests send `Authorization: Bearer <dashboard-token>` and `X-Dashboard-Session: <session-token>`.
+4. SSE uses the same headers against `/stream`.
+5. WebSocket telemetry connects to `/ws/telemetry` and sends an initial auth message with the dashboard token and session.
+
+Sensitive dashboard config writes require TOTP or a backup code once 2FA is enabled.
+
+## Main Screens
+
+| Screen | Purpose |
+|---|---|
+| Overview | Balance, uptime, P&L, positions, risk telemetry, agent reasoning |
+| Pairs | Active/configured pairs, cointegration status, hot reload, T212 wallet seeding |
+| Analytics | Profit and win/loss chart summaries |
+| Trade History | Search and filter executed trade groups |
+| Bot Control | Start/stop/restart requests and terminal feed |
+| Settings | Editable runtime settings, masked secrets, 2FA-gated sensitive changes |
+| System Health | CPU, memory, network, logs, and event feed |
+
+## Docker
+
+The Dockerfile builds the static bundle with Node 20 and serves it with `nginx:alpine`:
+
+```bash
+docker build -t trading-frontend .
+docker run --rm -p 3000:80 trading-frontend
+```
+
+The nginx config proxies `/api/`, `/stream`, and `/ws/` to the backend service.
