@@ -19,6 +19,15 @@ from src.services.brokerage_service import BrokerageService
 # ---------------------------------------------------------------------------
 
 def _make_service(provider_name: str = "T212") -> BrokerageService:
+    """
+    Create a BrokerageService instance with external provider constructors patched for testing.
+    
+    Parameters:
+        provider_name (str): The provider name to pass to BrokerageService (e.g., "T212" or "ALPACA").
+    
+    Returns:
+        BrokerageService: An instance of BrokerageService where T212Provider and AlpacaProvider are patched to prevent real provider construction or network calls.
+    """
     with patch(f"src.services.brokerage_service.T212Provider"), \
          patch(f"src.services.brokerage_service.AlpacaProvider"):
         svc = BrokerageService(provider_name=provider_name)
