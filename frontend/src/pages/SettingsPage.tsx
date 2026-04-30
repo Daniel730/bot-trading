@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { ConfigResponse, TwoFactorInitiateResponse } from '../services/api';
-import { SectionHeader, formatDateTime } from '../components/UIHelpers';
+import { SectionHeader } from '../components/UIHelpers';
+import { formatDateTime } from '../utils/formatters';
 
 interface SettingsPageProps {
   config: ConfigResponse | null;

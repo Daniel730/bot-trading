@@ -1,15 +1,8 @@
 import React from 'react';
 import type { SummaryResponse, ChartResponse, OpenPosition } from '../services/api';
 import type { TelemetryRisk, TelemetryThought } from '../hooks/useTelemetry';
-import { 
-  formatCurrency, 
-  formatPercent, 
-  formatCompact, 
-  formatDateTime, 
-  getTrendClass, 
-  LineMiniChart, 
-  SectionHeader 
-} from '../components/UIHelpers';
+import { LineMiniChart, SectionHeader } from '../components/UIHelpers';
+import { formatCompact, formatCurrency, formatDateTime, formatPercent, getTrendClass } from '../utils/formatters';
 import IntelligenceHub from '../components/IntelligenceHub';
 
 interface OverviewPageProps {

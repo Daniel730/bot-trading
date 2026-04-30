@@ -1,7 +1,6 @@
 import React from 'react';
 import type { ChartPoint } from '../services/api';
 import { sparklinePath } from '../utils/formatters';
-export { formatCompact, formatCurrency, formatDateTime, formatPercent, getTrendClass } from '../utils/formatters';
 
 export function LineMiniChart({ points, color }: { points: ChartPoint[]; color: string }) {
   const values = points.map((point) => point.value ?? 0);
