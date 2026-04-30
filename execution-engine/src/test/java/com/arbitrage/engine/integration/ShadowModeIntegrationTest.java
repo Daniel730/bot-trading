@@ -8,6 +8,7 @@ import com.arbitrage.engine.config.EnvironmentConfig;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ShadowModeIntegrationTest {
@@ -15,14 +16,12 @@ class ShadowModeIntegrationTest {
     @Test
     void testBrokerageRouterRouting() {
         L2FeedService mockFeed = Mockito.mock(L2FeedService.class);
-        Broker broker = BrokerageRouter.getBroker(mockFeed);
         
         if (EnvironmentConfig.isDryRun()) {
+            Broker broker = BrokerageRouter.getBroker(mockFeed);
             assertTrue(broker instanceof MockBroker, "Should return MockBroker when in Shadow Mode");
         } else {
-            // Live mode logic might depend on how LiveBroker is implemented
-            // For now, it returns LiveBroker placeholder
-            assertTrue(broker.getClass().getSimpleName().contains("LiveBroker"), "Should return LiveBroker in Live Mode");
+            assertThrows(IllegalStateException.class, () -> BrokerageRouter.getBroker(mockFeed));
         }
     }
 }

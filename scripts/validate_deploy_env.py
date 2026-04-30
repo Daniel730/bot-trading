@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 
 BLOCKED_POSTGRES_PASSWORDS = {"bot_pass", "postgres", "password", "changeme"}
 BLOCKED_DASHBOARD_TOKENS = {"arbi-elite-2026", "dashboard-token", "changeme"}
+JSON_OBJECT_KEYS = {"CRYPTO_TOKEN_MAPPING"}
 
 
 def _clean_value(value: str) -> str:
@@ -53,6 +55,18 @@ def validate(values: dict[str, str]) -> list[str]:
     database_url = values.get("DATABASE_URL", "")
     if database_url and "bot_pass" in database_url:
         errors.append("DATABASE_URL still contains the default Postgres password.")
+
+    for key in JSON_OBJECT_KEYS:
+        value = values.get(key, "")
+        if not value:
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            errors.append(f"{key} must be valid JSON.")
+            continue
+        if not isinstance(parsed, dict):
+            errors.append(f"{key} must be a JSON object.")
 
     return errors
 
