@@ -207,6 +207,10 @@ class BrokerageService:
             qty = order.get('quantity', 0.0)
             if qty > 0:
                 price = order.get('limitPrice') or order.get('price', 0.0)
+                if price == 0.0:
+                    from src.services.data_service import data_service
+                    prices = await data_service.get_latest_price_async([order.get('ticker')])
+                    price = prices.get(order.get('ticker'), 0.0)
                 total_value += (qty * price)
         return AwaitableFloat(total_value)
 
