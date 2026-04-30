@@ -1,3 +1,7 @@
+# Historical Audit Note
+
+This readiness audit captured the state for the Monday 2026-04-20 paper-trading target. It is not the current go/no-go document. Use `docs/tofix.md`, current test results, and source code for present readiness.
+
 # Monday Paper-Trading Readiness Audit
 **Audited**: 2026-04-19 (Sunday) · **Target**: `PAPER_TRADING=true` launch Monday 2026-04-20
 **Scope**: Python bot core · Java execution engine · Frontend · Infrastructure
