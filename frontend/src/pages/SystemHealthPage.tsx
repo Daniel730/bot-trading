@@ -1,10 +1,7 @@
 import React from 'react';
 import type { HealthResponse, LogsResponse } from '../services/api';
-import { 
-  SectionHeader, 
-  formatDateTime, 
-  LineMiniChart 
-} from '../components/UIHelpers';
+import { SectionHeader, LineMiniChart } from '../components/UIHelpers';
+import { formatDateTime } from '../utils/formatters';
 
 interface SystemHealthPageProps {
   health: HealthResponse | null;
