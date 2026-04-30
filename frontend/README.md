@@ -18,7 +18,7 @@ npm install
 npm run dev
 ```
 
-Vite serves the app on `http://localhost:5173` unless another port is selected. When the app runs on localhost and not on port `8080`, API calls are sent to `http://localhost:8080`.
+Vite serves the app on `http://localhost:5173` unless another port is selected. When the app runs on localhost and not on port `8080`, API calls are sent to `http://localhost:8080`. Remote nginx deployments use the same origin so `/api`, `/stream`, and `/ws` are handled by nginx proxy rules.
 
 Optional environment variables:
 

@@ -1,17 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { RiskTelemetry, ThoughtTelemetry, TelemetryMessage } from '../services/api';
+import { getRuntimeApiBase } from '../services/runtimeUrl';
 
-const getApiBase = () => {
-  if (typeof window === 'undefined') return 'http://localhost:8080';
-  const isLocalHost = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
-  const isFrontendPort = window.location.port === '3000';
-  if ((isLocalHost || isFrontendPort) && window.location.port !== '8080') {
-    return `${window.location.protocol}//${window.location.hostname}:8080`;
-  }
-  return window.location.origin;
-};
-
-const WS_BASE = getApiBase().replace('http', 'ws');
+const WS_BASE = getRuntimeApiBase(import.meta.env.VITE_API_URL).replace('http', 'ws');
 
 export const useTelemetry = (token: string | null, sessionToken?: string | null) => {
   const [isConnected, setIsConnected] = useState(false);
