@@ -1,6 +1,6 @@
 import React from 'react';
-import { SummaryResponse, ChartResponse, OpenPosition } from '../services/api';
-import { TelemetryRisk, TelemetryThought } from '../hooks/useTelemetry';
+import type { SummaryResponse, ChartResponse, OpenPosition } from '../services/api';
+import type { TelemetryRisk, TelemetryThought } from '../hooks/useTelemetry';
 import { 
   formatCurrency, 
   formatPercent, 

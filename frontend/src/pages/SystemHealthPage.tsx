@@ -1,5 +1,5 @@
 import React from 'react';
-import { HealthResponse, LogsResponse } from '../services/api';
+import type { HealthResponse, LogsResponse } from '../services/api';
 import { 
   SectionHeader, 
   formatDateTime, 

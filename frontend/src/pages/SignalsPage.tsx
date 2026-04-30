@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Signal } from '../services/api';
+import type { Signal } from '../services/api';
 import { SectionHeader } from '../components/UIHelpers';
 import Pagination from '../components/Pagination';
 import { Radio } from 'lucide-react';

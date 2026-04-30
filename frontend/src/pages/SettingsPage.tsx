@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ConfigResponse, TwoFactorInitiateResponse } from '../services/api';
+import type { ConfigResponse, TwoFactorInitiateResponse } from '../services/api';
 import { SectionHeader, formatDateTime } from '../components/UIHelpers';
 
 interface SettingsPageProps {

@@ -2,6 +2,9 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { RiskTelemetry, ThoughtTelemetry, TelemetryMessage } from '../services/api';
 import { getRuntimeApiBase } from '../services/runtimeUrl';
 
+export type TelemetryRisk = RiskTelemetry;
+export type TelemetryThought = ThoughtTelemetry;
+
 const WS_BASE = getRuntimeApiBase(import.meta.env.VITE_API_URL).replace('http', 'ws');
 
 export const useTelemetry = (token: string | null, sessionToken?: string | null) => {

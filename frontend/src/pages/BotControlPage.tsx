@@ -1,6 +1,6 @@
 import React from 'react';
 import { Play, Square, RefreshCw } from 'lucide-react';
-import { LogsResponse, TerminalMessage } from '../services/api';
+import type { LogsResponse, TerminalMessage } from '../services/api';
 import { SectionHeader, formatDateTime } from '../components/UIHelpers';
 
 interface BotControlPageProps {
