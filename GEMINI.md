@@ -75,7 +75,7 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml up 
 ## Development Rules
 
 - Preserve `signal_id` through signal evaluation, approval, execution, journal, and close paths.
-- Keep venue routing centralized in `BrokerageService.get_venue()`.
+- Keep venue routing centralized in `BrokerageService.get_venue()`. The bot supports multiple providers (T212, ALPACA) via `BROKERAGE_PROVIDER` in settings.
 - Use async I/O or `asyncio.to_thread` around blocking APIs.
 - Keep secrets out of docs, logs, and committed env files.
 - When touching execution paths, run focused brokerage, risk, and persistence tests.
