@@ -38,14 +38,19 @@ async def test_thompson_sampling_weight_allocation():
             return "0"
         return default
 
-    # We patch all the external API calls and the new Thompson DB fetcher
+    # We patch all the external API calls and the new Thompson DB fetcher.
+    # Macro regime + portfolio advice must be mocked too — otherwise Phase 0
+    # makes real yfinance calls for the sector beacon (NVDA), which can return
+    # EXTREME_VOLATILITY and short-circuit the orchestrator before MAB runs.
     with patch('src.agents.bull_agent.BullAgent.evaluate', return_value={"confidence": 0.1, "reasoning": "bad"}), \
          patch('src.agents.bear_agent.BearAgent.evaluate', return_value={"confidence": 0.9, "reasoning": "bad"}), \
          patch('src.services.redis_service.RedisService.get_fundamental_score', return_value={"score": 100}), \
          patch('src.services.persistence_service.PersistenceService.get_system_state', side_effect=mock_get_system_state), \
          patch('src.services.persistence_service.PersistenceService.get_agent_metrics', side_effect=mock_get_agent_metrics), \
-         patch('src.services.persistence_service.PersistenceService.set_system_state'):
-         
+         patch('src.services.persistence_service.PersistenceService.set_system_state'), \
+         patch('src.agents.macro_economic_agent.MacroEconomicAgent.get_ticker_regime', return_value="BULLISH"), \
+         patch('src.agents.portfolio_manager_agent.PortfolioManagerAgent.get_optimization_advice', return_value={"is_recommended": True, "improvement": 0.0}):
+
         # Execute the orchestrator
         state = await orchestrator.ainvoke(input_data)
         
