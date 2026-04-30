@@ -320,11 +320,13 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
-const withToken = (path: string, token: string | null, sessionToken?: string | null) => {
-  const url = new URL(path, API_BASE);
-  if (token) url.searchParams.set('token', token);
-  if (sessionToken) url.searchParams.set('session', sessionToken);
-  return url;
+const apiUrl = (path: string) => new URL(path, API_BASE);
+
+const authHeaders = (token: string | null, sessionToken?: string | null, initHeaders?: HeadersInit) => {
+  const headers = new Headers(initHeaders);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  if (sessionToken) headers.set('X-Dashboard-Session', sessionToken);
+  return headers;
 };
 
 async function requestJson<T>(
@@ -333,7 +335,10 @@ async function requestJson<T>(
   init?: RequestInit,
   sessionToken?: string | null,
 ): Promise<T> {
-  const response = await fetch(withToken(path, token, sessionToken).toString(), init);
+  const response = await fetch(apiUrl(path).toString(), {
+    ...init,
+    headers: authHeaders(token, sessionToken, init?.headers),
+  });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.detail || `Request failed (${response.status})`);
@@ -347,27 +352,60 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
 
   useEffect(() => {
     if (!token || !sessionToken) return;
-    const url = withToken('/stream', token, sessionToken);
-    const eventSource = new EventSource(url.toString());
+    const controller = new AbortController();
+    let retryCount = 0;
 
-    eventSource.onmessage = (event) => {
-      try {
-        const parsedData = JSON.parse(event.data);
-        setData(parsedData);
-        setError(null);
-      } catch (err) {
-        console.error('Failed to parse SSE data:', err);
+    const connect = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          const response = await fetch(apiUrl('/stream').toString(), {
+            headers: authHeaders(token, sessionToken),
+            signal: controller.signal,
+          });
+          if (!response.ok || !response.body) throw new Error(`SSE failed (${response.status})`);
+
+          retryCount = 0;
+          setError(null);
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          while (!controller.signal.aborted) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split(/\r?\n\r?\n/);
+            buffer = events.pop() || '';
+
+            for (const event of events) {
+              const dataLines = event
+                .split(/\r?\n/)
+                .filter((line) => line.startsWith('data:'))
+                .map((line) => line.slice(5).trimStart());
+              if (dataLines.length === 0) continue;
+              try {
+                setData(JSON.parse(dataLines.join('\n')));
+                setError(null);
+              } catch (err) {
+                console.error('Failed to parse SSE data:', err);
+              }
+            }
+          }
+        } catch (err) {
+          if (controller.signal.aborted) return;
+          console.error('SSE Error:', err);
+          setError('Connection to backend lost. Retrying...');
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 30000);
+          retryCount += 1;
+          await new Promise((resolve) => window.setTimeout(resolve, delay));
+        }
       }
     };
 
-    eventSource.onerror = (err) => {
-      console.error('SSE Error:', err);
-      setError('Connection to backend lost. Retrying...');
-      eventSource.close();
-    };
+    void connect();
 
     return () => {
-      eventSource.close();
+      controller.abort();
     };
   }, [token, sessionToken]);
 
@@ -453,13 +491,13 @@ export const fetchTradeHistory = async (
   sessionToken: string | null,
   params: { page?: number; pageSize?: number; search?: string; status?: string; venue?: string } = {},
 ): Promise<TradeHistoryResponse> => {
-  const url = withToken('/api/stats/trades', token, sessionToken);
+  const url = apiUrl('/api/stats/trades');
   if (params.page) url.searchParams.set('page', String(params.page));
   if (params.pageSize) url.searchParams.set('page_size', String(params.pageSize));
   if (params.search) url.searchParams.set('search', params.search);
   if (params.status) url.searchParams.set('status', params.status);
   if (params.venue) url.searchParams.set('venue', params.venue);
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), { headers: authHeaders(token, sessionToken) });
   if (!response.ok) throw new Error(`Failed to fetch trade history (${response.status})`);
   return response.json();
 };

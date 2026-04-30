@@ -12,10 +12,9 @@ public class BrokerageRouter {
         if (EnvironmentConfig.isDryRun()) {
             logger.warn("BrokerageRouter: SHADOW MODE ACTIVE. Routing to MockBroker.");
             return new MockBroker(l2FeedService);
-        } else {
-            logger.info("BrokerageRouter: LIVE MODE ACTIVE. Routing to LiveBroker.");
-            // For now, let's assume there's a LiveBroker implementation or we'll create a placeholder
-            return new LiveBroker();
         }
+        throw new IllegalStateException(
+                "Execution engine live brokerage is not implemented. Set DRY_RUN=true or wire a real LiveBroker before enabling live mode."
+        );
     }
 }

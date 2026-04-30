@@ -259,8 +259,6 @@ class RiskService:
                 "rejection_reason": "DEFCON_1: Market risk extreme. Long trades suppressed."
             }
 
-        fee_check = self.fee_analyzer.check_fees(ticker, amount_fiat)
-        
         # User-defined overrides for Kelly inputs.
         kelly_fraction = self.kelly_calculator.calculate_size(win_prob, win_loss_ratio)
         
@@ -280,8 +278,17 @@ class RiskService:
             ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         )
         
-        # Ensure minimum friction limits are kept
-        is_acceptable = fee_check["is_acceptable"] and final_amount >= settings.MIN_TRADE_VALUE
+        if final_amount < settings.MIN_TRADE_VALUE:
+            fee_check = {
+                "ticker": ticker,
+                "is_acceptable": False,
+                "total_friction_percent": 1.0,
+                "rejection_reason": f"Trade value below minimum {settings.MIN_TRADE_VALUE:.2f} after sizing",
+            }
+            is_acceptable = False
+        else:
+            fee_check = self.fee_analyzer.check_fees(ticker, final_amount)
+            is_acceptable = fee_check["is_acceptable"]
         
         return {
             "ticker": ticker,

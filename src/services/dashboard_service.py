@@ -10,6 +10,7 @@ import secrets
 import socket
 import time
 from collections import deque
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -33,6 +34,8 @@ except Exception:  # pragma: no cover - surfaced as an endpoint error if unavail
     wallet_seed = None
 
 logger = logging.getLogger(__name__)
+_dashboard_auth_token: ContextVar[Optional[str]] = ContextVar("dashboard_auth_token", default=None)
+_dashboard_auth_session: ContextVar[Optional[str]] = ContextVar("dashboard_auth_session", default=None)
 
 
 def _utcnow() -> datetime:
@@ -61,19 +64,30 @@ def _scrub_non_finite(obj):
     return obj
 
 
+def _bearer_token(authorization: Optional[str]) -> Optional[str]:
+    if not authorization:
+        return None
+    scheme, _, credentials = authorization.partition(" ")
+    if scheme.lower() == "bearer" and credentials.strip():
+        return credentials.strip()
+    return authorization.strip() or None
+
+
 class ConnectionManager:
     def __init__(self, max_connections: int = 50):
         self.active_connections: List[WebSocket] = []
         self.max_connections = max_connections
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, accept: bool = True) -> bool:
         if len(self.active_connections) >= self.max_connections:
             logger.warning("WebSocket: Max connections reached. Rejecting client without accept.")
             await websocket.close(code=1008)
-            return
-        await websocket.accept()
+            return False
+        if accept:
+            await websocket.accept()
         self.active_connections.append(websocket)
         logger.info("New WebSocket client connected. Total: %s", len(self.active_connections))
+        return True
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -311,7 +325,8 @@ class DashboardLoginChallengeManager:
 login_challenge_manager = DashboardLoginChallengeManager()
 
 
-def verify_security_token(token: str = Query(None)):
+def verify_security_token(token: Optional[str] = None):
+    token = token or _dashboard_auth_token.get()
     secret = settings.DASHBOARD_TOKEN.strip().strip('"').strip("'")
     if token != secret:
         logger.warning(
@@ -323,7 +338,8 @@ def verify_security_token(token: str = Query(None)):
     return token
 
 
-def verify_token(token: str = Query(None), session: str = Query(None)):
+def verify_token(token: Optional[str] = None, session: Optional[str] = None):
+    session = session or _dashboard_auth_session.get()
     verified_token = verify_security_token(token)
     session_manager.verify(session)
     return verified_token
@@ -530,11 +546,24 @@ class BotControlRequest(BaseModel):
 
 
 app = FastAPI(title="Arbitrage Dashboard")
+
+
+@app.middleware("http")
+async def dashboard_auth_context(request: Request, call_next):
+    token_marker = _dashboard_auth_token.set(_bearer_token(request.headers.get("authorization")))
+    session_marker = _dashboard_auth_session.set(request.headers.get("x-dashboard-session"))
+    try:
+        return await call_next(request)
+    finally:
+        _dashboard_auth_token.reset(token_marker)
+        _dashboard_auth_session.reset(session_marker)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.dashboard_allowed_origins,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Dashboard-Session"],
 )
 
 
@@ -915,6 +944,8 @@ class DashboardService:
         requires_2fa = False
         for key, value in updates.items():
             normalized_key = str(key).strip().upper()
+            if normalized_key not in self.editable_config:
+                raise HTTPException(status_code=400, detail=f"Unsupported configuration key: {normalized_key}")
             if self.editable_config.get(normalized_key, {}).get("sensitive") and self._is_masked_placeholder(value):
                 continue
             normalized_updates[normalized_key] = self._coerce_config_value(normalized_key, value)
@@ -1353,13 +1384,30 @@ async def ping():
 
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None), session: str = Query(None)):
-    try:
-        verify_token(token, session)
-    except HTTPException:
-        await websocket.close(code=4003)
-        return
+    if token or session:
+        try:
+            verify_token(token, session)
+        except HTTPException:
+            await websocket.close(code=4003)
+            return
+        if not await connection_manager.connect(websocket):
+            return
+    else:
+        await websocket.accept()
+        try:
+            raw_auth = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+            auth_payload = json.loads(raw_auth)
+            if auth_payload.get("type") != "auth":
+                raise ValueError("First WebSocket message must authenticate.")
+            verify_security_token(auth_payload.get("token"))
+            session_manager.verify(auth_payload.get("session"))
+        except Exception as exc:
+            logger.warning("WebSocket auth failed: %s", exc)
+            await websocket.close(code=4003)
+            return
+        if not await connection_manager.connect(websocket, accept=False):
+            return
 
-    await connection_manager.connect(websocket)
     try:
         while True:
             await websocket.receive_text()

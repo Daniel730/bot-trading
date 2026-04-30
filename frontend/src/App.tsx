@@ -145,11 +145,9 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: 
 }
 
 function App() {
-  const urlParams = new URLSearchParams(window.location.search);
-  const tokenFromUrl = urlParams.get('token') ?? '';
-  const [securityToken, setSecurityToken] = useState(() => sessionStorage.getItem('dashboardSecurityToken') ?? '');
-  const [sessionToken, setSessionToken] = useState(() => sessionStorage.getItem('dashboardSessionToken') ?? '');
-  const [loginToken, setLoginToken] = useState(() => tokenFromUrl);
+  const [securityToken, setSecurityToken] = useState('');
+  const [sessionToken, setSessionToken] = useState('');
+  const [loginToken, setLoginToken] = useState('');
   const [loginOtp, setLoginOtp] = useState('');
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [loginNotice, setLoginNotice] = useState<string | null>(null);
@@ -179,6 +177,14 @@ function App() {
   const [systemMessage, setSystemMessage] = useState<string | null>(null);
   const [systemError, setSystemError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  useEffect(() => {
+    const currentUrl = new URL(window.location.href);
+    if (!currentUrl.searchParams.has('token') && !currentUrl.searchParams.has('session')) return;
+    currentUrl.searchParams.delete('token');
+    currentUrl.searchParams.delete('session');
+    window.history.replaceState({}, document.title, currentUrl.toString());
+  }, []);
 
   const refreshDashboard = async () => {
     if (!isAuthenticated) return;
@@ -364,8 +370,6 @@ function App() {
         setLoginNotice('Approval notification sent. Waiting for confirmation.');
         return;
       }
-      sessionStorage.setItem('dashboardSecurityToken', loginToken.trim());
-      sessionStorage.setItem('dashboardSessionToken', result.session_token);
       setSecurityToken(loginToken.trim());
       setSessionToken(result.session_token);
       setLoginOtp('');
@@ -384,8 +388,6 @@ function App() {
       try {
         const result = await completeLogin(loginChallengeId);
         if (cancelled || result.status === 'pending') return;
-        sessionStorage.setItem('dashboardSecurityToken', loginToken.trim());
-        sessionStorage.setItem('dashboardSessionToken', result.session_token);
         setSecurityToken(loginToken.trim());
         setSessionToken(result.session_token);
         setLoginChallengeId(null);
@@ -412,8 +414,6 @@ function App() {
     } catch {
       // The local session is cleared either way.
     }
-    sessionStorage.removeItem('dashboardSecurityToken');
-    sessionStorage.removeItem('dashboardSessionToken');
     setSecurityToken('');
     setSessionToken('');
     setSummary(null);

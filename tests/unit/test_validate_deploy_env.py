@@ -54,3 +54,22 @@ def test_validate_deploy_env_blocks_values_that_crash_runtime_config(tmp_path):
     assert "DATABASE_URL" in result.stdout
     assert "bot_pass" not in result.stdout
     assert "arbi-elite-2026" not in result.stdout
+
+
+def test_validate_deploy_env_blocks_invalid_json_objects(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POSTGRES_PASSWORD=strong-postgres-secret",
+                "DASHBOARD_TOKEN=strong-dashboard-token",
+                "CRYPTO_TOKEN_MAPPING=not-json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_validator(env_file)
+
+    assert result.returncode == 1
+    assert "CRYPTO_TOKEN_MAPPING" in result.stdout
