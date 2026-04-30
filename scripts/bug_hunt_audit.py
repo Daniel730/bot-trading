@@ -70,8 +70,16 @@ def assert_async_order_tests_are_awaited() -> None:
 def assert_deploy_requires_quality_gate() -> None:
     path = ROOT / ".github" / "workflows" / "deploy.yml"
     text = path.read_text(encoding="utf-8")
-    if "quality:" not in text or "needs: quality" not in text:
-        fail("deploy.yml must keep the quality job as a build dependency")
+    # The workflow uses three split quality jobs rather than a single monolithic one.
+    # Verify each lane's quality job is defined and referenced as a build dependency.
+    required_jobs = ["quality_python:", "quality_java:", "quality_frontend:"]
+    required_needs = ["- quality_python", "- quality_java", "- quality_frontend"]
+    for job in required_jobs:
+        if job not in text:
+            fail(f"deploy.yml must keep the quality job as a build dependency (missing job: {job.rstrip(':')})")
+    for need in required_needs:
+        if need not in text:
+            fail(f"deploy.yml must keep the quality job as a build dependency (missing needs entry: {need.lstrip('- ')})")
 
 
 def main() -> None:
