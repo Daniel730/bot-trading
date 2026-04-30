@@ -1,5 +1,5 @@
 import React from 'react';
-import { SummaryResponse, ChartResponse } from '../services/api';
+import type { SummaryResponse, ChartResponse } from '../services/api';
 import { 
   formatCurrency, 
   LineMiniChart, 
