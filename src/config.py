@@ -106,6 +106,11 @@ class Settings(BaseSettings):
     T212_API_SECRET: str = Field(default="", validation_alias="T212_API_SECRET")
     TRADING_212_API_KEY: str = Field(default="", validation_alias="TRADING_212_API_KEY")
 
+    ALPACA_API_KEY: str = Field(default="", validation_alias="ALPACA_API_KEY")
+    ALPACA_API_SECRET: str = Field(default="", validation_alias="ALPACA_API_SECRET")
+    ALPACA_BASE_URL: str = Field(default="https://paper-api.alpaca.markets", validation_alias="ALPACA_BASE_URL")
+    BROKERAGE_PROVIDER: Literal["T212", "ALPACA"] = Field(default="T212", validation_alias="BROKERAGE_PROVIDER")
+
     REDIS_HOST: str = Field(default="localhost", validation_alias="REDIS_HOST")
     REDIS_PORT: int = Field(default=6379, validation_alias="REDIS_PORT")
     REDIS_DB: int = Field(default=0, validation_alias="REDIS_DB")
