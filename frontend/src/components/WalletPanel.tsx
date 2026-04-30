@@ -146,12 +146,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
     }
   };
 
-  const buyDisabled =
-    buying ||
-    loading ||
-    selectedRecommendations.length === 0 ||
-    !plan?.can_buy ||
-    plan?.cash_limited;
+  const buyDisabled = buying;
 
   return (
     <div className="wallet-page">
@@ -161,7 +156,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
             <Wallet size={18} />
             <div>
               <strong>Today&apos;s Stock Plan</strong>
-              <span>{plan ? `${plan.recommended_tickers.length} buys / ${plan.skipped.length} skipped` : 'Waiting for wallet state'}</span>
+              <span>{plan ? `${plan.recommended_tickers.length} recommended / ${plan.skipped.length} skipped` : 'Waiting for wallet state'}</span>
             </div>
           </div>
 
@@ -184,7 +179,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
               checked={includeBroken}
               onChange={(event) => setIncludeBroken(event.target.checked)}
             />
-            <span>Include BROKEN eligible</span>
+            <span>Include all active pairs (even BROKEN)</span>
           </label>
           <label className="wallet-toggle">
             <input
@@ -207,7 +202,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
         <div className="wallet-action-row">
           <button className="ghost-btn" disabled={loading} onClick={refresh}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} />
-            Calculate
+            Refresh Plan
           </button>
           <button className="primary-btn" disabled={buyDisabled} onClick={() => setConfirmOpen(true)}>
             <ShoppingCart size={14} />
@@ -226,12 +221,16 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
           <CheckCircle2 size={14} /> {ok}
         </div>
       ) : null}
-      {plan?.warning || plan?.cash_limited ? (
+      {plan?.warning ? (
         <div className="banner warning">
           <AlertTriangle size={14} />
-          {plan.cash_limited
-            ? `Budget exceeds spendable T212 cash. Effective cash is ${formatCurrency(plan.effective_cash)}.`
-            : plan.warning}
+          {plan.warning}
+        </div>
+      ) : null}
+      {plan?.cash_limited ? (
+        <div className="banner warning">
+          <AlertTriangle size={14} />
+          Budget exceeds bot-calculated spendable T212 cash. Orders will still be attempted.
         </div>
       ) : null}
 

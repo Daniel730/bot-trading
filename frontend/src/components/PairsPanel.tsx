@@ -217,15 +217,14 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const cryptoCount = activePairs.filter((p) => p.is_crypto).length;
   const cointCount = activePairs.filter((p) => p.is_cointegrated === true).length;
   const brokenCount = activePairs.filter((p) => p.is_cointegrated !== true).length;
-  const cointEquityPairs = activePairs.filter((p) => p.is_cointegrated === true && !p.is_crypto);
-  const cointEquityTickers = useMemo(() => {
+  const allEquityTickers = useMemo(() => {
     const tickers: string[] = [];
-    for (const pair of cointEquityPairs) {
+    for (const pair of activePairs.filter(p => !p.is_crypto)) {
       if (!tickers.includes(pair.ticker_a)) tickers.push(pair.ticker_a);
       if (!tickers.includes(pair.ticker_b)) tickers.push(pair.ticker_b);
     }
     return tickers;
-  }, [cointEquityPairs]);
+  }, [activePairs]);
 
   const openEditor = () => {
     setDraftStocks(configuredStocks.map((p) => ({ ...p })));
@@ -287,13 +286,13 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       return;
     }
 
-    if (cointEquityTickers.length === 0) {
-      setWalletError('No COINT T212 tickers are active.');
+    if (allEquityTickers.length === 0) {
+      setWalletError('No equity tickers are active.');
       return;
     }
 
     const confirmed = window.confirm(
-      `Place Trading 212 BUY orders for missing COINT tickers with a ${budget.toFixed(2)} budget?`,
+      `Place Trading 212 BUY orders for missing tickers with a ${budget.toFixed(2)} budget?`,
     );
     if (!confirmed) return;
 
@@ -382,7 +381,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
               <Wallet size={16} />
               <div>
                 <strong>T212 Wallet</strong>
-                <span>{cointEquityPairs.length} COINT pairs / {cointEquityTickers.length} tickers</span>
+                <span>{activePairs.filter(p => !p.is_crypto).length} pairs / {allEquityTickers.length} tickers</span>
               </div>
             </div>
             <div className="wallet-sync-controls">
@@ -398,12 +397,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
               </label>
               <button
                 className="wallet-sync-btn"
-                disabled={walletSyncing || cointEquityTickers.length === 0}
+                disabled={walletSyncing || allEquityTickers.length === 0}
                 onClick={handleWalletSync}
-                title="Buy missing COINT T212 tickers"
+                title="Buy missing T212 tickers"
               >
                 <ShoppingCart size={13} />
-                {walletSyncing ? 'Buying...' : 'Buy COINT'}
+                {walletSyncing ? 'Buying...' : 'Buy All'}
               </button>
             </div>
           </div>
