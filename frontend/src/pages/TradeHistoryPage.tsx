@@ -1,6 +1,6 @@
 import React from 'react';
 import { Search } from 'lucide-react';
-import { TradeHistoryResponse } from '../services/api';
+import type { TradeHistoryResponse } from '../services/api';
 import { 
   formatCurrency, 
   formatDateTime, 
