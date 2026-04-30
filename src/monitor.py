@@ -1,5 +1,12 @@
 import asyncio
 import logging
+from rich.logging import RichHandler
+from rich.console import Console
+from rich.theme import Theme
+from rich.panel import Panel
+from rich.table import Table
+from rich.live import Live
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
@@ -23,20 +30,45 @@ import uuid
 import pytz
 import inspect
 
+# Initialize Rich Console with a custom theme
+custom_theme = Theme({
+    "info": "cyan",
+    "warning": "yellow",
+    "error": "bold red",
+    "critical": "bold white on red",
+    "success": "bold green",
+    "scan": "magenta",
+    "signal": "bold yellow",
+    "trade": "bold blue"
+})
+console = Console(theme=custom_theme)
+
 # Disable yfinance cache
 yf.set_tz_cache_location("/tmp/yf_cache")
 
 # Configure logging
 def setup_logging():
+    # Remove existing handlers
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    root_logger.addHandler(handler)
+    # Rich logging handler
+    rich_handler = RichHandler(
+        console=console,
+        rich_tracebacks=True,
+        markup=True,
+        show_time=True,
+        show_path=True
+    )
+    rich_handler.setFormatter(logging.Formatter("%(message)s"))
+    root_logger.addHandler(rich_handler)
     root_logger.setLevel(logging.INFO)
+    
+    # Silence some noisy loggers
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("yfinance").setLevel(logging.ERROR)
+    
     return logging.getLogger(__name__)
 
 logger = setup_logging()
@@ -131,23 +163,23 @@ class ArbitrageMonitor:
         knows mode, pair universe size, and when the next trading window opens.
         """
         mode = "PAPER" if settings.PAPER_TRADING else "LIVE"
+        next_open = self.next_market_open()
+        
+        table = Table(title="Bot Pre-flight Configuration", show_header=False, box=None)
+        table.add_row("Mode", f"[bold cyan]{mode}[/]")
+        table.add_row("Dev Mode", f"{'[green]Enabled[/]' if settings.DEV_MODE else '[yellow]Disabled[/]'}")
+        
         if settings.DEV_MODE:
             pair_count = len(settings.CRYPTO_TEST_PAIRS)
-            logger.info(
-                f"MODE: {mode} | DEV_MODE=true (crypto test pairs, 24/7 scan, "
-                f"randomised prices) | Pair universe: {pair_count} crypto pairs"
-            )
+            table.add_row("Pair Universe", f"{pair_count} crypto pairs")
+            table.add_row("Market Hours", "24/7 (Crypto)")
         else:
             equity_count = len(settings.ARBITRAGE_PAIRS)
             crypto_count = len(settings.CRYPTO_TEST_PAIRS)
-            next_open = self.next_market_open()
-            logger.info(
-                f"MODE: {mode} | DEV_MODE=false | Pair universe: "
-                f"{equity_count} equity + {crypto_count} crypto = "
-                f"{equity_count + crypto_count} total | "
-                f"Equity pairs gated by NYSE hours, crypto runs 24/7 | "
-                f"Next NYSE open: {next_open.strftime('%Y-%m-%d %H:%M %Z')}"
-            )
+            table.add_row("Pair Universe", f"{equity_count} equity + {crypto_count} crypto")
+            table.add_row("Next NYSE Open", f"[bold yellow]{next_open.strftime('%Y-%m-%d %H:%M %Z')}[/]")
+
+        console.print(Panel(table, title="[bold blue]Arbitrage Elite Engine[/]", border_style="blue"))
 
     async def _preflight_live_sell_inventory(self, legs: list[dict]) -> bool:
         """Fail closed if a live T212 sell leg tries to sell more than owned."""
@@ -416,7 +448,8 @@ class ArbitrageMonitor:
 
             # Sprint J: Heartbeat log for pair health
             # US-033: Increased precision and diagnostic visibility
-            logger.info(f"SCAN [{t_a}/{t_b}] Z-Score: {z_score:.4f} | Beta: {state_vec[1]:.4f}")
+            z_color = "yellow" if abs(z_score) > entry_zscore * 0.8 else "cyan"
+            logger.info(f"SCAN [{t_a}/{t_b}] Z-Score: [bold {z_color}]{z_score:.4f}[/] | Beta: {state_vec[1]:.4f}")
             
             # Log raw diagnostics for the first few pairs to debug "zero-drift"
             if pair['id'] in [p['id'] for p in self.active_pairs[:5]]:
@@ -961,91 +994,111 @@ class ArbitrageMonitor:
         logger.info("Circuit breaker reset to NORMAL on startup.")
 
         try:
-            while True:
-                try:
-                    from src.services.performance_service import performance_service
-                    p_metrics = await performance_service.get_portfolio_metrics()
-                    await dashboard_service.update_metrics(p_metrics)
+            # Main Scan Loop with Rich Live UI
+            progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(bar_width=None),
+                TaskProgressColumn(),
+                expand=True
+            )
+            
+            scan_task = progress.add_task("Monitoring...", total=len(self.active_pairs))
+            
+            with Live(progress, console=console, refresh_per_second=4, vertical_overflow="visible"):
+                while True:
+                    try:
+                        from src.services.performance_service import performance_service
+                        p_metrics = await performance_service.get_portfolio_metrics()
+                        await dashboard_service.update_metrics(p_metrics)
 
-                    pnl = await persistence_service.get_total_pnl()
-                    await dashboard_service.update(
-                        stage="Monitoring",
-                        details=f"Scanning {len(self.active_pairs)} pairs...",
-                        pnl=pnl
-                    )
-                except Exception as e:
-                    logger.error(f"Error pushing metrics to dashboard: {e}")
-                    await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
-                # Exit Strategy Loop - M-06: run all exit evaluations concurrently
-                open_signals = []
-                try:
-                    open_signals = await persistence_service.get_open_signals()
-                    if open_signals:
-                        await asyncio.gather(
-                            *[self._evaluate_exit_conditions(signal) for signal in open_signals],
-                            return_exceptions=True  # one signal failing doesn't block the rest
+                        pnl = await persistence_service.get_total_pnl()
+                        await dashboard_service.update(
+                            stage="Monitoring",
+                            details=f"Scanning {len(self.active_pairs)} pairs...",
+                            pnl=pnl
                         )
-                except Exception as e:
-                    logger.error(f"Error evaluating open signals for exits: {e}")
+                    except Exception as e:
+                        logger.error(f"Error pushing metrics to dashboard: {e}")
+                        await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
+                    
+                    # Exit Strategy Loop - M-06: run all exit evaluations concurrently
+                    open_signals = []
+                    try:
+                        progress.update(scan_task, description="Checking open positions...")
+                        open_signals = await persistence_service.get_open_signals()
+                        if open_signals:
+                            await asyncio.gather(
+                                *[self._evaluate_exit_conditions(signal) for signal in open_signals],
+                                return_exceptions=True  # one signal failing doesn't block the rest
+                            )
+                    except Exception as e:
+                        logger.error(f"Error evaluating open signals for exits: {e}")
 
-                scan_pairs = []
-                all_tickers = []
-                for p in self.active_pairs:
-                    t_a, t_b = p['ticker_a'], p['ticker_b']
-                    is_crypto = "-USD" in t_a or "-USD" in t_b
-                    if not p.get('is_cointegrated', True):
-                        continue
-                    if not is_crypto and not self.is_market_open(t_a):
-                        continue
-                    scan_pairs.append(p)
-                    all_tickers.extend([t_a, t_b])
+                    scan_pairs = []
+                    all_tickers = []
+                    for p in self.active_pairs:
+                        t_a, t_b = p['ticker_a'], p['ticker_b']
+                        is_crypto = "-USD" in t_a or "-USD" in t_b
+                        if not p.get('is_cointegrated', True):
+                            continue
+                        if not is_crypto and not self.is_market_open(t_a):
+                            continue
+                        scan_pairs.append(p)
+                        all_tickers.extend([t_a, t_b])
 
-                latest_prices = (
-                    await data_service.get_latest_price_async(list(set(all_tickers)))
-                    if all_tickers
-                    else {}
-                )
+                    progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
+                    latest_prices = (
+                        await data_service.get_latest_price_async(list(set(all_tickers)))
+                        if all_tickers
+                        else {}
+                    )
 
-                # Daily Global Reset
-                today = datetime.now().date()
-                if self.current_day != today:
-                    logger.info(f"--- NEW TRADING DAY: {today} ---")
-                    self.current_day = today
-                    self.bumped_pairs_today = {} # Reset Kalman bumps for the new day
-                    # (Other daily resets like self.daily_halted could go here)
+                    # Daily Global Reset
+                    today = datetime.now().date()
+                    if self.current_day != today:
+                        logger.info(f"--- [bold yellow]NEW TRADING DAY[/]: {today} ---")
+                        self.current_day = today
+                        self.bumped_pairs_today = {} # Reset Kalman bumps for the new day
 
-                # Daily cointegration re-validation - fire background tasks so
-                # historical data fetches don't block the current scan cycle.
-                today = datetime.now().date()
-                for pair in self.active_pairs:
-                    if self.last_cointegration_check.get(pair['id']) != today:
-                        asyncio.create_task(self._recheck_cointegration(pair))
-                        self.last_cointegration_check[pair['id']] = today
+                    # Daily cointegration re-validation
+                    today = datetime.now().date()
+                    for pair in self.active_pairs:
+                        if self.last_cointegration_check.get(pair['id']) != today:
+                            asyncio.create_task(self._recheck_cointegration(pair))
+                            self.last_cointegration_check[pair['id']] = today
 
-                tasks = []
-                for pair in scan_pairs:
-                    # Process pairs sequentially or with a delay to avoid 429
-                    res = await self.process_pair(pair, latest_prices)
-                    tasks.append(res)
-                    # Small delay between pairs to spread out API load
-                    await asyncio.sleep(2.0)
-                
-                results = tasks
+                    results = []
+                    for i, pair in enumerate(scan_pairs):
+                        progress.update(scan_task, description=f"Scanning [magenta]{pair['ticker_a']}/{pair['ticker_b']}[/]", completed=i)
+                        res = await self.process_pair(pair, latest_prices)
+                        results.append(res)
+                        # Small delay between pairs to spread out API load
+                        if i < len(scan_pairs) - 1:
+                            # Use a sub-task for the delay so it's visible? Or just update description.
+                            progress.update(scan_task, description=f"Waiting 2s... ([dim]{pair['ticker_a']}/{pair['ticker_b']} done[/])")
+                            await asyncio.sleep(2.0)
+                    
+                    progress.update(scan_task, completed=len(scan_pairs), description="Scan iteration complete")
 
-                # L-14: Enriched heartbeat - show analyzed vs vetoed vs open signal counts
-                active_signals = [
-                    r for r in results
-                    if r and r.get('confidence', 0) > settings.MONITOR_MIN_AI_CONFIDENCE
-                ]
-                vetoed = [r for r in results if r and r.get('vetoed')]
-                logger.info(
-                    f"--- Iteration: {len(scan_pairs)}/{len(self.active_pairs)} pairs scanned | "
-                    f"{len(active_signals)} signals above threshold | "
-                    f"{len(vetoed)} vetoed | "
-                    f"{len(open_signals)} open positions ---"
-                )
+                    # L-14: Enriched heartbeat
+                    active_signals = [
+                        r for r in results
+                        if r and r.get('confidence', 0) > settings.MONITOR_MIN_AI_CONFIDENCE
+                    ]
+                    vetoed = [r for r in results if r and r.get('verdict') == "VETOED"]
+                    
+                    summary_msg = (
+                        f"[bold green]Iteration Complete[/] | "
+                        f"Scanned: {len(scan_pairs)}/{len(self.active_pairs)} | "
+                        f"Signals: {len(active_signals)} | "
+                        f"Vetoed: {len(vetoed)} | "
+                        f"Open: {len(open_signals)}"
+                    )
+                    logger.info(summary_msg)
 
-                await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
+                    progress.update(scan_task, description=f"Idle (sleeping {settings.SCAN_INTERVAL_SECONDS}s)...")
+                    await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
         except asyncio.CancelledError:
             logger.info("Shutdown signal received. Closing connections...")
         finally:
