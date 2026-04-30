@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import logging
 import math
@@ -12,7 +13,7 @@ import time
 from collections import deque
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Literal, Optional
 from urllib.parse import quote
@@ -71,6 +72,30 @@ def _bearer_token(authorization: Optional[str]) -> Optional[str]:
     if scheme.lower() == "bearer" and credentials.strip():
         return credentials.strip()
     return authorization.strip() or None
+
+
+async def _call_brokerage(func, *args, **kwargs):
+    result = await asyncio.to_thread(func, *args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
+
+
+def _format_t212_ticker(ticker: str) -> str:
+    ticker = (ticker or "").strip().upper()
+    if wallet_seed is not None and hasattr(wallet_seed, "format_t212_ticker"):
+        return wallet_seed.format_t212_ticker(ticker)
+    return brokerage_service._format_ticker(ticker)
+
+
+def _position_ticker(position: dict) -> str:
+    instrument = position.get("instrument") or {}
+    return str(
+        position.get("ticker")
+        or position.get("instrumentCode")
+        or instrument.get("ticker")
+        or ""
+    ).upper()
 
 
 class ConnectionManager:
@@ -599,6 +624,18 @@ class T212WalletSyncRequest(BaseModel):
     delay_seconds: float = Field(default=0.5, ge=0, le=10)
 
 
+class T212WalletRecommendationRequest(BaseModel):
+    budget: float = Field(..., gt=0)
+    include_broken: bool = False
+    skip_owned: bool = True
+    skip_pending: bool = True
+
+
+class T212WalletRecommendationBuyRequest(T212WalletRecommendationRequest):
+    tickers: Optional[List[str]] = None
+    delay_seconds: float = Field(default=0.5, ge=0, le=10)
+
+
 class DashboardConfigUpdateRequest(BaseModel):
     actor: str = "dashboard"
     updates: Dict[str, Any]
@@ -641,8 +678,9 @@ async def dashboard_auth_context(request: Request, call_next):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.dashboard_allowed_origins,
+    allow_origin_regex=settings.dashboard_allowed_origin_regex,
     allow_methods=["*"],
-    allow_headers=["Authorization", "Content-Type", "X-Dashboard-Session"],
+    allow_headers=["Accept", "Authorization", "Content-Type", "X-Dashboard-Session"],
 )
 
 
@@ -679,6 +717,339 @@ class DashboardService:
     def attach_monitor(self, monitor):
         dashboard_state.monitor = monitor
 
+    async def _wallet_pair_z_scores(self, pair_ids: list[str]) -> dict[str, float]:
+        scores: dict[str, float] = {}
+        try:
+            from src.services.redis_service import redis_service
+
+            for pair_id in pair_ids:
+                try:
+                    state = await redis_service.get_kalman_state(pair_id)
+                    if state and "z_score" in state:
+                        z_score = _safe_float(state["z_score"])
+                        if z_score is not None:
+                            scores[pair_id] = z_score
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.warning("DASHBOARD: Could not fetch wallet recommendation z-scores: %s", exc)
+        return scores
+
+    async def _collect_t212_wallet_candidates(self, include_broken: bool) -> tuple[dict[str, int], dict[str, dict]]:
+        monitor = dashboard_state.monitor
+        if monitor is None:
+            raise HTTPException(status_code=409, detail="The bot monitor is not attached yet. Start the bot before reading wallet recommendations.")
+
+        pair_ids = [
+            str(pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}")
+            for pair in monitor.active_pairs
+        ]
+        z_scores = await self._wallet_pair_z_scores(pair_ids)
+        counts = {"coint": 0, "broken_eligible": 0}
+        candidates: dict[str, dict] = {}
+
+        for pair in monitor.active_pairs:
+            ticker_a = str(pair.get("ticker_a") or "").strip().upper()
+            ticker_b = str(pair.get("ticker_b") or "").strip().upper()
+            if not ticker_a or not ticker_b:
+                continue
+            if "-USD" in ticker_a or "-USD" in ticker_b:
+                continue
+
+            is_coint = pair.get("is_cointegrated") is True
+            category = "coint" if is_coint else "broken_eligible"
+            counts[category] += 1
+            if category == "broken_eligible" and not include_broken:
+                continue
+
+            pair_id = str(pair.get("id") or f"{ticker_a}_{ticker_b}")
+            sector = settings.PAIR_SECTORS.get(
+                pair_id,
+                settings.PAIR_SECTORS.get(f"{ticker_b}_{ticker_a}", "Unassigned"),
+            )
+            z_score = _safe_float(z_scores.get(pair_id))
+            estimated_cost = _safe_float(pair.get("estimated_cost_pct")) or 0.0
+            pair_info = {
+                "id": pair_id,
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "category": category,
+                "z_score": z_score,
+                "estimated_cost_pct": estimated_cost,
+                "sector": sector,
+            }
+
+            for ticker in (ticker_a, ticker_b):
+                if brokerage_service.get_venue(ticker) != "T212":
+                    continue
+                entry = candidates.setdefault(
+                    ticker,
+                    {
+                        "ticker": ticker,
+                        "categories": set(),
+                        "pairs": [],
+                        "sectors": set(),
+                        "max_abs_z_score": 0.0,
+                        "estimated_cost_pct": 0.0,
+                    },
+                )
+                entry["categories"].add(category)
+                entry["pairs"].append(pair_info)
+                entry["sectors"].add(sector)
+                entry["estimated_cost_pct"] = max(float(entry["estimated_cost_pct"]), estimated_cost)
+                if z_score is not None:
+                    entry["max_abs_z_score"] = max(float(entry["max_abs_z_score"]), abs(z_score))
+
+        return counts, candidates
+
+    @staticmethod
+    def _wallet_recommendation_score(candidate: dict) -> float:
+        categories = candidate.get("categories") or set()
+        base = 100.0 if "coint" in categories else 55.0
+        z_bonus = min(float(candidate.get("max_abs_z_score") or 0.0), 4.0) * 8.0
+        pair_bonus = min(len(candidate.get("pairs") or []), 4) * 3.0
+        cost_penalty = min(float(candidate.get("estimated_cost_pct") or 0.0) * 1000.0, 25.0)
+        return round(max(1.0, base + z_bonus + pair_bonus - cost_penalty), 4)
+
+    @staticmethod
+    def _build_weighted_wallet_plan(total_budget: float, recommendations: list[dict]) -> list[tuple[str, Decimal]]:
+        if not recommendations:
+            return []
+        budget_dec = Decimal(str(total_budget))
+        cents = int((budget_dec * Decimal("100")).to_integral_value(rounding=ROUND_DOWN))
+        if cents < len(recommendations):
+            raise ValueError(
+                f"Budget {budget_dec} is too small for {len(recommendations)} recommendations; "
+                "each ticker needs at least 0.01."
+            )
+
+        scores = [max(Decimal("0.01"), Decimal(str(item.get("score") or 0.01))) for item in recommendations]
+        score_total = sum(scores)
+        allocations = [1 for _ in recommendations]
+        remaining = cents - len(recommendations)
+        exact_shares = [(Decimal(remaining) * score / score_total) if remaining > 0 else Decimal("0") for score in scores]
+        floor_shares = [int(share.to_integral_value(rounding=ROUND_DOWN)) for share in exact_shares]
+        for index, share in enumerate(floor_shares):
+            allocations[index] += share
+
+        leftover = remaining - sum(floor_shares)
+        fractional_order = sorted(
+            range(len(recommendations)),
+            key=lambda index: (exact_shares[index] - Decimal(floor_shares[index]), scores[index]),
+            reverse=True,
+        )
+        for index in fractional_order[:leftover]:
+            allocations[index] += 1
+
+        plan: list[tuple[str, Decimal]] = []
+        for rank, (item, allocated_cents) in enumerate(zip(recommendations, allocations), start=1):
+            amount = Decimal(allocated_cents) / Decimal("100")
+            item["rank"] = rank
+            item["suggested_amount"] = float(amount)
+            plan.append((item["ticker"], amount))
+        return plan
+
+    async def _t212_wallet_state(self) -> dict:
+        try:
+            positions = await _call_brokerage(brokerage_service.get_positions)
+            pending_orders = await _call_brokerage(brokerage_service.get_pending_orders)
+            account_cash = await _call_brokerage(brokerage_service.get_account_cash)
+            pending_value = float(await _call_brokerage(brokerage_service.get_pending_orders_value))
+        except Exception as exc:
+            logger.error("DASHBOARD: T212 wallet state preflight failed: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Could not read Trading 212 wallet state: {exc}") from exc
+
+        owned_tickers: set[str] = set()
+        for position in positions:
+            ticker = _position_ticker(position)
+            quantity = _safe_float(position.get("quantity"))
+            if ticker and quantity is not None and quantity > 0:
+                owned_tickers.add(ticker)
+
+        pending_buy_tickers: set[str] = set()
+        for order in pending_orders:
+            ticker = _position_ticker(order)
+            quantity = _safe_float(order.get("quantity"))
+            if ticker and quantity is not None and quantity > 0:
+                pending_buy_tickers.add(ticker)
+
+        from src.services.budget_service import budget_service
+
+        raw_cash = float(account_cash or 0.0)
+        spendable_cash = max(0.0, raw_cash - max(0.0, pending_value))
+        effective_cash = budget_service.get_effective_cash("T212", spendable_cash)
+        return {
+            "positions": positions,
+            "pending_orders": pending_orders,
+            "owned_tickers": owned_tickers,
+            "pending_buy_tickers": pending_buy_tickers,
+            "account_cash": raw_cash,
+            "pending_value": pending_value,
+            "spendable_cash": spendable_cash,
+            "effective_cash": effective_cash,
+        }
+
+    async def calculate_t212_wallet_recommendations(self, request: T212WalletRecommendationRequest) -> dict:
+        if not settings.has_t212_key:
+            raise HTTPException(status_code=400, detail="Trading 212 API key is not configured.")
+
+        counts, candidates = await self._collect_t212_wallet_candidates(request.include_broken)
+        wallet_state = await self._t212_wallet_state()
+
+        recommendations: list[dict] = []
+        skipped: list[dict] = []
+        for ticker, candidate in candidates.items():
+            t212_ticker = _format_t212_ticker(ticker)
+            categories = sorted(candidate["categories"])
+            category = "coint" if "coint" in candidate["categories"] else "broken_eligible"
+            common = {
+                "ticker": ticker,
+                "t212_ticker": t212_ticker,
+                "category": category,
+                "categories": categories,
+                "pairs": candidate["pairs"],
+                "sectors": sorted(candidate["sectors"]),
+                "score": self._wallet_recommendation_score(candidate),
+                "max_abs_z_score": _safe_float(candidate.get("max_abs_z_score")) or 0.0,
+                "estimated_cost_pct": _safe_float(candidate.get("estimated_cost_pct")) or 0.0,
+            }
+            if request.skip_owned and t212_ticker in wallet_state["owned_tickers"]:
+                skipped.append({**common, "reason": "owned"})
+                continue
+            if request.skip_pending and t212_ticker in wallet_state["pending_buy_tickers"]:
+                skipped.append({**common, "reason": "pending_buy"})
+                continue
+            recommendations.append({**common, "rank": None, "suggested_amount": 0.0, "status": "ready"})
+
+        recommendations.sort(
+            key=lambda item: (
+                0 if item["category"] == "coint" else 1,
+                -float(item["score"]),
+                item["ticker"],
+            )
+        )
+
+        budget = float(request.budget)
+        effective_cash = float(wallet_state["effective_cash"])
+        usable_budget = min(budget, effective_cash)
+        cash_limited = budget > effective_cash + 1e-9
+        warning = None
+        can_buy = bool(recommendations) and usable_budget > 0
+
+        if recommendations and can_buy:
+            try:
+                self._build_weighted_wallet_plan(usable_budget, recommendations)
+            except ValueError as exc:
+                warning = str(exc)
+                can_buy = False
+        elif recommendations:
+            warning = "No spendable Trading 212 cash is available for this plan."
+
+        if not recommendations and skipped:
+            message = "Every eligible recommendation is already owned or pending."
+        elif not recommendations:
+            message = "No T212 stock recommendations are available for the current filters."
+        else:
+            message = f"Calculated {len(recommendations)} recommended T212 stock buys."
+
+        return _scrub_non_finite(
+            {
+                "status": "ok",
+                "mode": "demo" if settings.is_t212_demo else "live",
+                "message": message,
+                "generated_at": _utcnow().isoformat(),
+                "include_broken": request.include_broken,
+                "coint_pairs": counts["coint"],
+                "broken_eligible_pairs": counts["broken_eligible"],
+                "candidate_tickers": sorted(candidates),
+                "recommended_tickers": [item["ticker"] for item in recommendations],
+                "budget": budget,
+                "usable_budget": usable_budget,
+                "cash_limited": cash_limited,
+                "spendable_cash": _safe_float(wallet_state["spendable_cash"]),
+                "effective_cash": _safe_float(effective_cash),
+                "can_buy": can_buy,
+                "warning": warning,
+                "recommendations": recommendations,
+                "skipped": skipped,
+            }
+        )
+
+    async def buy_t212_wallet_recommendations(self, request: T212WalletRecommendationBuyRequest) -> dict:
+        if wallet_seed is None:
+            raise HTTPException(
+                status_code=500,
+                detail="The Trading212 seed wallet script could not be loaded.",
+            )
+
+        plan_snapshot = await self.calculate_t212_wallet_recommendations(request)
+        effective_cash = float(plan_snapshot.get("effective_cash") or 0.0)
+        budget = float(request.budget)
+        if budget > effective_cash + 1e-9:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Requested wallet recommendation budget {budget:.2f} exceeds spendable T212 cash/budget "
+                    f"{effective_cash:.2f}."
+                ),
+            )
+
+        recommendations = plan_snapshot.get("recommendations") or []
+        selected_tickers = None
+        if request.tickers:
+            selected_tickers = {ticker.strip().upper() for ticker in request.tickers if ticker.strip()}
+            known_tickers = {item["ticker"] for item in recommendations}
+            unknown = sorted(selected_tickers - known_tickers)
+            if unknown:
+                raise HTTPException(status_code=400, detail=f"Tickers are not in the current recommendation plan: {', '.join(unknown)}")
+            recommendations = [item for item in recommendations if item["ticker"] in selected_tickers]
+
+        if not recommendations:
+            raise HTTPException(status_code=400, detail="No recommended T212 tickers are available to buy.")
+
+        try:
+            seed_plan = self._build_weighted_wallet_plan(budget, recommendations)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            orders, failures, seed_skipped = await self._place_wallet_seed_orders(
+                seed_plan,
+                request.delay_seconds,
+                rebalance_on_skip=False,
+            )
+        except Exception as exc:
+            logger.error("DASHBOARD: T212 recommendation order placement failed: %s", exc)
+            raise HTTPException(status_code=502, detail=f"Could not buy recommended tickers via seed script: {exc}") from exc
+
+        submitted = sum(1 for order in orders if order.get("status") == "ok")
+        planned = len(seed_plan)
+        target_tickers = [ticker for ticker, _ in seed_plan]
+        await dashboard_state.add_message(
+            "SYSTEM",
+            f"T212 wallet recommendations submitted {submitted}/{planned} BUY orders.",
+            metadata={
+                "type": "t212_wallet_recommendation_buy",
+                "failures": failures,
+                "tickers": target_tickers,
+                "include_broken": request.include_broken,
+            },
+        )
+
+        return _scrub_non_finite(
+            {
+                "status": "ok" if failures == 0 else "partial",
+                "mode": "demo" if settings.is_t212_demo else "live",
+                "message": f"Submitted {submitted}/{planned} recommended BUY orders.",
+                "budget": budget,
+                "target_tickers": target_tickers,
+                "recommendations": recommendations,
+                "skipped": seed_skipped,
+                "orders": orders,
+                "failures": failures,
+            }
+        )
+
     def _coint_t212_tickers(self) -> tuple[int, list[str]]:
         monitor = dashboard_state.monitor
         if monitor is None:
@@ -706,6 +1077,7 @@ class DashboardService:
         self,
         plan: list[tuple[str, Decimal]],
         delay_seconds: float,
+        rebalance_on_skip: bool = True,
     ) -> tuple[list[dict], int, list[dict]]:
         if wallet_seed is None:
             raise RuntimeError("scripts/seed_equal_wallet.py could not be loaded.")
@@ -740,8 +1112,10 @@ class DashboardService:
             return [], len(plan), skipped
 
         working_plan = plan
-        if len(resolved) != len(plan):
+        if len(resolved) != len(plan) and rebalance_on_skip:
             working_plan = wallet_seed.build_equal_plan(total_budget, list(resolved))
+        elif len(resolved) != len(plan):
+            working_plan = [(ticker, amount) for ticker, amount in plan if ticker in resolved]
 
         orders: list[dict] = []
         failures = 0
@@ -858,7 +1232,7 @@ class DashboardService:
         target_tickers: list[str] = []
         skipped: list[dict] = []
         for ticker in candidate_tickers:
-            t212_ticker = brokerage_service._format_ticker(ticker)
+            t212_ticker = _format_t212_ticker(ticker)
             if request.skip_owned and t212_ticker in owned_tickers:
                 skipped.append({"ticker": ticker, "reason": "owned"})
                 continue
@@ -1744,6 +2118,36 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
 async def sync_t212_wallet(request: T212WalletSyncRequest, token: str = Query(None), session: str = Query(None)):
     verify_token(token, session)
     return await dashboard_service.sync_t212_wallet_for_coint(request)
+
+
+@app.get("/api/t212/wallet/recommendations")
+async def get_t212_wallet_recommendations(
+    budget: float = Query(..., gt=0),
+    include_broken: bool = Query(False),
+    skip_owned: bool = Query(True),
+    skip_pending: bool = Query(True),
+    token: str = Query(None),
+    session: str = Query(None),
+):
+    verify_token(token, session)
+    return await dashboard_service.calculate_t212_wallet_recommendations(
+        T212WalletRecommendationRequest(
+            budget=budget,
+            include_broken=include_broken,
+            skip_owned=skip_owned,
+            skip_pending=skip_pending,
+        )
+    )
+
+
+@app.post("/api/t212/wallet/recommendations/buy")
+async def buy_t212_wallet_recommendations(
+    request: T212WalletRecommendationBuyRequest,
+    token: str = Query(None),
+    session: str = Query(None),
+):
+    verify_token(token, session)
+    return await dashboard_service.buy_t212_wallet_recommendations(request)
 
 
 @app.get("/api/positions")

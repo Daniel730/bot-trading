@@ -121,9 +121,11 @@ export interface PairsResponse {
 export interface T212WalletSyncOrder {
   ticker: string;
   amount: number;
-  status: 'ok' | 'error';
+  status: 'pending' | 'ok' | 'error' | 'skipped';
   order_id?: string | null;
   message?: string | null;
+  t212_ticker?: string | null;
+  price?: number | null;
 }
 
 export interface T212WalletSyncResponse {
@@ -139,6 +141,68 @@ export interface T212WalletSyncResponse {
   effective_cash?: number | null;
   per_ticker_min?: number;
   per_ticker_max?: number;
+  orders: T212WalletSyncOrder[];
+  failures: number;
+}
+
+export interface T212WalletRecommendationPair {
+  id: string;
+  ticker_a: string;
+  ticker_b: string;
+  category: 'coint' | 'broken_eligible';
+  z_score: number | null;
+  estimated_cost_pct: number;
+  sector: string;
+}
+
+export interface T212WalletRecommendation {
+  ticker: string;
+  t212_ticker: string;
+  category: 'coint' | 'broken_eligible';
+  categories: Array<'coint' | 'broken_eligible'>;
+  pairs: T212WalletRecommendationPair[];
+  sectors: string[];
+  score: number;
+  max_abs_z_score: number;
+  estimated_cost_pct: number;
+  rank: number | null;
+  suggested_amount: number;
+  status: 'ready';
+}
+
+export interface T212WalletRecommendationSkip extends Omit<T212WalletRecommendation, 'rank' | 'suggested_amount' | 'status'> {
+  reason: 'owned' | 'pending_buy' | string;
+}
+
+export interface T212WalletRecommendationResponse {
+  status: 'ok';
+  mode: 'demo' | 'live';
+  message: string;
+  generated_at: string;
+  include_broken: boolean;
+  coint_pairs: number;
+  broken_eligible_pairs: number;
+  candidate_tickers: string[];
+  recommended_tickers: string[];
+  budget: number;
+  usable_budget: number;
+  cash_limited: boolean;
+  spendable_cash: number | null;
+  effective_cash: number | null;
+  can_buy: boolean;
+  warning?: string | null;
+  recommendations: T212WalletRecommendation[];
+  skipped: T212WalletRecommendationSkip[];
+}
+
+export interface T212WalletRecommendationBuyResponse {
+  status: 'ok' | 'partial';
+  mode: 'demo' | 'live';
+  message: string;
+  budget: number;
+  target_tickers: string[];
+  recommendations: T212WalletRecommendation[];
+  skipped: Array<{ ticker: string; reason: string; message?: string | null }>;
   orders: T212WalletSyncOrder[];
   failures: number;
 }
@@ -506,6 +570,56 @@ export const syncT212Wallet = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ budget }),
+  }, sessionToken);
+
+export const fetchWalletRecommendations = async (
+  token: string | null,
+  sessionToken: string | null,
+  options: {
+    budget: number;
+    includeBroken?: boolean;
+    skipOwned?: boolean;
+    skipPending?: boolean;
+  },
+): Promise<T212WalletRecommendationResponse> => {
+  const url = apiUrl('/api/t212/wallet/recommendations');
+  url.searchParams.set('budget', String(options.budget));
+  url.searchParams.set('include_broken', String(options.includeBroken ?? false));
+  url.searchParams.set('skip_owned', String(options.skipOwned ?? true));
+  url.searchParams.set('skip_pending', String(options.skipPending ?? true));
+  const response = await fetchWithTimeout(url, {
+    headers: authHeaders(token, sessionToken),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new ApiError(response.status, errorData.detail || `Failed to fetch wallet recommendations (${response.status})`, errorData);
+  }
+  return response.json();
+};
+
+export const buyWalletRecommendations = async (
+  token: string | null,
+  sessionToken: string | null,
+  payload: {
+    budget: number;
+    includeBroken?: boolean;
+    tickers?: string[];
+    skipOwned?: boolean;
+    skipPending?: boolean;
+    delaySeconds?: number;
+  },
+): Promise<T212WalletRecommendationBuyResponse> =>
+  requestJson('/api/t212/wallet/recommendations/buy', token, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      budget: payload.budget,
+      include_broken: payload.includeBroken ?? false,
+      tickers: payload.tickers,
+      skip_owned: payload.skipOwned ?? true,
+      skip_pending: payload.skipPending ?? true,
+      delay_seconds: payload.delaySeconds ?? 0.5,
+    }),
   }, sessionToken);
 
 export const fetchOpenPositions = async (token: string | null, sessionToken?: string | null): Promise<{ positions: OpenPosition[] }> =>
