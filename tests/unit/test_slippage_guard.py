@@ -8,14 +8,14 @@ class TestSlippageGuard(unittest.IsolatedAsyncioTestCase):
             mock_settings.T212_API_KEY = "test"
             mock_settings.T212_API_SECRET = "test"
             mock_settings.TRADING_212_MODE = "demo"
-            self.service = BrokerageService()
+            self.service = BrokerageService("T212")
 
     @patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock)
-    @patch('src.services.brokerage_service.BrokerageService.get_symbol_metadata')
+    @patch('src.services.brokerage.t212.T212Provider.get_symbol_metadata')
     async def test_place_value_order_buy_slippage(self, mock_metadata, mock_price):
         mock_price.return_value = {"AAPL": 100.0}
         mock_metadata.return_value = {"minTradeQuantity": 0.0, "quantityIncrement": 0.0}
-        with patch.object(self.service.session, "post") as mock_post:
+        with patch.object(self.service.provider.session, "post") as mock_post:
             mock_post.return_value = MagicMock(status_code=200, json=lambda: {"id": "1"})
 
             # Buy $100 of AAPL at $100/share -> 1 share
@@ -28,11 +28,11 @@ class TestSlippageGuard(unittest.IsolatedAsyncioTestCase):
             self.assertIn("/orders/limit", args[0])
 
     @patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock)
-    @patch('src.services.brokerage_service.BrokerageService.get_symbol_metadata')
+    @patch('src.services.brokerage.t212.T212Provider.get_symbol_metadata')
     async def test_place_value_order_sell_slippage(self, mock_metadata, mock_price):
         mock_price.return_value = {"AAPL": 100.0}
         mock_metadata.return_value = {"minTradeQuantity": 0.0, "quantityIncrement": 0.0}
-        with patch.object(self.service.session, "post") as mock_post:
+        with patch.object(self.service.provider.session, "post") as mock_post:
             mock_post.return_value = MagicMock(status_code=200, json=lambda: {"id": "1"})
 
             # Sell $100 of AAPL at $100/share -> 1 share
