@@ -40,8 +40,11 @@ const formatZ = (value: number | null | undefined) => {
   return value.toFixed(2);
 };
 
-const categoryLabel = (category: T212WalletRecommendation['category']) =>
-  category === 'coint' ? 'COINT' : 'BROKEN eligible';
+const categoryLabel = (category: T212WalletRecommendation['category']) => {
+  if (category === 'coint') return 'COINT';
+  if (category === 'manual_override') return 'Manual override';
+  return 'BROKEN eligible';
+};
 
 const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
   const [budget, setBudget] = useState('100');
@@ -179,7 +182,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
               checked={includeBroken}
               onChange={(event) => setIncludeBroken(event.target.checked)}
             />
-            <span>Include all active pairs (even BROKEN)</span>
+            <span>Flag BROKEN-eligible mode</span>
           </label>
           <label className="wallet-toggle">
             <input
@@ -253,7 +256,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
         <div className="metric-card">
           <span>BROKEN Eligible</span>
           <strong>{plan?.broken_eligible_pairs ?? '--'}</strong>
-          <small>{includeBroken ? 'Included' : 'Hidden'}</small>
+          <small>{includeBroken ? 'Flagged' : 'Included'}</small>
         </div>
       </div>
 
