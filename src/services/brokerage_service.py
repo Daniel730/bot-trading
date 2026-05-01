@@ -23,12 +23,12 @@ class BrokerageService:
 
     def configure_provider(self, provider_name: str = None):
         """
-        Recreate the active equity brokerage provider from runtime settings.
-
+        Selects and instantiates the active brokerage provider using an explicit override or runtime configuration.
+        
         Parameters:
-            provider_name (str, optional): Explicit provider override. When omitted,
-            uses settings.BROKERAGE_PROVIDER so dashboard config changes can be
-            applied without restarting the process.
+            provider_name (str, optional): Explicit provider override. If omitted, the value of
+                `settings.BROKERAGE_PROVIDER` is used; if that is not set, a default of "T212" is applied.
+                The value is normalized before selection. Unsupported or unrecognized values fall back to T212.
         """
         selected_provider = (provider_name or settings.BROKERAGE_PROVIDER or "T212").strip().upper()
         self.provider_name = selected_provider

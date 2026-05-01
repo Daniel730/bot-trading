@@ -158,8 +158,24 @@ class AgentLogService:
         return "\n".join(hints)
 
 def agent_trace(name: str):
-    """Decorator to automatically trace execution steps."""
+    """
+    Create a decorator that records a named breadcrumb around a function's execution and annotates exceptions with the current breadcrumb path.
+    
+    Parameters:
+        name (str): A label added to the breadcrumb path for the wrapped function's execution.
+    
+    Returns:
+        decorator (Callable): A decorator that wraps a sync or async function. When the wrapped function runs, the decorator:
+          - appends `name` to the execution breadcrumb path before calling the function and removes it afterward, and
+          - if an exception is raised and lacks a `__agent_path__` attribute, sets `__agent_path__` to the current breadcrumb path before re-raising the exception.
+    """
     def decorator(func):
+        """
+        Wraps a callable so that an agent breadcrumb with the provided name is pushed before execution and popped after, and so exceptions raised during execution are annotated with the current breadcrumb path.
+        
+        Returns:
+            A wrapper callable that preserves the wrapped function's identity. If the wrapped function is a coroutine function, the wrapper is asynchronous; otherwise it is synchronous. In both cases the wrapper pushes the breadcrumb name before calling the original function, pops it afterward, and, if an exception is raised and lacks `__agent_path__`, sets that attribute to the current breadcrumb path before re-raising.
+        """
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             agent_logger.push_breadcrumb(name)
@@ -174,6 +190,14 @@ def agent_trace(name: str):
 
         @functools.wraps(func)
         def sync_wrapper(*args, **kwargs):
+            """
+            Pushes a breadcrumb for the wrapped call, executes the wrapped function, and always removes the breadcrumb when the call completes.
+            
+            If the wrapped call raises an exception, attach the current breadcrumb path to the exception as `__agent_path__` if that attribute is not already present, then re-raise the exception.
+            
+            Returns:
+                The value returned by the wrapped function.
+            """
             agent_logger.push_breadcrumb(name)
             try:
                 return func(*args, **kwargs)
