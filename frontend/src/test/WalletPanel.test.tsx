@@ -86,12 +86,7 @@ function makePlanResponse(overrides: Partial<{
 // ---------------------------------------------------------------------------
 
 describe('WalletPanel mode display', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
-    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -99,7 +94,6 @@ describe('WalletPanel mode display', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ mode: 'ALPACA' }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('ALPACA')).toBeInTheDocument();
     });
@@ -109,7 +103,6 @@ describe('WalletPanel mode display', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ mode: 'T212' }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('T212')).toBeInTheDocument();
     });
@@ -119,7 +112,6 @@ describe('WalletPanel mode display', () => {
     mockFetchRecs.mockRejectedValue(new Error('Network error'));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('BROKER')).toBeInTheDocument();
     });
@@ -131,12 +123,7 @@ describe('WalletPanel mode display', () => {
 // ---------------------------------------------------------------------------
 
 describe('WalletPanel broker_ticker display', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
-    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -145,7 +132,6 @@ describe('WalletPanel broker_ticker display', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec] }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       // ticker shown as strong, broker_ticker shown as muted subtext
       const mutedDivs = document.querySelectorAll('.muted');
@@ -163,7 +149,6 @@ describe('WalletPanel broker_ticker display', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec as any] }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('MSFT_US_EQ')).toBeInTheDocument();
     });
@@ -178,7 +163,6 @@ describe('WalletPanel broker_ticker display', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec as any] }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       // The ticker appears both as <strong> and as the .muted fallback
       const ticker = screen.getAllByText('GOOG');
@@ -192,12 +176,7 @@ describe('WalletPanel broker_ticker display', () => {
 // ---------------------------------------------------------------------------
 
 describe('WalletPanel cash_limited banner', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
-    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -205,7 +184,6 @@ describe('WalletPanel cash_limited banner', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ cash_limited: true }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(
         screen.getByText(/Budget exceeds bot-calculated spendable broker cash/i)
@@ -217,7 +195,6 @@ describe('WalletPanel cash_limited banner', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ cash_limited: false }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.queryByText(/spendable broker cash/i)).not.toBeInTheDocument();
     });
@@ -229,12 +206,7 @@ describe('WalletPanel cash_limited banner', () => {
 // ---------------------------------------------------------------------------
 
 describe('WalletPanel confirm dialog', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
-    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -242,7 +214,6 @@ describe('WalletPanel confirm dialog', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse());
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
 
     // Wait for the plan to render, then click the Buy Selected button
     await waitFor(() => {
@@ -261,12 +232,7 @@ describe('WalletPanel confirm dialog', () => {
 // ---------------------------------------------------------------------------
 
 describe('WalletPanel categoryLabel', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
-    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
@@ -275,7 +241,6 @@ describe('WalletPanel categoryLabel', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec] }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('COINT')).toBeInTheDocument();
     });
@@ -286,7 +251,6 @@ describe('WalletPanel categoryLabel', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec] }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('BROKEN eligible')).toBeInTheDocument();
     });
@@ -297,7 +261,6 @@ describe('WalletPanel categoryLabel', () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec] }));
 
     render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('Manual override')).toBeInTheDocument();
     });
