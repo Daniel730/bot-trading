@@ -1611,6 +1611,11 @@ class DashboardService:
         for key, spec in self.editable_config.items():
             raw_value = getattr(settings, key)
             should_mask = spec.get("masked", spec["sensitive"])
+            
+            # Smart masking: don't mask booleans or items with enumerated options
+            if spec["type"] == "bool" or spec.get("options"):
+                should_mask = False
+                
             item = {
                 "key": key,
                 "value": self._mask_sensitive_value(raw_value) if should_mask else raw_value,
@@ -1875,6 +1880,23 @@ class DashboardService:
                 "mode": dashboard_state.runtime_info()["mode"],
             }
         )
+
+    async def trigger_pair_discovery(self, actor: str) -> dict:
+        """
+        Manually triggers a global pair discovery cycle using PortfolioManagerAgent.
+        This runs in the background to avoid blocking the dashboard.
+        """
+        from src.agents.portfolio_manager_agent import portfolio_manager
+        
+        # We run it as a background task
+        asyncio.create_task(portfolio_manager.run_discovery())
+        
+        await dashboard_state.add_message(
+            "SYSTEM",
+            f"Global pair discovery triggered by {actor}.",
+            metadata={"type": "pair_discovery", "actor": actor}
+        )
+        return {"status": "accepted", "message": "Discovery cycle started in background."}
 
     async def start(self):
         try:
@@ -2300,6 +2322,17 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
         return {"status": "ok", "verified": True, "two_factor": dashboard_service.totp.public_status()}
     raise HTTPException(status_code=403, detail="Invalid 2FA token.")
 
+@app.post("/api/pairs/discover")
+async def discover_pairs(token: str = Query(None), session: str = Query(None)):
+    verify_token(token, session)
+    from src.agents.portfolio_manager_agent import portfolio_manager
+    import asyncio
+    
+    asyncio.create_task(portfolio_manager.scan_crypto_universe())
+    asyncio.create_task(portfolio_manager.scan_sector_universe("Technology"))
+    
+    await dashboard_state.add_message("SYSTEM", "Triggered background pair discovery for Crypto and Equities.")
+    return {"status": "ok", "message": "Discovery started"}
 
 @app.get("/api/pairs")
 async def list_pairs(token: str = Query(None), session: str = Query(None)):

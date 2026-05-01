@@ -41,6 +41,15 @@ class BrokerageService:
             self.provider = T212Provider()
             logger.info("BrokerageService: Initialized with T212 provider.")
 
+    def get_web3_account_cash(self) -> AwaitableFloat:
+        """
+        Get the cash balance from the WEB3 service as an AwaitableFloat for backward compatibility.
+        
+        Returns:
+            AwaitableFloat: The WEB3 account cash balance wrapped in an AwaitableFloat.
+        """
+        return self.web3.get_account_cash()
+
     def test_connection(self) -> bool:
         """
         Checks connectivity to the active brokerage provider.

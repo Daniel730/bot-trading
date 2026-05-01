@@ -11,6 +11,7 @@ interface BotControlPageProps {
   isConnected: boolean;
   isBusy: boolean;
   handleBotAction: (action: 'start' | 'stop' | 'restart') => void;
+  handleDiscoverPairs: () => void;
   terminalMessages: TerminalMessage[];
   logs: LogsResponse | null;
 }
@@ -22,9 +23,25 @@ const BotControlPage: React.FC<BotControlPageProps> = ({
   isConnected,
   isBusy,
   handleBotAction,
+  handleDiscoverPairs,
   terminalMessages,
   logs
 }) => {
+  const [pendingAction, setPendingAction] = React.useState<'start' | 'stop' | 'restart' | null>(null);
+
+  React.useEffect(() => {
+    if (pendingAction === 'start' && currentBotState === 'RUNNING') setPendingAction(null);
+    if (pendingAction === 'stop' && currentBotState === 'STOPPED') setPendingAction(null);
+    if (pendingAction === 'restart' && currentBotState === 'RUNNING') setPendingAction(null);
+  }, [currentBotState, pendingAction]);
+
+  const onActionClick = (action: 'start' | 'stop' | 'restart') => {
+    setPendingAction(action);
+    handleBotAction(action);
+    // Timeout to clear pending state if backend doesn't update
+    setTimeout(() => setPendingAction(null), 10000);
+  };
+
   return (
     <>
       <SectionHeader title="Bot Control" subtitle="Operational state, restart queueing, and recent terminal activity." />
@@ -47,17 +64,21 @@ const BotControlPage: React.FC<BotControlPageProps> = ({
         </div>
       </div>
       <div className="control-strip">
-        <button className="primary-btn" disabled={isBusy} onClick={() => handleBotAction('start')}>
+        <button className="primary-btn" disabled={isBusy || currentBotState === 'RUNNING' || pendingAction !== null} onClick={() => onActionClick('start')}>
           <Play size={14} />
-          Start
+          {pendingAction === 'start' ? 'Starting...' : 'Start'}
         </button>
-        <button className="ghost-btn" disabled={isBusy} onClick={() => handleBotAction('stop')}>
+        <button className="ghost-btn" disabled={isBusy || currentBotState === 'STOPPED' || pendingAction !== null} onClick={() => onActionClick('stop')}>
           <Square size={14} />
-          Stop
+          {pendingAction === 'stop' ? 'Stopping...' : 'Stop'}
         </button>
-        <button className="ghost-btn" disabled={isBusy} onClick={() => handleBotAction('restart')}>
+        <button className="ghost-btn" disabled={isBusy || pendingAction !== null} onClick={() => onActionClick('restart')}>
+          <RefreshCw size={14} className={pendingAction === 'restart' ? 'spin' : ''} />
+          {pendingAction === 'restart' ? 'Restarting...' : 'Restart'}
+        </button>
+        <button className="ghost-btn" disabled={isBusy} onClick={handleDiscoverPairs} title="Run cointegration tests on S&P 500 and Top Crypto">
           <RefreshCw size={14} />
-          Restart
+          Search & Update Eligibles
         </button>
       </div>
       <div className="card-grid two-up">

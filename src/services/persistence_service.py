@@ -402,6 +402,51 @@ class PersistenceService:
             tickers = set(result_a.scalars().all()) | set(result_b.scalars().all())
             return sorted(list(tickers))
 
+    async def get_active_trading_pairs(self) -> List[dict]:
+        """Returns a list of dicts for all active TradingPairs."""
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(TradingPair).where(TradingPair.status == "Active")
+            result = await session.execute(stmt)
+            pairs = result.scalars().all()
+            return [
+                {
+                    "id": p.id,
+                    "ticker_a": p.ticker_a,
+                    "ticker_b": p.ticker_b,
+                    "hedge_ratio": float(p.hedge_ratio),
+                    "is_cointegrated": p.is_cointegrated,
+                    "status": p.status
+                }
+                for p in pairs
+            ]
+
+    async def save_trading_pairs(self, pairs: List[dict]):
+        """Upserts a list of trading pairs."""
+        from sqlalchemy.dialects.postgresql import insert
+        if not pairs:
+            return
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                for p in pairs:
+                    stmt = insert(TradingPair).values(
+                        id=p.get('id') or f"{p['ticker_a']}_{p['ticker_b']}",
+                        ticker_a=p['ticker_a'],
+                        ticker_b=p['ticker_b'],
+                        hedge_ratio=p.get('hedge_ratio', 0.0),
+                        is_cointegrated=p.get('is_cointegrated', False),
+                        status=p.get('status', 'Active')
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[TradingPair.id],
+                        set_=dict(
+                            hedge_ratio=p.get('hedge_ratio', 0.0),
+                            is_cointegrated=p.get('is_cointegrated', False),
+                            status=p.get('status', 'Active')
+                        )
+                    )
+                    await session.execute(stmt)
+
     async def get_daily_returns(self, venue: Optional[str] = None) -> Dict[str, float]:
         """Returns aggregated daily PnL mapping of form {'YYYY-MM-DD': pnl_sum} based on CLOSED trades."""
         from sqlalchemy import select
@@ -701,4 +746,29 @@ class PersistenceService:
                     session.add(c)
                 # Or use bulk_save_objects if needed, but session.add in a loop within a transaction is usually fine for small/medium batches in async
 
+    async def get_top_candidates(self, limit: int = 20) -> List[dict]:
+        """Returns the best candidates based on Sortino ratio."""
+        from sqlalchemy import select, desc
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(UniverseCandidate).order_by(desc(UniverseCandidate.sortino)).limit(limit)
+            result = await session.execute(stmt)
+            return [
+                {
+                    "pair_id": c.pair_id,
+                    "sector": c.sector,
+                    "sortino": float(c.sortino or 0.0),
+                    "p_value": float(c.p_value or 1.0)
+                }
+                for c in result.scalars().all()
+            ]
+
+    async def update_pair_status(self, pair_id: str, status: str):
+        """Updates the status of a trading pair (e.g. Active, Benched)."""
+        from sqlalchemy import update
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = update(TradingPair).where(TradingPair.id == pair_id).values(status=status)
+                await session.execute(stmt)
+
 persistence_service = PersistenceService()
+

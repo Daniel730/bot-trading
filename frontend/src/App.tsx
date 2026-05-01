@@ -31,6 +31,7 @@ import {
   type TwoFactorInitiateResponse,
   completeLogin,
   controlBot,
+  discoverPairs,
   fetchChartMetric,
   fetchConfig,
   fetchOpenPositions,
@@ -414,6 +415,21 @@ function App() {
     }
   };
 
+  const handleDiscoverPairs = async () => {
+    setIsBusy(true);
+    setSystemError(null);
+    setSystemMessage(null);
+    try {
+      await discoverPairs(securityToken, sessionToken);
+      setSystemMessage('Pair discovery started. Check terminal feed for updates.');
+    } catch (err: any) {
+      if (handleAuthFailure(err)) return;
+      setSystemError(err.message || 'Failed to start pair discovery.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleSaveConfig = async () => {
     if (!config) return;
     const updates = Object.fromEntries(
@@ -471,7 +487,8 @@ function App() {
       setPendingConfigUpdates(null);
       setSaveOtpCode('');
       setSaveOtpModalOpen(false);
-      setSystemMessage('Configuration updated.');
+      await refreshConfig();
+      setSystemMessage('Configuration updated successfully!');
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
       setSystemError(err?.message || 'Failed to verify 2FA for configuration save.');
@@ -763,6 +780,7 @@ function App() {
             isConnected={isConnected}
             isBusy={isBusy}
             handleBotAction={handleBotAction}
+            handleDiscoverPairs={handleDiscoverPairs}
             terminalMessages={terminalMessages}
             logs={logs}
           />
