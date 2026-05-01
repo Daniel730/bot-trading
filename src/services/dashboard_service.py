@@ -809,23 +809,23 @@ class DashboardService:
 
     async def _collect_wallet_candidates(self, include_broken: bool) -> tuple[dict[str, int], dict[str, dict]]:
         """
-        Collects candidate tickers for wallet recommendations from the monitor's active pairs.
+        Collect candidate tickers from the monitor's active pairs for wallet recommendations.
+        
+        Parameters:
+        	include_broken (bool): If True, include tickers that come only from pairs not marked as cointegrated; if False, exclude those tickers.
         
         Raises:
         	HTTPException: 409 if the bot monitor is not attached.
         
-        Parameters:
-        	include_broken (bool): If True, include tickers from pairs not marked as cointegrated ("broken_eligible") as candidates; if False, still considers them but logs a warning the first time each non-cointegrated ticker is encountered.
-        
         Returns:
-        	counts (dict[str, int]): Counters with keys `"coint"` and `"broken_eligible"` representing number of pairs in each category.
-        	candidates (dict[str, dict]): Mapping from ticker symbol to candidate metadata with the following keys:
+        	counts (dict): Counters with keys "coint" and "broken_eligible" representing how many pairs were seen in each category.
+        	candidates (dict): Mapping from uppercased ticker to metadata with keys:
         		- ticker (str): Uppercased ticker symbol.
-        		- categories (set[str]): Set containing one or more of `"coint"` / `"broken_eligible"`.
-        		- pairs (list[dict]): List of pair info dicts, each containing `id`, `ticker_a`, `ticker_b`, `category`, `z_score` (float or None), `estimated_cost_pct` (float), and `sector`.
-        		- sectors (set[str]): Set of sector names for that ticker.
-        		- max_abs_z_score (float): Maximum absolute z-score observed across pairs for this ticker (0.0 if none).
-        		- estimated_cost_pct (float): Maximum estimated cost percentage observed across pairs for this ticker (0.0 if none).
+        		- categories (set): Set containing one or more of "coint"/"broken_eligible".
+        		- pairs (list): List of pair info dicts with keys `id`, `ticker_a`, `ticker_b`, `category`, `z_score` (float or None), `estimated_cost_pct` (float), and `sector`.
+        		- sectors (set): Set of sector names observed for that ticker.
+        		- max_abs_z_score (float): Maximum absolute z-score seen for the ticker (0.0 if none).
+        		- estimated_cost_pct (float): Maximum estimated cost percentage seen for the ticker (0.0 if none).
         """
         monitor = dashboard_state.monitor
         if monitor is None:
