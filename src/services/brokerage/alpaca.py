@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import alpaca_trade_api as tradeapi
+import re
 from typing import List, Dict, Any, Optional
 from src.config import settings
 from src.services.brokerage.base import AbstractBrokerageProvider
@@ -8,6 +9,23 @@ from src.services.brokerage.base import AbstractBrokerageProvider
 logger = logging.getLogger(__name__)
 
 class AlpacaProvider(AbstractBrokerageProvider):
+    _US_SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}([.-][A-Z])?$")
+
+    @classmethod
+    def normalize_symbol(cls, ticker: str) -> str:
+        symbol = (ticker or "").strip().upper()
+        # Alpaca uses BRK.B style share-class symbols.
+        if "-" in symbol and "." not in symbol:
+            left, right = symbol.rsplit("-", 1)
+            if left.isalpha() and right.isalpha() and len(right) <= 2:
+                return f"{left}.{right}"
+        return symbol
+
+    @classmethod
+    def is_supported_symbol(cls, ticker: str) -> bool:
+        symbol = cls.normalize_symbol(ticker)
+        return bool(cls._US_SYMBOL_PATTERN.fullmatch(symbol))
+
     def __init__(self, api_key: str = None, api_secret: str = None, base_url: str = None):
         """
         Configure the provider with Alpaca credentials and create the Alpaca REST client.
@@ -66,10 +84,14 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 - "status": "error"
                 - "message": a human-readable error message
         """
+        if not self.is_supported_symbol(ticker):
+            return {"status": "error", "message": f"Ticker {ticker} is not supported by Alpaca"}
+
+        broker_symbol = self.normalize_symbol(ticker)
         try:
             order_type = 'limit' if limit_price else 'market'
             params = {
-                'symbol': ticker,
+                'symbol': broker_symbol,
                 'qty': quantity,
                 'side': side.lower(),
                 'type': order_type,
@@ -88,7 +110,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 "client_order_id": order.client_order_id
             }
         except Exception as e:
-            logger.error(f"Alpaca order failed for {ticker}: {e}")
+            logger.error(f"Alpaca order failed for {broker_symbol}: {e}")
             return {"status": "error", "message": str(e)}
 
     async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
@@ -107,10 +129,14 @@ class AlpacaProvider(AbstractBrokerageProvider):
         Returns:
             dict: On success: {"status": "success", "order_id": <broker order id>, "broker": "ALPACA", "client_order_id": <client id or None>}. On error: {"status": "error", "message": <error message>}.
         """
+        if not self.is_supported_symbol(ticker):
+            return {"status": "error", "message": f"Ticker {ticker} is not supported by Alpaca"}
+
+        broker_symbol = self.normalize_symbol(ticker)
         try:
             # Alpaca supports notional orders (value-based) natively for many assets
             params = {
-                'symbol': ticker,
+                'symbol': broker_symbol,
                 'notional': amount,
                 'side': side.lower(),
                 'type': 'market',
@@ -127,7 +153,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 "client_order_id": order.client_order_id
             }
         except Exception as e:
-            logger.warning(f"Alpaca notional order failed for {ticker}, falling back to quantity: {e}")
+            logger.warning(f"Alpaca notional order failed for {broker_symbol}, falling back to quantity: {e}")
             # Fallback to calculating quantity if notional is not supported for this asset
             from src.services.data_service import data_service
             if price is None:
@@ -221,8 +247,10 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 - status: asset status string.
             Returns an empty dict if metadata cannot be retrieved.
         """
+        if not self.is_supported_symbol(ticker):
+            return {}
         try:
-            asset = self.api.get_asset(ticker)
+            asset = self.api.get_asset(self.normalize_symbol(ticker))
             return {
                 "ticker": asset.symbol,
                 "minTradeQuantity": 0.0001 if asset.fractionable else 1.0,

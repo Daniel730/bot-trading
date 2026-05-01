@@ -838,8 +838,6 @@ class DashboardService:
         z_scores = await self._wallet_pair_z_scores(pair_ids)
         counts = {"coint": 0, "broken_eligible": 0}
         candidates: dict[str, dict] = {}
-        logged_non_coint_candidates: set[str] = set()
-
         active_provider = brokerage_service.provider_name
         for pair in monitor.active_pairs:
             ticker_a = str(pair.get("ticker_a") or "").strip().upper()
@@ -852,6 +850,8 @@ class DashboardService:
             is_coint = pair.get("is_cointegrated") is True
             category = "coint" if is_coint else "broken_eligible"
             counts[category] += 1
+            if category == "broken_eligible" and not include_broken:
+                continue
 
             pair_id = str(pair.get("id") or f"{ticker_a}_{ticker_b}")
             sector = settings.PAIR_SECTORS.get(
@@ -873,17 +873,9 @@ class DashboardService:
             for ticker in (ticker_a, ticker_b):
                 if brokerage_service.get_venue(ticker) != active_provider:
                     continue
-                if (
-                    category == "broken_eligible"
-                    and not include_broken
-                    and ticker not in logged_non_coint_candidates
-                ):
-                    logger.warning(
-                        "DASHBOARD: Including non-COINT ticker %s in candidates for %s",
-                        ticker,
-                        active_provider
-                    )
-                    logged_non_coint_candidates.add(ticker)
+                provider = brokerage_service.provider
+                if hasattr(provider, "is_supported_symbol") and not provider.is_supported_symbol(ticker):
+                    continue
                 entry = candidates.setdefault(
                     ticker,
                     {
@@ -1923,7 +1915,7 @@ class DashboardService:
                 equity_cash: Optional[float] = None
                 equity_pending: float = 0.0
                 try:
-                    equity_cash = await asyncio.to_thread(brokerage_service.get_account_cash)
+                    equity_cash = await brokerage_service.get_account_cash()
                     equity_pending = await brokerage_service.get_pending_orders_value()
                 except Exception as exc:
                     logger.warning("DASHBOARD: Could not fetch %s cash: %s", active_provider, exc)

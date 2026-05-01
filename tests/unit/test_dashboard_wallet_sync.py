@@ -218,7 +218,7 @@ async def test_wallet_sync_warns_but_proceeds_when_budget_above_spendable(wallet
 
 
 @pytest.mark.asyncio
-async def test_wallet_recommendations_include_all_active_tickers_by_default(wallet_context, monkeypatch, caplog):
+async def test_wallet_recommendations_exclude_broken_tickers_by_default(wallet_context, monkeypatch, caplog):
     wallet_context("T212")
     monkeypatch.setattr(
         dashboard_service,
@@ -235,16 +235,13 @@ async def test_wallet_recommendations_include_all_active_tickers_by_default(wall
     assert result["coint_pairs"] == 2
     assert result["broken_eligible_pairs"] == 1
     assert result["recommended_tickers"][:4] == ["AAPL", "MSFT", "GOOG", "GOOGL"]
-    assert set(result["recommended_tickers"]) == {"AAPL", "MSFT", "GOOG", "GOOGL", "KO", "PEP"}
-    assert {item["category"] for item in result["recommendations"]} == {"coint", "broken_eligible"}
+    assert set(result["recommended_tickers"]) == {"AAPL", "MSFT", "GOOG", "GOOGL"}
+    assert {item["category"] for item in result["recommendations"]} == {"coint"}
     assert sum(item["suggested_amount"] for item in result["recommendations"]) == 40.0
-    assert [
+    assert not [
         record.getMessage()
         for record in caplog.records
         if "Including non-COINT ticker" in record.getMessage()
-    ] == [
-        "DASHBOARD: Including non-COINT ticker KO in candidates for T212",
-        "DASHBOARD: Including non-COINT ticker PEP in candidates for T212",
     ]
 
 
