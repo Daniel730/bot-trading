@@ -145,6 +145,14 @@ function isDashboardAuthError(err: unknown) {
   return /dashboard session|dashboard login is required|invalid dashboard token/i.test(message);
 }
 
+/**
+ * Root React component for the Alpha Arbitrage authenticated dashboard and login flows.
+ *
+ * Renders the login screen when not authenticated and the full operations console when authenticated.
+ * Manages session persistence, login/approval polling, periodic data refresh (summary, charts, positions, trade history, health, config), startup progress calculation and animation, bot control actions, configuration editing with optional 2FA confirmation, and 2FA setup/verification.
+ *
+ * @returns The dashboard UI element (login view when not authenticated; main console when authenticated).
+ */
 function App() {
   const [storedSession] = useState<StoredDashboardSession | null>(() => readStoredDashboardSession());
   const [securityToken, setSecurityToken] = useState('');
