@@ -1625,6 +1625,12 @@ class DashboardService:
             "items": items,
             "two_factor": self.totp.public_status(),
             "audit_log": audit_log,
+            "integrations": {
+                "brokerage_provider": settings.BROKERAGE_PROVIDER,
+                "alpaca_configured": bool(settings.ALPACA_API_KEY.strip() and settings.ALPACA_API_SECRET.strip()),
+                "alpaca_base_url": settings.ALPACA_BASE_URL,
+                "t212_configured": bool(settings.effective_t212_key.strip()),
+            },
         }
 
     async def update_dashboard_config(self, actor: str, updates: Dict[str, Any], otp_token: Optional[str]) -> dict:

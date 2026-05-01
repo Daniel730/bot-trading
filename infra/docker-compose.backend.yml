@@ -111,5 +111,7 @@ services:
 volumes:
   redis_data:
     name: trading-bot_redis_data
+    external: true
   postgres_data:
     name: trading-bot_postgres_data
+    external: true
