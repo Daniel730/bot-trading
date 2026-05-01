@@ -2368,22 +2368,30 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
 
 @app.post("/api/pairs/discover")
 async def discover_pairs(token: str = Query(None), session: str = Query(None)):
+    """
+    Initiates a background pair discovery task for the dashboard.
+    
+    Starts the pair discovery workflow and returns a record describing the initiated request and its acceptance status.
+    
+    Returns:
+    	A serializable object (typically a dict) describing the scheduled discovery task and its acceptance/status metadata.
+    """
     verify_token(token, session)
     return await dashboard_service.trigger_pair_discovery(actor="dashboard")
 
 @app.get("/api/pairs")
 async def list_pairs(token: str = Query(None), session: str = Query(None)):
     """
-    Return a snapshot of pair discovery state including active pairs enriched with latest z-scores and last cointegration check timestamps.
+    Return a snapshot of pair discovery state with active pairs enriched by latest z-scores and last cointegration check timestamps.
     
-    The response includes:
-    - `active_pairs`: list of active pair objects with added `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
-    - `configured_pairs`: the dashboard's configured pair list from settings.
-    - `crypto_test_pairs`: the configured crypto test pairs from settings.
-    - `dev_mode`: current development mode flag from settings.
+    The response contains:
+    - `active_pairs`: list of pair objects augmented with `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
+    - `configured_pairs`: list of pairs configured in settings (`settings.ARBITRAGE_PAIRS`).
+    - `crypto_test_pairs`: list of crypto test pairs from settings (`settings.CRYPTO_TEST_PAIRS`).
+    - `dev_mode`: boolean flag from settings (`settings.DEV_MODE`).
     
     Returns:
-        dict: The scrubbed response object described above, with non-finite floats replaced by `None`.
+        dict: A scrubbed response object with the keys above; non-finite numeric values are replaced with `None`.
     """
     verify_token(token, session)
     monitor = dashboard_state.monitor
