@@ -57,7 +57,7 @@ class DataService:
             return yf.download(*args, **kwargs)
         except Exception as exc:
             logger.error(f"DataService: yfinance download failed: {exc}")
-            return pd.DataFrame()
+            raise
 
     @staticmethod
     def _dedupe_tickers(tickers: List[str]) -> List[str]:
