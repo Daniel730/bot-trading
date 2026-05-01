@@ -119,19 +119,20 @@ export interface PairsResponse {
   dev_mode: boolean;
 }
 
-export interface T212WalletSyncOrder {
+export interface WalletSyncOrder {
   ticker: string;
   amount: number;
   status: 'pending' | 'ok' | 'error' | 'skipped';
   order_id?: string | null;
   message?: string | null;
+  broker_ticker?: string | null;
   t212_ticker?: string | null;
   price?: number | null;
 }
 
-export interface T212WalletSyncResponse {
+export interface WalletSyncResponse {
   status: 'ok' | 'partial';
-  mode: 'demo' | 'live';
+  mode: string;
   message: string;
   coint_pairs: number;
   candidate_tickers: string[];
@@ -142,11 +143,11 @@ export interface T212WalletSyncResponse {
   effective_cash?: number | null;
   per_ticker_min?: number;
   per_ticker_max?: number;
-  orders: T212WalletSyncOrder[];
+  orders: WalletSyncOrder[];
   failures: number;
 }
 
-export interface T212WalletRecommendationPair {
+export interface WalletRecommendationPair {
   id: string;
   ticker_a: string;
   ticker_b: string;
@@ -156,12 +157,13 @@ export interface T212WalletRecommendationPair {
   sector: string;
 }
 
-export interface T212WalletRecommendation {
+export interface WalletRecommendation {
   ticker: string;
-  t212_ticker: string;
+  broker_ticker: string;
+  t212_ticker?: string | null;
   category: 'coint' | 'broken_eligible' | 'manual_override';
   categories: Array<'coint' | 'broken_eligible' | 'manual_override'>;
-  pairs: T212WalletRecommendationPair[];
+  pairs: WalletRecommendationPair[];
   sectors: string[];
   score: number;
   max_abs_z_score: number;
@@ -171,13 +173,13 @@ export interface T212WalletRecommendation {
   status: 'ready' | 'manual_override';
 }
 
-export interface T212WalletRecommendationSkip extends Omit<T212WalletRecommendation, 'rank' | 'suggested_amount' | 'status'> {
+export interface WalletRecommendationSkip extends Omit<WalletRecommendation, 'rank' | 'suggested_amount' | 'status'> {
   reason: 'owned' | 'pending_buy' | string;
 }
 
-export interface T212WalletRecommendationResponse {
+export interface WalletRecommendationResponse {
   status: 'ok';
-  mode: 'demo' | 'live';
+  mode: string;
   message: string;
   generated_at: string;
   include_broken: boolean;
@@ -192,21 +194,29 @@ export interface T212WalletRecommendationResponse {
   effective_cash: number | null;
   can_buy: boolean;
   warning?: string | null;
-  recommendations: T212WalletRecommendation[];
-  skipped: T212WalletRecommendationSkip[];
+  recommendations: WalletRecommendation[];
+  skipped: WalletRecommendationSkip[];
 }
 
-export interface T212WalletRecommendationBuyResponse {
+export interface WalletRecommendationBuyResponse {
   status: 'ok' | 'partial';
-  mode: 'demo' | 'live';
+  mode: string;
   message: string;
   budget: number;
   target_tickers: string[];
-  recommendations: T212WalletRecommendation[];
+  recommendations: WalletRecommendation[];
   skipped: Array<{ ticker: string; reason: string; message?: string | null }>;
-  orders: T212WalletSyncOrder[];
+  orders: WalletSyncOrder[];
   failures: number;
 }
+
+export type T212WalletSyncOrder = WalletSyncOrder;
+export type T212WalletSyncResponse = WalletSyncResponse;
+export type T212WalletRecommendationPair = WalletRecommendationPair;
+export type T212WalletRecommendation = WalletRecommendation;
+export type T212WalletRecommendationSkip = WalletRecommendationSkip;
+export type T212WalletRecommendationResponse = WalletRecommendationResponse;
+export type T212WalletRecommendationBuyResponse = WalletRecommendationBuyResponse;
 
 export interface OpenPosition {
   signal_id: string;
@@ -553,16 +563,18 @@ export const updatePairs = async (
     }),
   }, sessionToken);
 
-export const syncT212Wallet = async (
+export const syncWallet = async (
   token: string | null,
   sessionToken: string | null,
   budget: number,
-): Promise<T212WalletSyncResponse> =>
-  requestJson('/api/t212/wallet/sync', token, {
+): Promise<WalletSyncResponse> =>
+  requestJson('/api/wallet/sync', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ budget }),
   }, sessionToken);
+
+export const syncT212Wallet = syncWallet;
 
 export const fetchWalletRecommendations = async (
   token: string | null,
@@ -573,8 +585,8 @@ export const fetchWalletRecommendations = async (
     skipOwned?: boolean;
     skipPending?: boolean;
   },
-): Promise<T212WalletRecommendationResponse> => {
-  const url = apiUrl('/api/t212/wallet/recommendations');
+): Promise<WalletRecommendationResponse> => {
+  const url = apiUrl('/api/wallet/recommendations');
   url.searchParams.set('budget', String(options.budget));
   url.searchParams.set('include_broken', String(options.includeBroken ?? false));
   url.searchParams.set('skip_owned', String(options.skipOwned ?? true));
@@ -600,8 +612,8 @@ export const buyWalletRecommendations = async (
     skipPending?: boolean;
     delaySeconds?: number;
   },
-): Promise<T212WalletRecommendationBuyResponse> =>
-  requestJson('/api/t212/wallet/recommendations/buy', token, {
+): Promise<WalletRecommendationBuyResponse> =>
+  requestJson('/api/wallet/recommendations/buy', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
