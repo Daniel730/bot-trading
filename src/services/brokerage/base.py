@@ -6,10 +6,10 @@ class AbstractBrokerageProvider(ABC):
     @abstractmethod
     def test_connection(self) -> bool:
         """
-        Check whether the provider can connect to and authenticate with the brokerage API.
+        Verify connectivity and authentication with the brokerage API.
         
         Returns:
-            true if connectivity and authentication succeed, false otherwise.
+            bool: True if connectivity and authentication succeed, False otherwise.
         """
         pass
 
@@ -47,7 +47,7 @@ class AbstractBrokerageProvider(ABC):
         client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Place an order sized by currency value for a given ticker and side.
+        Place a value-sized order for the specified ticker and side.
         
         Parameters:
         	ticker (str): Symbol or instrument identifier to trade.
@@ -57,7 +57,7 @@ class AbstractBrokerageProvider(ABC):
         	client_order_id (Optional[str]): Optional client-supplied identifier for the order.
         
         Returns:
-        	order_result (Dict[str, Any]): Provider-specific order response payload containing execution and order metadata.
+        	order_result (Dict[str, Any]): Provider-specific order response containing execution details and order metadata.
         """
         pass
 
@@ -74,23 +74,23 @@ class AbstractBrokerageProvider(ABC):
     @abstractmethod
     def get_positions(self, ticker: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        Retrieve open positions, optionally filtered by ticker.
+        Retrieve open positions, optionally limited to a single ticker.
         
         Parameters:
-        	ticker (Optional[str]): If provided, only positions for this ticker are returned.
+            ticker (Optional[str]): If provided, restricts results to positions for this ticker.
         
         Returns:
-        	positions (List[Dict[str, Any]]): A list of position dictionaries representing open positions; each dictionary contains provider-specific fields (e.g., ticker, quantity, average price, unrealized P&L).
+            List[Dict[str, Any]]: A list of position dictionaries; each dictionary contains provider-specific fields such as `ticker`, `quantity`, `average_price`, and `unrealized_pnl`.
         """
         pass
 
     @abstractmethod
     def get_account_cash(self) -> float:
         """
-        Get the currently available free cash balance for trading.
+        Retrieve the currently available free cash balance for trading.
         
         Returns:
-            float: Available free cash amount.
+            Available free cash balance as a float.
         """
         pass
 
