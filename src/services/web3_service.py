@@ -184,10 +184,12 @@ class Web3BrokerageService:
 
     async def place_value_order(self, ticker: str, amount_fiat: float, side: str) -> Dict[str, Any]:
         """
-        Executes a trade signal on-chain via a zero-value Sepolia transfer.
-        The trade metadata is encoded in the transaction data field so it appears
-        on Alchemy / Sepolia Etherscan (and in MetaMask if the receiving wallet
-        is configured or imported there).
+        Broadcasts a trade signal on-chain by sending a zero-value transaction with encoded trade metadata.
+        
+        Encodes the ticker, side, and fiat amount into the transaction data field and submits a signed transaction for signaling purposes (not value transfer). Handles missing token or base-token mappings by proceeding with simulated placeholders and returns error dictionaries when Web3 or the account are not available or when broadcasting fails.
+        
+        Returns:
+            dict: A result dictionary. On success contains keys such as `status` (e.g., "success"), `order_id`, `tx_hash`, `memo`, `from_address`, `to_address`, and `explorer_url`. On error contains `status: "error"` and a `message` describing the failure.
         """
         if not self.w3:
             return {"status": "error", "message": "web3 package is not installed."}
@@ -221,11 +223,14 @@ class Web3BrokerageService:
             logger.error(f"Web3 broadcast error: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def get_account_balance(self) -> float:
-        """Returns the native ETH balance as float.
-
-        Used as a pragmatic proxy for spendable balance on Sepolia/Alchemy test
-        setups where we hold ETH rather than a stablecoin base token.
+    async def get_account_cash(self) -> float:
+        """
+        Get the account's native ETH balance expressed in ether units.
+        
+        If Web3 or the account is not available, or if an error occurs while fetching the balance, returns 0.0.
+        
+        Returns:
+            float: The account balance converted from wei to ether, or 0.0 on error or when unavailable.
         """
         if not self.w3 or not self.account:
             return 0.0
@@ -259,7 +264,22 @@ class Web3BrokerageService:
         return 0.0
 
     async def get_budget_snapshot(self) -> Dict[str, Any]:
-        """Returns spendable Web3 budget in USD for venue-level sizing."""
+        """
+        Provide a snapshot of available Web3-native asset value in USD for venue-level sizing decisions.
+        
+        Returns:
+            result (Dict[str, Any]): A dictionary with one of two shapes:
+                - On success (`"status": "success"`):
+                    - base_symbol (str): Symbol of the base token from settings.
+                    - base_units (float): Available native token balance (in token units, e.g., ETH).
+                    - price_usd (float): USD price per base token.
+                    - balance_usd (float): base_units multiplied by price_usd.
+                    - available_usd (float): Spendable USD amount (equal to balance_usd).
+                    - source (str): Data source identifier, `"web3_balance_x_price"`.
+                - On error (`"status": "error"`):
+                    - message (str): Human-readable error description.
+                    - available_usd (float): Set to 0.0 when an error occurs.
+        """
         if not self.account:
             return {"status": "error", "message": "Web3 account not configured.", "available_usd": 0.0}
 
@@ -267,7 +287,7 @@ class Web3BrokerageService:
             return {"status": "error", "message": "Web3 is not enabled.", "available_usd": 0.0}
 
         try:
-            base_units = await self.get_account_balance()
+            base_units = await self.get_account_cash()
             price_usd = await self.get_base_token_price_usd()
             balance_usd = float(base_units) * float(price_usd)
             return {

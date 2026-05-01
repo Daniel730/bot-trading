@@ -32,6 +32,16 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   handleVerify2FA,
 }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  const [visibleFields, setVisibleFields] = useState<Set<string>>(new Set());
+
+  const toggleVisibility = (key: string) => {
+    setVisibleFields(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const getCategory = (key: string) => {
     if (
@@ -118,12 +128,25 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             <option value="false">Disabled</option>
                           </select>
                         ) : (
-                          <input
-                            type={item.sensitive ? 'password' : item.type === 'str' ? 'text' : item.type === 'int' || item.type === 'float' ? 'number' : 'text'}
-                            step={item.type === 'int' ? '1' : item.type === 'float' ? '0.0001' : undefined}
-                            value={configForm[item.key] ?? ''}
-                            onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
-                          />
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', width: '100%' }}>
+                            <input
+                              type={item.sensitive && !visibleFields.has(item.key) ? 'password' : item.type === 'str' ? 'text' : item.type === 'int' || item.type === 'float' ? 'number' : 'text'}
+                              step={item.type === 'int' ? '1' : item.type === 'float' ? '0.0001' : undefined}
+                              value={configForm[item.key] ?? ''}
+                              onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                              style={{ flex: 1 }}
+                            />
+                            {item.sensitive && (
+                              <button 
+                                type="button" 
+                                onClick={() => toggleVisibility(item.key)}
+                                style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1.2rem', color: 'var(--text)' }}
+                                title={visibleFields.has(item.key) ? "Hide value" : "Show value"}
+                              >
+                                {visibleFields.has(item.key) ? '🙈' : '👁️'}
+                              </button>
+                            )}
+                          </div>
                         )}
                       </label>
                     );

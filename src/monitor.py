@@ -43,12 +43,23 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 
-# Disable yfinance cache
-yf.set_tz_cache_location("/tmp/yf_cache")
+# Disable yfinance cache or use a cross-platform temp path
+import tempfile
+import os
+yf_cache_path = os.path.join(tempfile.gettempdir(), "yf_cache")
+yf.set_tz_cache_location(yf_cache_path)
 
 # Configure logging
 def setup_logging():
     # Remove existing handlers
+    """
+    Configure the root Python logger to use Rich for formatted console output and reduce noise from common third-party libraries.
+    
+    This function clears any existing root logger handlers, installs a RichHandler that displays message-only output with timestamps and paths, sets the root logger level to INFO, and lowers verbosity for `urllib3` and `yfinance`.
+    
+    Returns:
+        logging.Logger: A logger scoped to this module's __name__.
+    """
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
@@ -241,22 +252,28 @@ class ArbitrageMonitor:
 
     async def initialize_pairs(self):
         """
-        Initialize the monitor's pair universe by selecting eligible pairs, validating cointegration, and preparing Kalman filter state.
+        Initialize the monitor's active pair universe and prepare cointegration and Kalman filter state for each eligible pair.
         
-        Performs the following actions:
-        - If LIVE_CAPITAL_DANGER is enabled, verifies entropy baselines before proceeding.
-        - Chooses candidate pairs based on DEV_MODE (crypto-only) or production lists.
-        - Applies eligibility gates (currency/session/cost/LSE rules) and logs rejection reasons.
-        - For each accepted pair: loads historical data, runs cointegration tests (optionally with rolling-window stability), sanitizes the hedge ratio, creates or warm-starts a Kalman filter, computes spread statistics, and registers the pair in `self.active_pairs`.
-        - Updates `dashboard_service` with pre-warming progress and logs initialization results.
+        Selects candidate pairs (from persisted active pairs or config), applies eligibility gates, validates cointegration (optionally with rolling-window stability), sanitizes hedge ratios, warms or restores Kalman filter state, computes spread metrics, and registers prepared pair records in self.active_pairs. Updates dashboard pre-warming progress and records last_cointegration_check dates; may persist a bootstrapped active-pair list when the database is empty.
         """
         if settings.LIVE_CAPITAL_DANGER:
             await self.verify_entropy_baselines()
 
-        if settings.DEV_MODE:
-            candidate_pairs = settings.CRYPTO_TEST_PAIRS
+        db_pairs = await persistence_service.get_active_trading_pairs()
+        if not db_pairs:
+            logger.info("No active pairs in database. Initializing from config.")
+            if settings.DEV_MODE:
+                candidate_pairs = settings.CRYPTO_TEST_PAIRS
+            else:
+                candidate_pairs = list(settings.ARBITRAGE_PAIRS) + list(settings.CRYPTO_TEST_PAIRS)
+            candidate_pairs = candidate_pairs[:settings.MAX_ACTIVE_PAIRS]
+            await persistence_service.save_trading_pairs(candidate_pairs)
         else:
-            candidate_pairs = list(settings.ARBITRAGE_PAIRS) + list(settings.CRYPTO_TEST_PAIRS)
+            logger.info(f"Loaded {len(db_pairs)} active pairs from database.")
+            if settings.DEV_MODE:
+                candidate_pairs = [p for p in db_pairs if "-USD" in p["ticker_a"] or "-USD" in p["ticker_b"]]
+            else:
+                candidate_pairs = db_pairs
 
         # Spec 037: pair-eligibility gate. Reject cross-currency, cross-session,
         # LSE-stamp-duty and cost-above-ceiling pairs *before* allocating
@@ -379,6 +396,87 @@ class ArbitrageMonitor:
                 "pre_warming",
                 f"Pair list pre-warming complete ({total_pairs}/{total_pairs}).",
             )
+
+    async def _rotate_elite_pairs(self):
+        """
+        Implements the Elite Squad rotation logic.
+        Swaps the worst performing active pairs with the best candidates.
+        """
+        logger.info("ELITE SQUAD: Checking for potential pair rotation...")
+        
+        # 1. Get current active pairs
+        active_pairs = await persistence_service.get_active_trading_pairs()
+        if not active_pairs: return
+        
+        # 2. Get top candidates from scouting
+        top_candidates = await persistence_service.get_top_candidates(limit=10)
+        if not top_candidates:
+            logger.info("ELITE SQUAD: No candidates available for rotation.")
+            return
+
+        # 3. Find worst performing or broken active pair
+        # Simple heuristic: prioritize pairs that are no longer cointegrated.
+        worst_active = sorted(active_pairs, key=lambda p: p.get('is_cointegrated', True))[0]
+        
+        # Get the best candidate that isn't already active
+        active_ids = {p['id'] for p in active_pairs}
+        eligible_candidates = [c for c in top_candidates if c['pair_id'] not in active_ids]
+        
+        if not eligible_candidates:
+            logger.info("ELITE SQUAD: All top candidates are already active.")
+            return
+            
+        best_candidate = eligible_candidates[0]
+        
+        # 4. Rotation Logic: Rotate if active is broken OR candidate Sortino is significantly high
+        should_rotate = not worst_active.get('is_cointegrated') or best_candidate['sortino'] > 2.0
+        
+        if should_rotate:
+            logger.info(f"ELITE SQUAD: Rotating {worst_active['id']} out for {best_candidate['pair_id']}.")
+            
+            # Update DB
+            await persistence_service.update_pair_status(worst_active['id'], "Benched")
+            
+            # Promote candidate to Active
+            ticker_a, ticker_b = best_candidate['pair_id'].split('_')
+            await persistence_service.save_trading_pairs([{
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "status": "Active",
+                "is_cointegrated": True
+            }])
+            
+            # Reload in-memory state
+            await self.reload_pairs()
+        else:
+            logger.info("ELITE SQUAD: No rotation needed at this time.")
+
+    async def _auto_scout_and_rotate_loop(self):
+        """
+        Background task that periodically runs the discovery engine (Scouting)
+        and promotes the best pairs (Rotation).
+        """
+        # Wait a bit after startup to avoid initial load spike
+        await asyncio.sleep(60)
+        
+        while True:
+            try:
+                logger.info("AUTO-UPDATE: Starting periodic Scouting & Rotation cycle...")
+                
+                # 1. Scouting: Find new candidates
+                from src.agents.portfolio_manager_agent import portfolio_manager
+                await portfolio_manager.run_discovery()
+                
+                # 2. Rotation: Promote best candidates
+                await self._rotate_elite_pairs()
+                
+                logger.info(f"AUTO-UPDATE: Cycle complete. Next run in {settings.SCOUT_INTERVAL_HOURS} hours.")
+                await asyncio.sleep(settings.SCOUT_INTERVAL_HOURS * 3600)
+            except Exception as e:
+                logger.error(f"Error in auto-scout loop: {e}")
+                await asyncio.sleep(3600) # Retry in 1 hour
+
+
 
     async def reload_pairs(self):
         """
@@ -954,6 +1052,18 @@ class ArbitrageMonitor:
     async def run(self):
         # FR-006: Pre-flight line - operator must know mode/universe/window
         # before a single log line about infra appears.
+        """
+        Start and run the continuous monitoring loop that initializes services, performs startup health checks, and continuously scans active arbitrage pairs.
+        
+        This method performs startup routines (preflight display, database and pair initialization, dashboard and notification listeners), runs health checks for PostgreSQL, Redis, and the brokerage API, resets circuit-breaker state, launches background scouting/rotation, and enters the main Rich Live scan loop. While running it:
+        - updates dashboard metrics and progress,
+        - evaluates open-position exit conditions,
+        - fetches latest market prices,
+        - performs per-pair processing (signal generation, Kalman updates, and potential trade execution),
+        - schedules daily cointegration re-checks and daily resets,
+        - respects dashboard-controlled bot states ("STOPPED", "RESTARTING"),
+        and sleeps between scan iterations. On cancellation or termination it disposes database and Redis connections for a graceful shutdown.
+        """
         self.log_preflight()
 
         # Initial Setup
@@ -1017,6 +1127,9 @@ class ArbitrageMonitor:
         await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         logger.info("Circuit breaker reset to NORMAL on startup.")
 
+        # Start periodic Scouting & Rotation background task
+        asyncio.create_task(self._auto_scout_and_rotate_loop())
+
         try:
             # Main Scan Loop with Rich Live UI
             progress = Progress(
@@ -1032,6 +1145,21 @@ class ArbitrageMonitor:
             with Live(progress, console=console, refresh_per_second=4, vertical_overflow="visible"):
                 while True:
                     try:
+
+                        # Bot Control Check: respect dashboard state (STOPPED, RESTARTING)
+                        desired = dashboard_service.dashboard_state.desired_bot_state
+                        if desired == "STOPPED":
+                            await dashboard_service.update("PAUSED", "Bot is stopped via dashboard.")
+                            await asyncio.sleep(5)
+                            continue
+                        
+                        if desired == "RESTARTING":
+                            await dashboard_service.update("RESTARTING", "Reloading pairs and resetting state...")
+                            await self.reload_pairs()
+                            dashboard_service.dashboard_state.desired_bot_state = "RUNNING"
+                            await dashboard_service.update("Monitoring", "Bot restarted and active.")
+                            # Continue to normal scan immediately after reload
+
                         from src.services.performance_service import performance_service
                         p_metrics = await performance_service.get_portfolio_metrics()
                         await dashboard_service.update_metrics(p_metrics)
@@ -1084,6 +1212,7 @@ class ArbitrageMonitor:
                         logger.info(f"--- [bold yellow]NEW TRADING DAY[/]: {today} ---")
                         self.current_day = today
                         self.bumped_pairs_today = {} # Reset Kalman bumps for the new day
+
 
                     # Daily cointegration re-validation
                     today = datetime.now().date()
