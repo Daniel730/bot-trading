@@ -2,7 +2,7 @@
 
 > Documentation for **Alpha Arbitrage Bot**, an open-source statistical arbitrage and pairs-trading framework built in Python and Java. This index covers system architecture, operations, strategy, agent ensemble, budgets, and the React operations console.
 
-**Related keywords:** statistical arbitrage docs, pairs trading framework, algorithmic trading bot documentation, Kalman filter spread strategy, Python trading bot, Java gRPC execution engine, Trading 212 integration, Web3 trading bot, paper trading guide, FastMCP tool server.
+**Related keywords:** statistical arbitrage docs, pairs trading framework, algorithmic trading bot documentation, Kalman filter spread strategy, Python trading bot, Java gRPC execution engine, Trading 212 integration, Alpaca integration, Web3 trading bot, paper trading guide, FastMCP tool server.
 
 Use these files as the current documentation set:
 

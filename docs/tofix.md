@@ -48,7 +48,7 @@ This is the current human-readable backlog. Older audit files are preserved for 
 
 ## Testing Gaps
 
-13. Add live-path contract tests with fake T212/Web3 providers.
+13. Add live-path contract tests with fake T212/Alpaca/Web3 providers.
     Focus on signed quantity, limit price rounding, min quantity, timeout/retry behavior, budget update, and emergency close.
 
 14. Add dashboard auth regression tests.
