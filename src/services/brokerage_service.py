@@ -18,13 +18,9 @@ class BrokerageService:
         Parameters:
             provider_name (str, optional): The brokerage provider identifier to use. If omitted, the provider is taken from settings.BROKERAGE_PROVIDER. The selected provider is instantiated and assigned to `self.provider`; `self.provider_name` and `self.web3` are also set.
         """
-        self.configure_provider(provider_name)
-
-    def configure_provider(self, provider_name: str = None) -> None:
-        """Configure or refresh the active brokerage provider from settings."""
         self.provider_name = provider_name or settings.BROKERAGE_PROVIDER
         self.web3 = web3_service
-
+        
         if self.provider_name == "ALPACA":
             self.provider = AlpacaProvider()
             logger.info("BrokerageService: Initialized with ALPACA provider.")
@@ -34,10 +30,10 @@ class BrokerageService:
 
     def test_connection(self) -> bool:
         """
-        Check connectivity to the active brokerage provider.
+        Checks connectivity to the active brokerage provider.
         
         Returns:
-            True if the provider is reachable and credentials are valid, False otherwise.
+            true if the provider is reachable and credentials are valid, false otherwise.
         """
         return self.provider.test_connection()
 
@@ -55,10 +51,17 @@ class BrokerageService:
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
-        Places a market order for the given ticker using the active brokerage provider or the WEB3 service when applicable.
+        Places a market order using the active brokerage provider or the WEB3 service when applicable.
+        
+        Parameters:
+            ticker (str): Instrument symbol to trade.
+            quantity (float): Quantity to buy or sell.
+            side (str): Order side, e.g., "buy" or "sell".
+            limit_price (float, optional): Optional execution cap price if supported by the provider.
+            client_order_id (str, optional): Optional client-specified identifier for the order.
         
         Returns:
-            dict: Response from the provider or web3 service containing order details or an error description.
+            dict: Response from the provider or WEB3 service containing order details or an error description.
         """
         venue = self.get_venue(ticker)
         if venue == "WEB3" and not settings.PAPER_TRADING:
@@ -68,19 +71,19 @@ class BrokerageService:
 
     async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
-        Place a value-based order for the given ticker using the appropriate venue (broker or WEB3).
+        Place a fiat-value order for a ticker through the appropriate venue.
         
-        If the ticker indicates a WEB3 asset and paper trading is disabled, the order is routed to the web3 service; otherwise it is routed to the configured brokerage provider. On successful execution (result["status"] != "error") and when not in paper trading mode, the used budget for the chosen venue is updated.
+        Routes the request to the WEB3 service when the ticker denotes a WEB3 asset and paper trading is disabled; otherwise routes to the configured brokerage provider. On successful execution (result["status"] != "error") and when not in paper trading mode, updates the used budget for the chosen venue.
         
         Parameters:
             ticker (str): Asset identifier to buy or sell.
-            amount (float): Fiat amount to spend (for `buy`) or to receive (for `sell`).
+            amount (float): Fiat amount to spend for a `buy` or to receive for a `sell`.
             side (str): Order side, e.g., "buy" or "sell".
-            price (float, optional): Optional price for provider-side value orders when supported.
+            price (float, optional): Optional price to include for provider-side value orders when supported.
             client_order_id (str, optional): Optional client-supplied identifier forwarded to the provider.
         
         Returns:
-            result (Dict[str, Any]): Provider or web3 response augmented with a "venue" key indicating where the order was placed. If the order failed, result["status"] is expected to be "error".
+            Dict[str, Any]: The provider or web3 response dictionary augmented with a "venue" key indicating where the order was placed. On failure `result["status"]` is expected to be `"error"`.
         """
         venue = self.get_venue(ticker)
         from src.services.agent_log_service import agent_logger
@@ -116,10 +119,12 @@ class BrokerageService:
     async def get_portfolio(self) -> List[Dict[str, Any]]:
         # Maintaining AwaitableList behavior for backward compatibility
         """
-        Fetch the account portfolio from the active provider and present it as an awaitable list.
+        Return the account portfolio from the active provider as an awaitable list for backward compatibility.
+        
+        Each item in the returned list is a provider-specific position dictionary.
         
         Returns:
-            AwaitableList: A list-like wrapper of portfolio position dictionaries (each dict contains provider-specific position fields) for backward-compatible asynchronous consumption.
+            AwaitableList: A list-like wrapper around portfolio position dictionaries for asynchronous consumption.
         """
         data = await asyncio.to_thread(self.provider.get_portfolio)
         return AwaitableList(data)
@@ -160,29 +165,31 @@ class BrokerageService:
 
     async def get_pending_orders(self) -> List[Dict[str, Any]]:
         """
-        Retrieve pending orders from the active brokerage provider.
+        Get pending orders from the active brokerage provider.
+        
+        Wraps the provider's pending orders list in an AwaitableList for use in async contexts.
         
         Returns:
-            AwaitableList: A list-like AwaitableList of pending order dictionaries as returned by the provider.
+            AwaitableList: A list-like AwaitableList containing pending order dictionaries as returned by the provider.
         """
         data = await asyncio.to_thread(self.provider.get_pending_orders)
         return AwaitableList(data)
 
     async def has_pending_order(self, ticker: str) -> bool:
         """
-        Check whether a pending order exists for the specified ticker.
+        Check whether there is a pending order for the given ticker.
         
         Returns:
-            `True` if a pending order exists for `ticker`, `False` otherwise.
+            `true` if a pending order exists for `ticker`, `false` otherwise.
         """
         orders = await self.get_pending_orders()
         return any(o.get('ticker') == ticker for o in orders)
 
     async def is_ticker_owned(self, ticker: str) -> bool:
         """
-        Check whether the account currently holds a position for the given ticker.
+        Return whether the account holds a position for the given ticker.
         
-        @returns
+        Returns:
             `true` if a position with `ticker` exists in the portfolio, `false` otherwise.
         """
         portfolio = await self.get_portfolio()
@@ -191,10 +198,10 @@ class BrokerageService:
     async def get_account_cash(self) -> float:
         # Maintaining AwaitableFloat behavior for backward compatibility
         """
-        Retrieve the account cash balance.
+        Get the account cash balance.
         
         Returns:
-            AwaitableFloat: The account cash balance as a float, wrapped in an AwaitableFloat for backward compatibility.
+            AwaitableFloat: The account cash balance as a float wrapped in an AwaitableFloat for backward compatibility.
         """
         val = await asyncio.to_thread(self.provider.get_account_cash)
         return AwaitableFloat(val)
@@ -203,7 +210,10 @@ class BrokerageService:
         """
         Compute the total fiat value of pending orders.
         
-        Calculates the sum of (quantity * price) for each pending order where quantity is greater than zero. For each order, `limitPrice` is used when present; otherwise `price` is used. The result is returned as an AwaitableFloat containing the total value.
+        Each pending order contributes quantity * (its `limitPrice` if present, otherwise its `price`) only when quantity is greater than zero.
+        
+        Returns:
+            total_value (float): Sum of quantity * (limitPrice or price) for all pending orders with quantity > 0.
         """
         orders = await self.get_pending_orders()
         total_value = 0.0
@@ -211,10 +221,6 @@ class BrokerageService:
             qty = order.get('quantity', 0.0)
             if qty > 0:
                 price = order.get('limitPrice') or order.get('price', 0.0)
-                if price == 0.0:
-                    from src.services.data_service import data_service
-                    prices = await data_service.get_latest_price_async([order.get('ticker')])
-                    price = prices.get(order.get('ticker'), 0.0)
                 total_value += (qty * price)
         return AwaitableFloat(total_value)
 
