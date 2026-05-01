@@ -41,6 +41,19 @@ from src.services.dashboard_service import (
 
 @pytest.fixture
 def wallet_context(monkeypatch):
+    """
+    Pytest fixture that prepares a controlled dashboard and brokerage environment for wallet-related tests.
+    
+    Configures a temporary dashboard_state.monitor with a set of active pairs, sets T212 budget to 0.0, and monkeypatches the brokerage_service to provide deterministic behaviors (connected, venue selection that treats tickers containing "-USD" as crypto, account cash of 100.0, no positions or pending orders, and an async place_value_order that returns a success payload). Yields a builder function which accepts a provider_name and applies provider-specific monkeypatches, returning a small namespace with the patched brokerage and its mocked place_value_order for use in tests. On teardown the original monitor, provider_name, and T212 budget are restored.
+    
+    Parameters:
+        monkeypatch: pytest.MonkeyPatch fixture used to apply temporary attribute and function replacements.
+    
+    Returns:
+        build (callable): A factory function taking a single argument `provider_name` (str) that applies provider-specific mocks and returns a SimpleNamespace with attributes:
+            - brokerage: the patched brokerage_service object
+            - place_value_order: the AsyncMock used for order placement (can be awaited and inspected by tests)
+    """
     import src.services.dashboard_service as dashboard_module
 
     original_monitor = dashboard_state.monitor
@@ -58,6 +71,19 @@ def wallet_context(monkeypatch):
     )
 
     def build(provider_name: str):
+        """
+        Configure and patch the test brokerage service for a given provider name.
+        
+        Sets dashboard_module.brokerage_service.provider_name and monkeypatches common brokerage methods and dashboard_state.add_message for deterministic tests. The patched asynchronous place_value_order mock returns a success result with an `order_id` formed as "<provider>-<ticker>".
+        
+        Parameters:
+            provider_name (str): Provider identifier to set on the brokerage and to embed in generated `order_id` values.
+        
+        Returns:
+            types.SimpleNamespace: Contains:
+                - brokerage: the patched brokerage service object.
+                - place_value_order: AsyncMock used to simulate order placement.
+        """
         brokerage = dashboard_module.brokerage_service
         brokerage.provider_name = provider_name
 
@@ -74,6 +100,17 @@ def wallet_context(monkeypatch):
         monkeypatch.setattr(dashboard_state, "add_message", AsyncMock())
 
         async def fake_place_value_order(ticker, amount, side, *args, **kwargs):
+            """
+            Create a test stub that simulates a successful value order placement.
+            
+            Parameters:
+                ticker (str): Brokerage ticker for the order.
+                amount (Decimal | float): Monetary value to place.
+                side (str): Order side, e.g., "buy" or "sell".
+            
+            Returns:
+                dict: Response with `"status": "success"` and `"order_id"` formatted as `"<provider>-<ticker>"` (provider name lowercased).
+            """
             return {"status": "success", "order_id": f"{provider_name.lower()}-{ticker}"}
 
         place_value_order = AsyncMock(side_effect=fake_place_value_order)
@@ -301,6 +338,19 @@ class TestPlaceWalletOrders:
         import src.services.dashboard_service as dm
 
         async def fake_place(ticker, amount, side, *a, **kw):
+            """
+            Return a simulated successful brokerage order response.
+            
+            Parameters:
+                ticker (str): The ticker symbol for the order.
+                amount (Decimal | float | int): The value or size of the order.
+                side (str): Order side, e.g., "buy" or "sell".
+                *a: Additional positional arguments (ignored).
+                **kw: Additional keyword arguments (ignored).
+            
+            Returns:
+                dict: A dictionary with keys `status` and `order_id`. `status` is `"success"` and `order_id` is a string in the form `"id-<ticker>"`.
+            """
             return {"status": "success", "order_id": f"id-{ticker}"}
 
         monkeypatch.setattr(dm.brokerage_service, "place_value_order", AsyncMock(side_effect=fake_place))
@@ -318,6 +368,12 @@ class TestPlaceWalletOrders:
         import src.services.dashboard_service as dm
 
         async def fake_place(ticker, amount, side, *a, **kw):
+            """
+            Simulates a failed brokerage order placement returning an insufficient-funds error.
+            
+            Returns:
+                dict: A result object with `status` set to `"error"` and `message` set to `"insufficient funds"`.
+            """
             return {"status": "error", "message": "insufficient funds"}
 
         monkeypatch.setattr(dm.brokerage_service, "place_value_order", AsyncMock(side_effect=fake_place))
@@ -334,6 +390,19 @@ class TestPlaceWalletOrders:
         import src.services.dashboard_service as dm
 
         async def exploding_place(ticker, amount, side, *a, **kw):
+            """
+            Always raises a RuntimeError to simulate a network failure.
+            
+            Parameters:
+                ticker (str): Ignored; kept for API compatibility.
+                amount: Ignored; kept for API compatibility.
+                side: Ignored; kept for API compatibility.
+                *a: Additional positional arguments are ignored.
+                **kw: Additional keyword arguments are ignored.
+            
+            Raises:
+                RuntimeError: Always raised with the message "network error".
+            """
             raise RuntimeError("network error")
 
         monkeypatch.setattr(dm.brokerage_service, "place_value_order", AsyncMock(side_effect=exploding_place))
@@ -350,6 +419,12 @@ class TestPlaceWalletOrders:
         import src.services.dashboard_service as dm
 
         async def fake_place(ticker, amount, side, *a, **kw):
+            """
+            Return a deterministic successful order response used for tests.
+            
+            Returns:
+                dict: A response object with `"status"` set to `"success"` and `"order_id"` set to `"abc-123"`.
+            """
             return {"status": "success", "order_id": "abc-123"}
 
         monkeypatch.setattr(dm.brokerage_service, "place_value_order", AsyncMock(side_effect=fake_place))
@@ -366,6 +441,12 @@ class TestPlaceWalletOrders:
         call_count = 0
 
         async def sometimes_fail(ticker, amount, side, *a, **kw):
+            """
+            Simulates a flaky order placement that alternates between a successful result and an error on successive calls.
+            
+            Returns:
+                dict: On success, `{"status": "ok", "order_id": "<id>"}`; on failure, `{"status": "error", "message": "<reason>"}`.
+            """
             nonlocal call_count
             call_count += 1
             if call_count % 2 == 0:
@@ -547,9 +628,20 @@ class TestModeFieldInResponses:
 
 class TestGetActiveTickers:
     def _setup_monitor(self, pairs):
+        """
+        Attach a simple monitor object to dashboard_state with the provided active_pairs.
+        
+        Parameters:
+            pairs (iterable): Sequence of active pair identifiers to set as the monitor's `active_pairs`.
+        """
         dashboard_state.monitor = SimpleNamespace(active_pairs=pairs)
 
     def teardown_method(self):
+        """
+        Reset the global dashboard monitor to None after a test method.
+        
+        This clears dashboard_state.monitor to restore global test state so subsequent tests do not see a leftover monitor.
+        """
         dashboard_state.monitor = None
 
     def test_crypto_pairs_excluded(self, monkeypatch):
