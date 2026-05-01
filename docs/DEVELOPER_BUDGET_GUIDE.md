@@ -6,7 +6,8 @@
 
 | Venue | Routed By | Budget setting | State key |
 |---|---|---|---|
-| `T212` | non-crypto tickers | `T212_BUDGET_USD` | `budget_used_T212` |
+| `T212` | non-crypto tickers when `BROKERAGE_PROVIDER=T212` | `T212_BUDGET_USD` | `budget_used_T212` |
+| `ALPACA` | non-crypto tickers when `BROKERAGE_PROVIDER=ALPACA` | none yet; uncapped unless a future `ALPACA_BUDGET_USD` setting is added | `budget_used_ALPACA` |
 | `WEB3` | tickers containing `-USD` | `WEB3_BUDGET_USD` | `budget_used_WEB3` |
 
 Venue resolution is centralized in `BrokerageService.get_venue(ticker)`. Do not duplicate ticker parsing in callers.
@@ -17,10 +18,11 @@ Budget usage is stored in SQLite through `PersistenceManager` system state:
 
 ```text
 budget_used_T212
+budget_used_ALPACA
 budget_used_WEB3
 ```
 
-The values are initialized once and are not reset on restart. This lets the bot keep respecting spend caps across process restarts.
+The T212 and WEB3 values are initialized once and are not reset on restart. Alpaca usage is created lazily on the first live Alpaca value order. This lets the bot keep respecting spend caps across process restarts where a cap exists, while still preserving usage telemetry for uncapped venues.
 
 ## Sizing Flow
 
@@ -66,6 +68,7 @@ Use the service method:
 
 ```python
 budget_service.reset_budget("T212")
+budget_service.reset_budget("ALPACA")
 budget_service.reset_budget("WEB3")
 ```
 

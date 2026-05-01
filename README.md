@@ -1,6 +1,6 @@
 # Alpha Arbitrage Bot — Open-Source Statistical Arbitrage Trading Bot Framework
 
-> Open-source statistical arbitrage trading bot framework in Python and Java for paired equities and crypto. Includes a Kalman-filter spread engine, multi-agent signal validation, paper trading, Trading 212 and Web3 connectors, a gRPC execution engine, and a React operations dashboard.
+> Open-source statistical arbitrage trading bot framework in Python and Java for paired equities and crypto. Includes a Kalman-filter spread engine, multi-agent signal validation, paper trading, Trading 212, Alpaca, and Web3 connectors, a gRPC execution engine, and a React operations dashboard.
 
 [![License](https://img.shields.io/github/license/Daniel730/bot-trading)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Daniel730/bot-trading?style=social)](https://github.com/Daniel730/bot-trading/stargazers)
@@ -9,9 +9,9 @@
 [![Java](https://img.shields.io/badge/java-21-orange?logo=openjdk)](https://openjdk.org/)
 [![React](https://img.shields.io/badge/react-19-61dafb?logo=react)](https://react.dev/)
 
-Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/execution stack for paired assets. The Python monitor scans an equity and crypto pair universe, runs **Kalman-filter spread logic**, asks a small **agent ensemble** to validate signals, and routes accepted trades to either paper shadow execution, **Trading 212**, **Web3**, or the **Java gRPC execution engine** depending on mode and venue. A **React operations console** exposes telemetry, pairs, trade history, config, and health.
+Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/execution stack for paired assets. The Python monitor scans an equity and crypto pair universe, runs **Kalman-filter spread logic**, asks a small **agent ensemble** to validate signals, and routes accepted trades to either paper shadow execution, the active equity broker (**Trading 212** or **Alpaca**), **Web3**, or the **Java gRPC execution engine** depending on mode and venue. A **React operations console** exposes telemetry, pairs, trade history, config, and health.
 
-**Keywords:** statistical arbitrage, pairs trading, algorithmic trading bot, quantitative trading, Kalman filter, mean reversion, Python trading bot, Java gRPC trading engine, crypto arbitrage bot, equity arbitrage, paper trading, backtesting, Trading 212 API, Web3 trading bot, FastMCP, React trading dashboard, open source trading framework.
+**Keywords:** statistical arbitrage, pairs trading, algorithmic trading bot, quantitative trading, Kalman filter, mean reversion, Python trading bot, Java gRPC trading engine, crypto arbitrage bot, equity arbitrage, paper trading, backtesting, Trading 212 API, Alpaca API, Web3 trading bot, FastMCP, React trading dashboard, open source trading framework.
 
 > **Disclaimer:** This repository is **educational and experimental**. It is **not financial advice**, and live trading can lose capital quickly. Use paper trading and dry-run modes before risking real money.
 
@@ -33,7 +33,7 @@ Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/executio
 
 - **Statistical arbitrage** signal engine with Kalman-filter spread estimation and entropy/risk gates.
 - **Multi-agent validation** ensemble that vets signals before they reach execution.
-- **Pluggable execution venues**: paper shadow, Trading 212, Web3 wallet/router, and a high-performance Java gRPC engine.
+- **Pluggable execution venues**: paper shadow, Trading 212, Alpaca, Web3 wallet/router, and a high-performance Java gRPC engine.
 - **Operations console** built in React for live telemetry, pair management, trade history, and configuration.
 - **FastMCP tool server** for assistant/AI integrations over SSE.
 - **Production-ready infra** with Dockerfiles, Compose files, Redis idempotency, and PostgreSQL persistence.
@@ -61,7 +61,7 @@ Python dashboard API (:8080) <--> Redis
         v
 Python monitor loop ---- gRPC ---- Java execution engine (:50051)
         |
-        +---- Trading 212
+        +---- active equity broker (Trading 212 or Alpaca)
         +---- Web3 wallet/router
         +---- market data providers
 
@@ -76,7 +76,16 @@ FastMCP tool server (:8000) is a separate optional SSE endpoint for assistant/to
 cp .env.template .env
 ```
 
-Set at least `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` to non-default secret values. Add market data, Telegram, Trading 212, OpenAI/Gemini, and Web3 credentials only for the paths you intend to use.
+Set at least `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` to non-default secret values. Add market data, Telegram, broker, OpenAI/Gemini, and Web3 credentials only for the paths you intend to use.
+
+For live equity execution, choose one active broker:
+
+```bash
+BROKERAGE_PROVIDER=T212      # Trading 212
+# BROKERAGE_PROVIDER=ALPACA  # Alpaca paper/live endpoint from ALPACA_BASE_URL
+```
+
+`BROKERAGE_PROVIDER=ALPACA` uses `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL`; the template defaults Alpaca to the paper endpoint.
 
 2. Install and initialize the Python backend:
 
@@ -162,6 +171,7 @@ Useful ports:
 | Setting | Effect |
 |---|---|
 | `PAPER_TRADING=true` | Uses shadow execution and does not submit live broker orders |
+| `BROKERAGE_PROVIDER=T212` | Selects the live equity broker for non-crypto tickers (`T212` or `ALPACA`) |
 | `DEV_MODE=true` | Uses crypto test pairs, bypasses equity market hours, and enables development behavior |
 | `DRY_RUN=true` | Keeps the Java engine in mock-broker mode |
 | `LIVE_CAPITAL_DANGER=true` | Refuses startup unless Redis L2 entropy baselines exist |
@@ -222,4 +232,4 @@ See [LICENSE](LICENSE) for details. Issues and pull requests are welcome on [Git
 
 ---
 
-<sub>Topics: <code>trading-bot</code> · <code>statistical-arbitrage</code> · <code>pairs-trading</code> · <code>algorithmic-trading</code> · <code>quantitative-finance</code> · <code>kalman-filter</code> · <code>python</code> · <code>java</code> · <code>grpc</code> · <code>crypto</code> · <code>trading-212</code> · <code>web3</code> · <code>react-dashboard</code> · <code>open-source</code></sub>
+<sub>Topics: <code>trading-bot</code> · <code>statistical-arbitrage</code> · <code>pairs-trading</code> · <code>algorithmic-trading</code> · <code>quantitative-finance</code> · <code>kalman-filter</code> · <code>python</code> · <code>java</code> · <code>grpc</code> · <code>crypto</code> · <code>trading-212</code> · <code>alpaca</code> · <code>web3</code> · <code>react-dashboard</code> · <code>open-source</code></sub>

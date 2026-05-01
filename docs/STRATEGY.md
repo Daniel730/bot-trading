@@ -14,7 +14,7 @@ A pair can be rejected before any Kalman state is allocated when:
 - an LSE ticker is present while short-hold LSE pairs are blocked;
 - estimated round-trip cost exceeds `PAIR_MAX_ROUND_TRIP_COST_PCT`.
 
-Crypto pairs are admitted as 24/7 same-session pairs and use the Web3/T212 venue dispatcher rules later.
+Crypto pairs are admitted as 24/7 same-session pairs and use the Web3/active-broker venue dispatcher rules later.
 
 ## Cointegration
 
@@ -94,7 +94,7 @@ Hard veto examples:
 | Spread guard | Rejects trades when combined bid/ask spread exceeds `SPREAD_GUARD_MAX_PCT`. |
 | Cluster guard | Prevents projected sector exposure above `MAX_SECTOR_EXPOSURE`. |
 | Friction guard | Rejects trades whose estimated fee/spread friction exceeds venue thresholds. |
-| Budget guard | Caps spend by venue using `T212_BUDGET_USD` and `WEB3_BUDGET_USD`. |
+| Budget guard | Caps spend by venue using the active equity broker budget path and `WEB3_BUDGET_USD`. |
 | Live sell preflight | Blocks Trading 212 sell legs when available shares are insufficient. |
 | Atomic leg guard | Aborts after leg A failure; emergency-closes leg A when leg B fails. |
 | Kill switch | Closes positions when current value breaches `FINANCIAL_KILL_SWITCH_PCT`. |
@@ -116,7 +116,7 @@ Long A / Short B
 
 In paper mode the shadow service records simulated fills. In live mode the Python brokerage dispatcher routes:
 
-- equity/non-crypto tickers to Trading 212;
+- equity/non-crypto tickers to the configured broker provider (`BROKERAGE_PROVIDER=T212|ALPACA`);
 - `*-USD` crypto tickers to Web3 when Web3 is enabled and paper mode is off.
 
 ## Position Exit
