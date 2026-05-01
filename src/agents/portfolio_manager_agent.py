@@ -116,42 +116,60 @@ class PortfolioManagerAgent:
 
         try:
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
             
             response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=10)
             response.raise_for_status()
             
-            tables = await asyncio.to_thread(pd.read_html, response.text)
+            # Use 'bs4' (BeautifulSoup) as it's often more robust than lxml on Windows for large HTML files.
+            # We wrap this in a thread because pd.read_html is synchronous and can be slow for large pages.
+            try:
+                tables = await asyncio.to_thread(pd.read_html, response.text, flavor='bs4')
+            except Exception as inner_e:
+                logger.warning(f"pd.read_html with bs4 failed: {inner_e}. Retrying with default parser.")
+                tables = await asyncio.to_thread(pd.read_html, response.text)
+            
+            if not tables:
+                logger.error("S&P 500 Scraper: No tables found in the Wikipedia response.")
+                return pd.DataFrame()
             
             df = None
             for table in tables:
-                if len(table) > 400: # The constituents table has 503 rows
+                # The constituents table is typically the first large table found.
+                if len(table) > 400: 
                     df = table
                     break
             
             if df is None:
+                logger.warning("S&P 500 Scraper: Could not identify the main constituents table by row count. Falling back to the first table.")
                 df = tables[0]
 
-            # Identify columns by keyword search
+            # Identify columns by keyword search (Wikipedia column names change occasionally)
             ticker_col = next((c for c in df.columns if 'symbol' in str(c).lower() or 'ticker' in str(c).lower()), None)
             sector_col = next((c for c in df.columns if 'sector' in str(c).lower() or 'industry' in str(c).lower()), None)
             company_col = next((c for c in df.columns if 'security' in str(c).lower() or 'company' in str(c).lower()), None)
 
             if not ticker_col or not sector_col:
-                print(f"DEBUG SCRAPER: Failed to identify columns in table (len {len(df)}). Found: {df.columns.tolist()}")
+                logger.error(f"S&P 500 Scraper: Failed to identify Ticker or Sector columns. Columns found: {df.columns.tolist()}")
                 return pd.DataFrame()
 
             df = df.rename(columns={ticker_col: 'Ticker', sector_col: 'Sector', company_col: 'Company'})
+            
+            # Normalize tickers for yfinance (e.g., BRK.B to BRK-B)
             df['Ticker'] = df['Ticker'].astype(str).str.replace('.', '-', regex=False)
             df = df[['Ticker', 'Company', 'Sector']]
             
             self._sp500_cache = df
             self._last_cache_update = datetime.now()
-            print(f"DEBUG SCRAPER: S&P 500 Universe Cached. {len(df)} tickers.")
+            logger.info(f"S&P 500 Universe Cached. {len(df)} tickers.")
             return df
         except Exception as e:
             import traceback
-            logger.error(f"S&P 500 Scraper Exception: {type(e).__name__} - {str(e)}")
+            # Capture specific error name to avoid massive string dumps if the exception contains the HTML
+            err_name = type(e).__name__
+            logger.error(f"S&P 500 Scraper Error ({err_name}): {str(e)[:500]}")
             logger.error(traceback.format_exc())
             return pd.DataFrame()
 
