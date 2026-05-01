@@ -50,6 +50,7 @@ const TradeHistoryPage: React.FC<TradeHistoryPageProps> = ({
         <select value={tradeVenue} onChange={(event) => { setTradePage(1); setTradeVenue(event.target.value); }}>
           <option value="">All venues</option>
           <option value="T212">T212</option>
+          <option value="ALPACA">ALPACA</option>
           <option value="WEB3">WEB3</option>
         </select>
         <button className="ghost-btn" onClick={() => { setTradePage(1); refreshTradeHistory(); }}>Apply</button>

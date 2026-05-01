@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import type { ConfigResponse, TwoFactorInitiateResponse } from '../services/api';
 import { SectionHeader } from '../components/UIHelpers';
 import { formatDateTime } from '../utils/formatters';
+import { getConfigMetadata } from '../utils/configMetadata';
 
 interface SettingsPageProps {
   config: ConfigResponse | null;
@@ -36,17 +37,35 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
 
-  // Categorize settings
+  const getCategory = (key: string) => {
+    if (
+      key === 'BROKERAGE_PROVIDER' ||
+      key.startsWith('T212_') ||
+      key.startsWith('TRADING_212') ||
+      key.startsWith('ALPACA_')
+    ) {
+      return 'Brokerage';
+    }
+    if (key.includes('RISK') || key.includes('TRADE') || key.includes('MARGIN') || key.includes('DRAWDOWN')) {
+      return 'Trading & Risk';
+    }
+    if (key.includes('API') || key.includes('URL') || key.includes('TOKEN') || key.includes('KEY')) {
+      return 'API & Connectivity';
+    }
+    return 'General';
+  };
+
   const categories = {
-    'Trading & Risk': config?.items.filter(item => item.key.includes('RISK') || item.key.includes('TRADE') || item.key.includes('MARGIN')),
-    'API & Connectivity': config?.items.filter(item => item.key.includes('API') || item.key.includes('URL') || item.key.includes('TOKEN') || item.key.includes('KEY')),
-    'General': config?.items.filter(item => !item.key.includes('RISK') && !item.key.includes('TRADE') && !item.key.includes('MARGIN') && !item.key.includes('API') && !item.key.includes('URL') && !item.key.includes('TOKEN') && !item.key.includes('KEY')),
+    Brokerage: config?.items.filter(item => getCategory(item.key) === 'Brokerage'),
+    'Trading & Risk': config?.items.filter(item => getCategory(item.key) === 'Trading & Risk'),
+    'API & Connectivity': config?.items.filter(item => getCategory(item.key) === 'API & Connectivity'),
+    General: config?.items.filter(item => getCategory(item.key) === 'General'),
   };
 
   return (
     <>
       <SectionHeader title="Configuration" subtitle="Dashboard-editable runtime values with 2FA for sensitive changes." />
-      
+
       <div className="editor-tabs" style={{ marginBottom: '20px', padding: 0 }}>
         <button className={`editor-tab ${activeTab === 'general' ? 'active' : ''}`} onClick={() => setActiveTab('general')}>Configuration</button>
         <button className={`editor-tab ${activeTab === 'security' ? 'active' : ''}`} onClick={() => setActiveTab('security')}>Security & 2FA</button>
@@ -56,33 +75,45 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
       {activeTab === 'general' && (
         <section className="panel">
           <SectionHeader title="Editable Variables" subtitle="Sensitive changes require a current OTP or backup code." />
-          
+
           {Object.entries(categories).map(([category, items]) => (
             items && items.length > 0 && (
               <div key={category} style={{ marginBottom: '24px' }}>
                 <h3 style={{ fontSize: '0.9rem', color: 'var(--muted)', textTransform: 'uppercase', marginBottom: '12px', borderBottom: '1px solid var(--line)', paddingBottom: '4px' }}>{category}</h3>
                 <div className="settings-grid">
-                  {items.map((item) => (
-                    <label key={item.key} className="setting-field">
-                      <span>{item.key}{item.sensitive ? ' · 2FA' : ''}</span>
-                      {item.type === 'bool' ? (
-                        <select
-                          value={configForm[item.key] ?? 'false'}
-                          onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
-                        >
-                          <option value="true">Enabled</option>
-                          <option value="false">Disabled</option>
-                        </select>
-                      ) : (
-                        <input
-                          type={item.sensitive ? 'password' : item.type === 'str' ? 'text' : item.type === 'int' || item.type === 'float' ? 'number' : 'text'}
-                          step={item.type === 'int' ? '1' : item.type === 'float' ? '0.0001' : undefined}
-                          value={configForm[item.key] ?? ''}
-                          onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
-                        />
-                      )}
-                    </label>
-                  ))}
+                  {items.map((item) => {
+                    const metadata = getConfigMetadata(item.key);
+                    return (
+                      <label key={item.key} className="setting-field" title={metadata.description}>
+                        <span>{metadata.label}{item.sensitive ? ' - 2FA' : ''}</span>
+                        {item.options?.length ? (
+                          <select
+                            value={configForm[item.key] ?? item.options[0]}
+                            onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                          >
+                            {item.options.map((option) => (
+                              <option key={option} value={option}>{option}</option>
+                            ))}
+                          </select>
+                        ) : item.type === 'bool' ? (
+                          <select
+                            value={configForm[item.key] ?? 'false'}
+                            onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                          >
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                          </select>
+                        ) : (
+                          <input
+                            type={item.sensitive ? 'password' : item.type === 'str' ? 'text' : item.type === 'int' || item.type === 'float' ? 'number' : 'text'}
+                            step={item.type === 'int' ? '1' : item.type === 'float' ? '0.0001' : undefined}
+                            value={configForm[item.key] ?? ''}
+                            onChange={(event) => setConfigForm((current) => ({ ...current, [item.key]: event.target.value }))}
+                          />
+                        )}
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             )
@@ -145,11 +176,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
               <div className="list-row audit-row" key={`${entry.key}-${entry.timestamp}-${index}`}>
                 <div>
                   <strong>{entry.key}</strong>
-                  <span>{entry.actor} · {formatDateTime(entry.timestamp)}</span>
+                  <span>{entry.actor} - {formatDateTime(entry.timestamp)}</span>
                 </div>
                 <div className="audit-values">
                   <span>{String(entry.old_value)}</span>
-                  <span>→</span>
+                  <span>-&gt;</span>
                   <span>{String(entry.new_value)}</span>
                   {entry.requires_2fa ? <em>2FA</em> : null}
                 </div>
