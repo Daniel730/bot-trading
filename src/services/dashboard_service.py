@@ -1597,6 +1597,24 @@ class DashboardService:
         return value
 
     def get_dashboard_config(self) -> dict:
+        """
+        Return the dashboard's editable configuration items, two-factor status, recent audit log, and current integration flags.
+        
+        Each item in `items` describes a configurable key with its masked or raw value, declared type, and sensitivity; `options` is present when the setting has enumerated choices. The `audit_log` is a list of recent configuration change records; values for sensitive keys are masked. The `integrations` map reports runtime integration status (brokerage provider, whether Alpaca/T212 appear configured, and the Alpaca base URL).
+        
+        Returns:
+            config (dict): {
+                "items": list[dict(key: str, value: Any, type: str, sensitive: bool, options?: list)],
+                "two_factor": dict,          # public status from the TOTP manager
+                "audit_log": list[dict],     # recent config change entries (sensitive values masked)
+                "integrations": dict {       # runtime integration flags
+                    "brokerage_provider": str,
+                    "alpaca_configured": bool,
+                    "alpaca_base_url": str,
+                    "t212_configured": bool,
+                },
+            }
+        """
         items = []
         for key, spec in self.editable_config.items():
             raw_value = getattr(settings, key)
@@ -1625,9 +1643,37 @@ class DashboardService:
             "items": items,
             "two_factor": self.totp.public_status(),
             "audit_log": audit_log,
+            "integrations": {
+                "brokerage_provider": settings.BROKERAGE_PROVIDER,
+                "alpaca_configured": bool(settings.ALPACA_API_KEY.strip() and settings.ALPACA_API_SECRET.strip()),
+                "alpaca_base_url": settings.ALPACA_BASE_URL,
+                "t212_configured": bool(settings.effective_t212_key.strip()),
+            },
         }
 
     async def update_dashboard_config(self, actor: str, updates: Dict[str, Any], otp_token: Optional[str]) -> dict:
+        """
+        Update dashboard configuration keys with provided values, persist overrides, audit changes, and return the current dashboard configuration.
+        
+        Parameters:
+            actor (str): Identifier of the actor performing the change for audit messages.
+            updates (Dict[str, Any]): Mapping of configuration keys (case-insensitive) to new values. Keys must be declared in the service's editable_config; masked placeholder values for sensitive keys are ignored.
+            otp_token (Optional[str]): One-time password or backup code required when any updated key is marked sensitive.
+        
+        Returns:
+            dict: The updated dashboard configuration as returned by get_dashboard_config().
+        
+        Raises:
+            HTTPException(400): If no updates are provided, if no actual changes remain after filtering masked placeholders, or if an unsupported configuration key is included.
+            HTTPException(412): If a sensitive key is being changed but two-factor authentication is not enabled.
+            HTTPException(403): If a sensitive change is attempted without a valid 2FA token or backup code.
+        
+        Side effects:
+            - Persists each applied override via save_settings_override.
+            - Records an audit entry for each changed key via persistence.log_config_change (sensitive values are masked in the audit).
+            - Reconfigures the brokerage provider when brokerage-related keys change and refreshes the dashboard monitor's brokerage client when a monitor exists.
+            - Emits a system message describing the applied configuration updates.
+        """
         if not updates:
             raise HTTPException(status_code=400, detail="No configuration updates provided.")
 
