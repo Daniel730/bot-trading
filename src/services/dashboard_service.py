@@ -2368,23 +2368,8 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
 
 @app.post("/api/pairs/discover")
 async def discover_pairs(token: str = Query(None), session: str = Query(None)):
-    """
-    Trigger background pair discovery scans for the Crypto universe and the "Technology" equity sector and record a system message.
-    
-    Requires a valid dashboard auth token or session; enqueues two non-blocking background tasks (crypto universe scan and Technology sector scan) and appends a SYSTEM message to the dashboard message stream.
-    
-    Returns:
-        dict: {"status": "ok", "message": "Discovery started"} indicating the discovery tasks were initiated.
-    """
     verify_token(token, session)
-    from src.agents.portfolio_manager_agent import portfolio_manager
-    import asyncio
-    
-    asyncio.create_task(portfolio_manager.scan_crypto_universe())
-    asyncio.create_task(portfolio_manager.scan_sector_universe("Technology"))
-    
-    await dashboard_state.add_message("SYSTEM", "Triggered background pair discovery for Crypto and Equities.")
-    return {"status": "ok", "message": "Discovery started"}
+    return await dashboard_service.trigger_pair_discovery(actor="dashboard")
 
 @app.get("/api/pairs")
 async def list_pairs(token: str = Query(None), session: str = Query(None)):
