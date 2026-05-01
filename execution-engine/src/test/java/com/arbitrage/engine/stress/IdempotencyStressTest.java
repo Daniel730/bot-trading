@@ -4,6 +4,7 @@ import com.arbitrage.engine.persistence.RedisOrderSync;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import reactor.core.publisher.Flux;
@@ -18,20 +19,32 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 public class IdempotencyStressTest {
     private static final Logger logger = LoggerFactory.getLogger(IdempotencyStressTest.class);
     private static RedisOrderSync redisSync;
+    private static boolean redisAvailable = false;
 
     @BeforeAll
     static void setup() {
-        // Assuming Redis is running on localhost:6379
-        redisSync = new RedisOrderSync("redis://localhost:6379");
+        try {
+            // Assuming Redis is running on localhost:6379 for integration tests
+            redisSync = new RedisOrderSync("redis://localhost:6379");
+            // Ping or simple operation to check connectivity
+            redisSync.exists(UUID.randomUUID()).block(Duration.ofSeconds(2));
+            redisAvailable = true;
+        } catch (Exception e) {
+            logger.warn("Redis not available on localhost:6379, skipping stress test: {}", e.getMessage());
+        }
     }
 
     @AfterAll
     static void tearDown() {
-        redisSync.close();
+        if (redisSync != null) {
+            redisSync.close();
+        }
     }
 
     @Test
     void testConcurrentIdempotency_Lua() {
+        Assumptions.assumeTrue(redisAvailable, "Redis must be available for this stress test");
+        
         UUID signalId = UUID.randomUUID();
         int concurrency = 100;
         AtomicInteger newCount = new AtomicInteger(0);
