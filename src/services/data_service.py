@@ -30,16 +30,19 @@ class DataService:
 
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
         """
-        Download market data via yfinance and normalize empty or error results to an empty DataFrame.
+        Download market data via yfinance with a default timeout and normalized empty-result handling.
         
-        This wrapper sets a default timeout from settings.MARKET_DATA_TIMEOUT_SECONDS and forwards all positional and keyword arguments to yf.download. If yf.download returns None or an empty DataFrame, a warning is logged and an empty DataFrame is returned. If a TypeError occurs that references "timeout", the function retries the download after removing the timeout kwarg. Any other exception is logged and results in an empty DataFrame being returned.
+        Attempts to download data by forwarding all arguments to yf.download, inserting a default "timeout" from settings.MARKET_DATA_TIMEOUT_SECONDS when not provided. If yf.download returns None or an empty DataFrame, a warning is logged and an empty DataFrame is returned. If a TypeError arises mentioning "timeout", the call is retried once after removing the "timeout" kwarg. Any other exception raised by yf.download is propagated.
         
         Parameters:
             *args: Positional arguments passed through to yf.download (typically tickers and/or download options).
-            **kwargs: Keyword arguments passed through to yf.download. A default "timeout" is inserted when not provided.
+            **kwargs: Keyword arguments passed through to yf.download. A default "timeout" is applied when absent.
         
         Returns:
-            pd.DataFrame: The DataFrame returned by yfinance, or an empty DataFrame if no data was obtained or an error occurred.
+            pd.DataFrame: The DataFrame returned by yfinance, or an empty DataFrame if no data was obtained.
+        
+        Raises:
+            Exception: Re-raises exceptions raised by yf.download except for a TypeError caused by a "timeout" argument, which is handled by retrying without "timeout".
         """
         kwargs.setdefault("timeout", settings.MARKET_DATA_TIMEOUT_SECONDS)
         try:
@@ -57,18 +60,18 @@ class DataService:
             return yf.download(*args, **kwargs)
         except Exception as exc:
             logger.error(f"DataService: yfinance download failed: {exc}")
-            return pd.DataFrame()
+            raise
 
     @staticmethod
     def _dedupe_tickers(tickers: List[str]) -> List[str]:
         """
-        Return a new list of tickers with falsy entries removed and duplicates removed while preserving first-seen order.
+        Remove falsy entries and duplicate tickers while preserving first-seen order.
         
         Parameters:
-            tickers (List[str]): Sequence of ticker strings, may contain falsy values or duplicates.
+            tickers (List[str]): Sequence of ticker strings that may contain falsy values or duplicates.
         
         Returns:
-            List[str]: Ticketers in their original order with falsy values omitted and only the first occurrence of each ticker retained.
+            List[str]: Tickers in their original order with falsy values omitted and only the first occurrence of each ticker retained.
         """
         seen = set()
         result = []

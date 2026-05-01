@@ -2369,36 +2369,29 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
 @app.post("/api/pairs/discover")
 async def discover_pairs(token: str = Query(None), session: str = Query(None)):
     """
-    Trigger background pair discovery scans for the Crypto universe and the "Technology" equity sector and record a system message.
+    Initiates a background pair discovery task for the dashboard.
     
-    Requires a valid dashboard auth token or session; enqueues two non-blocking background tasks (crypto universe scan and Technology sector scan) and appends a SYSTEM message to the dashboard message stream.
+    Starts the pair discovery workflow and returns a record describing the initiated request and its acceptance status.
     
     Returns:
-        dict: {"status": "ok", "message": "Discovery started"} indicating the discovery tasks were initiated.
+    	A serializable object (typically a dict) describing the scheduled discovery task and its acceptance/status metadata.
     """
     verify_token(token, session)
-    from src.agents.portfolio_manager_agent import portfolio_manager
-    import asyncio
-    
-    asyncio.create_task(portfolio_manager.scan_crypto_universe())
-    asyncio.create_task(portfolio_manager.scan_sector_universe("Technology"))
-    
-    await dashboard_state.add_message("SYSTEM", "Triggered background pair discovery for Crypto and Equities.")
-    return {"status": "ok", "message": "Discovery started"}
+    return await dashboard_service.trigger_pair_discovery(actor="dashboard")
 
 @app.get("/api/pairs")
 async def list_pairs(token: str = Query(None), session: str = Query(None)):
     """
-    Return a snapshot of pair discovery state including active pairs enriched with latest z-scores and last cointegration check timestamps.
+    Return a snapshot of pair discovery state with active pairs enriched by latest z-scores and last cointegration check timestamps.
     
-    The response includes:
-    - `active_pairs`: list of active pair objects with added `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
-    - `configured_pairs`: the dashboard's configured pair list from settings.
-    - `crypto_test_pairs`: the configured crypto test pairs from settings.
-    - `dev_mode`: current development mode flag from settings.
+    The response contains:
+    - `active_pairs`: list of pair objects augmented with `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
+    - `configured_pairs`: list of pairs configured in settings (`settings.ARBITRAGE_PAIRS`).
+    - `crypto_test_pairs`: list of crypto test pairs from settings (`settings.CRYPTO_TEST_PAIRS`).
+    - `dev_mode`: boolean flag from settings (`settings.DEV_MODE`).
     
     Returns:
-        dict: The scrubbed response object described above, with non-finite floats replaced by `None`.
+        dict: A scrubbed response object with the keys above; non-finite numeric values are replaced with `None`.
     """
     verify_token(token, session)
     monitor = dashboard_state.monitor
