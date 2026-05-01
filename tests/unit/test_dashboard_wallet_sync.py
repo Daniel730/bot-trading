@@ -16,6 +16,19 @@ from src.services.dashboard_service import (
 
 @pytest.fixture
 def wallet_context(monkeypatch):
+    """
+    Provide a pytest fixture that configures a controllable wallet testing environment and yields a factory to build provider-specific mocked brokerages.
+    
+    The fixture replaces dashboard_state.monitor with a SimpleNamespace containing predefined active_pairs, sets settings.T212_BUDGET_USD to 0.0, and patches dashboard_service.brokerage_service methods to predictable test doubles. After the test, original monitor, provider_name, and budget are restored.
+    
+    Parameters:
+        monkeypatch (pytest.MonkeyPatch): Pytest monkeypatch fixture used to apply temporary attribute/method patches.
+    
+    Returns:
+        build (Callable[[str], SimpleNamespace]): A factory that accepts a `provider_name` and returns a SimpleNamespace with:
+            - brokerage: the patched brokerage_service
+            - place_value_order: an AsyncMock that simulates placing value orders and returns a success dict including a provider-prefixed order_id
+    """
     import src.services.dashboard_service as dashboard_module
 
     original_monitor = dashboard_state.monitor
@@ -33,6 +46,23 @@ def wallet_context(monkeypatch):
     )
 
     def build(provider_name: str):
+        """
+        Create a mocked brokerage environment configured for the given provider name.
+        
+        Sets dashboard_module.brokerage_service.provider_name and monkeypatches the brokerage methods to deterministic test doubles:
+        - connection and account queries return fixed success/cash values,
+        - position and pending-order queries return empty results,
+        - get_venue maps tickers containing "-USD" to "WEB3" otherwise to the provider name,
+        - place_value_order is an AsyncMock that simulates successful order placement and returns a dict with `status` and an `order_id` prefixed by the lowercased provider name.
+        
+        Parameters:
+            provider_name (str): The provider name to apply to the mocked brokerage.
+        
+        Returns:
+            SimpleNamespace: Contains two attributes:
+                - brokerage: the patched brokerage service object.
+                - place_value_order: the AsyncMock used for placing value orders (awaitable).
+        """
         brokerage = dashboard_module.brokerage_service
         brokerage.provider_name = provider_name
 
@@ -49,6 +79,12 @@ def wallet_context(monkeypatch):
         monkeypatch.setattr(dashboard_state, "add_message", AsyncMock())
 
         async def fake_place_value_order(ticker, amount, side, *args, **kwargs):
+            """
+            Return a fake successful order response for tests.
+            
+            Returns:
+                dict: Response with 'status' set to 'success' and 'order_id' formatted as '<provider>-<ticker>', where '<provider>' is the lowercased `provider_name` from the enclosing scope and '<ticker>' is the supplied ticker.
+            """
             return {"status": "success", "order_id": f"{provider_name.lower()}-{ticker}"}
 
         place_value_order = AsyncMock(side_effect=fake_place_value_order)
