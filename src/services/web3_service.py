@@ -221,7 +221,7 @@ class Web3BrokerageService:
             logger.error(f"Web3 broadcast error: {e}")
             return {"status": "error", "message": str(e)}
 
-    async def get_account_balance(self) -> float:
+    async def get_account_cash(self) -> float:
         """Returns the native ETH balance as float.
 
         Used as a pragmatic proxy for spendable balance on Sepolia/Alchemy test
@@ -267,7 +267,7 @@ class Web3BrokerageService:
             return {"status": "error", "message": "Web3 is not enabled.", "available_usd": 0.0}
 
         try:
-            base_units = await self.get_account_balance()
+            base_units = await self.get_account_cash()
             price_usd = await self.get_base_token_price_usd()
             balance_usd = float(base_units) * float(price_usd)
             return {

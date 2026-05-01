@@ -150,8 +150,9 @@ class PortfolioManagerAgent:
             print(f"DEBUG SCRAPER: S&P 500 Universe Cached. {len(df)} tickers.")
             return df
         except Exception as e:
-            # Avoid UnicodeEncodeError on Windows console by not printing full character junk
-            logger.error(f"S&P 500 Scraper Exception: {type(e).__name__}")
+            import traceback
+            logger.error(f"S&P 500 Scraper Exception: {type(e).__name__} - {str(e)}")
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
 
     @agent_trace("PortfolioManagerAgent.calculate_sortino_ratio")

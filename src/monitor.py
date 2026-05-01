@@ -43,8 +43,11 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 
-# Disable yfinance cache
-yf.set_tz_cache_location("/tmp/yf_cache")
+# Disable yfinance cache or use a cross-platform temp path
+import tempfile
+import os
+yf_cache_path = os.path.join(tempfile.gettempdir(), "yf_cache")
+yf.set_tz_cache_location(yf_cache_path)
 
 # Configure logging
 def setup_logging():
