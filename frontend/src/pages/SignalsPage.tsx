@@ -14,9 +14,11 @@ const SignalsPage: React.FC<SignalsPageProps> = ({ signals }) => {
 
   const totalItems = signals.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  
   useEffect(() => {
-    if (page > totalPages) setPage(totalPages);
-  }, [page, totalPages]);
+    setPage(prevPage => prevPage > totalPages ? totalPages : prevPage);
+  }, [totalPages]);
+  
   const paginatedSignals = signals.slice((page - 1) * pageSize, page * pageSize);
 
   return (
