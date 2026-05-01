@@ -694,7 +694,7 @@ class BotControlRequest(BaseModel):
     actor: str = "dashboard"
 
 
-app = FastAPI(title="Arbitrage Dashboard")
+app = FastAPI(title="Arbitrage Dashboard", redirect_slashes=True)
 
 
 @app.middleware("http")
@@ -2403,8 +2403,11 @@ async def sync_wallet(request: WalletSyncRequest, token: str = Query(None), sess
     return await dashboard_service.sync_wallet_for_coint(request)
 
 
+
 @app.get("/api/wallet/recommendations")
+@app.get("/api/wallet/recommendations/") 
 @app.get("/api/t212/wallet/recommendations")
+@app.get("/api/t212/wallet/recommendations/")
 async def get_wallet_recommendations(
     budget: float = Query(..., gt=0),
     include_broken: bool = Query(False),
