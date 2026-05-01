@@ -7,7 +7,8 @@ export interface ConfigMetadata {
 export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   // --- General ---
   'REGION': { label: 'Trading Region', description: 'Target market region (US or EU). Affects trading hours and asset availability.' },
-  'TRADING_212_MODE': { label: 'Trading Mode', description: 'Set to "live" for real capital or "demo" for simulated trading.' },
+  'BROKERAGE_PROVIDER': { label: 'Equity Broker', description: 'Active broker for non-crypto live orders.' },
+  'TRADING_212_MODE': { label: 'Trading 212 Mode', description: 'Set to "live" for real capital or "demo" for simulated Trading 212 orders.' },
   'PAPER_TRADING': { label: 'Shadow Trading', description: 'When enabled, trades are simulated locally without hitting any exchange API.' },
   'DEV_MODE': { label: 'Development Mode', description: 'Enable 24/7 scanning on test pairs. Do not use for real trading.' },
   'LIVE_CAPITAL_DANGER': { label: 'Live Capital Guard', description: 'Safety switch that must be ON to allow real money trades.' },
@@ -33,6 +34,14 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   'GEMINI_API_KEY': { label: 'Gemini API Key', description: 'Used for macro-economic analysis and reflection.' },
   'TELEGRAM_BOT_TOKEN': { label: 'Telegram Token', description: 'Bot token for remote approvals and notifications.' },
   'TELEGRAM_CHAT_ID': { label: 'Telegram Chat ID', description: 'Target chat for admin alerts.' },
+  'T212_API_KEY': { label: 'Trading 212 API Key', description: 'Trading 212 API key for the active equity broker path.' },
+  'T212_API_SECRET': { label: 'Trading 212 API Secret', description: 'Trading 212 API secret for accounts that use Basic auth.' },
+  'TRADING_212_API_KEY': { label: 'Trading 212 Legacy Key', description: 'Fallback legacy Trading 212 API key value.' },
+  'ALPACA_API_KEY': { label: 'Alpaca API Key', description: 'Alpaca key used when Equity Broker is ALPACA.' },
+  'ALPACA_API_SECRET': { label: 'Alpaca API Secret', description: 'Alpaca secret used when Equity Broker is ALPACA.' },
+  'ALPACA_BASE_URL': { label: 'Alpaca Base URL', description: 'Alpaca paper or live REST endpoint.' },
+  'WEB3_RPC_URL': { label: 'Web3 RPC URL', description: 'RPC endpoint for on-chain crypto execution.' },
+  'WEB3_PRIVATE_KEY': { label: 'Web3 Private Key', description: 'Wallet private key for on-chain crypto execution.' },
   
   // --- Advanced ---
   'KALMAN_DELTA': { label: 'Kalman Process Noise', description: 'Higher values make the filter more responsive but noisier.' },
