@@ -170,7 +170,7 @@ async def test_min_trade_quantity_sell_side_also_rejected():
 @pytest.mark.asyncio
 async def test_get_available_quantity_uses_positions_endpoint():
     """get_available_quantity returns quantityAvailableForTrading from the provider."""
-
+    service = BrokerageService("T212")
 
     # The provider is responsible for fetching and normalising positions.
     # Mock at the provider boundary so we don't depend on HTTP internals.
