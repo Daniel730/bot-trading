@@ -10,6 +10,26 @@ class MacroEconomicAgent:
         self.data_service = DataService()
         self.logger = logging.getLogger(__name__)
 
+    @staticmethod
+    def _extract_series(df: pd.DataFrame, ticker: str) -> pd.Series:
+        """Extract a usable close-price series for the requested ticker."""
+        if isinstance(df, pd.Series):
+            return df.dropna()
+
+        if not isinstance(df, pd.DataFrame) or df.empty:
+            return pd.Series(dtype="float64")
+
+        # Most callers receive a single-column frame for one ticker.
+        if ticker in df.columns:
+            return df[ticker].dropna()
+        if "Close" in df.columns:
+            close_series = df["Close"]
+            if isinstance(close_series, pd.Series):
+                return close_series.dropna()
+        if len(df.columns) == 1:
+            return df.iloc[:, 0].dropna()
+        return pd.Series(dtype="float64")
+
     def analyze_market_state(self, interest_rate: float, inflation: float) -> str:
         """
         Determines if the market is RISK_ON or RISK_OFF based on macro indicators.
@@ -30,10 +50,10 @@ class MacroEconomicAgent:
         try:
             # Fetch 60d to ensure we have enough for SMA 50
             df = await self.data_service.get_historical_data_async([ticker], "60d", "1d")
-            if isinstance(df, pd.Series):
-                df = df.to_frame(name=ticker)
-                
-            series = df[ticker]
+            series = self._extract_series(df, ticker)
+            if len(series) < 2:
+                self.logger.warning(f"Not enough data to infer regime for {ticker}. Defaulting to BEARISH.")
+                return "BEARISH"
             
             # 1. Check for Flash Crash (Circuit Breaker)
             last_close = series.iloc[-1]
