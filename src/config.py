@@ -144,6 +144,8 @@ class Settings(BaseSettings):
     T212_BUDGET_USD: float = Field(default=0.0, validation_alias="T212_BUDGET_USD")
     WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 10.0
+    MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
+    SCOUT_INTERVAL_HOURS: int = Field(default=12, validation_alias="SCOUT_INTERVAL_HOURS")
     SGOV_SWEEP_TICKER: str = "SGOV"
     MIN_SWEEP_THRESHOLD: float = 10.0
     LIVE_CAPITAL_DANGER: bool = Field(default=False, validation_alias="LIVE_CAPITAL_DANGER")
@@ -240,6 +242,7 @@ class Settings(BaseSettings):
     MONITOR_ENTRY_ZSCORE: float = Field(default=2.0, validation_alias="MONITOR_ENTRY_ZSCORE")
     MONITOR_MIN_AI_CONFIDENCE: float = Field(default=0.5, validation_alias="MONITOR_MIN_AI_CONFIDENCE")
     ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
+    MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
     MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
     MARKET_DATA_BATCH_SIZE: int = Field(default=30, validation_alias="MARKET_DATA_BATCH_SIZE")
     MARKET_DATA_BATCH_CONCURRENCY: int = Field(default=3, validation_alias="MARKET_DATA_BATCH_CONCURRENCY")

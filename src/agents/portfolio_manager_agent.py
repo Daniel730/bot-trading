@@ -269,7 +269,6 @@ class PortfolioManagerAgent:
             pair_id = f"{t_a}_{t_b}"
             
             if pair_id in existing_ids:
-                logger.info(f"Skipping existing candidate: {pair_id}")
                 continue
 
             try:
@@ -279,6 +278,8 @@ class PortfolioManagerAgent:
                     "1d",
                     timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
                 )
+                if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
+                    continue
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
                 
                 if is_coint:
@@ -305,6 +306,59 @@ class PortfolioManagerAgent:
         if new_candidates:
             await persistence_service.save_universe_candidates(new_candidates)
             logger.info(f"Successfully bulk inserted {len(new_candidates)} new candidates for {sector}.")
+
+    @agent_trace("PortfolioManagerAgent.scan_crypto_universe")
+    async def scan_crypto_universe(self):
+        """
+        Scans top crypto pairs for cointegration.
+        """
+        logger.info("Scanning crypto universe...")
+        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "MATIC-USD"]
+        
+        existing_ids = await persistence_service.get_existing_candidate_ids("Crypto")
+        new_candidates = []
+
+        for i in range(len(top_crypto)):
+            for j in range(i + 1, len(top_crypto)):
+                t_a, t_b = top_crypto[i], top_crypto[j]
+                pair_id = f"{t_a}_{t_b}"
+                
+                if pair_id in existing_ids:
+                    continue
+
+                try:
+                    df = await self.data_service.get_historical_data_async(
+                        [t_a, t_b],
+                        "1y",
+                        "1d",
+                        timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
+                    )
+                    if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
+                        continue
+                        
+                    is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
+                    
+                    if is_coint:
+                        spread = df[t_a] - (hedge * df[t_b])
+                        spread_returns = spread.pct_change().dropna()
+                        pair_sortino = self.calculate_sortino_ratio(np.array([1.0]), pd.DataFrame(spread_returns))
+                        
+                        new_candidates.append(UniverseCandidate(
+                            pair_id=pair_id,
+                            sector="Crypto",
+                            p_value=p_val,
+                            correlation=df[t_a].corr(df[t_b]),
+                            expected_return=spread_returns.mean() * 365,
+                            volatility=spread_returns.std() * np.sqrt(365),
+                            sortino=pair_sortino
+                        ))
+                        logger.info(f"Found new crypto candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
+                except Exception as e:
+                    continue
+
+        if new_candidates:
+            await persistence_service.save_universe_candidates(new_candidates)
+            logger.info(f"Successfully inserted {len(new_candidates)} new crypto candidates.")
 
     async def get_optimization_advice(self, new_ticker: str) -> Dict:
         """
@@ -368,6 +422,95 @@ class PortfolioManagerAgent:
         logger.info(f"NARRATIVE APPROVED: Sector {sector} Leader {beacon_ticker} is BULLISH. Scanning followers...")
         await self.scan_sector_universe(sector)
         return {"status": "COMPLETED", "sector": sector}
+
+    @agent_trace("PortfolioManagerAgent.run_discovery")
+    async def run_discovery(self):
+        """
+        Runs a full discovery cycle across key S&P 500 sectors and the crypto universe.
+        This is a resource-intensive background task.
+        """
+        logger.info("Starting global pair discovery cycle...")
+        sectors = ["Financials", "Information Technology", "Consumer Staples", "Health Care"]
+        
+        # Scan sectors
+        for sector in sectors:
+            try:
+                await self.scan_sector_universe(sector)
+            except Exception as e:
+                logger.error(f"Discovery failed for sector {sector}: {e}")
+        
+        # Scan crypto
+        try:
+            await self.scan_crypto_universe()
+        except Exception as e:
+            logger.error(f"Discovery failed for crypto universe: {e}")
+            
+        logger.info("Global pair discovery cycle completed.")
+        return {"status": "COMPLETED", "timestamp": datetime.now().isoformat()}
+
+    @agent_trace("PortfolioManagerAgent.rotate_pairs")
+    async def rotate_pairs(self):
+        """
+        Compares currently Active pairs against Scout (candidate) pairs.
+        If a Scout pair has a significantly better Sortino ratio than an Active pair,
+        they are swapped.
+        """
+        from src.services.persistence_service import TradingPair, UniverseCandidate
+        from sqlalchemy import select, update, desc
+        
+        logger.info("Starting pair rotation audit...")
+        
+        async with persistence_service.AsyncSessionLocal() as session:
+            # 1. Get current active pairs
+            active_stmt = select(TradingPair).where(TradingPair.status == "Active")
+            active_pairs = (await session.execute(active_stmt)).scalars().all()
+            
+            # 2. Get top candidates (Scouts)
+            scout_stmt = select(UniverseCandidate).order_by(desc(UniverseCandidate.sortino)).limit(settings.MAX_ACTIVE_PAIRS)
+            scouts = (await session.execute(scout_stmt)).scalars().all()
+            
+            if not active_pairs or not scouts:
+                logger.info("Rotation skipped: Insufficient active pairs or scouts.")
+                return
+            
+            # Sort active pairs by Sortino (if we have it, otherwise we'd need to calculate it)
+            # For now, let's assume we want to ensure we have the best Sortino pairs in Active
+            
+            active_ids = {p.id for p in active_pairs}
+            scout_ids = {s.pair_id for s in scouts}
+            
+            to_activate = scout_ids - active_ids
+            if not to_activate:
+                logger.info("Rotation completed: No better candidates found.")
+                return
+
+            logger.info(f"Identified {len(to_activate)} potential improvements.")
+            
+            # Simple rotation: swap worst active for best scout
+            # In a more advanced version, we'd check PnL and current volatility
+            
+            # For now, let's just make sure we don't exceed MAX_ACTIVE_PAIRS
+            # and that we have the top Sortino pairs active.
+            
+            # 1. Deactivate all
+            await session.execute(update(TradingPair).values(status="Scout"))
+            
+            # 2. Activate top Sortino scouts
+            for scout in scouts:
+                # Upsert into TradingPair
+                ticker_a, ticker_b = scout.pair_id.split('_')
+                p = TradingPair(
+                    id=scout.pair_id,
+                    ticker_a=ticker_a,
+                    ticker_b=ticker_b,
+                    hedge_ratio=0.0, # Will be re-calculated by monitor
+                    is_cointegrated=True,
+                    status="Active"
+                )
+                await session.merge(p)
+            
+            await session.commit()
+            logger.info(f"Rotated {len(scouts)} pairs into Active status.")
 
 portfolio_manager_agent = PortfolioManagerAgent()
 portfolio_manager = portfolio_manager_agent
