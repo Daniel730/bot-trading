@@ -68,7 +68,7 @@ describe('PairsPanel Broker Wallet label', () => {
 
   it('renders "Broker Wallet" as the wallet section label', async () => {
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
     await waitFor(() => {
       expect(screen.getByText('Broker Wallet')).toBeInTheDocument();
     });
@@ -76,7 +76,7 @@ describe('PairsPanel Broker Wallet label', () => {
 
   it('does NOT render the old "T212 Wallet" label', async () => {
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
     await waitFor(() => {
       expect(screen.queryByText('T212 Wallet')).not.toBeInTheDocument();
     });
@@ -100,7 +100,7 @@ describe('PairsPanel buy button title', () => {
 
   it('button title is "Buy missing broker tickers"', async () => {
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
     await waitFor(() => {
       const btn = screen.getByTitle('Buy missing broker tickers');
       expect(btn).toBeInTheDocument();
@@ -109,7 +109,7 @@ describe('PairsPanel buy button title', () => {
 
   it('does NOT use the old "Buy missing T212 tickers" title', async () => {
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
     await waitFor(() => {
       expect(screen.queryByTitle('Buy missing T212 tickers')).not.toBeInTheDocument();
     });
@@ -153,7 +153,7 @@ describe('PairsPanel wallet sync interaction', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       expect(screen.getByTitle('Buy missing broker tickers')).toBeInTheDocument();
@@ -174,7 +174,7 @@ describe('PairsPanel wallet sync interaction', () => {
     });
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       expect(screen.getByTitle('Buy missing broker tickers')).toBeInTheDocument();
@@ -190,7 +190,7 @@ describe('PairsPanel wallet sync interaction', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       expect(screen.getByTitle('Buy missing broker tickers')).toBeInTheDocument();
@@ -206,7 +206,7 @@ describe('PairsPanel wallet sync interaction', () => {
     mockSyncWallet.mockRejectedValue(new Error());
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       expect(screen.getByTitle('Buy missing broker tickers')).toBeInTheDocument();
@@ -236,7 +236,7 @@ describe('PairsPanel wallet sync interaction', () => {
     });
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       expect(screen.getByTitle('Buy missing broker tickers')).toBeInTheDocument();
@@ -289,7 +289,7 @@ describe('PairsPanel buy button disabled state', () => {
     });
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       const btn = screen.getByTitle('Buy missing broker tickers');
@@ -301,7 +301,7 @@ describe('PairsPanel buy button disabled state', () => {
     mockFetchPairs.mockResolvedValue(makePairsResponse());
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     await waitFor(() => {
       const btn = screen.getByTitle('Buy missing broker tickers');
@@ -319,7 +319,7 @@ describe('PairsPanel buy button disabled state', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
-    await act(async () => { vi.runAllTimersAsync(); });
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
 
     // With no pairs loaded the button should be disabled; handleWalletSync sets error
     // Trigger click despite disabled state by finding the button after pairs load
