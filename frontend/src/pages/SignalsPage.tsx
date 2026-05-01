@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { Signal } from '../services/api';
 import { SectionHeader } from '../components/UIHelpers';
 import Pagination from '../components/Pagination';
@@ -13,6 +13,10 @@ const SignalsPage: React.FC<SignalsPageProps> = ({ signals }) => {
   const pageSize = 12;
 
   const totalItems = signals.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
   const paginatedSignals = signals.slice((page - 1) * pageSize, page * pageSize);
 
   return (
@@ -46,9 +50,13 @@ const SignalsPage: React.FC<SignalsPageProps> = ({ signals }) => {
                         <strong>{sig.ticker_a} / {sig.ticker_b}</strong>
                       </td>
                       <td>
-                        <span className={Math.abs(sig.z_score) > 2 ? (sig.z_score > 0 ? 'negative' : 'positive') : ''}>
-                          {sig.z_score.toFixed(2)}
-                        </span>
+                        {typeof sig.z_score === 'number' ? (
+                          <span className={Math.abs(sig.z_score) > 2 ? (sig.z_score > 0 ? 'negative' : 'positive') : ''}>
+                            {sig.z_score.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
                       </td>
                       <td>
                         <span className="badge badge-blue">{sig.status}</span>

@@ -725,12 +725,20 @@ class DashboardService:
         self.health_history: Deque[dict] = deque(maxlen=120)
         self.totp = TOTPManager(self.persistence)
         self.editable_config: Dict[str, dict] = {
+            "REGION": {"type": "str", "sensitive": False, "options": ["US", "EU"]},
             "APPROVAL_THRESHOLD": {"type": "float", "sensitive": False},
             "SCAN_INTERVAL_SECONDS": {"type": "int", "sensitive": False},
             "MARKET_DATA_TIMEOUT_SECONDS": {"type": "float", "sensitive": False},
             "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
+            "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": False},
+            "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": False},
+            "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True},
             "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True},
             "MAX_DRAWDOWN": {"type": "float", "sensitive": True},
+            "FINANCIAL_KILL_SWITCH_PCT": {"type": "float", "sensitive": True},
+            "COINTEGRATION_PVALUE_THRESHOLD": {"type": "float", "sensitive": False},
+            "KALMAN_DELTA": {"type": "float", "sensitive": False},
+            "KALMAN_R": {"type": "float", "sensitive": False},
             "BROKERAGE_PROVIDER": {
                 "type": "str",
                 "sensitive": True,
@@ -757,7 +765,10 @@ class DashboardService:
             "ALPACA_API_KEY": {"type": "str", "sensitive": True},
             "ALPACA_API_SECRET": {"type": "str", "sensitive": True},
             "ALPACA_BASE_URL": {"type": "str", "sensitive": True, "masked": False},
+            "ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM": {"type": "bool", "sensitive": True},
+            "SEC_USER_AGENT": {"type": "str", "sensitive": False},
             "TELEGRAM_BOT_TOKEN": {"type": "str", "sensitive": True},
+            "TELEGRAM_CHAT_ID": {"type": "str", "sensitive": False},
             "WEB3_PRIVATE_KEY": {"type": "str", "sensitive": True},
             "WEB3_RPC_URL": {"type": "str", "sensitive": True},
         }

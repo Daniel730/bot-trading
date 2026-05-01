@@ -458,13 +458,42 @@ async function requestJsonWithFallbacks<T>(
   attempts: Array<{ path: string; init?: RequestInit }>,
   token: string | null,
   sessionToken?: string | null,
+  cacheKey?: string,
 ): Promise<T> {
+  const healthyPath = cacheKey ? preferredFallbackPathByKey.get(cacheKey) : undefined;
+  const now = Date.now();
+  const candidateAttempts = attempts.filter((attempt) => {
+    if (!cacheKey) return true;
+    const block = blockedFallbackPathByKey.get(`${cacheKey}:${attempt.path}`);
+    if (!block) return true;
+    if (block.expiresAt <= now) {
+      blockedFallbackPathByKey.delete(`${cacheKey}:${attempt.path}`);
+      return true;
+    }
+    return false;
+  });
+  const orderedAttempts = healthyPath
+    ? [
+      ...candidateAttempts.filter((attempt) => attempt.path === healthyPath),
+      ...candidateAttempts.filter((attempt) => attempt.path !== healthyPath),
+    ]
+    : candidateAttempts;
+
   let lastError: unknown = null;
-  for (const attempt of attempts) {
+  for (const attempt of orderedAttempts) {
     try {
-      return await requestJson<T>(attempt.path, token, attempt.init, sessionToken);
+      const response = await requestJson<T>(attempt.path, token, attempt.init, sessionToken);
+      if (cacheKey) {
+        preferredFallbackPathByKey.set(cacheKey, attempt.path);
+      }
+      return response;
     } catch (error) {
       lastError = error;
+      if (cacheKey && error instanceof ApiError && [404, 405].includes(error.status)) {
+        blockedFallbackPathByKey.set(`${cacheKey}:${attempt.path}`, {
+          expiresAt: now + FALLBACK_BLOCK_TTL_MS,
+        });
+      }
       if (error instanceof ApiError && ![404, 405].includes(error.status)) {
         throw error;
       }
@@ -475,6 +504,10 @@ async function requestJsonWithFallbacks<T>(
   }
   throw new Error('Request failed.');
 }
+
+const FALLBACK_BLOCK_TTL_MS = 10 * 60 * 1000;
+const preferredFallbackPathByKey = new Map<string, string>();
+const blockedFallbackPathByKey = new Map<string, { expiresAt: number }>();
 
 export const useDashboardStream = (token: string | null, sessionToken?: string | null) => {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -607,7 +640,7 @@ export const syncWallet = async (
         body: JSON.stringify({ budget }),
       },
     },
-  ], token, sessionToken);
+  ], token, sessionToken, 'wallet.sync');
 
 export const syncT212Wallet = syncWallet;
 
@@ -627,24 +660,10 @@ export const fetchWalletRecommendations = async (
     skip_owned: String(options.skipOwned ?? true),
     skip_pending: String(options.skipPending ?? true),
   });
-  const body = JSON.stringify({
-    budget: options.budget,
-    include_broken: options.includeBroken ?? false,
-    skip_owned: options.skipOwned ?? true,
-    skip_pending: options.skipPending ?? true,
-  });
   return requestJsonWithFallbacks<WalletRecommendationResponse>([
     { path: `/api/wallet/recommendations?${query.toString()}` },
-    {
-      path: '/api/wallet/recommendations',
-      init: {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      },
-    },
     { path: `/api/t212/wallet/recommendations?${query.toString()}` },
-  ], token, sessionToken);
+  ], token, sessionToken, 'wallet.recommendations');
 };
 
 export const buyWalletRecommendations = async (
@@ -690,7 +709,7 @@ export const buyWalletRecommendations = async (
         }),
       },
     },
-  ], token, sessionToken);
+  ], token, sessionToken, 'wallet.recommendations.buy');
 
 export const fetchOpenPositions = async (token: string | null, sessionToken?: string | null): Promise<{ positions: OpenPosition[] }> =>
   requestJson('/api/positions', token, undefined, sessionToken);

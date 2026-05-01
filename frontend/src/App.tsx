@@ -16,8 +16,10 @@ import {
 import './App.css';
 import PairsPanel from './components/PairsPanel';
 import WalletPanel from './components/WalletPanel';
+import PositionsPanel from './components/PositionsPanel';
 import {
   ApiError,
+  type Signal,
   type AuthSession,
   type ChartResponse,
   type ConfigResponse,
@@ -52,8 +54,9 @@ import TradeHistoryPage from './pages/TradeHistoryPage';
 import BotControlPage from './pages/BotControlPage';
 import SettingsPage from './pages/SettingsPage';
 import SystemHealthPage from './pages/SystemHealthPage';
+import SignalsPage from './pages/SignalsPage';
 
-type Page = 'overview' | 'wallet' | 'pairs' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
+type Page = 'overview' | 'wallet' | 'pairs' | 'signals' | 'positions' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
 
 interface NavItem {
   key: Page;
@@ -69,6 +72,8 @@ const NAV_ITEMS: NavItem[] = [
   
   { key: 'wallet', label: 'Wallet', icon: <Wallet size={16} />, category: 'TRADING' },
   { key: 'pairs', label: 'Pairs', icon: <Layers size={16} />, category: 'TRADING' },
+  { key: 'signals', label: 'Signals', icon: <Activity size={16} />, category: 'TRADING' },
+  { key: 'positions', label: 'Positions', icon: <History size={16} />, category: 'TRADING' },
   
   { key: 'control', label: 'Bot Control', icon: <Bot size={16} />, category: 'SYSTEM' },
   { key: 'settings', label: 'Settings', icon: <SettingsIcon size={16} />, category: 'SYSTEM' },
@@ -169,7 +174,9 @@ function App() {
   const [logs, setLogs] = useState<LogsResponse | null>(null);
   const [config, setConfig] = useState<ConfigResponse | null>(null);
   const [configForm, setConfigForm] = useState<Record<string, string>>({});
-  const [otpToken, setOtpToken] = useState('');
+  const [saveOtpModalOpen, setSaveOtpModalOpen] = useState(false);
+  const [saveOtpCode, setSaveOtpCode] = useState('');
+  const [pendingConfigUpdates, setPendingConfigUpdates] = useState<Record<string, string> | null>(null);
   const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorInitiateResponse | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [systemMessage, setSystemMessage] = useState<string | null>(null);
@@ -341,27 +348,65 @@ function App() {
 
   const handleSaveConfig = async () => {
     if (!config) return;
+    const updates = Object.fromEntries(
+      config.items
+        .filter((item) => configForm[item.key] !== String(item.value))
+        .map((item) => [item.key, configForm[item.key]]),
+    );
+    if (!Object.keys(updates).length) {
+      setSystemMessage('No settings changed.');
+      return;
+    }
+
     setIsBusy(true);
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const updates = Object.fromEntries(
-        config.items
-          .filter((item) => configForm[item.key] !== String(item.value))
-          .map((item) => [item.key, configForm[item.key]]),
-      );
-      if (!Object.keys(updates).length) {
-        setSystemMessage('No settings changed.');
-        return;
-      }
-      const response = await updateConfig(securityToken, sessionToken, updates, 'dashboard', otpToken || undefined);
+      const response = await updateConfig(securityToken, sessionToken, updates, 'dashboard');
       setConfig(response);
       setConfigForm(Object.fromEntries(response.items.map((item) => [item.key, String(item.value)])));
-      setOtpToken('');
       setSystemMessage('Configuration updated.');
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
-      setSystemError(err.message || 'Failed to update configuration.');
+      const errMsg = err?.message || 'Failed to update configuration.';
+      const requiresOtp = err instanceof ApiError && err.status === 403 && /2fa|token/i.test(errMsg);
+      if (requiresOtp) {
+        setPendingConfigUpdates(updates);
+        setSaveOtpCode('');
+        setSaveOtpModalOpen(true);
+        setSystemMessage('2FA confirmation required to save these changes.');
+      } else {
+        setSystemError(errMsg);
+      }
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleConfirmSaveWithOtp = async () => {
+    if (!pendingConfigUpdates || !saveOtpCode.trim()) {
+      setSystemError('Enter your authenticator or backup code.');
+      return;
+    }
+    setIsBusy(true);
+    setSystemError(null);
+    try {
+      const response = await updateConfig(
+        securityToken,
+        sessionToken,
+        pendingConfigUpdates,
+        'dashboard',
+        saveOtpCode.trim(),
+      );
+      setConfig(response);
+      setConfigForm(Object.fromEntries(response.items.map((item) => [item.key, String(item.value)])));
+      setPendingConfigUpdates(null);
+      setSaveOtpCode('');
+      setSaveOtpModalOpen(false);
+      setSystemMessage('Configuration updated.');
+    } catch (err: any) {
+      if (handleAuthFailure(err)) return;
+      setSystemError(err?.message || 'Failed to verify 2FA for configuration save.');
     } finally {
       setIsBusy(false);
     }
@@ -571,6 +616,8 @@ function App() {
             positions={positions}
             risk={risk}
             recentThoughts={recentThoughts}
+            marketRegimeConfidence={data?.market_regime?.confidence}
+            globalAccuracy={data?.global_accuracy ?? null}
           />
         )}
 
@@ -592,6 +639,14 @@ function App() {
             profitChart={profitChart}
             winLossChart={winLossChart}
           />
+        )}
+
+        {page === 'signals' && (
+          <SignalsPage signals={(data?.active_signals ?? []) as Signal[]} />
+        )}
+
+        {page === 'positions' && (
+          <PositionsPanel token={securityToken} sessionToken={sessionToken} />
         )}
 
         {page === 'trades' && (
@@ -627,8 +682,6 @@ function App() {
             config={config}
             configForm={configForm}
             setConfigForm={setConfigForm}
-            otpToken={otpToken}
-            setOtpToken={setOtpToken}
             handleSaveConfig={handleSaveConfig}
             isBusy={isBusy}
             handleInitiate2FA={handleInitiate2FA}
@@ -645,6 +698,44 @@ function App() {
             logs={logs}
           />
         )}
+        {saveOtpModalOpen ? (
+          <div className="overlay" onClick={(event) => event.target === event.currentTarget && !isBusy && setSaveOtpModalOpen(false)}>
+            <div className="confirm-window">
+              <div className="terminal-header">
+                <div className="terminal-dots">
+                  <span className="td-red" onClick={() => !isBusy && setSaveOtpModalOpen(false)} />
+                  <span className="td-yellow" />
+                  <span className="td-green" />
+                </div>
+                <span className="terminal-title">confirm 2fa for save</span>
+              </div>
+              <div className="confirm-body">
+                <div className="confirm-total">
+                  <span>One-time confirmation needed</span>
+                  <strong>2FA</strong>
+                  <small>Enter authenticator code or backup code to apply settings changes.</small>
+                </div>
+                <label className="setting-field">
+                  <span>Authenticator / Backup Code</span>
+                  <input
+                    value={saveOtpCode}
+                    onChange={(event) => setSaveOtpCode(event.target.value)}
+                    autoFocus
+                    placeholder="6-digit code or backup code"
+                  />
+                </label>
+                <div className="inline-actions">
+                  <button className="ghost-btn" disabled={isBusy} onClick={() => setSaveOtpModalOpen(false)}>
+                    Cancel
+                  </button>
+                  <button className="primary-btn" disabled={isBusy} onClick={handleConfirmSaveWithOtp}>
+                    {isBusy ? 'Saving...' : 'Confirm Save'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </main>
     </div>
   );
