@@ -20,6 +20,7 @@ import {
   fetchPairs,
   syncWallet,
   updatePairs,
+  discoverPairs,
   type PairInfo,
   type PairConfigEntry,
 } from '../services/api';
@@ -242,6 +243,20 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
     }
     return tickers;
   }, [activePairs]);
+
+  const [discovering, setDiscovering] = useState(false);
+
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    try {
+      await discoverPairs(token, sessionToken);
+      setSaveOk('Global discovery cycle started in background. Check terminal for updates.');
+    } catch (err: any) {
+      setSaveError(err.message || 'Failed to start discovery.');
+    } finally {
+      setDiscovering(false);
+    }
+  };
 
   const openEditor = () => {
     setDraftStocks(configuredStocks.map((p) => ({ ...p })));
@@ -602,6 +617,16 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
                   </div>
                 )}
                 <div className="editor-footer">
+                  <button
+                    className="editor-discover-btn"
+                    onClick={handleDiscover}
+                    disabled={discovering}
+                    title="Search for new cointegrated pairs in background"
+                    style={{ marginRight: 'auto' }}
+                  >
+                    <RefreshCw size={12} className={discovering ? 'spin' : ''} />
+                    {discovering ? 'Scouting...' : 'Search & Update Eligibles'}
+                  </button>
                   <label className="editor-apply-label">
                     <input
                       type="checkbox"

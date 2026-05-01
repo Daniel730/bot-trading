@@ -608,6 +608,11 @@ export const sendTerminalCommand = async (command: string, token: string | null,
 export const fetchPairs = async (token: string | null, sessionToken?: string | null): Promise<PairsResponse> =>
   requestJson<PairsResponse>('/api/pairs', token, undefined, sessionToken);
 
+export const discoverPairs = async (token: string | null, sessionToken: string | null): Promise<{ status: string; message: string }> =>
+  requestJson('/api/pairs/discover', token, {
+    method: 'POST',
+  }, sessionToken);
+
 export const updatePairs = async (
   token: string | null,
   pairs: PairConfigEntry[],

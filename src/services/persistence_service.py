@@ -389,7 +389,12 @@ class PersistenceService:
             return val if val is not None else default
 
     async def get_active_trading_universe(self) -> List[str]:
-        """Returns a unique list of all tickers currently in active trading pairs."""
+        """
+        List all unique tickers present in trading pairs with status "Active".
+        
+        Returns:
+            List[str]: A sorted list of unique ticker symbols gathered from `ticker_a` and `ticker_b` of trading pairs whose `status` equals "Active".
+        """
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
             # Query all tickers from both A and B sides of the pairs
@@ -402,8 +407,78 @@ class PersistenceService:
             tickers = set(result_a.scalars().all()) | set(result_b.scalars().all())
             return sorted(list(tickers))
 
+    async def get_active_trading_pairs(self) -> List[dict]:
+        """
+        List active trading pairs as dictionaries.
+        
+        @returns A list of dictionaries, each containing the keys `id`, `ticker_a`, `ticker_b`, `hedge_ratio` (float), `is_cointegrated`, and `status`.
+        """
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(TradingPair).where(TradingPair.status == "Active")
+            result = await session.execute(stmt)
+            pairs = result.scalars().all()
+            return [
+                {
+                    "id": p.id,
+                    "ticker_a": p.ticker_a,
+                    "ticker_b": p.ticker_b,
+                    "hedge_ratio": float(p.hedge_ratio),
+                    "is_cointegrated": p.is_cointegrated,
+                    "status": p.status
+                }
+                for p in pairs
+            ]
+
+    async def save_trading_pairs(self, pairs: List[dict]):
+        """
+        Upserts trading pair records from a list of pair dictionaries into the database.
+        
+        Parameters:
+            pairs (List[dict]): List of dictionaries describing trading pairs. Each dictionary must include
+                `ticker_a` and `ticker_b`. Optional keys:
+                    - `id`: explicit record id; if omitted, `"{ticker_a}_{ticker_b}"` is used.
+                    - `hedge_ratio` (float): defaults to 0.0 when absent.
+                    - `is_cointegrated` (bool): defaults to False when absent.
+                    - `status` (str): defaults to "Active" when absent.
+                Providing an empty list is a no-op.
+        """
+        from sqlalchemy.dialects.postgresql import insert
+        if not pairs:
+            return
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                for p in pairs:
+                    stmt = insert(TradingPair).values(
+                        id=p.get('id') or f"{p['ticker_a']}_{p['ticker_b']}",
+                        ticker_a=p['ticker_a'],
+                        ticker_b=p['ticker_b'],
+                        hedge_ratio=p.get('hedge_ratio', 0.0),
+                        is_cointegrated=p.get('is_cointegrated', False),
+                        status=p.get('status', 'Active')
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[TradingPair.id],
+                        set_=dict(
+                            hedge_ratio=p.get('hedge_ratio', 0.0),
+                            is_cointegrated=p.get('is_cointegrated', False),
+                            status=p.get('status', 'Active')
+                        )
+                    )
+                    await session.execute(stmt)
+
     async def get_daily_returns(self, venue: Optional[str] = None) -> Dict[str, float]:
-        """Returns aggregated daily PnL mapping of form {'YYYY-MM-DD': pnl_sum} based on CLOSED trades."""
+        """
+        Compute aggregated daily PnL per calendar day from closed trades.
+        
+        Filters closed trades (optionally by venue), reads per-signal PnL from each trade's `metadata_json["pnl"]`, deduplicates multiple legs by `signal_id` (or trade `id` when `signal_id` is missing), and sums those signal-level PnLs into a mapping keyed by YYYY-MM-DD.
+        
+        Parameters:
+        	venue (Optional[str]): If provided, restrict results to trades from this exact venue.
+        
+        Returns:
+        	daily_pnl (Dict[str, float]): Mapping from day string `'YYYY-MM-DD'` to the sum of signal-level PnL for that day.
+        """
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
             stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.CLOSED)
@@ -692,7 +767,16 @@ class PersistenceService:
             return [row[0] for row in result.all()]
 
     async def save_universe_candidates(self, candidates: List[UniverseCandidate]):
-        """Bulk saves universe candidates."""
+        """
+        Insert multiple UniverseCandidate objects into the database within a single transaction.
+        
+        Parameters:
+            candidates (List[UniverseCandidate]): Iterable of UniverseCandidate ORM instances to persist. If the list is empty, the function returns without performing any database operations.
+        
+        Notes:
+            - Each provided candidate is added as a new row; existing rows are not updated (no upsert is performed).
+            - All inserts occur inside a single transactional context and will be committed together.
+        """
         if not candidates:
             return
         async with self.AsyncSessionLocal() as session:
@@ -701,4 +785,47 @@ class PersistenceService:
                     session.add(c)
                 # Or use bulk_save_objects if needed, but session.add in a loop within a transaction is usually fine for small/medium batches in async
 
+    async def get_top_candidates(self, limit: int = 20) -> List[dict]:
+        """
+        Retrieve the top universe candidates ordered by Sortino ratio.
+        
+        Parameters:
+            limit (int): Maximum number of candidates to return (default 20).
+        
+        Returns:
+            List[dict]: A list of candidate dictionaries, each containing:
+                - "pair_id": candidate identifier (str)
+                - "sector": sector name (str)
+                - "sortino": Sortino ratio as a float (defaults to 0.0 if missing)
+                - "p_value": p-value as a float (defaults to 1.0 if missing)
+        """
+        from sqlalchemy import select, desc
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(UniverseCandidate).order_by(desc(UniverseCandidate.sortino)).limit(limit)
+            result = await session.execute(stmt)
+            return [
+                {
+                    "pair_id": c.pair_id,
+                    "sector": c.sector,
+                    "sortino": float(c.sortino or 0.0),
+                    "p_value": float(c.p_value or 1.0)
+                }
+                for c in result.scalars().all()
+            ]
+
+    async def update_pair_status(self, pair_id: str, status: str):
+        """
+        Change the stored status of a trading pair identified by its id.
+        
+        Parameters:
+            pair_id (str): Identifier of the trading pair to update.
+            status (str): New status value for the pair (e.g., "Active", "Benched").
+        """
+        from sqlalchemy import update
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = update(TradingPair).where(TradingPair.id == pair_id).values(status=status)
+                await session.execute(stmt)
+
 persistence_service = PersistenceService()
+

@@ -110,47 +110,72 @@ class PortfolioManagerAgent:
 
     @agent_trace("PortfolioManagerAgent.get_sp500_universe")
     async def get_sp500_universe(self) -> pd.DataFrame:
-        """Fetches and caches the S&P 500 constituents and sectors from Wikipedia."""
+        """
+        Return the S&P 500 constituents with their company names and sectors, using a cached copy when available.
+        
+        Returns:
+            pd.DataFrame: DataFrame with columns `Ticker`, `Company`, and `Sector`. The result is cached for up to 7 days; on failure or if required columns cannot be identified, returns an empty DataFrame.
+        """
         if self._sp500_cache is not None and (datetime.now() - self._last_cache_update) < timedelta(days=7):
             return self._sp500_cache
 
         try:
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
             
             response = await asyncio.to_thread(requests.get, url, headers=headers, timeout=10)
             response.raise_for_status()
             
-            tables = await asyncio.to_thread(pd.read_html, response.text)
+            # Use 'bs4' (BeautifulSoup) as it's often more robust than lxml on Windows for large HTML files.
+            # We wrap this in a thread because pd.read_html is synchronous and can be slow for large pages.
+            try:
+                tables = await asyncio.to_thread(pd.read_html, response.text, flavor='bs4')
+            except Exception as inner_e:
+                logger.warning(f"pd.read_html with bs4 failed: {inner_e}. Retrying with default parser.")
+                tables = await asyncio.to_thread(pd.read_html, response.text)
+            
+            if not tables:
+                logger.error("S&P 500 Scraper: No tables found in the Wikipedia response.")
+                return pd.DataFrame()
             
             df = None
             for table in tables:
-                if len(table) > 400: # The constituents table has 503 rows
+                # The constituents table is typically the first large table found.
+                if len(table) > 400: 
                     df = table
                     break
             
             if df is None:
+                logger.warning("S&P 500 Scraper: Could not identify the main constituents table by row count. Falling back to the first table.")
                 df = tables[0]
 
-            # Identify columns by keyword search
+            # Identify columns by keyword search (Wikipedia column names change occasionally)
             ticker_col = next((c for c in df.columns if 'symbol' in str(c).lower() or 'ticker' in str(c).lower()), None)
             sector_col = next((c for c in df.columns if 'sector' in str(c).lower() or 'industry' in str(c).lower()), None)
             company_col = next((c for c in df.columns if 'security' in str(c).lower() or 'company' in str(c).lower()), None)
 
             if not ticker_col or not sector_col:
-                print(f"DEBUG SCRAPER: Failed to identify columns in table (len {len(df)}). Found: {df.columns.tolist()}")
+                logger.error(f"S&P 500 Scraper: Failed to identify Ticker or Sector columns. Columns found: {df.columns.tolist()}")
                 return pd.DataFrame()
 
             df = df.rename(columns={ticker_col: 'Ticker', sector_col: 'Sector', company_col: 'Company'})
+            
+            # Normalize tickers for yfinance (e.g., BRK.B to BRK-B)
+            df['Ticker'] = df['Ticker'].astype(str).str.replace('.', '-', regex=False)
             df = df[['Ticker', 'Company', 'Sector']]
             
             self._sp500_cache = df
             self._last_cache_update = datetime.now()
-            print(f"DEBUG SCRAPER: S&P 500 Universe Cached. {len(df)} tickers.")
+            logger.info(f"S&P 500 Universe Cached. {len(df)} tickers.")
             return df
         except Exception as e:
-            # Avoid UnicodeEncodeError on Windows console by not printing full character junk
-            logger.error(f"S&P 500 Scraper Exception: {type(e).__name__}")
+            import traceback
+            # Capture specific error name to avoid massive string dumps if the exception contains the HTML
+            err_name = type(e).__name__
+            logger.error(f"S&P 500 Scraper Error ({err_name}): {str(e)[:500]}")
+            logger.error(traceback.format_exc())
             return pd.DataFrame()
 
     @agent_trace("PortfolioManagerAgent.calculate_sortino_ratio")
@@ -232,8 +257,12 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.scan_sector_universe")
     async def scan_sector_universe(self, sector: str):
         """
-        Scans a specific S&P 500 sector for cointegrated pairs.
-        Uses bulk search to avoid re-analyzing existing candidates and bulk inserts for speed.
+        Scan the S&P 500 sector for cointegrated ticker pairs and persist newly discovered candidates.
+        
+        Fetches the sector tickers (using a cached/wrapped scraper and a hardcoded fallback when scraping fails), skips pairs already recorded, analyzes adjacent ticker pairs for cointegration and spread performance metrics, and bulk-saves any newly discovered UniverseCandidate entries. The method logs progress, warnings when falling back to hardcoded lists, and errors per-pair when analysis fails.
+        
+        Parameters:
+            sector (str): The exact sector name to scan (e.g., "Information Technology", "Health Care").
         """
         universe = await self.get_sp500_universe()
         
@@ -269,7 +298,6 @@ class PortfolioManagerAgent:
             pair_id = f"{t_a}_{t_b}"
             
             if pair_id in existing_ids:
-                logger.info(f"Skipping existing candidate: {pair_id}")
                 continue
 
             try:
@@ -279,6 +307,8 @@ class PortfolioManagerAgent:
                     "1d",
                     timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
                 )
+                if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
+                    continue
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
                 
                 if is_coint:
@@ -306,10 +336,81 @@ class PortfolioManagerAgent:
             await persistence_service.save_universe_candidates(new_candidates)
             logger.info(f"Successfully bulk inserted {len(new_candidates)} new candidates for {sector}.")
 
+    @agent_trace("PortfolioManagerAgent.scan_crypto_universe")
+    async def scan_crypto_universe(self):
+        """
+        Scan a fixed list of top crypto tickers for cointegrated pairs and persist discovered universe candidates.
+        
+        For each unique pair among a predefined top-crypto list, the method:
+        - Skips pairs already present in the persisted candidate IDs.
+        - Loads up to one year of daily historical price data and skips the pair if data is missing or incomplete.
+        - Tests for cointegration; if cointegrated, computes the spread and its daily returns, then derives annualized metrics:
+          - `expected_return` (mean of spread returns annualized using 365 days),
+          - `volatility` (standard deviation annualized using sqrt(365)),
+          - `sortino` (using the agent's Sortino calculation on the spread returns),
+          - `p_value` and `correlation`.
+        - Creates and persists a UniverseCandidate for each discovered pair and logs discoveries.
+        
+        Pairs with missing data or pairs that raise exceptions during processing are skipped silently; newly discovered candidates are saved in bulk at the end.
+        """
+        logger.info("Scanning crypto universe...")
+        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "POL-USD"]
+        
+        existing_ids = await persistence_service.get_existing_candidate_ids("Crypto")
+        new_candidates = []
+
+        for i in range(len(top_crypto)):
+            for j in range(i + 1, len(top_crypto)):
+                t_a, t_b = top_crypto[i], top_crypto[j]
+                pair_id = f"{t_a}_{t_b}"
+                
+                if pair_id in existing_ids:
+                    continue
+
+                try:
+                    df = await self.data_service.get_historical_data_async(
+                        [t_a, t_b],
+                        "1y",
+                        "1d",
+                        timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
+                    )
+                    if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
+                        continue
+                        
+                    is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
+                    
+                    if is_coint:
+                        spread = df[t_a] - (hedge * df[t_b])
+                        spread_returns = spread.pct_change().dropna()
+                        pair_sortino = self.calculate_sortino_ratio(np.array([1.0]), pd.DataFrame(spread_returns))
+                        
+                        new_candidates.append(UniverseCandidate(
+                            pair_id=pair_id,
+                            sector="Crypto",
+                            p_value=p_val,
+                            correlation=df[t_a].corr(df[t_b]),
+                            expected_return=spread_returns.mean() * 365,
+                            volatility=spread_returns.std() * np.sqrt(365),
+                            sortino=pair_sortino
+                        ))
+                        logger.info(f"Found new crypto candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
+                except Exception as e:
+                    continue
+
+        if new_candidates:
+            await persistence_service.save_universe_candidates(new_candidates)
+            logger.info(f"Successfully inserted {len(new_candidates)} new crypto candidates.")
+
     async def get_optimization_advice(self, new_ticker: str) -> Dict:
         """
-        Determines if adding a new ticker improves the portfolio's Sortino Ratio.
-        Returns: {"is_recommended": bool, "improvement": float, "target_weight": float}
+        Assess whether adding the given ticker would improve the portfolio's Sortino ratio.
+        
+        Returns:
+            result (dict): Recommendation and metrics with keys:
+                - is_recommended (bool): `True` if adding `new_ticker` increases the portfolio's Sortino ratio, `False` otherwise.
+                - improvement (float): The change in Sortino ratio (new_sortino - current_sortino).
+                - target_weight (float): Suggested weight for `new_ticker` in the optimized portfolio.
+                - optimized_portfolio (dict): Mapping of tickers to optimized weights (present when optimization completed).
         """
         try:
             current_tickers = await persistence_service.get_active_portfolio_tickers()
@@ -357,7 +458,14 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.run_narrative_scan")
     async def run_narrative_scan(self, sector: str, beacon_ticker: str):
         """
-        Executes a sector scan only if the Beacon Asset (Leader) is in a healthy regime.
+        Perform a conditional sector scan based on the market regime of a beacon ticker.
+        
+        Parameters:
+        	sector (str): Name of the sector to scan (e.g., "Information Technology").
+        	beacon_ticker (str): Ticker symbol used as the market regime beacon.
+        
+        Returns:
+        	result (dict): If the beacon's regime is "BEARISH" or "EXTREME_VOLATILITY", returns {"status": "VETOED", "reason": "<explanation>"}. Otherwise returns {"status": "COMPLETED", "sector": sector} after initiating the sector scan.
         """
         regime = await macro_economic_agent.get_ticker_regime(beacon_ticker)
         
@@ -368,6 +476,101 @@ class PortfolioManagerAgent:
         logger.info(f"NARRATIVE APPROVED: Sector {sector} Leader {beacon_ticker} is BULLISH. Scanning followers...")
         await self.scan_sector_universe(sector)
         return {"status": "COMPLETED", "sector": sector}
+
+    @agent_trace("PortfolioManagerAgent.run_discovery")
+    async def run_discovery(self):
+        """
+        Orchestrates discovery of cointegrated trading pairs across selected S&P 500 sectors and the crypto universe.
+        
+        Runs sector scans for a fixed set of sectors and a subsequent crypto scan; errors for individual sectors or the crypto scan are logged and do not stop the overall cycle. This is intended as a long-running background task.
+        
+        Returns:
+            result (dict): A completion summary with keys:
+                - "status": a string status, e.g., "COMPLETED".
+                - "timestamp": ISO 8601 timestamp when the run finished.
+        """
+        logger.info("Starting global pair discovery cycle...")
+        sectors = ["Financials", "Information Technology", "Consumer Staples", "Health Care"]
+        
+        # Scan sectors
+        for sector in sectors:
+            try:
+                await self.scan_sector_universe(sector)
+            except Exception as e:
+                logger.error(f"Discovery failed for sector {sector}: {e}")
+        
+        # Scan crypto
+        try:
+            await self.scan_crypto_universe()
+        except Exception as e:
+            logger.error(f"Discovery failed for crypto universe: {e}")
+            
+        logger.info("Global pair discovery cycle completed.")
+        return {"status": "COMPLETED", "timestamp": datetime.now().isoformat()}
+
+    @agent_trace("PortfolioManagerAgent.rotate_pairs")
+    async def rotate_pairs(self):
+        """
+        Rotate active trading pairs by replacing them with the top scout candidates ranked by Sortino.
+        
+        Fetches all TradingPair rows with status "Active" and the top UniverseCandidate rows ordered by descending `sortino`. If there are scout pairs not already active, sets all TradingPair rows' status to "Scout", upserts the selected scout pairs as Active TradingPair rows (using the scout `pair_id` to populate `ticker_a` and `ticker_b`, with `hedge_ratio=0.0` and `is_cointegrated=True`), commits the transaction, and logs the rotation. If there are no active pairs or no scouts, or no scouts to activate, the method returns without making changes.
+        """
+        from src.services.persistence_service import TradingPair, UniverseCandidate
+        from sqlalchemy import select, update, desc
+        
+        logger.info("Starting pair rotation audit...")
+        
+        async with persistence_service.AsyncSessionLocal() as session:
+            # 1. Get current active pairs
+            active_stmt = select(TradingPair).where(TradingPair.status == "Active")
+            active_pairs = (await session.execute(active_stmt)).scalars().all()
+            
+            # 2. Get top candidates (Scouts)
+            scout_stmt = select(UniverseCandidate).order_by(desc(UniverseCandidate.sortino)).limit(settings.MAX_ACTIVE_PAIRS)
+            scouts = (await session.execute(scout_stmt)).scalars().all()
+            
+            if not active_pairs or not scouts:
+                logger.info("Rotation skipped: Insufficient active pairs or scouts.")
+                return
+            
+            # Sort active pairs by Sortino (if we have it, otherwise we'd need to calculate it)
+            # For now, let's assume we want to ensure we have the best Sortino pairs in Active
+            
+            active_ids = {p.id for p in active_pairs}
+            scout_ids = {s.pair_id for s in scouts}
+            
+            to_activate = scout_ids - active_ids
+            if not to_activate:
+                logger.info("Rotation completed: No better candidates found.")
+                return
+
+            logger.info(f"Identified {len(to_activate)} potential improvements.")
+            
+            # Simple rotation: swap worst active for best scout
+            # In a more advanced version, we'd check PnL and current volatility
+            
+            # For now, let's just make sure we don't exceed MAX_ACTIVE_PAIRS
+            # and that we have the top Sortino pairs active.
+            
+            # 1. Deactivate all
+            await session.execute(update(TradingPair).values(status="Scout"))
+            
+            # 2. Activate top Sortino scouts
+            for scout in scouts:
+                # Upsert into TradingPair
+                ticker_a, ticker_b = scout.pair_id.split('_')
+                p = TradingPair(
+                    id=scout.pair_id,
+                    ticker_a=ticker_a,
+                    ticker_b=ticker_b,
+                    hedge_ratio=0.0, # Will be re-calculated by monitor
+                    is_cointegrated=True,
+                    status="Active"
+                )
+                await session.merge(p)
+            
+            await session.commit()
+            logger.info(f"Rotated {len(scouts)} pairs into Active status.")
 
 portfolio_manager_agent = PortfolioManagerAgent()
 portfolio_manager = portfolio_manager_agent
