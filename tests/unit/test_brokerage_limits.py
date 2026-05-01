@@ -28,10 +28,12 @@ async def test_quantity_rounding_and_limits():
                     # quantity = 172.0 / 100.0 = 1.72, rounded down to 0.05 increment → 1.70
                     assert kwargs["json"]["quantity"] == pytest.approx(1.70, rel=1e-4)
 
-            mock_metadata["minTradeQuantity"] = 2.0
-            mock_prices["AAPL"] = 1000.0
-            with patch.object(service.provider.session, "post") as mock_post:
-                result = await service.place_value_order("AAPL", 100.0, "BUY")
+            with patch.object(
+                service.provider,
+                "get_symbol_metadata",
+                return_value={"minTradeQuantity": 2.0, "quantityIncrement": 0.05},
+            ), patch.object(service.provider.session, "post") as mock_post:
+                result = await service.place_value_order("AAPL", 100.0, "BUY", price=1000.0)
 
                 assert result["status"] == "error"
                 assert "minTradeQuantity" in result["message"]
