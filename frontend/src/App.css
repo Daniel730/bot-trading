@@ -699,6 +699,21 @@ select {
   gap: 8px;
 }
 
+.list-pagination {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.list-pagination-label {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 92px;
+  text-align: center;
+}
+
 .wallet-pair-list span,
 .wallet-pair-list em,
 .wallet-chip-list span {

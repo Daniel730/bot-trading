@@ -61,6 +61,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     'API & Connectivity': config?.items.filter(item => getCategory(item.key) === 'API & Connectivity'),
     General: config?.items.filter(item => getCategory(item.key) === 'General'),
   };
+  const provider = configForm.BROKERAGE_PROVIDER
+    ?? String(config?.items.find((item) => item.key === 'BROKERAGE_PROVIDER')?.value ?? 'T212');
+  const hasAlpacaKey = Boolean(String(configForm.ALPACA_API_KEY ?? config?.items.find((item) => item.key === 'ALPACA_API_KEY')?.value ?? '').trim());
+  const hasAlpacaSecret = Boolean(String(configForm.ALPACA_API_SECRET ?? config?.items.find((item) => item.key === 'ALPACA_API_SECRET')?.value ?? '').trim());
+  const alpacaBaseUrl = String(configForm.ALPACA_BASE_URL ?? config?.items.find((item) => item.key === 'ALPACA_BASE_URL')?.value ?? '');
 
   return (
     <>
@@ -75,6 +80,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
       {activeTab === 'general' && (
         <section className="panel">
           <SectionHeader title="Editable Variables" subtitle="Sensitive changes require a current OTP or backup code." />
+          <div className="twofa-status" style={{ marginBottom: '16px' }}>
+            <div><span>Active Equity Broker</span><strong>{provider}</strong></div>
+            <div><span>Alpaca API Key</span><strong>{hasAlpacaKey ? 'Set' : 'Missing'}</strong></div>
+            <div><span>Alpaca API Secret</span><strong>{hasAlpacaSecret ? 'Set' : 'Missing'}</strong></div>
+            <div><span>Alpaca Base URL</span><strong>{alpacaBaseUrl || 'Not set'}</strong></div>
+          </div>
 
           {Object.entries(categories).map(([category, items]) => (
             items && items.length > 0 && (

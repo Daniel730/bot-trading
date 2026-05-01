@@ -31,6 +31,7 @@ interface PairsPanelProps {
 
 type EditorTab = 'stocks' | 'crypto';
 type ListFilter = 'all' | 'stocks' | 'crypto' | 'coint' | 'broken';
+const ACTIVE_PAIRS_PAGE_SIZE = 12;
 
 const formatNum = (val: number | null | undefined, decimals = 3): string => {
   if (val === null || val === undefined || Number.isNaN(val)) return '—';
@@ -158,6 +159,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const [configuredCrypto, setConfiguredCrypto] = useState<PairConfigEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<ListFilter>('all');
+  const [activePairsPage, setActivePairsPage] = useState(1);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorTab, setEditorTab] = useState<EditorTab>('stocks');
@@ -212,6 +214,21 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       return a.id.localeCompare(b.id);
     });
   }, [activePairs, filter]);
+  const totalActivePairPages = Math.max(1, Math.ceil(filteredActive.length / ACTIVE_PAIRS_PAGE_SIZE));
+  const pagedActivePairs = useMemo(() => {
+    const start = (activePairsPage - 1) * ACTIVE_PAIRS_PAGE_SIZE;
+    return filteredActive.slice(start, start + ACTIVE_PAIRS_PAGE_SIZE);
+  }, [activePairsPage, filteredActive]);
+
+  useEffect(() => {
+    setActivePairsPage(1);
+  }, [filter]);
+
+  useEffect(() => {
+    if (activePairsPage > totalActivePairPages) {
+      setActivePairsPage(totalActivePairPages);
+    }
+  }, [activePairsPage, totalActivePairPages]);
 
   const stockCount = activePairs.filter((p) => !p.is_crypto).length;
   const cryptoCount = activePairs.filter((p) => p.is_crypto).length;
@@ -431,9 +448,32 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
                 <span>Status</span>
                 <span />
               </div>
-              {filteredActive.map((p) => (
+              {pagedActivePairs.map((p) => (
                 <PairRow key={p.id} p={p} />
               ))}
+            </div>
+          )}
+          {filteredActive.length > ACTIVE_PAIRS_PAGE_SIZE && (
+            <div className="list-pagination">
+              <button
+                className="panel-action-btn"
+                disabled={activePairsPage <= 1}
+                onClick={() => setActivePairsPage((current) => Math.max(1, current - 1))}
+                title="Previous page"
+              >
+                Prev
+              </button>
+              <span className="list-pagination-label">
+                Page {activePairsPage} / {totalActivePairPages}
+              </span>
+              <button
+                className="panel-action-btn"
+                disabled={activePairsPage >= totalActivePairPages}
+                onClick={() => setActivePairsPage((current) => Math.min(totalActivePairPages, current + 1))}
+                title="Next page"
+              >
+                Next
+              </button>
             </div>
           )}
         </div>

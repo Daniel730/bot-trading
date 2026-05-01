@@ -454,6 +454,28 @@ async function requestJson<T>(
   return response.json();
 }
 
+async function requestJsonWithFallbacks<T>(
+  attempts: Array<{ path: string; init?: RequestInit }>,
+  token: string | null,
+  sessionToken?: string | null,
+): Promise<T> {
+  let lastError: unknown = null;
+  for (const attempt of attempts) {
+    try {
+      return await requestJson<T>(attempt.path, token, attempt.init, sessionToken);
+    } catch (error) {
+      lastError = error;
+      if (error instanceof ApiError && ![404, 405].includes(error.status)) {
+        throw error;
+      }
+    }
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error('Request failed.');
+}
+
 export const useDashboardStream = (token: string | null, sessionToken?: string | null) => {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -568,11 +590,24 @@ export const syncWallet = async (
   sessionToken: string | null,
   budget: number,
 ): Promise<WalletSyncResponse> =>
-  requestJson('/api/wallet/sync', token, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ budget }),
-  }, sessionToken);
+  requestJsonWithFallbacks<WalletSyncResponse>([
+    {
+      path: '/api/wallet/sync',
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ budget }),
+      },
+    },
+    {
+      path: '/api/t212/wallet/sync',
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ budget }),
+      },
+    },
+  ], token, sessionToken);
 
 export const syncT212Wallet = syncWallet;
 
@@ -586,19 +621,30 @@ export const fetchWalletRecommendations = async (
     skipPending?: boolean;
   },
 ): Promise<WalletRecommendationResponse> => {
-  const url = apiUrl('/api/wallet/recommendations');
-  url.searchParams.set('budget', String(options.budget));
-  url.searchParams.set('include_broken', String(options.includeBroken ?? false));
-  url.searchParams.set('skip_owned', String(options.skipOwned ?? true));
-  url.searchParams.set('skip_pending', String(options.skipPending ?? true));
-  const response = await fetchWithTimeout(url, {
-    headers: authHeaders(token, sessionToken),
+  const query = new URLSearchParams({
+    budget: String(options.budget),
+    include_broken: String(options.includeBroken ?? false),
+    skip_owned: String(options.skipOwned ?? true),
+    skip_pending: String(options.skipPending ?? true),
   });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, errorData.detail || `Failed to fetch wallet recommendations (${response.status})`, errorData);
-  }
-  return response.json();
+  const body = JSON.stringify({
+    budget: options.budget,
+    include_broken: options.includeBroken ?? false,
+    skip_owned: options.skipOwned ?? true,
+    skip_pending: options.skipPending ?? true,
+  });
+  return requestJsonWithFallbacks<WalletRecommendationResponse>([
+    { path: `/api/wallet/recommendations?${query.toString()}` },
+    {
+      path: '/api/wallet/recommendations',
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      },
+    },
+    { path: `/api/t212/wallet/recommendations?${query.toString()}` },
+  ], token, sessionToken);
 };
 
 export const buyWalletRecommendations = async (
@@ -613,18 +659,38 @@ export const buyWalletRecommendations = async (
     delaySeconds?: number;
   },
 ): Promise<WalletRecommendationBuyResponse> =>
-  requestJson('/api/wallet/recommendations/buy', token, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      budget: payload.budget,
-      include_broken: payload.includeBroken ?? false,
-      tickers: payload.tickers,
-      skip_owned: payload.skipOwned ?? true,
-      skip_pending: payload.skipPending ?? true,
-      delay_seconds: payload.delaySeconds ?? 0.5,
-    }),
-  }, sessionToken);
+  requestJsonWithFallbacks<WalletRecommendationBuyResponse>([
+    {
+      path: '/api/wallet/recommendations/buy',
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          budget: payload.budget,
+          include_broken: payload.includeBroken ?? false,
+          tickers: payload.tickers,
+          skip_owned: payload.skipOwned ?? true,
+          skip_pending: payload.skipPending ?? true,
+          delay_seconds: payload.delaySeconds ?? 0.5,
+        }),
+      },
+    },
+    {
+      path: '/api/t212/wallet/recommendations/buy',
+      init: {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          budget: payload.budget,
+          include_broken: payload.includeBroken ?? false,
+          tickers: payload.tickers,
+          skip_owned: payload.skipOwned ?? true,
+          skip_pending: payload.skipPending ?? true,
+          delay_seconds: payload.delaySeconds ?? 0.5,
+        }),
+      },
+    },
+  ], token, sessionToken);
 
 export const fetchOpenPositions = async (token: string | null, sessionToken?: string | null): Promise<{ positions: OpenPosition[] }> =>
   requestJson('/api/positions', token, undefined, sessionToken);
