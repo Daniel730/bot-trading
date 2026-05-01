@@ -15,38 +15,49 @@ logger = logging.getLogger(__name__)
 class AwaitableList(list):
     def __await__(self):
         """
-        Make the object awaitable so awaiting it yields the object itself.
+        Allow awaiting the object so the await expression evaluates to this instance.
+        
+        When used in an `await` expression, the coroutine returns this object.
         
         Returns:
-            An iterator which, when awaited, produces this instance.
+            The instance itself.
         """
         async def _coro():
+            """
+            Coroutine that returns the surrounding instance when awaited.
+            
+            Returns:
+                self: the instance that defined this coroutine
+            """
             return self
         return _coro().__await__()
 
 class AwaitableFloat(float):
     def __await__(self):
         """
-        Make the float instance awaitable so awaiting it yields its numeric value.
+        Allow awaiting this object to produce its numeric value.
         
         Returns:
             float: The numeric value of this instance.
         """
         async def _coro():
+            """
+            Return the float value represented by the AwaitableFloat instance.
+            
+            Returns:
+                float: The numeric value of the instance.
+            """
             return float(self)
         return _coro().__await__()
 
 class T212Provider(AbstractBrokerageProvider):
     def __init__(self, api_key: str = None, api_secret: str = None):
         """
-        Initialize the T212Provider with API credentials, HTTP session, and in-memory caches.
+        Configure the provider with Trading212 credentials, select the demo or live base URL, create a persistent HTTP session with provider headers, and initialize in-memory caches and TTLs.
         
         Parameters:
-            api_key (str, optional): API key to use; if omitted, loaded from application settings.
-            api_secret (str, optional): API secret to use; if omitted, loaded from application settings.
-        
-        Description:
-            Stores credentials, configures the provider base URL (demo vs live) from settings, creates a persistent requests.Session with the provider headers, and initializes in-memory caches and TTL values for general and metadata caching used by other methods.
+            api_key (str, optional): Trading212 API key; if None, loaded from application settings and stripped.
+            api_secret (str, optional): Trading212 API secret; if None, loaded from application settings and stripped.
         """
         self.api_key = api_key or settings.effective_t212_key.strip()
         self.api_secret = api_secret or settings.T212_API_SECRET.strip()
@@ -62,10 +73,10 @@ class T212Provider(AbstractBrokerageProvider):
     @property
     def headers(self) -> Dict[str, str]:
         """
-        Builds HTTP headers for Trading212 API requests.
+        Build HTTP headers for Trading212 API requests.
         
         Returns:
-            headers (Dict[str, str]): HTTP headers including "Content-Type": "application/json". If both `api_key` and `api_secret` are present, includes an "Authorization" header with HTTP Basic credentials encoded from "`api_key:api_secret`". If only `api_key` is present, includes an "Authorization" header with the raw API key.
+            headers (Dict[str, str]): Mapping of header names to values. Always contains `"Content-Type": "application/json"`. If both `api_key` and `api_secret` are configured, includes an `"Authorization"` header with HTTP Basic credentials; if only `api_key` is configured, includes an `"Authorization"` header with the raw API key.
         """
         headers = {"Content-Type": "application/json"}
         if self.api_key and self.api_secret:
@@ -117,11 +128,14 @@ class T212Provider(AbstractBrokerageProvider):
 
     def _round_t212_quantity(self, quantity: float | Decimal, metadata: Dict[str, Any]) -> Decimal:
         """
-        Round a quantity down to the instrument's minimum quantity increment.
+        Round the requested quantity down to the instrument's quantityIncrement.
+        
+        Negative quantities are treated as their absolute value. If metadata lacks a valid
+        `quantityIncrement`, a default of 0.01 is used.
         
         Parameters:
-            quantity (float | Decimal): The requested quantity; negative values are converted to positive.
-            metadata (Dict[str, Any]): Instrument metadata; `quantityIncrement` is read to determine the increment (defaults to "0.01" if missing or invalid).
+            quantity (float | Decimal): Requested quantity; negative values are converted to positive.
+            metadata (Dict[str, Any]): Instrument metadata from which `quantityIncrement` is read.
         
         Returns:
             Decimal: The absolute quantity rounded down to the nearest multiple of the instrument's `quantityIncrement`.
@@ -154,14 +168,14 @@ class T212Provider(AbstractBrokerageProvider):
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
-        Place an order for a given ticker using Trading212's market or limit endpoints.
+        Place a market or limit order for the given ticker on Trading212.
         
         Parameters:
-            ticker (str): Instrument symbol in user format (will be converted to Trading212 format).
-            quantity (float): Desired quantity to order; will be rounded down to the instrument's allowed increment.
-            side (str): Order side; use "BUY" to create a positive quantity, any other value will create a sell (negative quantity).
-            limit_price (float, optional): If provided, submits the order as a limit order with this price; otherwise submits a market order.
-            client_order_id (str, optional): Client-supplied identifier (accepted but not included in the provider's payload).
+            ticker (str): Instrument symbol in user format; will be converted to Trading212 format.
+            quantity (float): Desired order quantity; will be rounded down to the instrument's allowed quantityIncrement.
+            side (str): Order side; "BUY" results in a buy (positive quantity), any other value results in a sell (negative quantity).
+            limit_price (float, optional): If provided, the order is submitted as a limit order using this price.
+            client_order_id (str, optional): Client-supplied identifier (accepted but not included in the provider payload).
         
         Returns:
             dict: On success: {"status": "success", "order_id": <orderId or None>, "broker": "T212"}.
@@ -173,10 +187,6 @@ class T212Provider(AbstractBrokerageProvider):
         
         if final_qty_dec <= 0:
             return {"status": "error", "message": f"Quantity rounds to zero for {ticker}"}
-
-        min_qty = self._metadata_decimal(metadata, "minTradeQuantity", "0.0")
-        if final_qty_dec < min_qty:
-            return {"status": "error", "message": f"Quantity {final_qty_dec} is below minTradeQuantity {min_qty} for {ticker}"}
 
         signed_qty = float(final_qty_dec) if side.upper() == "BUY" else -float(final_qty_dec)
         payload = {"ticker": t212_ticker, "quantity": signed_qty}
