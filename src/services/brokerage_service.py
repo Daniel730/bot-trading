@@ -43,19 +43,19 @@ class BrokerageService:
 
     def get_web3_account_cash(self) -> AwaitableFloat:
         """
-        Get the cash balance from the WEB3 service as an AwaitableFloat for backward compatibility.
+        Retrieve the WEB3 account cash balance.
         
         Returns:
-            AwaitableFloat: The WEB3 account cash balance wrapped in an AwaitableFloat.
+            AwaitableFloat: The WEB3 account cash balance wrapped in an AwaitableFloat for backward compatibility.
         """
         return self.web3.get_account_cash()
 
     def test_connection(self) -> bool:
         """
-        Checks connectivity to the active brokerage provider.
+        Check whether the active brokerage provider can be contacted and authenticated.
         
         Returns:
-            true if the provider is reachable and credentials are valid, false otherwise.
+            `True` if the provider is reachable and credentials are valid, `False` otherwise.
         """
         return self.provider.test_connection()
 

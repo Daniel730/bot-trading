@@ -52,6 +52,14 @@ yf.set_tz_cache_location(yf_cache_path)
 # Configure logging
 def setup_logging():
     # Remove existing handlers
+    """
+    Configure the root Python logger to use Rich for formatted console output and reduce noise from common third-party libraries.
+    
+    This function clears any existing root logger handlers, installs a RichHandler that displays message-only output with timestamps and paths, sets the root logger level to INFO, and lowers verbosity for `urllib3` and `yfinance`.
+    
+    Returns:
+        logging.Logger: A logger scoped to this module's __name__.
+    """
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
@@ -244,14 +252,9 @@ class ArbitrageMonitor:
 
     async def initialize_pairs(self):
         """
-        Initialize the monitor's pair universe by selecting eligible pairs, validating cointegration, and preparing Kalman filter state.
+        Initialize the monitor's active pair universe and prepare cointegration and Kalman filter state for each eligible pair.
         
-        Performs the following actions:
-        - If LIVE_CAPITAL_DANGER is enabled, verifies entropy baselines before proceeding.
-        - Chooses candidate pairs based on DEV_MODE (crypto-only) or production lists.
-        - Applies eligibility gates (currency/session/cost/LSE rules) and logs rejection reasons.
-        - For each accepted pair: loads historical data, runs cointegration tests (optionally with rolling-window stability), sanitizes the hedge ratio, creates or warm-starts a Kalman filter, computes spread statistics, and registers the pair in `self.active_pairs`.
-        - Updates `dashboard_service` with pre-warming progress and logs initialization results.
+        Selects candidate pairs (from persisted active pairs or config), applies eligibility gates, validates cointegration (optionally with rolling-window stability), sanitizes hedge ratios, warms or restores Kalman filter state, computes spread metrics, and registers prepared pair records in self.active_pairs. Updates dashboard pre-warming progress and records last_cointegration_check dates; may persist a bootstrapped active-pair list when the database is empty.
         """
         if settings.LIVE_CAPITAL_DANGER:
             await self.verify_entropy_baselines()
@@ -1049,6 +1052,18 @@ class ArbitrageMonitor:
     async def run(self):
         # FR-006: Pre-flight line - operator must know mode/universe/window
         # before a single log line about infra appears.
+        """
+        Start and run the continuous monitoring loop that initializes services, performs startup health checks, and continuously scans active arbitrage pairs.
+        
+        This method performs startup routines (preflight display, database and pair initialization, dashboard and notification listeners), runs health checks for PostgreSQL, Redis, and the brokerage API, resets circuit-breaker state, launches background scouting/rotation, and enters the main Rich Live scan loop. While running it:
+        - updates dashboard metrics and progress,
+        - evaluates open-position exit conditions,
+        - fetches latest market prices,
+        - performs per-pair processing (signal generation, Kalman updates, and potential trade execution),
+        - schedules daily cointegration re-checks and daily resets,
+        - respects dashboard-controlled bot states ("STOPPED", "RESTARTING"),
+        and sleeps between scan iterations. On cancellation or termination it disposes database and Redis connections for a graceful shutdown.
+        """
         self.log_preflight()
 
         # Initial Setup
