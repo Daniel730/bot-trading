@@ -18,8 +18,14 @@ from src.services.brokerage_service import BrokerageService
 
 def _make_service(provider_name: str = None, setting_value: str = "T212") -> BrokerageService:
     """
-    Create a BrokerageService with patched providers and a controllable
-    settings.BROKERAGE_PROVIDER value.
+    Create a BrokerageService instance with T212 and Alpaca providers and the settings.BROKERAGE_PROVIDER value patched for tests.
+    
+    Parameters:
+        provider_name (str | None): Optional explicit provider name passed to BrokerageService; if None, the patched setting_value is used.
+        setting_value (str): Value to assign to the patched settings.BROKERAGE_PROVIDER.
+    
+    Returns:
+        tuple: (svc, mock_t212, mock_alpaca) where `svc` is the created BrokerageService, and `mock_t212` and `mock_alpaca` are the patched provider classes (mocks).
     """
     with (
         patch("src.services.brokerage_service.T212Provider") as mock_t212,
@@ -187,6 +193,12 @@ class TestConfigureProviderRuntimeSwap:
         mock_alpaca.assert_called_once()
 
     def test_provider_object_is_replaced_on_reconfigure(self):
+        """
+        Verifies that reconfiguring the brokerage provider replaces the service's provider instance.
+        
+        After switching the configured provider and calling configure_provider(), the service's `provider`
+        attribute refers to a different object than it did before reconfiguration.
+        """
         with (
             patch("src.services.brokerage_service.T212Provider") as mock_t212,
             patch("src.services.brokerage_service.AlpacaProvider") as mock_alpaca,

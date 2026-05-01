@@ -30,9 +30,15 @@ def _reset_breadcrumbs():
 
 class TestAgentTraceAsyncDetection:
     def setup_method(self):
+        """
+        Reset global breadcrumb state before each test method by clearing the agent logger's breadcrumb list.
+        """
         _reset_breadcrumbs()
 
     def teardown_method(self):
+        """
+        Reset shared breadcrumb state after each test completes.
+        """
         _reset_breadcrumbs()
 
     @pytest.mark.asyncio
@@ -41,6 +47,12 @@ class TestAgentTraceAsyncDetection:
 
         @agent_trace("step_async")
         async def my_async_func():
+            """
+            Provide a constant test result string used by tests.
+            
+            Returns:
+                str: The constant string 'async_result'.
+            """
             return "async_result"
 
         result = await my_async_func()
@@ -51,6 +63,12 @@ class TestAgentTraceAsyncDetection:
 
         @agent_trace("step_sync")
         def my_sync_func():
+            """
+            Provide a synchronous test function that returns a fixed result string.
+            
+            Returns:
+                str: The fixed value "sync_result".
+            """
             return "sync_result"
 
         result = my_sync_func()
@@ -65,15 +83,33 @@ class TestAgentTraceAsyncDetection:
         """
 
         async def inner():
+            """
+            Return a sentinel string used by tests for wrapped async functions.
+            
+            Returns:
+                str: The sentinel string "wrapped_async".
+            """
             return "wrapped_async"
 
         @functools.wraps(inner)
         async def outer():
+            """
+            Call the inner coroutine and return its result.
+            
+            Returns:
+                The value returned by `inner`.
+            """
             return await inner()
 
         @agent_trace("wrapped_step")
         @functools.wraps(inner)
         async def double_wrapped():
+            """
+            Invoke the wrapped inner coroutine and return its result.
+            
+            Returns:
+                The value returned by the `inner` coroutine.
+            """
             return await inner()
 
         result = await double_wrapped()
@@ -86,17 +122,33 @@ class TestAgentTraceAsyncDetection:
 
 class TestAgentTraceBreadcrumbs:
     def setup_method(self):
+        """
+        Reset global breadcrumb state before each test method by clearing the agent logger's breadcrumb list.
+        """
         _reset_breadcrumbs()
 
     def teardown_method(self):
+        """
+        Reset shared breadcrumb state after each test completes.
+        """
         _reset_breadcrumbs()
 
     @pytest.mark.asyncio
     async def test_async_wrapper_pushes_and_pops_breadcrumb(self):
+        """
+        Verify that an async function decorated with `agent_trace` pushes a breadcrumb while running and pops it after completion.
+        
+        The test records the agent path from inside the decorated coroutine (expected "my_step") and asserts that the global agent path is an empty string after the coroutine finishes.
+        """
         observed = []
 
         @agent_trace("my_step")
         async def capturing_func():
+            """
+            Append the current agent logger path to the enclosing `observed` list.
+            
+            This coroutine retrieves the current path from `agent_logger.get_path()` and appends it to the outer-scope list `observed`.
+            """
             observed.append(agent_logger.get_path())
 
         await capturing_func()
@@ -110,6 +162,11 @@ class TestAgentTraceBreadcrumbs:
 
         @agent_trace("sync_step")
         def capturing_func():
+            """
+            Record the current agent breadcrumb path into the enclosing `observed` list.
+            
+            Appends the value returned by `agent_logger.get_path()` to the surrounding scope's `observed` list as a side effect; does not return a value.
+            """
             observed.append(agent_logger.get_path())
 
         capturing_func()
@@ -123,6 +180,11 @@ class TestAgentTraceBreadcrumbs:
 
         @agent_trace("outer")
         async def outer():
+            """
+            Record the agent trace path observed inside a nested `inner` trace and then record the agent path after `inner` completes.
+            
+            The inner coroutine is decorated with `@agent_trace("inner")` and appends the current agent path to the `observed` list while running. After awaiting `inner()`, `outer` appends the current agent path again.
+            """
             @agent_trace("inner")
             async def inner():
                 observed.append(agent_logger.get_path())
@@ -139,6 +201,12 @@ class TestAgentTraceBreadcrumbs:
     def test_breadcrumb_popped_even_on_sync_exception(self):
         @agent_trace("failing_step")
         def failing_func():
+            """
+            Raise a ValueError with message "boom".
+            
+            Raises:
+                ValueError: always raised with the message "boom".
+            """
             raise ValueError("boom")
 
         with pytest.raises(ValueError, match="boom"):
@@ -150,6 +218,12 @@ class TestAgentTraceBreadcrumbs:
     async def test_breadcrumb_popped_even_on_async_exception(self):
         @agent_trace("async_failing_step")
         async def failing_func():
+            """
+            Asynchronous test helper that always raises a RuntimeError.
+            
+            Raises:
+                RuntimeError: Always raised with message "async boom".
+            """
             raise RuntimeError("async boom")
 
         with pytest.raises(RuntimeError, match="async boom"):
@@ -164,14 +238,26 @@ class TestAgentTraceBreadcrumbs:
 
 class TestAgentTraceExceptionPath:
     def setup_method(self):
+        """
+        Reset global breadcrumb state before each test method by clearing the agent logger's breadcrumb list.
+        """
         _reset_breadcrumbs()
 
     def teardown_method(self):
+        """
+        Reset shared breadcrumb state after each test completes.
+        """
         _reset_breadcrumbs()
 
     def test_sync_exception_receives_agent_path_attribute(self):
         @agent_trace("annotated_step")
         def broken():
+            """
+            Always raises a ValueError with the message "broken".
+            
+            Raises:
+                ValueError: always raised with message "broken".
+            """
             raise ValueError("broken")
 
         try:
@@ -182,6 +268,11 @@ class TestAgentTraceExceptionPath:
 
     @pytest.mark.asyncio
     async def test_async_exception_receives_agent_path_attribute(self):
+        """
+        Verifies that an exception raised inside an async function decorated with `agent_trace` is annotated with a `__agent_path__` attribute.
+        
+        Asserts the exception object has a `__agent_path__` attribute and that it contains the decorator step name `async_annotated`.
+        """
         @agent_trace("async_annotated")
         async def async_broken():
             raise RuntimeError("async broken")
@@ -197,6 +288,11 @@ class TestAgentTraceExceptionPath:
 
         @agent_trace("outer_trace")
         def outer():
+            """
+            Defines and calls an inner traced function that raises a ValueError with a pre-set `__agent_path__`.
+            
+            The inner function sets `err.__agent_path__ = "already_set"` and then raises the error, causing `outer` to propagate that exception.
+            """
             @agent_trace("inner_trace")
             def inner():
                 err = ValueError("nested")
@@ -220,7 +316,11 @@ class TestAgentTraceFunctoolsWraps:
     def test_sync_wrapper_preserves_function_metadata(self):
         @agent_trace("meta_step")
         def documented_func():
-            """My docstring."""
+            """
+            Placeholder function used by tests as a no-op target for decorator and metadata-preservation checks.
+            
+            This function intentionally performs no operation and exists to verify decorator behavior (e.g., metadata preservation, async/sync detection) in unit tests.
+            """
             pass
 
         assert documented_func.__name__ == "documented_func"
@@ -230,7 +330,12 @@ class TestAgentTraceFunctoolsWraps:
     async def test_async_wrapper_preserves_function_metadata(self):
         @agent_trace("async_meta_step")
         async def async_documented_func():
-            """Async docstring."""
+            """
+            No-op asynchronous function used as a placeholder in tests.
+            
+            This coroutine performs no actions and returns None; it exists to exercise
+            async code paths and decorator behavior in unit tests.
+            """
             pass
 
         assert async_documented_func.__name__ == "async_documented_func"
