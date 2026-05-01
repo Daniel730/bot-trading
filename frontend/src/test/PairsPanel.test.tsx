@@ -15,10 +15,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../services/api', () => ({
   fetchPairs: vi.fn(),
   syncWallet: vi.fn(),
-  updatePairs: vi.fn(),
 }));
 
-import { fetchPairs, syncWallet, updatePairs } from '../services/api';
+import { fetchPairs, syncWallet } from '../services/api';
 import PairsPanel from '../components/PairsPanel';
 
 const mockFetchPairs = fetchPairs as ReturnType<typeof vi.fn>;

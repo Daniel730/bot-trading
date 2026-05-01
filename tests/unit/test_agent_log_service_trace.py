@@ -316,11 +316,7 @@ class TestAgentTraceFunctoolsWraps:
     def test_sync_wrapper_preserves_function_metadata(self):
         @agent_trace("meta_step")
         def documented_func():
-            """
-            Placeholder function used by tests as a no-op target for decorator and metadata-preservation checks.
-            
-            This function intentionally performs no operation and exists to verify decorator behavior (e.g., metadata preservation, async/sync detection) in unit tests.
-            """
+            """My docstring."""
             pass
 
         assert documented_func.__name__ == "documented_func"
@@ -330,12 +326,7 @@ class TestAgentTraceFunctoolsWraps:
     async def test_async_wrapper_preserves_function_metadata(self):
         @agent_trace("async_meta_step")
         async def async_documented_func():
-            """
-            No-op asynchronous function used as a placeholder in tests.
-            
-            This coroutine performs no actions and returns None; it exists to exercise
-            async code paths and decorator behavior in unit tests.
-            """
+            """Async docstring."""
             pass
 
         assert async_documented_func.__name__ == "async_documented_func"

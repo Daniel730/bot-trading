@@ -11,7 +11,7 @@
  * - WalletRecommendation.broker_ticker is required; t212_ticker optional
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   syncWallet,
   syncT212Wallet,
@@ -23,15 +23,11 @@ import {
   type WalletRecommendation,
   type WalletRecommendationResponse,
   type WalletRecommendationBuyResponse,
-  type WalletRecommendationPair,
-  type WalletRecommendationSkip,
   type T212WalletSyncOrder,
   type T212WalletSyncResponse,
   type T212WalletRecommendation,
   type T212WalletRecommendationResponse,
   type T212WalletRecommendationBuyResponse,
-  type T212WalletRecommendationPair,
-  type T212WalletRecommendationSkip,
 } from '../services/api';
 
 // ---------------------------------------------------------------------------

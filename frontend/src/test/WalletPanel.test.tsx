@@ -20,11 +20,10 @@ vi.mock('../services/api', () => ({
   buyWalletRecommendations: vi.fn(),
 }));
 
-import { fetchWalletRecommendations, buyWalletRecommendations } from '../services/api';
+import { fetchWalletRecommendations } from '../services/api';
 import WalletPanel from '../components/WalletPanel';
 
 const mockFetchRecs = fetchWalletRecommendations as ReturnType<typeof vi.fn>;
-const mockBuyRecs = buyWalletRecommendations as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helpers
