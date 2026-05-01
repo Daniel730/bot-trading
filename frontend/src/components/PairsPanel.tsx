@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import {
   fetchPairs,
-  syncT212Wallet,
+  syncWallet,
   updatePairs,
   type PairInfo,
   type PairConfigEntry,
@@ -292,13 +292,13 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
     }
 
     const confirmed = window.confirm(
-      `Place Trading 212 BUY orders for missing tickers with a ${budget.toFixed(2)} budget?`,
+      `Place broker BUY orders for missing stock tickers with a ${budget.toFixed(2)} budget?`,
     );
     if (!confirmed) return;
 
     setWalletSyncing(true);
     try {
-      const result = await syncT212Wallet(token, sessionToken, budget);
+      const result = await syncWallet(token, sessionToken, budget);
       const okOrders = result.orders.filter((order) => order.status === 'ok').length;
       setWalletOk(
         `${result.message} ${okOrders} orders, ${result.skipped.length} skipped.`,
@@ -306,7 +306,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       await refresh();
     } catch (err) {
       const e = err as Error;
-      setWalletError(e.message || 'Failed to sync T212 wallet');
+      setWalletError(e.message || 'Failed to sync broker wallet');
     } finally {
       setWalletSyncing(false);
     }
@@ -380,7 +380,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
             <div className="wallet-sync-meta">
               <Wallet size={16} />
               <div>
-                <strong>T212 Wallet</strong>
+                <strong>Broker Wallet</strong>
                 <span>{activePairs.filter(p => !p.is_crypto).length} pairs / {allEquityTickers.length} tickers</span>
               </div>
             </div>
@@ -399,7 +399,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
                 className="wallet-sync-btn"
                 disabled={walletSyncing || allEquityTickers.length === 0}
                 onClick={handleWalletSync}
-                title="Buy missing T212 tickers"
+                title="Buy missing broker tickers"
               >
                 <ShoppingCart size={13} />
                 {walletSyncing ? 'Buying...' : 'Buy All'}

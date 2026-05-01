@@ -1,6 +1,7 @@
 import os
 import traceback
 import json
+import inspect
 from datetime import datetime
 from contextvars import ContextVar
 from typing import List, Dict, Any, Optional
@@ -183,7 +184,7 @@ def agent_trace(name: str):
             finally:
                 agent_logger.pop_breadcrumb()
 
-        return async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+        return async_wrapper if inspect.iscoroutinefunction(func) else sync_wrapper
     return decorator
 
 # Global instance

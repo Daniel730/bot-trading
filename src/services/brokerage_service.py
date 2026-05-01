@@ -18,13 +18,26 @@ class BrokerageService:
         Parameters:
             provider_name (str, optional): The brokerage provider identifier to use. If omitted, the provider is taken from settings.BROKERAGE_PROVIDER. The selected provider is instantiated and assigned to `self.provider`; `self.provider_name` and `self.web3` are also set.
         """
-        self.provider_name = provider_name or settings.BROKERAGE_PROVIDER
         self.web3 = web3_service
-        
-        if self.provider_name == "ALPACA":
+        self.configure_provider(provider_name)
+
+    def configure_provider(self, provider_name: str = None):
+        """
+        Recreate the active equity brokerage provider from runtime settings.
+
+        Parameters:
+            provider_name (str, optional): Explicit provider override. When omitted,
+            uses settings.BROKERAGE_PROVIDER so dashboard config changes can be
+            applied without restarting the process.
+        """
+        selected_provider = (provider_name or settings.BROKERAGE_PROVIDER or "T212").strip().upper()
+        self.provider_name = selected_provider
+
+        if selected_provider == "ALPACA":
             self.provider = AlpacaProvider()
             logger.info("BrokerageService: Initialized with ALPACA provider.")
         else:
+            self.provider_name = "T212"
             self.provider = T212Provider()
             logger.info("BrokerageService: Initialized with T212 provider.")
 
