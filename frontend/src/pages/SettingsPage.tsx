@@ -58,10 +58,17 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     General: config?.items.filter(item => getCategory(item.key) === 'General'),
   };
   const provider = configForm.BROKERAGE_PROVIDER
-    ?? String(config?.items.find((item) => item.key === 'BROKERAGE_PROVIDER')?.value ?? 'T212');
-  const hasAlpacaKey = Boolean(String(configForm.ALPACA_API_KEY ?? config?.items.find((item) => item.key === 'ALPACA_API_KEY')?.value ?? '').trim());
-  const hasAlpacaSecret = Boolean(String(configForm.ALPACA_API_SECRET ?? config?.items.find((item) => item.key === 'ALPACA_API_SECRET')?.value ?? '').trim());
-  const alpacaBaseUrl = String(configForm.ALPACA_BASE_URL ?? config?.items.find((item) => item.key === 'ALPACA_BASE_URL')?.value ?? '');
+    ?? String(config?.integrations?.brokerage_provider ?? config?.items.find((item) => item.key === 'BROKERAGE_PROVIDER')?.value ?? 'T212');
+  const hasAlpacaKey = Boolean(String(configForm.ALPACA_API_KEY ?? '').trim())
+    || Boolean(config?.integrations?.alpaca_configured);
+  const hasAlpacaSecret = Boolean(String(configForm.ALPACA_API_SECRET ?? '').trim())
+    || Boolean(config?.integrations?.alpaca_configured);
+  const alpacaBaseUrl = String(
+    configForm.ALPACA_BASE_URL
+    ?? config?.integrations?.alpaca_base_url
+    ?? config?.items.find((item) => item.key === 'ALPACA_BASE_URL')?.value
+    ?? '',
+  );
 
   return (
     <>

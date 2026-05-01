@@ -475,6 +475,7 @@ jobs:
     env:
       APP_ENV_FILE: /home/danrasp3/.env.trading
       DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+      COMPOSE_IGNORE_ORPHANS: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -600,9 +601,6 @@ jobs:
       - name: Log in to GHCR (for private image pulls)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Pull base images (redis, postgres)
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull redis postgres
-
       - name: Pull python image (bot, mcp-server, sec-worker)
         if: ${{ needs.detect_changes.outputs.python_image == 'true' }}
         run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot mcp-server sec-worker
@@ -615,15 +613,13 @@ jobs:
             sec-fundamental-worker \
             2>/dev/null || true
 
-      - name: Apply / restart base services
+      - name: Apply / restart sec-worker
         run: |
           docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
-          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d redis postgres
+          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d sec-worker
 
-      - name: Apply / restart sec-worker
-        run: timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d sec-worker
-
-      - name: Cleanup dangling images
+      - name: Cleanup dangling images (force-all only)
+        if: ${{ inputs.force_all == true }}
         run: docker image prune -f
 
       - name: Verify sec-worker deployment
@@ -663,6 +659,7 @@ jobs:
     env:
       APP_ENV_FILE: /home/danrasp3/.env.trading
       DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+      COMPOSE_IGNORE_ORPHANS: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -686,9 +683,10 @@ jobs:
       - name: Apply / restart bot and mcp-server
         run: |
           docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
-          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d bot mcp-server
+          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d --no-deps bot mcp-server
 
-      - name: Cleanup dangling images
+      - name: Cleanup dangling images (force-all only)
+        if: ${{ inputs.force_all == true }}
         run: docker image prune -f
 
       - name: Verify bot and mcp-server deployment

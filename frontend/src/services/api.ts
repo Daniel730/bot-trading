@@ -357,6 +357,12 @@ export interface ConfigResponse {
   items: ConfigItem[];
   two_factor: TwoFactorStatus;
   audit_log: ConfigAuditEntry[];
+  integrations?: {
+    brokerage_provider?: string;
+    alpaca_configured?: boolean;
+    alpaca_base_url?: string;
+    t212_configured?: boolean;
+  };
 }
 
 export interface TwoFactorInitiateResponse {
