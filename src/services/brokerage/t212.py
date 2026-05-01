@@ -188,6 +188,10 @@ class T212Provider(AbstractBrokerageProvider):
         if final_qty_dec <= 0:
             return {"status": "error", "message": f"Quantity rounds to zero for {ticker}"}
 
+        min_qty = self._metadata_decimal(metadata, "minTradeQuantity", "0.0")
+        if final_qty_dec < min_qty:
+            return {"status": "error", "message": f"Quantity {final_qty_dec} is below minTradeQuantity {min_qty} for {ticker}"}
+
         signed_qty = float(final_qty_dec) if side.upper() == "BUY" else -float(final_qty_dec)
         payload = {"ticker": t212_ticker, "quantity": signed_qty}
         
