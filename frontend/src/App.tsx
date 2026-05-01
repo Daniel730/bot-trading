@@ -145,6 +145,14 @@ function isDashboardAuthError(err: unknown) {
   return /dashboard session|dashboard login is required|invalid dashboard token/i.test(message);
 }
 
+/**
+ * Root React component for the Alpha Arbitrage authenticated dashboard and login flows.
+ *
+ * Renders the login screen when not authenticated and the full operations console when authenticated.
+ * Manages session persistence, login/approval polling, periodic data refresh (summary, charts, positions, trade history, health, config), startup progress calculation and animation, bot control actions, configuration editing with optional 2FA confirmation, and 2FA setup/verification.
+ *
+ * @returns The dashboard UI element (login view when not authenticated; main console when authenticated).
+ */
 function App() {
   const [storedSession] = useState<StoredDashboardSession | null>(() => readStoredDashboardSession());
   const [securityToken, setSecurityToken] = useState('');
@@ -329,6 +337,66 @@ function App() {
   const currentMode = data?.runtime?.mode ?? summary?.mode ?? '—';
   const currentStage = data?.stage ?? summary?.stage ?? botState ?? 'Initializing';
   const currentBotState = data?.runtime?.desired_bot_state ?? summary?.bot_status ?? 'RUNNING';
+  const startupStageText = `${currentStage} ${data?.details ?? ''}`.toLowerCase();
+  const preWarmingProgress = useMemo(() => {
+    const stage = (currentStage || '').toLowerCase();
+    const details = data?.details || '';
+    if (!/pre[_ -]?warming|initializ/.test(stage) && !/pair list/i.test(details)) return null;
+    const match = details.match(/(\d+)\s*\/\s*(\d+)/);
+    if (!match) return null;
+    const current = Number(match[1]);
+    const total = Number(match[2]);
+    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return null;
+    return {
+      current,
+      total,
+      pct: Math.max(0, Math.min(100, Math.round((current / total) * 100))),
+    };
+  }, [currentStage, data?.details]);
+  const startupReady = useMemo(() => {
+    if (!isAuthenticated) return false;
+    if (!summary || !data) return false;
+    if (!isConnected) return false;
+    const stillStarting = /(boot|init|start|warm|load|attach|connect)/i.test(startupStageText);
+    return !stillStarting;
+  }, [data, isAuthenticated, isConnected, startupStageText, summary]);
+  const startupTargetProgress = useMemo(() => {
+    if (!isAuthenticated) return 0;
+    if (startupReady) return 100;
+    let progress = 10;
+    if (data) progress = 28;
+    if (summary) progress = 54;
+    if (health || tradeHistory || config) progress = 72;
+    if (isConnected) progress = 84;
+    if (/warm|load|attach|connect/.test(startupStageText)) progress = Math.max(progress, 90);
+    return Math.min(progress, 95);
+  }, [config, data, health, isAuthenticated, isConnected, startupReady, startupStageText, summary, tradeHistory]);
+  const [startupProgress, setStartupProgress] = useState(8);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setStartupProgress(8);
+      return;
+    }
+    setStartupProgress((current) => {
+      if (startupReady) return 100;
+      if (current > startupTargetProgress) return startupTargetProgress;
+      return current;
+    });
+  }, [isAuthenticated, startupReady, startupTargetProgress]);
+
+  useEffect(() => {
+    if (!isAuthenticated || startupReady) return;
+    const id = window.setInterval(() => {
+      setStartupProgress((current) => {
+        if (current >= startupTargetProgress) return current;
+        const remaining = startupTargetProgress - current;
+        const step = Math.max(1, Math.ceil(remaining / 6));
+        return Math.min(startupTargetProgress, current + step);
+      });
+    }, 350);
+    return () => window.clearInterval(id);
+  }, [isAuthenticated, startupReady, startupTargetProgress]);
 
   const handleBotAction = async (action: 'start' | 'stop' | 'restart') => {
     setIsBusy(true);
@@ -608,6 +676,29 @@ function App() {
 
         {systemMessage ? <div className="banner success">{systemMessage}</div> : null}
         {systemError || error ? <div className="banner error">{systemError || error}</div> : null}
+        {!startupReady ? (
+          <div className="startup-progress">
+            <div className="startup-progress-head">
+              <strong>Bot starting up...</strong>
+              <span>{startupProgress}%</span>
+            </div>
+            <div className="startup-progress-track">
+              <div className="startup-progress-fill" style={{ width: `${startupProgress}%` }} />
+            </div>
+            <small>{data?.details || currentStage || 'Loading services and syncing state...'}</small>
+            {preWarmingProgress ? (
+              <div className="prewarm-progress">
+                <div className="startup-progress-head">
+                  <strong>Pre-warming pair list</strong>
+                  <span>{preWarmingProgress.current}/{preWarmingProgress.total}</span>
+                </div>
+                <div className="startup-progress-track">
+                  <div className="startup-progress-fill prewarm-progress-fill" style={{ width: `${preWarmingProgress.pct}%` }} />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {page === 'overview' && (
           <OverviewPage

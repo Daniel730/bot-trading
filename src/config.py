@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Literal
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, EnvSettingsSource, PydanticBaseSettingsSource, SettingsConfigDict
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 
 load_dotenv()
 
@@ -106,9 +106,18 @@ class Settings(BaseSettings):
     T212_API_SECRET: str = Field(default="", validation_alias="T212_API_SECRET")
     TRADING_212_API_KEY: str = Field(default="", validation_alias="TRADING_212_API_KEY")
 
-    ALPACA_API_KEY: str = Field(default="", validation_alias="ALPACA_API_KEY")
-    ALPACA_API_SECRET: str = Field(default="", validation_alias="ALPACA_API_SECRET")
-    ALPACA_BASE_URL: str = Field(default="https://paper-api.alpaca.markets", validation_alias="ALPACA_BASE_URL")
+    ALPACA_API_KEY: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALPACA_API_KEY", "APCA_API_KEY_ID"),
+    )
+    ALPACA_API_SECRET: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALPACA_API_SECRET", "APCA_API_SECRET_KEY", "ALPACA_SECRET_KEY"),
+    )
+    ALPACA_BASE_URL: str = Field(
+        default="https://paper-api.alpaca.markets",
+        validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL"),
+    )
     BROKERAGE_PROVIDER: Literal["T212", "ALPACA"] = Field(default="T212", validation_alias="BROKERAGE_PROVIDER")
 
     REDIS_HOST: str = Field(default="localhost", validation_alias="REDIS_HOST")

@@ -240,13 +240,15 @@ class ArbitrageMonitor:
         logger.info("L2 ENTROPY BASELINES VALIDATED. Proceeding with Live Startup.")
 
     async def initialize_pairs(self):
-        """Initializes cointegration metrics and Kalman filters.
-
-        - DEV_MODE: only crypto pairs (24/7 testing with randomized prices).
-        - PROD: equity pairs + crypto pairs combined. The market-hours guard
-          in process_pair() pauses equity scans outside NYSE hours; crypto
-          pairs (detected by '-USD' suffix) keep running on weekends and
-          overnight so the bot is never idle.
+        """
+        Initialize the monitor's pair universe by selecting eligible pairs, validating cointegration, and preparing Kalman filter state.
+        
+        Performs the following actions:
+        - If LIVE_CAPITAL_DANGER is enabled, verifies entropy baselines before proceeding.
+        - Chooses candidate pairs based on DEV_MODE (crypto-only) or production lists.
+        - Applies eligibility gates (currency/session/cost/LSE rules) and logs rejection reasons.
+        - For each accepted pair: loads historical data, runs cointegration tests (optionally with rolling-window stability), sanitizes the hedge ratio, creates or warm-starts a Kalman filter, computes spread statistics, and registers the pair in `self.active_pairs`.
+        - Updates `dashboard_service` with pre-warming progress and logs initialization results.
         """
         if settings.LIVE_CAPITAL_DANGER:
             await self.verify_entropy_baselines()
@@ -275,6 +277,12 @@ class ArbitrageMonitor:
             f"crypto={len(settings.CRYPTO_TEST_PAIRS)}, "
             f"rejected_by_eligibility={len(rejected)})..."
         )
+        total_pairs = len(pairs_to_init)
+        if total_pairs > 0:
+            await dashboard_service.update(
+                "pre_warming",
+                f"Reading pair list 0/{total_pairs}...",
+            )
         if rejected:
             # One concise summary line per rejection reason so the operator
             # can spot configuration-driven exclusions at boot.
@@ -283,8 +291,12 @@ class ArbitrageMonitor:
             for reason, count in reasons.most_common():
                 logger.info(f"  ↳ eligibility rejection: {reason} × {count}")
 
-        for pair_config in pairs_to_init:
+        for idx, pair_config in enumerate(pairs_to_init, start=1):
             ticker_a, ticker_b = pair_config['ticker_a'], pair_config['ticker_b']
+            await dashboard_service.update(
+                "pre_warming",
+                f"Reading pair list {idx}/{total_pairs}: {ticker_a}/{ticker_b}",
+            )
             try:
                 hist_data = await data_service.get_historical_data_async([ticker_a, ticker_b])
                 if hist_data is None or hist_data.empty:
@@ -362,13 +374,20 @@ class ArbitrageMonitor:
                 logger.info(f"Pair {ticker_a}/{ticker_b} initialized (Coint: {is_coint}).")
             except Exception as e:
                 logger.error(f"Error initializing {ticker_a}/{ticker_b}: {e}")
+        if total_pairs > 0:
+            await dashboard_service.update(
+                "pre_warming",
+                f"Pair list pre-warming complete ({total_pairs}/{total_pairs}).",
+            )
 
     async def reload_pairs(self):
-        """Hot-reload the active pair universe from the (possibly updated)
-        settings. Re-uses the same logic as initialize_pairs but is safe to call
-        from a running scan loop: we swap self.active_pairs only after the new
-        list is built, then clear filters that no longer correspond to a live
-        pair so memory doesn't leak.
+        """
+        Reload the active pair universe from settings and update in-memory state.
+        
+        Builds a new list of active pairs by calling initialize_pairs() while holding the signals lock;
+        replaces the existing active_pairs and resets last_cointegration_check. After reloading,
+        removes any in-memory Kalman filters that correspond to pairs no longer active to prevent
+        memory growth and logs a summary of added/removed pairs.
         """
         async with self._signals_lock:
             old_ids = {p['id'] for p in self.active_pairs}
