@@ -11,7 +11,9 @@ logger = logging.getLogger(__name__)
 class PersistenceManager:
     def __init__(self, db_path: Optional[str] = None):
         # Fallback to a default if settings doesn't have it or passed as None
-        self.db_path = db_path or getattr(settings, "DB_PATH", "logs/trading_bot.db")
+        # Use an absolute path for the default to avoid FileNotFoundError on Windows if CWD changes.
+        default_db = os.path.join(os.getcwd(), "logs", "trading_bot.db")
+        self.db_path = db_path or getattr(settings, "DB_PATH", default_db)
         self._memory_uri = None
         self._memory_anchor = None
         if self.db_path == ":memory:":
