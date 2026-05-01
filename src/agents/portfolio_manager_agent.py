@@ -2,6 +2,7 @@ import logging
 import asyncio
 import inspect
 import requests
+import io
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
@@ -131,10 +132,10 @@ class PortfolioManagerAgent:
             # Use 'bs4' (BeautifulSoup) as it's often more robust than lxml on Windows for large HTML files.
             # We wrap this in a thread because pd.read_html is synchronous and can be slow for large pages.
             try:
-                tables = await asyncio.to_thread(pd.read_html, response.text, flavor='bs4')
+                tables = await asyncio.to_thread(pd.read_html, io.StringIO(response.text), flavor='bs4')
             except Exception as inner_e:
                 logger.warning(f"pd.read_html with bs4 failed: {inner_e}. Retrying with default parser.")
-                tables = await asyncio.to_thread(pd.read_html, response.text)
+                tables = await asyncio.to_thread(pd.read_html, io.StringIO(response.text))
             
             if not tables:
                 logger.error("S&P 500 Scraper: No tables found in the Wikipedia response.")
