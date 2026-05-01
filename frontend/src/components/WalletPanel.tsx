@@ -11,9 +11,9 @@ import {
 import {
   buyWalletRecommendations,
   fetchWalletRecommendations,
-  type T212WalletRecommendation,
-  type T212WalletRecommendationResponse,
-  type T212WalletRecommendationBuyResponse,
+  type WalletRecommendation,
+  type WalletRecommendationResponse,
+  type WalletRecommendationBuyResponse,
 } from '../services/api';
 
 interface WalletPanelProps {
@@ -40,7 +40,7 @@ const formatZ = (value: number | null | undefined) => {
   return value.toFixed(2);
 };
 
-const categoryLabel = (category: T212WalletRecommendation['category']) => {
+const categoryLabel = (category: WalletRecommendation['category']) => {
   if (category === 'coint') return 'COINT';
   if (category === 'manual_override') return 'Manual override';
   return 'BROKEN eligible';
@@ -51,14 +51,14 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
   const [includeBroken, setIncludeBroken] = useState(false);
   const [skipOwned, setSkipOwned] = useState(true);
   const [skipPending, setSkipPending] = useState(true);
-  const [plan, setPlan] = useState<T212WalletRecommendationResponse | null>(null);
+  const [plan, setPlan] = useState<WalletRecommendationResponse | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [buying, setBuying] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
-  const [buyResult, setBuyResult] = useState<T212WalletRecommendationBuyResponse | null>(null);
+  const [buyResult, setBuyResult] = useState<WalletRecommendationBuyResponse | null>(null);
 
   const budgetValue = Number(budget);
 
@@ -233,7 +233,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
       {plan?.cash_limited ? (
         <div className="banner warning">
           <AlertTriangle size={14} />
-          Budget exceeds bot-calculated spendable T212 cash. Orders will still be attempted.
+          Budget exceeds bot-calculated spendable broker cash. Orders will still be attempted.
         </div>
       ) : null}
 
@@ -241,7 +241,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
         <div className="metric-card">
           <span>Usable Budget</span>
           <strong>{formatCurrency(plan?.usable_budget)}</strong>
-          <small>{plan?.mode ? `${plan.mode.toUpperCase()} T212` : 'T212'}</small>
+          <small>{plan?.mode ? plan.mode.toUpperCase() : 'BROKER'}</small>
         </div>
         <div className="metric-card">
           <span>Spendable Cash</span>
@@ -306,7 +306,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
                     </td>
                     <td>
                       <strong>{item.ticker}</strong>
-                      <div className="muted">{item.t212_ticker}</div>
+                      <div className="muted">{item.broker_ticker || item.t212_ticker || item.ticker}</div>
                     </td>
                     <td>
                       <span className={`badge ${item.category === 'coint' ? 'badge-green' : 'badge-blue'}`}>
@@ -381,7 +381,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
                 <span className="td-yellow" />
                 <span className="td-green" />
               </div>
-              <span className="terminal-title">confirm t212 buy</span>
+              <span className="terminal-title">confirm broker buy</span>
               <button className="terminal-close-btn" onClick={() => setConfirmOpen(false)}>
                 <X size={14} />
               </button>
