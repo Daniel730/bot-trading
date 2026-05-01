@@ -13,6 +13,15 @@ class AlpacaProvider(AbstractBrokerageProvider):
 
     @classmethod
     def normalize_symbol(cls, ticker: str) -> str:
+        """
+        Normalize a ticker to Alpaca's share-class format and uppercase form.
+        
+        Parameters:
+            ticker (str): The input ticker symbol; may be None or empty.
+        
+        Returns:
+            str: The normalized ticker symbol. Converts "LEFT-RIGHT" to "LEFT.RIGHT" when both sides are alphabetic and the right side length is <= 2; otherwise returns the trimmed, uppercased input (or an empty string).
+        """
         symbol = (ticker or "").strip().upper()
         # Alpaca uses BRK.B style share-class symbols.
         if "-" in symbol and "." not in symbol:
@@ -23,6 +32,15 @@ class AlpacaProvider(AbstractBrokerageProvider):
 
     @classmethod
     def is_supported_symbol(cls, ticker: str) -> bool:
+        """
+        Determines whether a ticker is a supported US-format symbol after normalization.
+        
+        Parameters:
+            ticker (str): Ticker string to validate; it will be normalized before checking.
+        
+        Returns:
+            True if the normalized ticker matches the provider's US symbol pattern, False otherwise.
+        """
         symbol = cls.normalize_symbol(ticker)
         return bool(cls._US_SYMBOL_PATTERN.fullmatch(symbol))
 
@@ -65,24 +83,20 @@ class AlpacaProvider(AbstractBrokerageProvider):
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
-        Place a market order or a limit order for the specified ticker.
+        Place a market or limit order for the given ticker on Alpaca.
+        
+        Validates the ticker is supported and submits either a market order (when no limit_price) or a limit order (when limit_price is provided). The function returns a standardized result dictionary indicating success or error.
         
         Parameters:
-            ticker (str): Symbol to trade.
+            ticker (str): Symbol to trade; will be normalized and validated for Alpaca.
             quantity (float): Quantity to buy or sell.
-            side (str): Order side; typically "buy" or "sell" (case-insensitive).
-            limit_price (float, optional): If provided, submits a limit order at this price; otherwise submits a market order.
+            side (str): Order side, e.g., "buy" or "sell" (case-insensitive).
+            limit_price (float, optional): If provided, a limit order is submitted at this price.
             client_order_id (str, optional): Optional client-generated identifier to attach to the order.
         
         Returns:
-            dict: On success, contains:
-                - "status": "success"
-                - "order_id": broker-assigned order identifier
-                - "broker": "ALPACA"
-                - "client_order_id": the order's client-provided identifier (if any)
-            On failure, contains:
-                - "status": "error"
-                - "message": a human-readable error message
+            dict: On success: {"status": "success", "order_id": <broker id>, "broker": "ALPACA", "client_order_id": <client id or None>}.
+                  On failure: {"status": "error", "message": <human-readable error message>}.
         """
         if not self.is_supported_symbol(ticker):
             return {"status": "error", "message": f"Ticker {ticker} is not supported by Alpaca"}
