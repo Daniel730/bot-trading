@@ -325,6 +325,7 @@ export interface ConfigItem {
   value: string | number | boolean | null;
   type: 'float' | 'int' | 'bool' | 'str';
   sensitive: boolean;
+  options?: string[];
 }
 
 export interface TwoFactorStatus {

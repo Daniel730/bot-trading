@@ -27,7 +27,7 @@ import uvicorn
 
 from src.config import save_pairs_override, save_settings_override, settings
 from src.models.persistence import PersistenceManager
-from src.services.brokerage_service import brokerage_service
+from src.services.brokerage_service import BrokerageService, brokerage_service
 
 try:
     from scripts import seed_equal_wallet as wallet_seed
@@ -698,8 +698,20 @@ class DashboardService:
             "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
             "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True},
             "MAX_DRAWDOWN": {"type": "float", "sensitive": True},
+            "BROKERAGE_PROVIDER": {
+                "type": "str",
+                "sensitive": True,
+                "masked": False,
+                "options": ["T212", "ALPACA"],
+            },
             "T212_BUDGET_USD": {"type": "float", "sensitive": False},
             "WEB3_BUDGET_USD": {"type": "float", "sensitive": False},
+            "TRADING_212_MODE": {
+                "type": "str",
+                "sensitive": True,
+                "masked": False,
+                "options": ["demo", "live"],
+            },
             "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True},
             "PAPER_TRADING": {"type": "bool", "sensitive": True},
             "DEV_MODE": {"type": "bool", "sensitive": True},
@@ -709,6 +721,9 @@ class DashboardService:
             "T212_API_KEY": {"type": "str", "sensitive": True},
             "T212_API_SECRET": {"type": "str", "sensitive": True},
             "TRADING_212_API_KEY": {"type": "str", "sensitive": True},
+            "ALPACA_API_KEY": {"type": "str", "sensitive": True},
+            "ALPACA_API_SECRET": {"type": "str", "sensitive": True},
+            "ALPACA_BASE_URL": {"type": "str", "sensitive": True, "masked": False},
             "TELEGRAM_BOT_TOKEN": {"type": "str", "sensitive": True},
             "WEB3_PRIVATE_KEY": {"type": "str", "sensitive": True},
             "WEB3_RPC_URL": {"type": "str", "sensitive": True},
@@ -1418,7 +1433,15 @@ class DashboardService:
                     return False
                 raise ValueError("invalid boolean")
             if kind == "str":
-                return str(value)
+                text = str(value).strip()
+                options = spec.get("options")
+                if options:
+                    normalized_options = {str(option).upper(): str(option) for option in options}
+                    option_key = text.upper()
+                    if option_key not in normalized_options:
+                        raise ValueError(f"expected one of: {', '.join(options)}")
+                    return normalized_options[option_key]
+                return text
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"Invalid value for {key}: {value}") from exc
         return value
@@ -1436,7 +1459,8 @@ class DashboardService:
         return text == "********" or ("..." in text and len(text) <= 16)
 
     def _audit_value(self, key: str, value: Any) -> Any:
-        if self.editable_config.get(key, {}).get("sensitive"):
+        spec = self.editable_config.get(key, {})
+        if spec.get("masked", spec.get("sensitive", False)):
             return self._mask_sensitive_value(value)
         return value
 
@@ -1444,18 +1468,21 @@ class DashboardService:
         items = []
         for key, spec in self.editable_config.items():
             raw_value = getattr(settings, key)
-            items.append(
-                {
-                    "key": key,
-                    "value": self._mask_sensitive_value(raw_value) if spec["sensitive"] else raw_value,
-                    "type": spec["type"],
-                    "sensitive": spec["sensitive"],
-                }
-            )
+            should_mask = spec.get("masked", spec["sensitive"])
+            item = {
+                "key": key,
+                "value": self._mask_sensitive_value(raw_value) if should_mask else raw_value,
+                "type": spec["type"],
+                "sensitive": spec["sensitive"],
+            }
+            if spec.get("options"):
+                item["options"] = spec["options"]
+            items.append(item)
         audit_log = []
         for entry in self.persistence.get_recent_config_changes(limit=25):
             key = entry.get("key")
-            if self.editable_config.get(key, {}).get("sensitive"):
+            spec = self.editable_config.get(key, {})
+            if spec.get("masked", spec.get("sensitive", False)):
                 entry = {
                     **entry,
                     "old_value": self._mask_sensitive_value(entry.get("old_value")),
@@ -1478,7 +1505,9 @@ class DashboardService:
             normalized_key = str(key).strip().upper()
             if normalized_key not in self.editable_config:
                 raise HTTPException(status_code=400, detail=f"Unsupported configuration key: {normalized_key}")
-            if self.editable_config.get(normalized_key, {}).get("sensitive") and self._is_masked_placeholder(value):
+            spec = self.editable_config.get(normalized_key, {})
+            should_mask = spec.get("masked", spec.get("sensitive", False))
+            if should_mask and self._is_masked_placeholder(value):
                 continue
             normalized_updates[normalized_key] = self._coerce_config_value(normalized_key, value)
             requires_2fa = requires_2fa or self.editable_config[normalized_key]["sensitive"]
@@ -1504,6 +1533,21 @@ class DashboardService:
                 new_value=self._audit_value(key, value),
                 requires_2fa=self.editable_config[key]["sensitive"],
             )
+
+        brokerage_config_keys = {
+            "BROKERAGE_PROVIDER",
+            "T212_API_KEY",
+            "T212_API_SECRET",
+            "TRADING_212_API_KEY",
+            "TRADING_212_MODE",
+            "ALPACA_API_KEY",
+            "ALPACA_API_SECRET",
+            "ALPACA_BASE_URL",
+        }
+        if brokerage_config_keys.intersection(normalized_updates):
+            brokerage_service.configure_provider()
+            if dashboard_state.monitor is not None:
+                dashboard_state.monitor.brokerage = BrokerageService()
 
         await dashboard_state.add_message(
             "SYSTEM",

@@ -18,9 +18,13 @@ class BrokerageService:
         Parameters:
             provider_name (str, optional): The brokerage provider identifier to use. If omitted, the provider is taken from settings.BROKERAGE_PROVIDER. The selected provider is instantiated and assigned to `self.provider`; `self.provider_name` and `self.web3` are also set.
         """
+        self.configure_provider(provider_name)
+
+    def configure_provider(self, provider_name: str = None) -> None:
+        """Configure or refresh the active brokerage provider from settings."""
         self.provider_name = provider_name or settings.BROKERAGE_PROVIDER
         self.web3 = web3_service
-        
+
         if self.provider_name == "ALPACA":
             self.provider = AlpacaProvider()
             logger.info("BrokerageService: Initialized with ALPACA provider.")
