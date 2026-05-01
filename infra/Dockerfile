@@ -20,7 +20,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # This avoids slow backtracking and ensures deterministic builds.
 COPY requirements.lock .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    /uv/bin/uv pip install --user --no-build-isolation -r requirements.lock
+    /uv/bin/uv pip install --system --no-build-isolation -r requirements.lock
 
 # Copy proto and generate gRPC stubs
 COPY execution-engine/src/main/proto/ /app/proto/
@@ -43,7 +43,6 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
-ENV PATH="/root/.local/bin:${PATH}"
 
 # Install runtime dependencies, Node.js 20, and Gemini CLI.
 # Placed BEFORE any application code COPYs so this expensive layer stays cached
@@ -59,8 +58,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @google/gemini-cli
 
-# Copy installed Python packages from builder
-COPY --from=builder /root/.local /root/.local
+# Copy installed Python packages and entrypoints from builder
+COPY --from=builder /usr/local /usr/local
 
 # Copy generated gRPC stubs
 COPY --from=builder /app/src/generated /app/src/generated
