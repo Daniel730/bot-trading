@@ -8,8 +8,6 @@ interface SettingsPageProps {
   config: ConfigResponse | null;
   configForm: Record<string, string>;
   setConfigForm: (val: Record<string, string> | ((prev: Record<string, string>) => Record<string, string>)) => void;
-  otpToken: string;
-  setOtpToken: (val: string) => void;
   handleSaveConfig: () => void;
   isBusy: boolean;
   handleInitiate2FA: () => void;
@@ -25,8 +23,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   config,
   configForm,
   setConfigForm,
-  otpToken,
-  setOtpToken,
   handleSaveConfig,
   isBusy,
   handleInitiate2FA,
@@ -129,19 +125,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
               </div>
             )
           ))}
-
-          <div style={{ marginTop: '20px', padding: '16px', borderRadius: '14px', background: 'rgba(98, 192, 255, 0.05)', border: '1px solid rgba(98, 192, 255, 0.1)' }}>
-            <label className="setting-field">
-              <span>OTP / Backup Code</span>
-              <input
-                value={otpToken}
-                onChange={(event) => setOtpToken(event.target.value)}
-                placeholder="Required for sensitive changes"
-              />
-            </label>
-            <div className="inline-actions" style={{ marginTop: '12px' }}>
-              <button className="primary-btn" disabled={isBusy} onClick={handleSaveConfig}>Save Changes</button>
-            </div>
+          <div className="inline-actions" style={{ marginTop: '12px' }}>
+            <button className="primary-btn" disabled={isBusy} onClick={handleSaveConfig}>Save Changes</button>
           </div>
         </section>
       )}

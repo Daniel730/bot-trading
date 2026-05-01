@@ -12,6 +12,7 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   'PAPER_TRADING': { label: 'Shadow Trading', description: 'When enabled, trades are simulated locally without hitting any exchange API.' },
   'DEV_MODE': { label: 'Development Mode', description: 'Enable 24/7 scanning on test pairs. Do not use for real trading.' },
   'LIVE_CAPITAL_DANGER': { label: 'Live Capital Guard', description: 'Safety switch that must be ON to allow real money trades.' },
+  'ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM': { label: 'Allow Live Approval Without Telegram', description: 'Permit live approvals even if Telegram approval delivery is unavailable.' },
 
   // --- Risk & Allocation ---
   'T212_BUDGET_USD': { label: 'Equity Budget (USD)', description: 'Total capital allocated for stock/ETF trading.' },
@@ -42,6 +43,7 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   'ALPACA_BASE_URL': { label: 'Alpaca Base URL', description: 'Alpaca paper or live REST endpoint.' },
   'WEB3_RPC_URL': { label: 'Web3 RPC URL', description: 'RPC endpoint for on-chain crypto execution.' },
   'WEB3_PRIVATE_KEY': { label: 'Web3 Private Key', description: 'Wallet private key for on-chain crypto execution.' },
+  'SEC_USER_AGENT': { label: 'SEC User Agent', description: 'User-Agent value used for SEC/EDGAR and similar data-source calls.' },
   
   // --- Advanced ---
   'KALMAN_DELTA': { label: 'Kalman Process Noise', description: 'Higher values make the filter more responsive but noisier.' },

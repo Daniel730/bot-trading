@@ -11,6 +11,8 @@ interface OverviewPageProps {
   positions: OpenPosition[];
   risk: TelemetryRisk | null;
   recentThoughts: TelemetryThought[];
+  marketRegimeConfidence?: number | null;
+  globalAccuracy?: number | null;
 }
 
 const OverviewPage: React.FC<OverviewPageProps> = ({
@@ -19,6 +21,8 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
   positions,
   risk,
   recentThoughts,
+  marketRegimeConfidence,
+  globalAccuracy,
 }) => {
   return (
     <>
@@ -28,8 +32,8 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
       {risk && (
         <IntelligenceHub 
           regime={risk.volatility_status || 'SIDEWAYS'} 
-          confidence={0.85} // Mock or derive if available
-          accuracy={0.72}    // Mock or derive if available
+          confidence={marketRegimeConfidence ?? 0}
+          accuracy={globalAccuracy ?? 0}
         />
       )}
 
