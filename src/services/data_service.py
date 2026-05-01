@@ -31,12 +31,21 @@ class DataService:
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
         kwargs.setdefault("timeout", settings.MARKET_DATA_TIMEOUT_SECONDS)
         try:
-            return yf.download(*args, **kwargs)
+            df = yf.download(*args, **kwargs)
+            if df is None or df.empty:
+                # yfinance often prints 'Possible delisted' to stdout. 
+                # We catch the empty result here to log it clearly.
+                logger.warning(f"DataService: yfinance download returned empty for {args[0] if args else 'unknown'}")
+                return pd.DataFrame()
+            return df
         except TypeError as exc:
             if "timeout" not in str(exc):
                 raise
             kwargs.pop("timeout", None)
             return yf.download(*args, **kwargs)
+        except Exception as exc:
+            logger.error(f"DataService: yfinance download failed: {exc}")
+            return pd.DataFrame()
 
     @staticmethod
     def _dedupe_tickers(tickers: List[str]) -> List[str]:
@@ -373,7 +382,9 @@ class DataService:
             )
 
         if not results:
-            raise ValueError(f"No valid prices found in yfinance response for {tickers}")
+            logger.error(f"DataService: Critical - No valid prices found for {tickers}. This may indicate a network issue or mass delisting.")
+            # Return an empty dict instead of raising if we want to avoid crashing the caller
+            return results
 
         return results
 

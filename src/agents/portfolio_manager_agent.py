@@ -142,6 +142,7 @@ class PortfolioManagerAgent:
                 return pd.DataFrame()
 
             df = df.rename(columns={ticker_col: 'Ticker', sector_col: 'Sector', company_col: 'Company'})
+            df['Ticker'] = df['Ticker'].astype(str).str.replace('.', '-', regex=False)
             df = df[['Ticker', 'Company', 'Sector']]
             
             self._sp500_cache = df
@@ -313,7 +314,7 @@ class PortfolioManagerAgent:
         Scans top crypto pairs for cointegration.
         """
         logger.info("Scanning crypto universe...")
-        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "MATIC-USD"]
+        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "POL-USD"]
         
         existing_ids = await persistence_service.get_existing_candidate_ids("Crypto")
         new_candidates = []
