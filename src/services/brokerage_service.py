@@ -210,7 +210,9 @@ class BrokerageService:
         """
         Compute the total fiat value of pending orders.
         
-        Each pending order contributes quantity * (its `limitPrice` if present, otherwise its `price`) only when quantity is greater than zero.
+        Each pending order contributes quantity * price. When the broker reports
+        a zero/missing order price, fall back to the latest market price for the
+        order ticker so budget checks do not undercount pending commitments.
         
         Returns:
             total_value (float): Sum of quantity * (limitPrice or price) for all pending orders with quantity > 0.
@@ -218,9 +220,23 @@ class BrokerageService:
         orders = await self.get_pending_orders()
         total_value = 0.0
         for order in orders:
-            qty = order.get('quantity', 0.0)
+            try:
+                qty = float(order.get('quantity', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                qty = 0.0
             if qty > 0:
-                price = order.get('limitPrice') or order.get('price', 0.0)
+                try:
+                    price = float(order.get('limitPrice') or order.get('price') or 0.0)
+                except (TypeError, ValueError):
+                    price = 0.0
+                if price <= 0.0:
+                    from src.services.data_service import data_service
+                    ticker = order.get('ticker')
+                    prices = await data_service.get_latest_price_async([ticker])
+                    try:
+                        price = float(prices.get(ticker, 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        price = 0.0
                 total_value += (qty * price)
         return AwaitableFloat(total_value)
 
