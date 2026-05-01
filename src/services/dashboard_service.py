@@ -1590,22 +1590,23 @@ class DashboardService:
 
     def get_dashboard_config(self) -> dict:
         """
-        Return the dashboard's editable configuration items, two-factor status, recent audit log, and current integration flags.
-        
-        Each item in `items` describes a configurable key with its masked or raw value, declared type, and sensitivity; `options` is present when the setting has enumerated choices. The `audit_log` is a list of recent configuration change records; values for sensitive keys are masked. The `integrations` map reports runtime integration status (brokerage provider, whether Alpaca/T212 appear configured, and the Alpaca base URL).
+        Assembles the dashboard's editable configuration, two-factor public status, recent configuration audit entries, and runtime integration flags.
         
         Returns:
-            config (dict): {
-                "items": list[dict(key: str, value: Any, type: str, sensitive: bool, options?: list)],
-                "two_factor": dict,          # public status from the TOTP manager
-                "audit_log": list[dict],     # recent config change entries (sensitive values masked)
-                "integrations": dict {       # runtime integration flags
-                    "brokerage_provider": str,
-                    "alpaca_configured": bool,
-                    "alpaca_base_url": str,
-                    "t212_configured": bool,
-                },
-            }
+            config (dict): A mapping with the following keys:
+                - items (list[dict]): Editable configuration entries. Each entry contains:
+                    - key (str): Setting name.
+                    - value (Any): Current value or a masked placeholder when the setting is sensitive (booleans and enum options are never masked).
+                    - type (str): Declared type for the setting (e.g., "str", "int", "float", "bool").
+                    - sensitive (bool): Whether the setting is considered sensitive.
+                    - options (list, optional): Enumerated choices when the setting exposes options.
+                - two_factor (dict): Public status information returned by the TOTP manager.
+                - audit_log (list[dict]): Recent configuration change records; old/new values are masked when the setting is marked sensitive.
+                - integrations (dict): Runtime integration flags including:
+                    - brokerage_provider (str): Active brokerage provider name.
+                    - alpaca_configured (bool): Whether Alpaca API credentials appear configured.
+                    - alpaca_base_url (str): Configured Alpaca base URL.
+                    - t212_configured (bool): Whether a Trading212 key appears configured.
         """
         items = []
         for key, spec in self.editable_config.items():
@@ -1847,6 +1848,29 @@ class DashboardService:
         return {"status": "accepted", "requested_state": desired_state, "action": action}
 
     async def build_summary(self) -> dict:
+        """
+        Builds a snapshot summary of trading and system metrics for the dashboard.
+        
+        Returns:
+            dict: A scrubbed mapping containing:
+                - `current_balance` (float|None): Available cash from portfolio metrics.
+                - `capital_deployed` (float|None): Total invested capital from portfolio metrics.
+                - `profit_today` (float|None): Daily profit from portfolio metrics.
+                - `trades_today` (int): Number of trades opened today (derived from recent trade history).
+                - `win_rate` (float): Trade win rate (0.0–1.0) from persisted trade summary.
+                - `wins` (int): Count of winning trades from persisted trade summary.
+                - `losses` (int): Count of losing trades from persisted trade summary.
+                - `closed_trades` (int): Count of closed trades from persisted trade summary.
+                - `system_uptime_seconds` (int|None): Uptime in seconds from the latest health snapshot.
+                - `system_uptime_human` (str): Human-readable uptime derived from `system_uptime_seconds`.
+                - `bot_status` (str): Desired bot state from dashboard state.
+                - `stage` (str): Current dashboard stage.
+                - `cpu_pct` (float|None): CPU usage percentage from the latest health snapshot.
+                - `memory_pct` (float|None): System memory usage percentage from the latest health snapshot.
+                - `open_signals` (int): Number of active signals tracked by the dashboard.
+                - `open_positions` (int): Number of open signals persisted in storage.
+                - `mode` (str): Runtime mode returned by `dashboard_state.runtime_info()` (e.g., "DEV", "PAPER", "LIVE").
+        """
         from src.services.persistence_service import persistence_service
 
         trade_summary = await persistence_service.get_trade_summary()
@@ -1899,6 +1923,11 @@ class DashboardService:
         return {"status": "accepted", "message": "Discovery cycle started in background."}
 
     async def start(self):
+        """
+        Start the dashboard service: begin telemetry broadcasting, launch the ASGI server, and schedule background polling tasks.
+        
+        Initializes and starts the telemetry broadcast loop, creates and starts the Uvicorn server on 0.0.0.0:8080, and schedules periodic background tasks for metrics and system health polling. Errors during startup are logged.
+        """
         try:
             from src.services.telemetry_service import telemetry_service
 
@@ -2314,6 +2343,21 @@ async def initiate_2fa(token: str = Query(None), session: str = Query(None)):
 
 @app.post("/api/auth/2fa/verify")
 async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), session: str = Query(None)):
+    """
+    Verify a submitted TOTP or backup code and enable or confirm two-factor authentication for the dashboard.
+    
+    Parameters:
+        request (TOTPVerifyRequest): Payload containing the TOTP/backup token to verify.
+        token (str, optional): Optional dashboard API security token or bearer value used to authenticate the request prior to 2FA verification.
+        session (str, optional): Optional dashboard session identifier used to authenticate the request prior to 2FA verification.
+    
+    Returns:
+        dict: If the request enables 2FA, returns {"status": "ok", "two_factor": <public_status>}.
+              If the request only verifies a token, returns {"status": "ok", "verified": True, "two_factor": <public_status>}.
+    
+    Raises:
+        HTTPException: 403 if the provided TOTP or backup code is invalid.
+    """
     verify_token(token, session)
     if dashboard_service.totp.verify_setup(request.token):
         await dashboard_state.add_message("SYSTEM", "Two-factor authentication enabled for dashboard config changes.")
@@ -2324,6 +2368,14 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
 
 @app.post("/api/pairs/discover")
 async def discover_pairs(token: str = Query(None), session: str = Query(None)):
+    """
+    Trigger background pair discovery scans for the Crypto universe and the "Technology" equity sector and record a system message.
+    
+    Requires a valid dashboard auth token or session; enqueues two non-blocking background tasks (crypto universe scan and Technology sector scan) and appends a SYSTEM message to the dashboard message stream.
+    
+    Returns:
+        dict: {"status": "ok", "message": "Discovery started"} indicating the discovery tasks were initiated.
+    """
     verify_token(token, session)
     from src.agents.portfolio_manager_agent import portfolio_manager
     import asyncio
@@ -2336,6 +2388,18 @@ async def discover_pairs(token: str = Query(None), session: str = Query(None)):
 
 @app.get("/api/pairs")
 async def list_pairs(token: str = Query(None), session: str = Query(None)):
+    """
+    Return a snapshot of pair discovery state including active pairs enriched with latest z-scores and last cointegration check timestamps.
+    
+    The response includes:
+    - `active_pairs`: list of active pair objects with added `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
+    - `configured_pairs`: the dashboard's configured pair list from settings.
+    - `crypto_test_pairs`: the configured crypto test pairs from settings.
+    - `dev_mode`: current development mode flag from settings.
+    
+    Returns:
+        dict: The scrubbed response object described above, with non-finite floats replaced by `None`.
+    """
     verify_token(token, session)
     monitor = dashboard_state.monitor
 
