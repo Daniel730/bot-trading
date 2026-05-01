@@ -29,6 +29,18 @@ class DataService:
         self._ws_client: Optional[WebSocketClient] = None
 
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
+        """
+        Download market data via yfinance and normalize empty or error results to an empty DataFrame.
+        
+        This wrapper sets a default timeout from settings.MARKET_DATA_TIMEOUT_SECONDS and forwards all positional and keyword arguments to yf.download. If yf.download returns None or an empty DataFrame, a warning is logged and an empty DataFrame is returned. If a TypeError occurs that references "timeout", the function retries the download after removing the timeout kwarg. Any other exception is logged and results in an empty DataFrame being returned.
+        
+        Parameters:
+            *args: Positional arguments passed through to yf.download (typically tickers and/or download options).
+            **kwargs: Keyword arguments passed through to yf.download. A default "timeout" is inserted when not provided.
+        
+        Returns:
+            pd.DataFrame: The DataFrame returned by yfinance, or an empty DataFrame if no data was obtained or an error occurred.
+        """
         kwargs.setdefault("timeout", settings.MARKET_DATA_TIMEOUT_SECONDS)
         try:
             df = yf.download(*args, **kwargs)
@@ -49,6 +61,15 @@ class DataService:
 
     @staticmethod
     def _dedupe_tickers(tickers: List[str]) -> List[str]:
+        """
+        Return a new list of tickers with falsy entries removed and duplicates removed while preserving first-seen order.
+        
+        Parameters:
+            tickers (List[str]): Sequence of ticker strings, may contain falsy values or duplicates.
+        
+        Returns:
+            List[str]: Ticketers in their original order with falsy values omitted and only the first occurrence of each ticker retained.
+        """
         seen = set()
         result = []
         for ticker in tickers:
@@ -344,12 +365,13 @@ class DataService:
         reraise=True
     )
     def _get_latest_price_yfinance_with_retry(self, tickers: List[str]) -> dict:
-        """Internal helper to fetch prices from yfinance with tenacity retries.
-
-        Batch failures are allowed to propagate so tenacity can apply the
-        exponential backoff between attempts (T013). The per-ticker fallback
-        below only runs when the batch call *partially* succeeded — i.e. some
-        tickers came back missing from an otherwise-successful response.
+        """
+        Fetch latest intraday close prices for the given tickers from yfinance, using a retried batch request and limited per-ticker fallbacks.
+        
+        The function deduplicates the input tickers, performs a batch fetch which is retried with exponential backoff, and then fills any partially-missing tickers by performing sequential single-ticker requests when 1–10 tickers are missing (with a short delay between attempts). If more than 10 tickers are missing the per-ticker fallback is skipped to avoid long timeouts. If no valid prices are obtained, an empty dict is returned and an error is logged.
+        
+        Returns:
+            dict: Mapping from ticker string to latest price (float) for tickers successfully fetched.
         """
         tickers = self._dedupe_tickers(tickers)
         # Let batch exceptions propagate to tenacity so retries with backoff actually happen.
