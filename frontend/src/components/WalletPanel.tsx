@@ -21,6 +21,10 @@ interface WalletPanelProps {
   sessionToken: string;
 }
 
+const RECOMMENDATIONS_PAGE_SIZE = 10;
+const SKIPPED_PAGE_SIZE = 10;
+const ORDERS_PAGE_SIZE = 10;
+
 const formatCurrency = (value: number | null | undefined) => {
   if (value === null || value === undefined) return '--';
   return new Intl.NumberFormat('en-US', {
@@ -59,6 +63,9 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [buyResult, setBuyResult] = useState<WalletRecommendationBuyResponse | null>(null);
+  const [recommendationsPage, setRecommendationsPage] = useState(1);
+  const [skippedPage, setSkippedPage] = useState(1);
+  const [ordersPage, setOrdersPage] = useState(1);
 
   const budgetValue = Number(budget);
 
@@ -100,11 +107,50 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
     () => (plan?.recommendations || []).filter((item) => selected.has(item.ticker)),
     [plan?.recommendations, selected],
   );
+  const totalRecommendationPages = Math.max(1, Math.ceil((plan?.recommendations.length ?? 0) / RECOMMENDATIONS_PAGE_SIZE));
+  const visibleRecommendations = useMemo(() => {
+    const recommendations = plan?.recommendations ?? [];
+    const start = (recommendationsPage - 1) * RECOMMENDATIONS_PAGE_SIZE;
+    return recommendations.slice(start, start + RECOMMENDATIONS_PAGE_SIZE);
+  }, [plan?.recommendations, recommendationsPage]);
+  const totalSkippedPages = Math.max(1, Math.ceil((plan?.skipped.length ?? 0) / SKIPPED_PAGE_SIZE));
+  const visibleSkipped = useMemo(() => {
+    const skipped = plan?.skipped ?? [];
+    const start = (skippedPage - 1) * SKIPPED_PAGE_SIZE;
+    return skipped.slice(start, start + SKIPPED_PAGE_SIZE);
+  }, [plan?.skipped, skippedPage]);
+  const totalOrderPages = Math.max(1, Math.ceil((buyResult?.orders.length ?? 0) / ORDERS_PAGE_SIZE));
+  const visibleOrders = useMemo(() => {
+    const orders = buyResult?.orders ?? [];
+    const start = (ordersPage - 1) * ORDERS_PAGE_SIZE;
+    return orders.slice(start, start + ORDERS_PAGE_SIZE);
+  }, [buyResult?.orders, ordersPage]);
 
   const selectedSuggestedTotal = useMemo(
     () => selectedRecommendations.reduce((sum, item) => sum + (item.suggested_amount || 0), 0),
     [selectedRecommendations],
   );
+
+  useEffect(() => {
+    setRecommendationsPage(1);
+    setSkippedPage(1);
+  }, [plan?.generated_at]);
+
+  useEffect(() => {
+    setOrdersPage(1);
+  }, [buyResult?.message, buyResult?.orders.length]);
+
+  useEffect(() => {
+    if (recommendationsPage > totalRecommendationPages) setRecommendationsPage(totalRecommendationPages);
+  }, [recommendationsPage, totalRecommendationPages]);
+
+  useEffect(() => {
+    if (skippedPage > totalSkippedPages) setSkippedPage(totalSkippedPages);
+  }, [skippedPage, totalSkippedPages]);
+
+  useEffect(() => {
+    if (ordersPage > totalOrderPages) setOrdersPage(totalOrderPages);
+  }, [ordersPage, totalOrderPages]);
 
   const toggleTicker = (ticker: string) => {
     setSelected((current) => {
@@ -294,7 +340,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
                 </tr>
               </thead>
               <tbody>
-                {plan.recommendations.map((item) => (
+                {visibleRecommendations.map((item) => (
                   <tr key={item.ticker}>
                     <td>
                       <input
@@ -333,6 +379,27 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
             </table>
           </div>
         )}
+        {(plan?.recommendations.length ?? 0) > RECOMMENDATIONS_PAGE_SIZE ? (
+          <div className="list-pagination">
+            <button
+              className="panel-action-btn"
+              disabled={recommendationsPage <= 1}
+              onClick={() => setRecommendationsPage((current) => Math.max(1, current - 1))}
+            >
+              Prev
+            </button>
+            <span className="list-pagination-label">
+              Page {recommendationsPage} / {totalRecommendationPages}
+            </span>
+            <button
+              className="panel-action-btn"
+              disabled={recommendationsPage >= totalRecommendationPages}
+              onClick={() => setRecommendationsPage((current) => Math.min(totalRecommendationPages, current + 1))}
+            >
+              Next
+            </button>
+          </div>
+        ) : null}
       </section>
 
       {plan?.skipped.length ? (
@@ -343,13 +410,34 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
             <span className="panel-count">{plan.skipped.length}</span>
           </div>
           <div className="wallet-skip-list">
-            {plan.skipped.slice(0, 8).map((item) => (
+            {visibleSkipped.map((item) => (
               <div className="wallet-skip-row" key={`${item.ticker}-${item.reason}`}>
                 <strong>{item.ticker}</strong>
                 <span>{item.reason.replace('_', ' ')}</span>
               </div>
             ))}
           </div>
+          {plan.skipped.length > SKIPPED_PAGE_SIZE ? (
+            <div className="list-pagination">
+              <button
+                className="panel-action-btn"
+                disabled={skippedPage <= 1}
+                onClick={() => setSkippedPage((current) => Math.max(1, current - 1))}
+              >
+                Prev
+              </button>
+              <span className="list-pagination-label">
+                Page {skippedPage} / {totalSkippedPages}
+              </span>
+              <button
+                className="panel-action-btn"
+                disabled={skippedPage >= totalSkippedPages}
+                onClick={() => setSkippedPage((current) => Math.min(totalSkippedPages, current + 1))}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -361,7 +449,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
             <span className="panel-count">{buyResult.orders.length}</span>
           </div>
           <div className="wallet-order-grid">
-            {buyResult.orders.map((order) => (
+            {visibleOrders.map((order) => (
               <div className="wallet-order-row" key={`${order.ticker}-${order.order_id ?? order.message ?? order.amount}`}>
                 <strong>{order.ticker}</strong>
                 <span>{formatCurrency(order.amount)}</span>
@@ -369,6 +457,27 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
               </div>
             ))}
           </div>
+          {buyResult.orders.length > ORDERS_PAGE_SIZE ? (
+            <div className="list-pagination">
+              <button
+                className="panel-action-btn"
+                disabled={ordersPage <= 1}
+                onClick={() => setOrdersPage((current) => Math.max(1, current - 1))}
+              >
+                Prev
+              </button>
+              <span className="list-pagination-label">
+                Page {ordersPage} / {totalOrderPages}
+              </span>
+              <button
+                className="panel-action-btn"
+                disabled={ordersPage >= totalOrderPages}
+                onClick={() => setOrdersPage((current) => Math.min(totalOrderPages, current + 1))}
+              >
+                Next
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
