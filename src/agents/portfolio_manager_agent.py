@@ -110,7 +110,12 @@ class PortfolioManagerAgent:
 
     @agent_trace("PortfolioManagerAgent.get_sp500_universe")
     async def get_sp500_universe(self) -> pd.DataFrame:
-        """Fetches and caches the S&P 500 constituents and sectors from Wikipedia."""
+        """
+        Return the S&P 500 constituents with their company names and sectors, using a cached copy when available.
+        
+        Returns:
+            pd.DataFrame: DataFrame with columns `Ticker`, `Company`, and `Sector`. The result is cached for up to 7 days; on failure or if required columns cannot be identified, returns an empty DataFrame.
+        """
         if self._sp500_cache is not None and (datetime.now() - self._last_cache_update) < timedelta(days=7):
             return self._sp500_cache
 
@@ -234,8 +239,12 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.scan_sector_universe")
     async def scan_sector_universe(self, sector: str):
         """
-        Scans a specific S&P 500 sector for cointegrated pairs.
-        Uses bulk search to avoid re-analyzing existing candidates and bulk inserts for speed.
+        Scan the S&P 500 sector for cointegrated ticker pairs and persist newly discovered candidates.
+        
+        Fetches the sector tickers (using a cached/wrapped scraper and a hardcoded fallback when scraping fails), skips pairs already recorded, analyzes adjacent ticker pairs for cointegration and spread performance metrics, and bulk-saves any newly discovered UniverseCandidate entries. The method logs progress, warnings when falling back to hardcoded lists, and errors per-pair when analysis fails.
+        
+        Parameters:
+            sector (str): The exact sector name to scan (e.g., "Information Technology", "Health Care").
         """
         universe = await self.get_sp500_universe()
         
@@ -312,7 +321,19 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.scan_crypto_universe")
     async def scan_crypto_universe(self):
         """
-        Scans top crypto pairs for cointegration.
+        Scan a fixed list of top crypto tickers for cointegrated pairs and persist discovered universe candidates.
+        
+        For each unique pair among a predefined top-crypto list, the method:
+        - Skips pairs already present in the persisted candidate IDs.
+        - Loads up to one year of daily historical price data and skips the pair if data is missing or incomplete.
+        - Tests for cointegration; if cointegrated, computes the spread and its daily returns, then derives annualized metrics:
+          - `expected_return` (mean of spread returns annualized using 365 days),
+          - `volatility` (standard deviation annualized using sqrt(365)),
+          - `sortino` (using the agent's Sortino calculation on the spread returns),
+          - `p_value` and `correlation`.
+        - Creates and persists a UniverseCandidate for each discovered pair and logs discoveries.
+        
+        Pairs with missing data or pairs that raise exceptions during processing are skipped silently; newly discovered candidates are saved in bulk at the end.
         """
         logger.info("Scanning crypto universe...")
         top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "POL-USD"]
@@ -364,8 +385,14 @@ class PortfolioManagerAgent:
 
     async def get_optimization_advice(self, new_ticker: str) -> Dict:
         """
-        Determines if adding a new ticker improves the portfolio's Sortino Ratio.
-        Returns: {"is_recommended": bool, "improvement": float, "target_weight": float}
+        Assess whether adding the given ticker would improve the portfolio's Sortino ratio.
+        
+        Returns:
+            result (dict): Recommendation and metrics with keys:
+                - is_recommended (bool): `True` if adding `new_ticker` increases the portfolio's Sortino ratio, `False` otherwise.
+                - improvement (float): The change in Sortino ratio (new_sortino - current_sortino).
+                - target_weight (float): Suggested weight for `new_ticker` in the optimized portfolio.
+                - optimized_portfolio (dict): Mapping of tickers to optimized weights (present when optimization completed).
         """
         try:
             current_tickers = await persistence_service.get_active_portfolio_tickers()
@@ -413,7 +440,14 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.run_narrative_scan")
     async def run_narrative_scan(self, sector: str, beacon_ticker: str):
         """
-        Executes a sector scan only if the Beacon Asset (Leader) is in a healthy regime.
+        Perform a conditional sector scan based on the market regime of a beacon ticker.
+        
+        Parameters:
+        	sector (str): Name of the sector to scan (e.g., "Information Technology").
+        	beacon_ticker (str): Ticker symbol used as the market regime beacon.
+        
+        Returns:
+        	result (dict): If the beacon's regime is "BEARISH" or "EXTREME_VOLATILITY", returns {"status": "VETOED", "reason": "<explanation>"}. Otherwise returns {"status": "COMPLETED", "sector": sector} after initiating the sector scan.
         """
         regime = await macro_economic_agent.get_ticker_regime(beacon_ticker)
         
@@ -428,8 +462,14 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.run_discovery")
     async def run_discovery(self):
         """
-        Runs a full discovery cycle across key S&P 500 sectors and the crypto universe.
-        This is a resource-intensive background task.
+        Orchestrates discovery of cointegrated trading pairs across selected S&P 500 sectors and the crypto universe.
+        
+        Runs sector scans for a fixed set of sectors and a subsequent crypto scan; errors for individual sectors or the crypto scan are logged and do not stop the overall cycle. This is intended as a long-running background task.
+        
+        Returns:
+            result (dict): A completion summary with keys:
+                - "status": a string status, e.g., "COMPLETED".
+                - "timestamp": ISO 8601 timestamp when the run finished.
         """
         logger.info("Starting global pair discovery cycle...")
         sectors = ["Financials", "Information Technology", "Consumer Staples", "Health Care"]
@@ -453,9 +493,9 @@ class PortfolioManagerAgent:
     @agent_trace("PortfolioManagerAgent.rotate_pairs")
     async def rotate_pairs(self):
         """
-        Compares currently Active pairs against Scout (candidate) pairs.
-        If a Scout pair has a significantly better Sortino ratio than an Active pair,
-        they are swapped.
+        Rotate active trading pairs by replacing them with the top scout candidates ranked by Sortino.
+        
+        Fetches all TradingPair rows with status "Active" and the top UniverseCandidate rows ordered by descending `sortino`. If there are scout pairs not already active, sets all TradingPair rows' status to "Scout", upserts the selected scout pairs as Active TradingPair rows (using the scout `pair_id` to populate `ticker_a` and `ticker_b`, with `hedge_ratio=0.0` and `is_cointegrated=True`), commits the transaction, and logs the rotation. If there are no active pairs or no scouts, or no scouts to activate, the method returns without making changes.
         """
         from src.services.persistence_service import TradingPair, UniverseCandidate
         from sqlalchemy import select, update, desc
