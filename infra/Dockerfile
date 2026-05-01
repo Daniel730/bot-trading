@@ -4,6 +4,9 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
+# Install uv for fast dependency resolution and installation
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uv/bin/uv
+
 # Install build-time dependencies. Use BuildKit apt caches so packages don't
 # re-download on every rebuild.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -13,11 +16,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libpq-dev \
     curl
 
-# Install Python dependencies with a pip cache mount so wheels (numpy, pandas,
-# scipy, grpcio, etc.) aren't recompiled every time unrelated files change.
-COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir --no-build-isolation --user -r requirements.txt
+# Install Python dependencies using uv and the pinned requirements.lock file.
+# This avoids slow backtracking and ensures deterministic builds.
+COPY requirements.lock .
+RUN --mount=type=cache,target=/root/.cache/uv \
+    /uv/bin/uv pip install --user --no-build-isolation -r requirements.lock
 
 # Copy proto and generate gRPC stubs
 COPY execution-engine/src/main/proto/ /app/proto/
