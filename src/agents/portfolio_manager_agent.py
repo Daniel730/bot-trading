@@ -355,7 +355,7 @@ class PortfolioManagerAgent:
         Pairs with missing data or pairs that raise exceptions during processing are skipped silently; newly discovered candidates are saved in bulk at the end.
         """
         logger.info("Scanning crypto universe...")
-        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "MATIC-USD"]
+        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "LTC-USD"]
         
         existing_ids = await persistence_service.get_existing_candidate_ids("Crypto")
         new_candidates = []
