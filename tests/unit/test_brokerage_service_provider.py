@@ -219,7 +219,7 @@ class TestConfigureProviderRuntimeSwap:
 
 
 # ---------------------------------------------------------------------------
-# get_venue – updated to use provider_name (not hardcoded "T212")
+# get_venue – routes all bot trades through the configured broker
 # ---------------------------------------------------------------------------
 
 class TestGetVenueWithActiveProvider:
@@ -232,13 +232,13 @@ class TestGetVenueWithActiveProvider:
             mock_settings.BROKERAGE_PROVIDER = provider_name
             return BrokerageService()
 
-    def test_crypto_ticker_always_routes_to_web3(self):
+    def test_crypto_ticker_routes_to_active_t212_provider(self):
         svc = self._service_with_provider("T212")
-        assert svc.get_venue("BTC-USD") == "WEB3"
+        assert svc.get_venue("BTC-USD") == "T212"
 
-    def test_crypto_ticker_routes_to_web3_even_with_alpaca(self):
+    def test_crypto_ticker_routes_to_active_alpaca_provider(self):
         svc = self._service_with_provider("ALPACA")
-        assert svc.get_venue("ETH-USD") == "WEB3"
+        assert svc.get_venue("ETH-USD") == "ALPACA"
 
     def test_equity_ticker_routes_to_active_t212_provider(self):
         svc = self._service_with_provider("T212")
@@ -250,4 +250,4 @@ class TestGetVenueWithActiveProvider:
 
     def test_case_insensitive_crypto_detection(self):
         svc = self._service_with_provider("T212")
-        assert svc.get_venue("btc-usd") == "WEB3"
+        assert svc.get_venue("btc-usd") == "T212"
