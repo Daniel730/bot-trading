@@ -787,7 +787,11 @@ class ArbitrageMonitor:
             budget_source = f"{venue.lower()}_{asset_class}_cash"
             if total_cash is not None:
                 try:
-                    pending_value = max(0.0, float(await self.brokerage.get_pending_orders_value()))
+                    maybe_pending = self.brokerage.get_pending_orders_value()
+                    pending_value_raw = (
+                        await maybe_pending if inspect.isawaitable(maybe_pending) else maybe_pending
+                    )
+                    pending_value = max(0.0, float(pending_value_raw))
                 except Exception as e:
                     logger.warning(f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}")
 
