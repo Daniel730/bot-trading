@@ -251,3 +251,57 @@ class TestGetVenueWithActiveProvider:
     def test_case_insensitive_crypto_detection(self):
         svc = self._service_with_provider("T212")
         assert svc.get_venue("btc-usd") == "WEB3"
+
+
+# ---------------------------------------------------------------------------
+# get_web3_account_cash removal (PR change)
+# ---------------------------------------------------------------------------
+
+class TestRemovedGetWeb3AccountCash:
+    def test_get_web3_account_cash_is_not_defined(self):
+        """
+        The PR removed BrokerageService.get_web3_account_cash entirely.
+        This guards against accidentally re-adding the method.
+        """
+        from src.services.brokerage_service import BrokerageService
+        assert not hasattr(BrokerageService, "get_web3_account_cash"), (
+            "BrokerageService.get_web3_account_cash should have been removed in this PR"
+        )
+
+    def test_test_connection_still_exists(self):
+        """test_connection was NOT removed – only get_web3_account_cash."""
+        from src.services.brokerage_service import BrokerageService
+        assert hasattr(BrokerageService, "test_connection")
+
+    def test_test_connection_delegates_to_provider(self):
+        """test_connection should proxy directly to provider.test_connection()."""
+        with (
+            patch("src.services.brokerage_service.T212Provider") as mock_t212,
+            patch("src.services.brokerage_service.AlpacaProvider"),
+            patch("src.services.brokerage_service.settings") as mock_settings,
+        ):
+            mock_settings.BROKERAGE_PROVIDER = "T212"
+            mock_provider = mock_t212.return_value
+            mock_provider.test_connection.return_value = True
+
+            from src.services.brokerage_service import BrokerageService
+            svc = BrokerageService()
+            result = svc.test_connection()
+
+        assert result is True
+        mock_provider.test_connection.assert_called_once()
+
+    def test_test_connection_returns_false_on_provider_failure(self):
+        with (
+            patch("src.services.brokerage_service.T212Provider") as mock_t212,
+            patch("src.services.brokerage_service.AlpacaProvider"),
+            patch("src.services.brokerage_service.settings") as mock_settings,
+        ):
+            mock_settings.BROKERAGE_PROVIDER = "T212"
+            mock_t212.return_value.test_connection.return_value = False
+
+            from src.services.brokerage_service import BrokerageService
+            svc = BrokerageService()
+            result = svc.test_connection()
+
+        assert result is False

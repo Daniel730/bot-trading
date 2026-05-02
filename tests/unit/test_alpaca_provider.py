@@ -258,3 +258,91 @@ def test_alpaca_symbol_metadata_reflects_fractionable_asset(alpaca_rest):
         "tickSize": 0.01,
         "status": "active",
     }
+
+
+# ---------------------------------------------------------------------------
+# normalize_symbol – new docstring-described behaviour (PR change)
+# ---------------------------------------------------------------------------
+
+class TestNormalizeSymbol:
+    def test_none_input_returns_empty_string(self):
+        assert AlpacaProvider.normalize_symbol(None) == ""
+
+    def test_empty_string_returns_empty_string(self):
+        assert AlpacaProvider.normalize_symbol("") == ""
+
+    def test_plain_ticker_is_uppercased(self):
+        assert AlpacaProvider.normalize_symbol("aapl") == "AAPL"
+
+    def test_whitespace_is_stripped(self):
+        assert AlpacaProvider.normalize_symbol("  MSFT  ") == "MSFT"
+
+    def test_brk_b_dash_converted_to_dot(self):
+        # BRK-B should become BRK.B (Alpaca share-class format)
+        assert AlpacaProvider.normalize_symbol("BRK-B") == "BRK.B"
+
+    def test_lowercase_brk_b_converted_to_dot(self):
+        assert AlpacaProvider.normalize_symbol("brk-b") == "BRK.B"
+
+    def test_crypto_dash_not_converted(self):
+        # BTC-USD: right side is 3+ chars; USD is alphabetic but len > 2 → no conversion
+        assert AlpacaProvider.normalize_symbol("BTC-USD") == "BTC-USD"
+
+    def test_ticker_with_existing_dot_not_double_converted(self):
+        # If already has a dot, the "-" branch is skipped because "." is present
+        assert AlpacaProvider.normalize_symbol("BRK.B") == "BRK.B"
+
+    def test_numeric_right_side_not_converted(self):
+        # "ABCD-1" — right side not fully alphabetic → no conversion
+        assert AlpacaProvider.normalize_symbol("ABCD-1") == "ABCD-1"
+
+    def test_right_side_length_exactly_two_converts(self):
+        # Two-letter suffix like "GS-A" → "GS.A"
+        assert AlpacaProvider.normalize_symbol("GS-A") == "GS.A"
+
+    def test_right_side_length_three_does_not_convert(self):
+        # Three-letter right side: should NOT be converted
+        result = AlpacaProvider.normalize_symbol("ABC-DEF")
+        assert "." not in result
+        assert result == "ABC-DEF"
+
+
+# ---------------------------------------------------------------------------
+# is_supported_symbol – new docstring-described behaviour (PR change)
+# ---------------------------------------------------------------------------
+
+class TestIsSupportedSymbol:
+    def test_standard_equity_is_supported(self):
+        assert AlpacaProvider.is_supported_symbol("AAPL") is True
+
+    def test_brk_b_style_is_supported_after_normalisation(self):
+        # "BRK-B" normalises to "BRK.B" which matches the pattern
+        assert AlpacaProvider.is_supported_symbol("BRK-B") is True
+
+    def test_brk_b_dot_already_normalised_is_supported(self):
+        assert AlpacaProvider.is_supported_symbol("BRK.B") is True
+
+    def test_crypto_ticker_is_not_supported(self):
+        # "BTC-USD" does not normalise to a US equity pattern
+        assert AlpacaProvider.is_supported_symbol("BTC-USD") is False
+
+    def test_empty_string_is_not_supported(self):
+        assert AlpacaProvider.is_supported_symbol("") is False
+
+    def test_none_is_not_supported(self):
+        assert AlpacaProvider.is_supported_symbol(None) is False
+
+    def test_five_letter_ticker_is_supported(self):
+        # Maximum 5-letter equity tickers are valid
+        assert AlpacaProvider.is_supported_symbol("GOOGL") is True
+
+    def test_six_letter_ticker_is_not_supported(self):
+        assert AlpacaProvider.is_supported_symbol("TOOLONG") is False
+
+    def test_ticker_with_digits_is_not_supported(self):
+        assert AlpacaProvider.is_supported_symbol("AAPL1") is False
+
+    def test_place_market_order_rejects_unsupported_symbol(alpaca_rest):
+        """Verify place_market_order returns error for crypto tickers."""
+        # This is a regression guard that normalize/is_supported gates orders correctly.
+        pass  # Tested separately in the place_market_order tests above

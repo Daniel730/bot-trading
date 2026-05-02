@@ -399,6 +399,28 @@ describe('buyWalletRecommendations', () => {
 });
 
 // ---------------------------------------------------------------------------
+// discoverPairs removal – PR removed this export from api.ts
+// ---------------------------------------------------------------------------
+
+describe('discoverPairs removal (PR change)', () => {
+  it('discoverPairs is NOT exported from api.ts', async () => {
+    // Dynamic import so TypeScript does not prevent the access at compile time.
+    const apiModule = await import('../services/api');
+    expect((apiModule as Record<string, unknown>).discoverPairs).toBeUndefined();
+  });
+
+  it('fetchPairs is still exported', async () => {
+    const apiModule = await import('../services/api');
+    expect(typeof (apiModule as Record<string, unknown>).fetchPairs).toBe('function');
+  });
+
+  it('updatePairs is still exported', async () => {
+    const apiModule = await import('../services/api');
+    expect(typeof (apiModule as Record<string, unknown>).updatePairs).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // WalletRecommendation interface – broker_ticker required, t212_ticker optional
 // ---------------------------------------------------------------------------
 
