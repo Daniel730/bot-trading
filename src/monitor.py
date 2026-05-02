@@ -317,15 +317,18 @@ class ArbitrageMonitor:
             try:
                 hist_data = await data_service.get_historical_data_async([ticker_a, ticker_b])
                 if hist_data is None or hist_data.empty:
-                    logger.warning(f"No historical data for {ticker_a}/{ticker_b}")
+                    logger.warning(f"SKIP {ticker_a}/{ticker_b}: No historical data returned.")
                     continue
 
-                col_a = next((c for c in hist_data.columns if ticker_a in c), None)
-                col_b = next((c for c in hist_data.columns if ticker_b in c), None)
+                col_a = next((c for c in hist_data.columns if ticker_a in str(c)), None)
+                col_b = next((c for c in hist_data.columns if ticker_b in str(c)), None)
 
-                if not col_a or not col_b: continue
+                if not col_a or not col_b:
+                    logger.warning(f"SKIP {ticker_a}/{ticker_b}: Columns not found in data. Found: {hist_data.columns.tolist()}")
+                    continue
 
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(hist_data[col_a], hist_data[col_b])
+                logger.info(f"DEBUG {ticker_a}/{ticker_b}: Coint={is_coint}, p={p_val:.4f}, hedge={hedge:.4f}")
 
                 # Spec 037: rolling-window stability check on top of the
                 # static ADF. A pair that flunked stability across rolling
@@ -388,13 +391,15 @@ class ArbitrageMonitor:
                 # Mark the pair as already validated today so the daily re-check
                 # in the scan loop doesn't immediately fire again 15 s after boot.
                 self.last_cointegration_check[pair_id] = datetime.now().date()
-                logger.info(f"Pair {ticker_a}/{ticker_b} initialized (Coint: {is_coint}).")
+                logger.info(f"SUCCESS: Pair {ticker_a}/{ticker_b} initialized.")
             except Exception as e:
-                logger.error(f"Error initializing {ticker_a}/{ticker_b}: {e}")
+                logger.error(f"FATAL ERROR initializing {ticker_a}/{ticker_b}: {e}")
+        
+        logger.info(f"Initialization Summary: {len(self.active_pairs)}/{total_pairs} pairs successfully loaded.")
         if total_pairs > 0:
             await dashboard_service.update(
                 "pre_warming",
-                f"Pair list pre-warming complete ({total_pairs}/{total_pairs}).",
+                f"Pair list pre-warming complete ({len(self.active_pairs)}/{total_pairs}).",
             )
 
     async def _rotate_elite_pairs(self):
