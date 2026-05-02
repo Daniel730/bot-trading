@@ -237,7 +237,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const brokenCount = activePairs.filter((p) => p.is_cointegrated !== true).length;
   const allEquityTickers = useMemo(() => {
     const tickers: string[] = [];
-    for (const pair of activePairs.filter(p => !p.is_crypto)) {
+    for (const pair of activePairs) {
       if (!tickers.includes(pair.ticker_a)) tickers.push(pair.ticker_a);
       if (!tickers.includes(pair.ticker_b)) tickers.push(pair.ticker_b);
     }
@@ -319,12 +319,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
     }
 
     if (allEquityTickers.length === 0) {
-      setWalletError('No equity tickers are active.');
+      setWalletError('No tickers are active.');
       return;
     }
 
     const confirmed = window.confirm(
-      `Place broker BUY orders for missing stock tickers with a ${budget.toFixed(2)} budget?`,
+      `Place broker BUY orders for missing tickers with a ${budget.toFixed(2)} budget?`,
     );
     if (!confirmed) return;
 
@@ -413,7 +413,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
               <Wallet size={16} />
               <div>
                 <strong>Broker Wallet</strong>
-                <span>{activePairs.filter(p => !p.is_crypto).length} pairs / {allEquityTickers.length} tickers</span>
+                <span>{activePairs.length} pairs / {allEquityTickers.length} tickers</span>
               </div>
             </div>
             <div className="wallet-sync-controls">
