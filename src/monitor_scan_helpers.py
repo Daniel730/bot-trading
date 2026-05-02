@@ -5,15 +5,76 @@ from collections.abc import Callable
 from src.monitor_helpers import is_crypto_pair
 
 
+def _pair_key(pair: dict) -> tuple[str, str]:
+    return (str(pair["ticker_a"]).upper(), str(pair["ticker_b"]).upper())
+
+
+def build_candidate_pairs(
+    base_pairs: list[dict],
+    configured_crypto_pairs: list[dict],
+    max_active_pairs: int,
+    *,
+    dev_mode: bool,
+) -> list[dict]:
+    """
+    Build the boot-time candidate universe while reserving active slots for crypto.
+
+    Crypto pairs run 24/7, so production mode must not let a full saved equity
+    universe crowd them out. The returned list is capped at max_active_pairs.
+    """
+    seen_crypto: set[tuple[str, str]] = set()
+    crypto_pairs: list[dict] = []
+    for pair in [*base_pairs, *configured_crypto_pairs]:
+        if not is_crypto_pair(pair["ticker_a"], pair["ticker_b"]):
+            continue
+        key = _pair_key(pair)
+        if key in seen_crypto:
+            continue
+        seen_crypto.add(key)
+        crypto_pairs.append(pair)
+
+    effective_limit = max_active_pairs if max_active_pairs > 0 else len(crypto_pairs)
+    if effective_limit <= 0:
+        return []
+
+    if dev_mode:
+        return crypto_pairs[:effective_limit]
+
+    selected_crypto = crypto_pairs[:effective_limit]
+    equity_slots = max(0, effective_limit - len(selected_crypto))
+
+    seen_equity: set[tuple[str, str]] = set()
+    equity_pairs: list[dict] = []
+    if equity_slots > 0:
+        for pair in base_pairs:
+            if is_crypto_pair(pair["ticker_a"], pair["ticker_b"]):
+                continue
+            key = _pair_key(pair)
+            if key in seen_equity:
+                continue
+            seen_equity.add(key)
+            equity_pairs.append(pair)
+            if len(equity_pairs) >= equity_slots:
+                break
+
+    return [*equity_pairs, *selected_crypto]
+
+
 def build_scan_pairs(active_pairs: list[dict], is_market_open: Callable[[str], bool]) -> tuple[list[dict], list[str]]:
     scan_pairs: list[dict] = []
     all_tickers: list[str] = []
     for pair in active_pairs:
         ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
-        if not pair.get("is_cointegrated", True):
-            continue
-        if not is_crypto_pair(ticker_a, ticker_b) and not is_market_open(ticker_a):
-            continue
+        # Note: pairs admitted with is_cointegrated=False (rolling stability fail)
+        # are NOT skipped here — process_pair checks the flag and skips signal
+        # generation, but we still need prices fetched so z-scores update.
+        # Only skip pairs explicitly marked non-cointegrated AND non-crypto
+        # (crypto pairs always need price updates for exit monitoring).
+        if not is_crypto_pair(ticker_a, ticker_b):
+            if not pair.get("is_cointegrated", False) and not is_market_open(ticker_a):
+                continue
+            if not is_market_open(ticker_a):
+                continue
         scan_pairs.append(pair)
         all_tickers.extend([ticker_a, ticker_b])
     return scan_pairs, all_tickers

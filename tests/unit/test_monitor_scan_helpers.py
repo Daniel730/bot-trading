@@ -11,6 +11,7 @@ Covers:
 import pytest
 from src.monitor_scan_helpers import (
     build_close_orders,
+    build_candidate_pairs,
     build_scan_pairs,
     calculate_realized_pnl,
     summarize_scan_iteration,
@@ -32,6 +33,73 @@ def _signal(legs: list[dict]) -> dict:
 
 def _leg(ticker: str, side: str, quantity: float, price: float) -> dict:
     return {"ticker": ticker, "side": side, "quantity": quantity, "price": price}
+
+
+# ---------------------------------------------------------------------------
+# build_candidate_pairs
+# ---------------------------------------------------------------------------
+
+
+class TestBuildCandidatePairs:
+    def test_reserves_slots_for_configured_crypto_in_prod(self):
+        equities = [
+            _pair("AAPL", "MSFT"),
+            _pair("KO", "PEP"),
+            _pair("JPM", "BAC"),
+        ]
+        crypto = [_pair("BTC-USD", "ETH-USD"), _pair("ETH-USD", "BTC-USD")]
+
+        candidates = build_candidate_pairs(equities, crypto, max_active_pairs=4, dev_mode=False)
+
+        assert [(p["ticker_a"], p["ticker_b"]) for p in candidates] == [
+            ("AAPL", "MSFT"),
+            ("KO", "PEP"),
+            ("BTC-USD", "ETH-USD"),
+            ("ETH-USD", "BTC-USD"),
+        ]
+
+    def test_merges_configured_crypto_when_saved_pairs_are_equity_only(self):
+        saved_pairs = [_pair(f"EQ{i}", f"EQ{i + 1}") for i in range(18)]
+        crypto = [_pair("BTC-USD", "ETH-USD"), _pair("ETH-USD", "BTC-USD")]
+
+        candidates = build_candidate_pairs(saved_pairs, crypto, max_active_pairs=18, dev_mode=False)
+
+        assert len(candidates) == 18
+        assert candidates[-2]["ticker_a"] == "BTC-USD"
+        assert candidates[-1]["ticker_a"] == "ETH-USD"
+        assert len([p for p in candidates if not p["ticker_a"].endswith("-USD")]) == 16
+
+    def test_deduplicates_crypto_already_present_in_saved_pairs(self):
+        saved_pairs = [_pair("AAPL", "MSFT"), _pair("BTC-USD", "ETH-USD")]
+        crypto = [_pair("BTC-USD", "ETH-USD")]
+
+        candidates = build_candidate_pairs(saved_pairs, crypto, max_active_pairs=4, dev_mode=False)
+
+        assert [(p["ticker_a"], p["ticker_b"]) for p in candidates] == [
+            ("AAPL", "MSFT"),
+            ("BTC-USD", "ETH-USD"),
+        ]
+
+    def test_dev_mode_returns_crypto_only(self):
+        saved_pairs = [_pair("AAPL", "MSFT"), _pair("BTC-USD", "ETH-USD")]
+        crypto = [_pair("ETH-USD", "BTC-USD")]
+
+        candidates = build_candidate_pairs(saved_pairs, crypto, max_active_pairs=3, dev_mode=True)
+
+        assert [(p["ticker_a"], p["ticker_b"]) for p in candidates] == [
+            ("BTC-USD", "ETH-USD"),
+            ("ETH-USD", "BTC-USD"),
+        ]
+
+    def test_non_positive_limit_keeps_configured_crypto_as_minimum_universe(self):
+        equities = [_pair("AAPL", "MSFT")]
+        crypto = [_pair("BTC-USD", "ETH-USD")]
+
+        candidates = build_candidate_pairs(equities, crypto, max_active_pairs=0, dev_mode=False)
+
+        assert [(p["ticker_a"], p["ticker_b"]) for p in candidates] == [
+            ("BTC-USD", "ETH-USD"),
+        ]
 
 
 # ---------------------------------------------------------------------------

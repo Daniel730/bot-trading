@@ -700,51 +700,50 @@ class Settings(BaseSettings):
     # off-hours while crypto pairs keep scanning.
     CRYPTO_TEST_PAIRS: list = [
         {'ticker_a': 'BTC-USD',   'ticker_b': 'ETH-USD'},
-        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
         # --- Layer 1 / smart-contract platforms ---
-        # {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
-        # {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
-        # {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
-        # {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
-        # {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
-        # {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
-        # {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
-        # {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
-        # {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
-        # # --- Stores of value / Bitcoin forks ---
-        # {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
-        # {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
-        # {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
-        # {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
-        # # --- Payments / XRP-style ---
-        # {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
-        # {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},  # Competing payment networks
-        # {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
-        # # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
-        # {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},  # replaces UNI/LINK
-        # {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},   # replaces UNI/AAVE
-        # {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},  # Cosmos DeFi
-        # # --- Storage / utility ---
-        # {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
-        # # --- Cosmos ecosystem ---
-        # {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},  # Celestia modular L1
-        # # --- Infrastructure / enterprise ---
-        # {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},  # Enterprise DLT pair
-        # # --- Memes (high vol, mean-reverting spreads) ---
-        # {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
-        # {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},  # Solana memes
-        # # --- Newer L1s ---
-        # {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
-        # # P-09 (2026-04-26): Removed pairs containing tickers that yfinance
-        # # consistently reports as delisted (no spot data available):
-        # #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
-        # #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
-        # #   JUP-USD, PEPE-USD.
-        # # Re-add them once Yahoo Finance restores their feeds.
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
+        {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
+        # --- Stores of value / Bitcoin forks ---
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
+        {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
+        {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
+        # --- Payments / XRP-style ---
+        {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
+        {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},   # Competing payment networks
+        {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
+        # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
+        {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},   # replaces UNI/LINK
+        {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},    # replaces UNI/AAVE
+        {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},   # Cosmos DeFi
+        # --- Storage / utility ---
+        {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
+        # --- Cosmos ecosystem ---
+        {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},   # Celestia modular L1
+        # --- Infrastructure / enterprise ---
+        {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},   # Enterprise DLT pair
+        # --- Memes (high vol, mean-reverting spreads) ---
+        {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
+        {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},   # Solana memes
+        # --- Newer L1s ---
+        {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
+        # P-09 (2026-04-26): Removed pairs containing tickers that yfinance
+        # consistently reports as delisted (no spot data available):
+        #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
+        #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
+        #   JUP-USD, PEPE-USD.
+        # Re-add them once Yahoo Finance restores their feeds.
     ]
 
     DEV_EXECUTION_TICKERS: dict = {
