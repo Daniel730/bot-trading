@@ -5,6 +5,16 @@ from src.services.data_service import DataService
 
 class MacroEconomicAgent:
     def __init__(self, rate_threshold: float = 0.05, inflation_threshold: float = 0.04):
+        """
+        Initialize the MacroEconomicAgent with macro thresholds and auxiliary services.
+        
+        Parameters:
+            rate_threshold (float): Interest rate threshold used to classify market risk; when current interest rate is greater than this value it contributes to a "RISK_OFF" decision.
+            inflation_threshold (float): Inflation threshold used to classify market risk; when current inflation is greater than this value it contributes to a "RISK_OFF" decision.
+        
+        Notes:
+            This sets instance attributes `rate_threshold`, `inflation_threshold`, `data_service` (a DataService instance), and `logger`.
+        """
         self.rate_threshold = rate_threshold
         self.inflation_threshold = inflation_threshold
         self.data_service = DataService()
@@ -12,7 +22,24 @@ class MacroEconomicAgent:
 
     @staticmethod
     def _extract_series(df: pd.DataFrame, ticker: str) -> pd.Series:
-        """Extract a usable close-price series for the requested ticker."""
+        """
+        Return a 1-D pandas Series of close prices for the requested ticker.
+        
+        The function returns a cleaned, one-dimensional price series (NaNs removed) using the first applicable source from the input:
+        - If `df` is already a `pd.Series`, that series with NaNs dropped is returned.
+        - If `df` is not a non-empty `pd.DataFrame`, an empty float `pd.Series` is returned.
+        - If `ticker` is a column in `df`, that column with NaNs dropped is returned.
+        - If a `"Close"` column exists and is a `pd.Series`, it is returned with NaNs dropped.
+        - If `df` contains exactly one column, that column with NaNs dropped is returned.
+        - Otherwise an empty float `pd.Series` is returned.
+        
+        Parameters:
+            df (pd.DataFrame | pd.Series): Input price data or a single-series time series.
+            ticker (str): Column name to prefer when extracting the close-price series.
+        
+        Returns:
+            pd.Series: A one-dimensional series of numeric close prices with missing values removed, or an empty float series if no usable data is found.
+        """
         if isinstance(df, pd.Series):
             return df.dropna()
 
@@ -32,7 +59,10 @@ class MacroEconomicAgent:
 
     def analyze_market_state(self, interest_rate: float, inflation: float) -> str:
         """
-        Determines if the market is RISK_ON or RISK_OFF based on macro indicators.
+        Determine whether the market is in a "RISK_ON" or "RISK_OFF" state based on macro thresholds.
+        
+        Returns:
+            str: `"RISK_OFF"` if `interest_rate` is greater than `self.rate_threshold` or `inflation` is greater than `self.inflation_threshold`, `"RISK_ON"` otherwise.
         """
         if interest_rate > self.rate_threshold or inflation > self.inflation_threshold:
             self.logger.info(f"Macro state: RISK_OFF (Rates: {interest_rate}, Inflation: {inflation})")
@@ -43,9 +73,15 @@ class MacroEconomicAgent:
 
     async def get_ticker_regime(self, ticker: str) -> Literal["BULLISH", "BEARISH", "EXTREME_VOLATILITY"]:
         """
-        Determines the regime of a beacon asset.
-        Logic: BULLISH if SMA20 > SMA50, BEARISH if SMA20 < SMA50.
-        Circuit Breaker: EXTREME_VOLATILITY if daily drop > 3%.
+        Determine the market regime for a ticker using recent price history.
+        
+        Uses a flash-crash circuit breaker and moving-average trend to classify the regime:
+        - If the most recent daily drop is greater than 3%, returns "EXTREME_VOLATILITY".
+        - Otherwise compares 20-day and 50-day simple moving averages: returns "BULLISH" when SMA20 > SMA50, "BEARISH" otherwise.
+        If there is insufficient data for SMA50, returns "BULLISH". If the price series has fewer than two points or an error occurs, returns "BEARISH".
+        
+        Returns:
+            str: One of `"BULLISH"`, `"BEARISH"`, or `"EXTREME_VOLATILITY"`.
         """
         try:
             # Fetch 60d to ensure we have enough for SMA 50
