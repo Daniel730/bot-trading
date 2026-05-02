@@ -1,17 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity,
-  BarChart3,
-  Bot,
-  Cpu,
-  Gauge,
-  History,
-  Layers,
   LogOut,
   RefreshCw,
-  Settings as SettingsIcon,
-  Shield,
-  Wallet,
 } from 'lucide-react';
 import './App.css';
 import PairsPanel from './components/PairsPanel';
@@ -46,7 +36,18 @@ import {
   useDashboardStream,
   verifyTwoFactor,
 } from './services/api';
+import {
+  clearStoredDashboardSession,
+  isDashboardAuthError,
+  readStoredDashboardSession,
+  type StoredDashboardSession,
+  writeStoredDashboardSession,
+} from './services/dashboardSession';
 import { useTelemetry } from './hooks/useTelemetry';
+import { useStartupProgress } from './hooks/useStartupProgress';
+import { NAV_ITEMS, type Page } from './constants/navigation';
+import LoginView from './components/dashboard/LoginView';
+import SidebarNav from './components/dashboard/SidebarNav';
 
 // New page imports
 import OverviewPage from './pages/OverviewPage';
@@ -56,95 +57,6 @@ import BotControlPage from './pages/BotControlPage';
 import SettingsPage from './pages/SettingsPage';
 import SystemHealthPage from './pages/SystemHealthPage';
 import SignalsPage from './pages/SignalsPage';
-
-type Page = 'overview' | 'wallet' | 'pairs' | 'signals' | 'positions' | 'analytics' | 'trades' | 'control' | 'settings' | 'health';
-
-interface NavItem {
-  key: Page;
-  label: string;
-  icon: React.ReactNode;
-  category: 'MONITORING' | 'TRADING' | 'SYSTEM';
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { key: 'overview', label: 'Overview', icon: <Gauge size={16} />, category: 'MONITORING' },
-  { key: 'analytics', label: 'Analytics', icon: <BarChart3 size={16} />, category: 'MONITORING' },
-  { key: 'trades', label: 'Trade History', icon: <History size={16} />, category: 'MONITORING' },
-  
-  { key: 'wallet', label: 'Wallet', icon: <Wallet size={16} />, category: 'TRADING' },
-  { key: 'pairs', label: 'Pairs', icon: <Layers size={16} />, category: 'TRADING' },
-  { key: 'signals', label: 'Signals', icon: <Activity size={16} />, category: 'TRADING' },
-  { key: 'positions', label: 'Positions', icon: <History size={16} />, category: 'TRADING' },
-  
-  { key: 'control', label: 'Bot Control', icon: <Bot size={16} />, category: 'SYSTEM' },
-  { key: 'settings', label: 'Settings', icon: <SettingsIcon size={16} />, category: 'SYSTEM' },
-  { key: 'health', label: 'System Health', icon: <Cpu size={16} />, category: 'SYSTEM' },
-];
-
-const DASHBOARD_SESSION_STORAGE_KEY = 'alpha-arbitrage.dashboardSession';
-
-interface StoredDashboardSession {
-  sessionToken: string;
-  expiresAt: string;
-  actor?: string;
-}
-
-function clearStoredDashboardSession() {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.removeItem(DASHBOARD_SESSION_STORAGE_KEY);
-  } catch {
-    // Storage can be disabled by browser privacy settings.
-  }
-}
-
-function readStoredDashboardSession(): StoredDashboardSession | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(DASHBOARD_SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<StoredDashboardSession>;
-    if (!parsed.sessionToken || !parsed.expiresAt) {
-      clearStoredDashboardSession();
-      return null;
-    }
-    const expiresAtMs = Date.parse(parsed.expiresAt);
-    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
-      clearStoredDashboardSession();
-      return null;
-    }
-    return {
-      sessionToken: parsed.sessionToken,
-      expiresAt: parsed.expiresAt,
-      actor: parsed.actor,
-    };
-  } catch {
-    clearStoredDashboardSession();
-    return null;
-  }
-}
-
-function writeStoredDashboardSession(session: AuthSession) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(
-      DASHBOARD_SESSION_STORAGE_KEY,
-      JSON.stringify({
-        sessionToken: session.session_token,
-        expiresAt: session.expires_at,
-        actor: session.actor,
-      } satisfies StoredDashboardSession),
-    );
-  } catch {
-    // The in-memory session still works for this tab.
-  }
-}
-
-function isDashboardAuthError(err: unknown) {
-  const message = err instanceof Error ? err.message : String(err ?? '');
-  if (err instanceof ApiError && err.status === 401) return true;
-  return /dashboard session|dashboard login is required|invalid dashboard token/i.test(message);
-}
 
 /**
  * Root React component that provides the authenticated Alpha Arbitrage dashboard and its login flow.
@@ -337,66 +249,17 @@ function App() {
   const currentMode = data?.runtime?.mode ?? summary?.mode ?? '—';
   const currentStage = data?.stage ?? summary?.stage ?? botState ?? 'Initializing';
   const currentBotState = data?.runtime?.desired_bot_state ?? summary?.bot_status ?? 'RUNNING';
-  const startupStageText = `${currentStage} ${data?.details ?? ''}`.toLowerCase();
-  const preWarmingProgress = useMemo(() => {
-    const stage = (currentStage || '').toLowerCase();
-    const details = data?.details || '';
-    if (!/pre[_ -]?warming|initializ/.test(stage) && !/pair list/i.test(details)) return null;
-    const match = details.match(/(\d+)\s*\/\s*(\d+)/);
-    if (!match) return null;
-    const current = Number(match[1]);
-    const total = Number(match[2]);
-    if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return null;
-    return {
-      current,
-      total,
-      pct: Math.max(0, Math.min(100, Math.round((current / total) * 100))),
-    };
-  }, [currentStage, data?.details]);
-  const startupReady = useMemo(() => {
-    if (!isAuthenticated) return false;
-    if (!summary || !data) return false;
-    if (!isConnected) return false;
-    const stillStarting = /(boot|init|start|warm|load|attach|connect)/i.test(startupStageText);
-    return !stillStarting;
-  }, [data, isAuthenticated, isConnected, startupStageText, summary]);
-  const startupTargetProgress = useMemo(() => {
-    if (!isAuthenticated) return 0;
-    if (startupReady) return 100;
-    let progress = 10;
-    if (data) progress = 28;
-    if (summary) progress = 54;
-    if (health || tradeHistory || config) progress = 72;
-    if (isConnected) progress = 84;
-    if (/warm|load|attach|connect/.test(startupStageText)) progress = Math.max(progress, 90);
-    return Math.min(progress, 95);
-  }, [config, data, health, isAuthenticated, isConnected, startupReady, startupStageText, summary, tradeHistory]);
-  const [startupProgress, setStartupProgress] = useState(8);
-
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setStartupProgress(8);
-      return;
-    }
-    setStartupProgress((current) => {
-      if (startupReady) return 100;
-      if (current > startupTargetProgress) return startupTargetProgress;
-      return current;
-    });
-  }, [isAuthenticated, startupReady, startupTargetProgress]);
-
-  useEffect(() => {
-    if (!isAuthenticated || startupReady) return;
-    const id = window.setInterval(() => {
-      setStartupProgress((current) => {
-        if (current >= startupTargetProgress) return current;
-        const remaining = startupTargetProgress - current;
-        const step = Math.max(1, Math.ceil(remaining / 6));
-        return Math.min(startupTargetProgress, current + step);
-      });
-    }, 350);
-    return () => window.clearInterval(id);
-  }, [isAuthenticated, startupReady, startupTargetProgress]);
+  const { startupProgress, startupReady, preWarmingProgress } = useStartupProgress({
+    isAuthenticated,
+    isConnected,
+    currentStage,
+    details: data?.details,
+    dataReady: Boolean(data),
+    summary,
+    health,
+    tradeHistory,
+    config,
+  });
 
   const handleBotAction = async (action: 'start' | 'stop' | 'restart') => {
     setIsBusy(true);
@@ -582,95 +445,32 @@ function App() {
   };
 
   if (!isAuthenticated) {
-    return (
-      <div className="login-screen">
-        <form className="login-panel" onSubmit={handleLogin}>
-          <div className="login-mark">
-            <Shield size={24} />
-          </div>
-          <div>
-            <h1>Alpha Arbitrage</h1>
-            <p>Operations Console</p>
-          </div>
-          {loginNotice ? <div className="banner success">{loginNotice}</div> : null}
-          {loginError ? <div className="banner error">{loginError}</div> : null}
-          <label className="setting-field">
-            <span>Security Token</span>
-            <input
-              type="password"
-              value={loginToken}
-              onChange={(event) => setLoginToken(event.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </label>
-          <label className="setting-field">
-            <span>Authenticator / Backup Code</span>
-            <input
-              value={loginOtp}
-              onChange={(event) => setLoginOtp(event.target.value)}
-              autoComplete="one-time-code"
-            />
-          </label>
-          <button className="primary-btn" disabled={isBusy || Boolean(loginChallengeId)} type="submit">
-            <Shield size={14} />
-            {loginChallengeId ? 'Waiting Approval' : 'Login'}
-          </button>
-        </form>
-      </div>
-    );
+    return <LoginView
+      loginToken={loginToken}
+      setLoginToken={setLoginToken}
+      loginOtp={loginOtp}
+      setLoginOtp={setLoginOtp}
+      loginNotice={loginNotice}
+      loginError={loginError}
+      isBusy={isBusy}
+      loginChallengeId={loginChallengeId}
+      onSubmit={handleLogin}
+    />;
   }
 
   return (
     <div className="dashboard-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <Activity size={16} />
-          </div>
-          <div>
-            <strong>Alpha Arbitrage</strong>
-            <span>Operations Console</span>
-          </div>
-        </div>
-
-        <div className="mode-card">
-          <span className={`status-dot ${isConnected ? 'live' : 'warn'}`} />
-          <div>
-            <strong>{currentStage}</strong>
-            <span>{currentMode} mode · {currentBotState}</span>
-          </div>
-        </div>
-
-        <nav className="nav">
-          {['MONITORING', 'TRADING', 'SYSTEM'].map((category) => (
-            <div key={category} className="nav-group">
-              <div className="nav-group-label">{category}</div>
-              {NAV_ITEMS.filter((item) => item.category === category).map((item) => (
-                <button
-                  key={item.key}
-                  className={`nav-item ${page === item.key ? 'active' : ''}`}
-                  onClick={() => setPage(item.key)}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="mini-stat">
-            <span>Signals</span>
-            <strong>{summary?.open_signals ?? data?.active_signals?.length ?? 0}</strong>
-          </div>
-          <div className="mini-stat">
-            <span>Positions</span>
-            <strong>{summary?.open_positions ?? positions.length}</strong>
-          </div>
-        </div>
-      </aside>
+      <SidebarNav
+        isConnected={isConnected}
+        currentStage={currentStage}
+        currentMode={currentMode}
+        currentBotState={currentBotState}
+        page={page}
+        onPageChange={setPage}
+        summary={summary}
+        activeSignalsCount={data?.active_signals?.length ?? 0}
+        positionsCount={positions.length}
+      />
 
       <main className="workspace">
         <header className="topbar">

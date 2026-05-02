@@ -11,7 +11,7 @@ def monitor():
         m = ArbitrageMonitor(mode="live")
         # Ensure the instance created inside __init__ is our mock
         m.brokerage = mock_broker_class.return_value
-        m.brokerage.get_venue.side_effect = lambda ticker: "WEB3" if "-USD" in ticker else "T212"
+        m.brokerage.get_venue.side_effect = lambda ticker: "ALPACA" if "-USD" in ticker else "T212"
         m.brokerage.get_available_quantity = AsyncMock(return_value=1_000_000.0)
         m.brokerage.get_pending_orders_value.return_value = 0.0
         return m
@@ -146,16 +146,14 @@ async def test_execute_trade_crypto_live_uses_broker(monitor):
             "kelly_fraction": 0.1,
         }
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
-        monitor.brokerage.web3.enabled = True
-        monitor.brokerage.web3.get_budget_snapshot = AsyncMock(
-            return_value={"status": "success", "available_usd": 10000.0, "source": "unit_test"}
-        )
+        monitor.brokerage.get_account_cash.return_value = 10000.0
         monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "0xtx"})
 
         await monitor.execute_trade(pair, "Short-Long", 2000.0, 50000.0, signal_id)
 
         assert monitor.brokerage.place_value_order.call_count == 2
-        monitor.brokerage.get_account_cash.assert_not_called()
+        monitor.brokerage.get_account_cash.assert_called_once()
+        monitor.brokerage.get_web3_account_cash.assert_not_called()
         mock_shadow_exec.assert_not_called()
         assert mock_log_trade.call_count == 2
         mock_log_journal.assert_called_once()
@@ -183,15 +181,13 @@ async def test_execute_trade_crypto_budget_cap_applied(monitor):
             "kelly_fraction": 0.1,
         }
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
-        monitor.brokerage.web3.enabled = True
-        monitor.brokerage.web3.get_budget_snapshot = AsyncMock(
-            return_value={"status": "success", "available_usd": 1200.0, "source": "unit_test"}
-        )
+        monitor.brokerage.get_account_cash.return_value = 1200.0
         monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "0xtx"})
 
         await monitor.execute_trade(pair, "Short-Long", 2000.0, 50000.0, signal_id)
 
         assert monitor.brokerage.place_value_order.call_count == 2
+        monitor.brokerage.get_web3_account_cash.assert_not_called()
         assert mock_validate_trade.call_count == 1
         assert mock_validate_trade.call_args.kwargs["total_portfolio_cash"] == 250.0
 

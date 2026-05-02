@@ -31,7 +31,7 @@ async def test_startup_refusal_missing_baselines():
 
                 # Should raise SystemExit
                 with pytest.raises(SystemExit) as excinfo:
-                    await monitor.verify_entropy_baselines()
+                    await monitor.verify_entropy_baselines([{'ticker_a': 'KO', 'ticker_b': 'PEP'}])
 
                 assert "CRITICAL: Missing L2 Entropy Baselines" in str(excinfo.value)
 @pytest.mark.asyncio
@@ -53,4 +53,4 @@ async def test_startup_success_with_baselines():
             
             monitor = ArbitrageMonitor()
             # Should not raise exception
-            await monitor.verify_entropy_baselines()
+            await monitor.verify_entropy_baselines([{'ticker_a': 'KO', 'ticker_b': 'PEP'}])

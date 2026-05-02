@@ -10,10 +10,15 @@ logger = logging.getLogger(__name__)
 
 class AlpacaProvider(AbstractBrokerageProvider):
     _US_SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}([.-][A-Z])?$")
+    _CRYPTO_PAIR_PATTERN = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,4}$")
+    _CRYPTO_DASH_PAIR_PATTERN = re.compile(r"^[A-Z0-9]{2,15}-[A-Z]{3,4}$")
 
     @classmethod
     def normalize_symbol(cls, ticker: str) -> str:
         symbol = (ticker or "").strip().upper()
+        if cls._CRYPTO_DASH_PAIR_PATTERN.fullmatch(symbol):
+            base, quote = symbol.rsplit("-", 1)
+            return f"{base}/{quote}"
         # Alpaca uses BRK.B style share-class symbols.
         if "-" in symbol and "." not in symbol:
             left, right = symbol.rsplit("-", 1)
@@ -22,9 +27,24 @@ class AlpacaProvider(AbstractBrokerageProvider):
         return symbol
 
     @classmethod
+    def is_crypto_symbol(cls, ticker: str) -> bool:
+        return bool(cls._CRYPTO_PAIR_PATTERN.fullmatch(cls.normalize_symbol(ticker)))
+
+    @classmethod
     def is_supported_symbol(cls, ticker: str) -> bool:
         symbol = cls.normalize_symbol(ticker)
-        return bool(cls._US_SYMBOL_PATTERN.fullmatch(symbol))
+        return bool(cls._US_SYMBOL_PATTERN.fullmatch(symbol) or cls._CRYPTO_PAIR_PATTERN.fullmatch(symbol))
+
+    @classmethod
+    def to_bot_symbol(cls, symbol: str) -> str:
+        normalized = cls.normalize_symbol(symbol)
+        if cls._CRYPTO_PAIR_PATTERN.fullmatch(normalized):
+            return normalized.replace("/", "-")
+        return normalized
+
+    @classmethod
+    def order_time_in_force(cls, ticker: str) -> str:
+        return "gtc" if cls.is_crypto_symbol(ticker) else "day"
 
     def __init__(self, api_key: str = None, api_secret: str = None, base_url: str = None):
         """
@@ -95,7 +115,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 'qty': quantity,
                 'side': side.lower(),
                 'type': order_type,
-                'time_in_force': 'day'
+                'time_in_force': self.order_time_in_force(ticker)
             }
             if limit_price:
                 params['limit_price'] = limit_price
@@ -140,7 +160,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 'notional': amount,
                 'side': side.lower(),
                 'type': 'market',
-                'time_in_force': 'day'
+                'time_in_force': self.order_time_in_force(ticker)
             }
             if client_order_id:
                 params['client_order_id'] = client_order_id
@@ -192,8 +212,9 @@ class AlpacaProvider(AbstractBrokerageProvider):
         """
         try:
             if ticker:
+                broker_symbol = self.normalize_symbol(ticker)
                 try:
-                    p = self.api.get_position(ticker)
+                    p = self.api.get_position(broker_symbol)
                     return [self._normalize_position(p)]
                 except:
                     return []
@@ -252,7 +273,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
         try:
             asset = self.api.get_asset(self.normalize_symbol(ticker))
             return {
-                "ticker": asset.symbol,
+                "ticker": self.to_bot_symbol(asset.symbol),
                 "minTradeQuantity": 0.0001 if asset.fractionable else 1.0,
                 "quantityIncrement": 0.0001 if asset.fractionable else 1.0,
                 "tickSize": 0.01,
@@ -279,7 +300,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 - marketValue (float): Market value of the position.
         """
         return {
-            "ticker": p.symbol,
+            "ticker": self.to_bot_symbol(p.symbol),
             "quantity": float(p.qty),
             "quantityAvailableForTrading": float(p.qty_available) if hasattr(p, 'qty_available') else float(p.qty),
             "averagePrice": float(p.avg_entry_price),
@@ -304,7 +325,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 - id (str): Broker order identifier.
         """
         return {
-            "ticker": o.symbol,
+            "ticker": self.to_bot_symbol(o.symbol),
             "quantity": float(o.qty) if o.qty else 0.0,
             "side": o.side.upper(),
             "status": o.status,

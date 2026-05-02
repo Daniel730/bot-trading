@@ -2,7 +2,7 @@
 Tests for BrokerageService dispatcher routing.
 
 Verifies that:
-  - Crypto tickers route to web3 when PAPER_TRADING=False
+  - Crypto tickers route to the active broker provider, not Web3
   - Equity tickers route to the active broker provider
   - The ALPACA provider path is exercised correctly
 """
@@ -52,23 +52,26 @@ def test_default_provider_uses_settings_brokerage_provider():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_live_crypto_routes_to_web3():
-    """A crypto ticker (contains -USD) must go through web3 in live mode."""
-    svc = _make_service()
+async def test_live_crypto_routes_to_active_alpaca_provider():
+    """A crypto ticker (contains -USD) must go through Alpaca in live mode."""
+    svc = _make_service(provider_name="ALPACA")
     svc.web3 = MagicMock()
     svc.web3.place_value_order = AsyncMock(
         return_value={"status": "success", "order_id": "0xtx"}
     )
     svc.provider.place_value_order = AsyncMock(
-        return_value={"status": "success", "order_id": "broker_order"}
+        return_value={"status": "success", "order_id": "alpaca_crypto_order"}
     )
 
     with patch("src.services.brokerage_service.settings.PAPER_TRADING", False):
         result = await svc.place_value_order("ETH-USD", 100.0, "BUY")
 
-    assert result["order_id"] == "0xtx"
-    svc.web3.place_value_order.assert_awaited_once()
-    svc.provider.place_value_order.assert_not_awaited()
+    assert result["order_id"] == "alpaca_crypto_order"
+    assert result["venue"] == "ALPACA"
+    svc.provider.place_value_order.assert_awaited_once_with(
+        "ETH-USD", 100.0, "BUY", None, None
+    )
+    svc.web3.place_value_order.assert_not_awaited()
 
 
 @pytest.mark.asyncio

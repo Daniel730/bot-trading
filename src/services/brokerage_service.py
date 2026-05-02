@@ -61,19 +61,21 @@ class BrokerageService:
 
     def get_venue(self, ticker: str) -> str:
         """
-        Determines whether a ticker should be routed to the WEB3 venue or the active brokerage.
+        Determines which brokerage venue should execute a ticker.
         
         Parameters:
-            ticker (str): The instrument symbol; matching is case-insensitive and based on the presence of the substring "-USD".
+            ticker (str): The instrument symbol.
         
         Returns:
-            str: `"WEB3"` if `"-USD"` appears in `ticker` (case-insensitive), otherwise the active provider name.
+            str: The active provider name. Crypto symbols such as ``BTC-USD`` are
+            still crypto for scanning/market-hour purposes, but they no longer
+            imply Web3 execution.
         """
-        return "WEB3" if "-USD" in ticker.upper() else self.provider_name
+        return self.provider_name
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
-        Places a market order using the active brokerage provider or the WEB3 service when applicable.
+        Places a market order using the active brokerage provider.
         
         Parameters:
             ticker (str): Instrument symbol to trade.
@@ -83,19 +85,22 @@ class BrokerageService:
             client_order_id (str, optional): Optional client-specified identifier for the order.
         
         Returns:
-            dict: Response from the provider or WEB3 service containing order details or an error description.
+            dict: Response from the provider containing order details or an error description.
         """
         venue = self.get_venue(ticker)
-        if venue == "WEB3" and not settings.PAPER_TRADING:
-             return await self.web3.place_market_order(ticker, quantity, side)
-        
-        return await self.provider.place_market_order(ticker, quantity, side, limit_price, client_order_id)
+        result = await self.provider.place_market_order(ticker, quantity, side, limit_price, client_order_id)
+        result["venue"] = venue
+        return result
 
     async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
         Place a fiat-value order for a ticker through the appropriate venue.
         
-        Routes the request to the WEB3 service when the ticker denotes a WEB3 asset and paper trading is disabled; otherwise routes to the configured brokerage provider. On successful execution (result["status"] != "error") and when not in paper trading mode, updates the used budget for the chosen venue.
+        Routes the request to the configured brokerage provider. Web3 wallet
+        configuration is intentionally separate from crypto execution; crypto
+        symbols such as ``BTC-USD`` are sent to the active broker, typically
+        Alpaca. On successful execution (result["status"] != "error") and when
+        not in paper trading mode, updates the used budget for the chosen venue.
         
         Parameters:
             ticker (str): Asset identifier to buy or sell.
@@ -105,15 +110,14 @@ class BrokerageService:
             client_order_id (str, optional): Optional client-supplied identifier forwarded to the provider.
         
         Returns:
-            Dict[str, Any]: The provider or web3 response dictionary augmented with a "venue" key indicating where the order was placed. On failure `result["status"]` is expected to be `"error"`.
+            Dict[str, Any]: The provider response dictionary augmented with a
+            "venue" key indicating where the order was placed. On failure
+            `result["status"]` is expected to be `"error"`.
         """
         venue = self.get_venue(ticker)
         from src.services.agent_log_service import agent_logger
         
-        if venue == "WEB3" and not settings.PAPER_TRADING:
-            result = await self.web3.place_value_order(ticker=ticker, amount_fiat=amount, side=side)
-        else:
-            result = await self.provider.place_value_order(ticker, amount, side, price, client_order_id)
+        result = await self.provider.place_value_order(ticker, amount, side, price, client_order_id)
 
         if result.get("status") != "error" and not settings.PAPER_TRADING:
             budget_service.update_used_budget(venue, amount)
