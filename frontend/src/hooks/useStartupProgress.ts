@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { ConfigResponse, HealthResponse, SummaryResponse, TradeHistoryResponse } from '../services/api';
 
 interface StartupProgressInput {
   isAuthenticated: boolean;
@@ -7,10 +6,10 @@ interface StartupProgressInput {
   currentStage: string;
   details?: string;
   dataReady: boolean;
-  summary: SummaryResponse | null;
-  health: HealthResponse | null;
-  tradeHistory: TradeHistoryResponse | null;
-  config: ConfigResponse | null;
+  summary: object | null;
+  health: object | null;
+  tradeHistory: object | null;
+  config: object | null;
 }
 
 export function useStartupProgress(input: StartupProgressInput) {
