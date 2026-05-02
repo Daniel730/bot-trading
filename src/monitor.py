@@ -31,6 +31,7 @@ import pytz
 import inspect
 from src.monitor_helpers import is_crypto_pair, resolve_pair_sector, compute_entry_zscore
 from src.monitor_scan_helpers import (
+    build_candidate_pairs,
     build_scan_pairs,
     summarize_scan_iteration,
     build_close_orders,
@@ -301,18 +302,21 @@ class ArbitrageMonitor:
         db_pairs = await persistence_service.get_active_trading_pairs()
         if not db_pairs:
             logger.info("No active pairs in database. Initializing from config.")
-            if settings.DEV_MODE:
-                candidate_pairs = settings.CRYPTO_TEST_PAIRS
-            else:
-                candidate_pairs = list(settings.ARBITRAGE_PAIRS) + list(settings.CRYPTO_TEST_PAIRS)
-            candidate_pairs = candidate_pairs[:settings.MAX_ACTIVE_PAIRS]
+            candidate_pairs = build_candidate_pairs(
+                settings.CRYPTO_TEST_PAIRS if settings.DEV_MODE else settings.ARBITRAGE_PAIRS,
+                settings.CRYPTO_TEST_PAIRS,
+                settings.MAX_ACTIVE_PAIRS,
+                dev_mode=settings.DEV_MODE,
+            )
             await persistence_service.save_trading_pairs(candidate_pairs)
         else:
             logger.info(f"Loaded {len(db_pairs)} active pairs from database.")
-            if settings.DEV_MODE:
-                candidate_pairs = [p for p in db_pairs if "-USD" in p["ticker_a"] or "-USD" in p["ticker_b"]]
-            else:
-                candidate_pairs = db_pairs
+            candidate_pairs = build_candidate_pairs(
+                db_pairs,
+                settings.CRYPTO_TEST_PAIRS,
+                settings.MAX_ACTIVE_PAIRS,
+                dev_mode=settings.DEV_MODE,
+            )
 
         # Spec 037: pair-eligibility gate. Reject cross-currency, cross-session,
         # LSE-stamp-duty and cost-above-ceiling pairs *before* allocating
@@ -363,11 +367,34 @@ class ArbitrageMonitor:
                     logger.warning(f"SKIP {ticker_a}/{ticker_b}: No historical data returned.")
                     continue
 
-                col_a = next((c for c in hist_data.columns if ticker_a in str(c)), None)
-                col_b = next((c for c in hist_data.columns if ticker_b in str(c)), None)
+                # Normalise: if yfinance returned a MultiIndex DataFrame, flatten to
+                # a simple ticker→price DataFrame so column matching is consistent.
+                if isinstance(hist_data.columns, pd.MultiIndex):
+                    # Level 0 is the price field (Close/Open/…), level 1 is ticker.
+                    # Drop down to just the Close slice if available.
+                    if "Close" in hist_data.columns.get_level_values(0):
+                        hist_data = hist_data["Close"]
+                    else:
+                        # Keep the last level (tickers) as column names.
+                        hist_data.columns = hist_data.columns.get_level_values(-1)
+
+                # Case-insensitive substring match so 'BTC-USD' matches 'BTC-USD' column.
+                col_a = next(
+                    (c for c in hist_data.columns
+                     if ticker_a.upper() in str(c).upper()),
+                    None,
+                )
+                col_b = next(
+                    (c for c in hist_data.columns
+                     if ticker_b.upper() in str(c).upper()),
+                    None,
+                )
 
                 if not col_a or not col_b:
-                    logger.warning(f"SKIP {ticker_a}/{ticker_b}: Columns not found in data. Found: {hist_data.columns.tolist()}")
+                    logger.warning(
+                        f"SKIP {ticker_a}/{ticker_b}: Columns not found in data. "
+                        f"Found: {hist_data.columns.tolist()}"
+                    )
                     continue
 
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(hist_data[col_a], hist_data[col_b])
@@ -418,7 +445,8 @@ class ArbitrageMonitor:
                 kf = await arbitrage_service.get_or_create_filter(
                     pair_id,
                     delta=settings.KALMAN_DELTA,
-                    r=settings.KALMAN_R
+                    r=settings.KALMAN_R,
+                    prewarm_data=hist_data
                 )
 
                 metrics = arbitrage_service.get_spread_metrics(hist_data[col_a], hist_data[col_b], hedge)
@@ -435,6 +463,9 @@ class ArbitrageMonitor:
                 # in the scan loop doesn't immediately fire again 15 s after boot.
                 self.last_cointegration_check[pair_id] = datetime.now().date()
                 logger.info(f"SUCCESS: Pair {ticker_a}/{ticker_b} initialized.")
+                
+                # Pacing: Avoid blasting the data API (Yahoo/Polygon) during boot
+                await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"FATAL ERROR initializing {ticker_a}/{ticker_b}: {e}")
         
@@ -507,8 +538,17 @@ class ArbitrageMonitor:
         Background task that periodically runs the discovery engine (Scouting)
         and promotes the best pairs (Rotation).
         """
-        # Wait a bit after startup to avoid initial load spike
-        await asyncio.sleep(60)
+        # Wait 20 minutes after startup before the first scout cycle.
+        # The 60s original value caused run_discovery() to saturate yfinance
+        # immediately after boot, rate-limiting the first reload and dropping
+        # all active pairs to 0.  20 min gives the scan loop time to warm up
+        # Kalman filters before any heavy portfolio_manager downloads begin.
+        initial_delay = max(1200, settings.SCOUT_INTERVAL_HOURS * 1800)
+        logger.info(
+            "AUTO-SCOUT: first cycle in %.0f minutes.",
+            initial_delay / 60,
+        )
+        await asyncio.sleep(initial_delay)
         
         while True:
             try:
@@ -539,12 +579,30 @@ class ArbitrageMonitor:
         memory growth and logs a summary of added/removed pairs.
         """
         async with self._signals_lock:
-            old_ids = {p['id'] for p in self.active_pairs}
+            old_pairs = list(self.active_pairs)
+            old_ids = {p['id'] for p in old_pairs}
+
             # Reset and rebuild via the existing initializer.
             self.active_pairs = []
             self.last_cointegration_check = {}
             await self.initialize_pairs()
             new_ids = {p['id'] for p in self.active_pairs}
+
+            # Safety net: if the reload produced ZERO pairs (e.g. Yahoo rate-limited
+            # during run_discovery), restore the previous set so the scan loop is
+            # never left with 0/0 pairs.
+            if not self.active_pairs and old_pairs:
+                logger.warning(
+                    "reload_pairs: new initialization returned 0 pairs — "
+                    "keeping existing %d pairs to avoid scan blackout.",
+                    len(old_pairs),
+                )
+                self.active_pairs = old_pairs
+                self.last_cointegration_check = {
+                    p['id']: __import__('datetime').date.today()
+                    for p in old_pairs
+                }
+                return
 
             # Forget Kalman filters for pairs that were removed so memory
             # doesn't accumulate across reloads.
@@ -1048,9 +1106,7 @@ class ArbitrageMonitor:
         """
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         try:
-            hist_data = await asyncio.to_thread(
-                data_service.get_historical_data, [t_a, t_b]
-            )
+            hist_data = await data_service.get_historical_data_async([t_a, t_b], "30d", "1h")
             if hist_data is None or hist_data.empty:
                 return
 
@@ -1141,10 +1197,11 @@ class ArbitrageMonitor:
 
         # Initial Setup
         logger.info("Initializing Databases...")
-        await asyncio.gather(
-            persistence_service.init_db(),
-            self.initialize_pairs()
-        )
+        await persistence_service.init_db()
+        await self.initialize_pairs()
+        if not self.active_pairs:
+            logger.warning("Startup loaded zero active pairs. Retrying pair initialization once before entering the scan loop.")
+            await self.reload_pairs()
         # Make this monitor instance discoverable by dashboard endpoints
         # (so /api/pairs can hot-reload, etc).
         dashboard_service.attach_monitor(self)
@@ -1259,6 +1316,19 @@ class ArbitrageMonitor:
                             )
                     except Exception as e:
                         logger.error(f"Error evaluating open signals for exits: {e}")
+
+                    if not self.active_pairs:
+                        logger.warning("No active pairs loaded; attempting pair reload before scanning.")
+                        await self.reload_pairs()
+                        progress.update(scan_task, total=len(self.active_pairs), completed=0)
+                        if not self.active_pairs:
+                            await dashboard_service.update(
+                                "NO_ACTIVE_PAIRS",
+                                "No active pairs are loaded. Check pair initialization logs and configured crypto pairs.",
+                            )
+                            logger.warning("No active pairs available after reload; sleeping before next retry.")
+                            await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
+                            continue
 
                     scan_pairs, all_tickers = build_scan_pairs(
                         self.active_pairs,

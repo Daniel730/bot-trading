@@ -108,6 +108,7 @@ class DataService:
         timeout: Optional[float] = None,
         label: str = "backend request",
         fallback: Optional[T] = None,
+        raise_on_timeout: bool = False,
         **kwargs,
     ) -> T:
         deadline = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS
@@ -125,6 +126,8 @@ class DataService:
             return await asyncio.wait_for(runner(), timeout=deadline)
         except asyncio.TimeoutError:
             logger.warning("DataService: %s timed out after %.1fs", label, deadline)
+            if raise_on_timeout:
+                raise
             return fallback
 
     @agent_trace("DataService.get_historical_data_async")
@@ -135,14 +138,17 @@ class DataService:
         interval: str = "1h",
         timeout: Optional[float] = None,
     ) -> pd.DataFrame:
+        # Increase deadline for historical data to allow for yf delays + retries
+        deadline = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS * 3
         return await self._run_sync_backend(
             self.get_historical_data,
             tickers,
             period,
             interval,
-            timeout=timeout,
+            timeout=deadline,
             label=f"historical data for {tickers}",
             fallback=pd.DataFrame(),
+            raise_on_timeout=True
         )
 
     @staticmethod
@@ -183,28 +189,87 @@ class DataService:
         return float(series.iloc[-1])
 
     @agent_trace("DataService.get_historical_data")
+    @retry(
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(3),
+        retry=retry_if_exception_type(Exception),
+        reraise=True
+    )
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
         """
-        Fetches historical data using yfinance with auto_adjust=True.
+        Fetches historical data using yfinance with auto_adjust=True, falling back to Polygon if yfinance fails.
         """
+        # 1. Try yfinance
         try:
             # Bug 1.2: Enforce auto_adjust=True to handle splits and dividends correctly
             df = self._download_yfinance(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
-            if df.empty:
-                raise ValueError(f"No data returned for {tickers}")
-            
-            # When auto_adjust=True, 'Adj Close' is usually not present, 'Close' IS the adjusted close
-            if 'Close' in df.columns:
-                return df['Close']
-            else:
-                # In some cases yf returns a flat DF
-                cols = [c for c in df.columns if 'Close' in c]
-                if cols:
-                    return df[cols]
-                raise KeyError(f"Adjusted 'Close' not found in columns: {df.columns}")
+            if not df.empty:
+                # When auto_adjust=True, 'Adj Close' is usually not present, 'Close' IS the adjusted close
+                if 'Close' in df.columns:
+                    return df['Close']
+                else:
+                    # In some cases yf returns a flat DF
+                    cols = [c for c in df.columns if 'Close' in c]
+                    if cols:
+                        return df[cols]
+                    logger.warning(f"Adjusted 'Close' not found in yfinance columns: {df.columns}")
         except Exception as e:
-            logger.error(f"DataService: yfinance error for {tickers}: {e}")
-            raise
+            logger.warning(f"DataService: yfinance historical data error for {tickers}: {e}")
+
+        # 2. Fallback to Polygon if API key exists and it's a small batch
+        if settings.POLYGON_API_KEY and len(tickers) <= 5:
+            try:
+                logger.info(f"DataService: Falling back to Polygon for {tickers} historical data...")
+                # Polygon is per-ticker, so we fetch one by one and merge
+                import pandas as pd
+                from datetime import datetime, timedelta
+                
+                # Approximate 30d -> dates
+                # interval 1h -> 1, "hour"
+                poly_data = {}
+                end_dt = datetime.now()
+                # Simplified period mapping
+                days = 30
+                if "d" in period: days = int(period.replace("d", ""))
+                elif "mo" in period: days = int(period.replace("mo", "")) * 30
+                elif "y" in period: days = int(period.replace("y", "")) * 365
+                
+                start_dt = end_dt - timedelta(days=days)
+                
+                for ticker in tickers:
+                    # Map yfinance crypto to Polygon if needed
+                    poly_ticker = ticker
+                    if ticker.endswith("-USD"):
+                        poly_ticker = f"X:{ticker.replace('-USD', 'USD')}"
+                    
+                    aggs = self.polygon_client.list_aggs(
+                        poly_ticker,
+                        1,
+                        "hour" if interval == "1h" else "minute",
+                        start_dt.strftime("%Y-%m-%d"),
+                        end_dt.strftime("%Y-%m-%d"),
+                        limit=5000
+                    )
+                    
+                    ticker_aggs = []
+                    for agg in aggs:
+                        ticker_aggs.append({
+                            "timestamp": pd.to_datetime(agg.timestamp, unit="ms"),
+                            "Close": agg.close
+                        })
+                    
+                    if ticker_aggs:
+                        tdf = pd.DataFrame(ticker_aggs).set_index("timestamp")
+                        poly_data[ticker] = tdf["Close"]
+                
+                if poly_data:
+                    final_df = pd.DataFrame(poly_data).sort_index()
+                    if not final_df.empty:
+                        return final_df
+            except Exception as pe:
+                logger.error(f"DataService: Polygon fallback failed for {tickers}: {pe}")
+
+        raise ValueError(f"No data returned for {tickers} after yfinance and Polygon attempts.")
 
     @agent_trace("DataService.get_latest_price")
     def get_latest_price(self, tickers: List[str]) -> dict:

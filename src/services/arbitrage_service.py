@@ -16,7 +16,8 @@ class ArbitrageService:
 
     @agent_trace("ArbitrageService.get_or_create_filter")
     async def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01, 
-                             initial_state: list = None, initial_covariance: list = None) -> KalmanFilter:
+                             initial_state: list = None, initial_covariance: list = None,
+                             prewarm_data: Optional[pd.DataFrame] = None) -> KalmanFilter:
         """Retrieves or initializes a Kalman filter for a specific pair, reloading from Redis if possible."""
         if pair_id in self.filters:
             return self.filters[pair_id]
@@ -39,14 +40,24 @@ class ArbitrageService:
                 try:
                     from src.services.data_service import DataService
                     t_a, t_b = pair_id.split('_')
-                    ds = DataService()
-                    logger.info(f"[ArbitrageService] No Redis state for {pair_id}. Initiating 30d historical pre-warming...")
-                    df = await ds.get_historical_data_async([t_a, t_b], "30d", "1h")
-                    for i in range(len(df)):
-                        price_a = float(df[t_a].iloc[i])
-                        price_b = float(df[t_b].iloc[i])
-                        if pd.isna(price_a) or pd.isna(price_b): continue
-                        kf.update(price_a, price_b)
+                    
+                    df = prewarm_data
+                    if df is None:
+                        ds = DataService()
+                        logger.info(f"[ArbitrageService] No Redis state or prewarm_data for {pair_id}. Initiating 30d historical pre-warming...")
+                        df = await ds.get_historical_data_async([t_a, t_b], "30d", "1h")
+                    
+                    if df is not None and not df.empty:
+                        for i in range(len(df)):
+                            # Find columns that match ticker names
+                            col_a = next((c for c in df.columns if t_a in str(c)), None)
+                            col_b = next((c for c in df.columns if t_b in str(c)), None)
+                            if not col_a or not col_b: continue
+
+                            price_a = float(df[col_a].iloc[i])
+                            price_b = float(df[col_b].iloc[i])
+                            if pd.isna(price_a) or pd.isna(price_b): continue
+                            kf.update(price_a, price_b)
                     
                     self.filters[pair_id] = kf
                     logger.info(f"[ArbitrageService] Pre-warming complete for {pair_id}. Filter matrices converged.")
