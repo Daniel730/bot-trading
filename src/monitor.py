@@ -29,6 +29,13 @@ from src.services.dashboard_service import dashboard_service
 import uuid
 import pytz
 import inspect
+from src.monitor_helpers import is_crypto_pair, resolve_pair_sector, compute_entry_zscore
+from src.monitor_scan_helpers import (
+    build_scan_pairs,
+    summarize_scan_iteration,
+    build_close_orders,
+    calculate_realized_pnl,
+)
 
 # Initialize Rich Console with a custom theme
 custom_theme = Theme({
@@ -100,6 +107,37 @@ class ArbitrageMonitor:
         self.last_cointegration_check: dict = {}
         # Tracks which pairs have had their Kalman uncertainty bumped today.
         self.bumped_pairs_today: dict = {}
+
+    async def _upsert_active_signal(
+        self,
+        ticker_a: str,
+        ticker_b: str,
+        *,
+        z_score: float,
+        status: str,
+        confidence: float | None = None,
+    ) -> None:
+        """Keep dashboard-facing signal state live for z-score and confidence."""
+        async with self._signals_lock:
+            signal_entry = next(
+                (s for s in self.active_signals if s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b),
+                None,
+            )
+            if signal_entry is None:
+                signal_entry = {"ticker_a": ticker_a, "ticker_b": ticker_b}
+                self.active_signals.append(signal_entry)
+            signal_entry["z_score"] = z_score
+            signal_entry["status"] = status
+            if confidence is not None:
+                signal_entry["confidence"] = confidence
+
+    async def _remove_active_signal(self, ticker_a: str, ticker_b: str) -> None:
+        async with self._signals_lock:
+            self.active_signals = [
+                s
+                for s in self.active_signals
+                if not (s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b)
+            ]
 
     def get_market_config(self, ticker: str) -> dict:
         """
@@ -225,21 +263,25 @@ class ArbitrageMonitor:
 
         return True
 
-    async def verify_entropy_baselines(self):
+    async def verify_entropy_baselines(self, pairs: list[dict]):
         """
         US1: Enforce mandatory startup check against Redis L2 entropy baselines.
         Refuses to boot if baselines are missing for any active pair when LIVE_CAPITAL_DANGER=True.
         """
-        logger.info("VALIDATING L2 ENTROPY BASELINES (LIVE_CAPITAL_DANGER=True)...")
+        logger.info(f"VALIDATING L2 ENTROPY BASELINES FOR {len(pairs)} PAIRS (LIVE_CAPITAL_DANGER=True)...")
+        
+        # Extract unique tickers to minimize Redis calls
+        unique_tickers = set()
+        for p in pairs:
+            unique_tickers.add(p['ticker_a'])
+            unique_tickers.add(p['ticker_b'])
+            
         missing_baselines = []
-        for pair in settings.ARBITRAGE_PAIRS:
-            ticker_a, ticker_b = pair['ticker_a'], pair['ticker_b']
+        for ticker in unique_tickers:
             # Entropy service stores baselines as 'entropy_baseline:{ticker}'
-            baseline_a = await redis_service.client.get(f"entropy_baseline:{ticker_a}")
-            baseline_b = await redis_service.client.get(f"entropy_baseline:{ticker_b}")
-
-            if not baseline_a: missing_baselines.append(ticker_a)
-            if not baseline_b: missing_baselines.append(ticker_b)
+            baseline = await redis_service.client.get(f"entropy_baseline:{ticker}")
+            if not baseline:
+                missing_baselines.append(ticker)
 
         if missing_baselines:
             error_msg = f"CRITICAL: Missing L2 Entropy Baselines for: {list(set(missing_baselines))}. Refusing to boot in LIVE mode."
@@ -256,9 +298,6 @@ class ArbitrageMonitor:
         
         Selects candidate pairs (from persisted active pairs or config), applies eligibility gates, validates cointegration (optionally with rolling-window stability), sanitizes hedge ratios, warms or restores Kalman filter state, computes spread metrics, and registers prepared pair records in self.active_pairs. Updates dashboard pre-warming progress and records last_cointegration_check dates; may persist a bootstrapped active-pair list when the database is empty.
         """
-        if settings.LIVE_CAPITAL_DANGER:
-            await self.verify_entropy_baselines()
-
         db_pairs = await persistence_service.get_active_trading_pairs()
         if not db_pairs:
             logger.info("No active pairs in database. Initializing from config.")
@@ -287,6 +326,10 @@ class ArbitrageMonitor:
             block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
             allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
         )
+
+        # US1: Verify entropy baselines ONLY for the pairs we are about to trade.
+        if settings.LIVE_CAPITAL_DANGER:
+            await self.verify_entropy_baselines(pairs_to_init)
         logger.info(
             f"Initializing {len(pairs_to_init)} pairs in "
             f"{'DEV' if settings.DEV_MODE else 'PROD'} mode "
@@ -434,7 +477,10 @@ class ArbitrageMonitor:
         best_candidate = eligible_candidates[0]
         
         # 4. Rotation Logic: Rotate if active is broken OR candidate Sortino is significantly high
-        should_rotate = not worst_active.get('is_cointegrated') or best_candidate['sortino'] > 2.0
+        should_rotate = (
+            not worst_active.get("is_cointegrated")
+            or best_candidate["sortino"] > settings.ELITE_ROTATION_SORTINO_THRESHOLD
+        )
         
         if should_rotate:
             logger.info(f"ELITE SQUAD: Rotating {worst_active['id']} out for {best_candidate['pair_id']}.")
@@ -520,7 +566,7 @@ class ArbitrageMonitor:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
 
             # Multi-Market Hour Enforcement
-            is_crypto = "-USD" in t_a or "-USD" in t_b
+            is_crypto = is_crypto_pair(t_a, t_b)
             if not is_crypto and not self.is_market_open(t_a):
                 return diagnostic
 
@@ -573,16 +619,13 @@ class ArbitrageMonitor:
             # Swiss, cross-currency) require more statistical edge before
             # firing. Falls back to the global threshold when the toggle is off
             # or when no cost estimate is available on the pair record.
-            entry_zscore = settings.MONITOR_ENTRY_ZSCORE
-            if settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED:
-                cost_pct = float(pair.get("estimated_cost_pct") or 0.0)
-                baseline = float(settings.MONITOR_ENTRY_ZSCORE_COST_BASELINE)
-                if baseline > 0 and cost_pct > baseline:
-                    scale = min(
-                        cost_pct / baseline,
-                        float(settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP),
-                    )
-                    entry_zscore = settings.MONITOR_ENTRY_ZSCORE * scale
+            entry_zscore = compute_entry_zscore(
+                settings.MONITOR_ENTRY_ZSCORE,
+                cost_scaling_enabled=settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED,
+                pair_estimated_cost_pct=float(pair.get("estimated_cost_pct") or 0.0),
+                cost_baseline=float(settings.MONITOR_ENTRY_ZSCORE_COST_BASELINE),
+                scaling_cap=float(settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP),
+            )
 
             # Sprint J: Heartbeat log for pair health
             # US-033: Increased precision and diagnostic visibility
@@ -598,11 +641,7 @@ class ArbitrageMonitor:
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
                 # Update Active Signals for Dashboard
-                async with self._signals_lock:
-                    signal_entry = next((s for s in self.active_signals if s['ticker_a'] == t_a and s['ticker_b'] == t_b), None)
-                    if not signal_entry:
-                        signal_entry = {"ticker_a": t_a, "ticker_b": t_b, "z_score": z_score, "status": "Analyzing"}
-                        self.active_signals.append(signal_entry)
+                await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="Analyzing")
 
                 # AI Validation
                 # Look up this pair's sector so the orchestrator uses the right beacon asset.
@@ -610,10 +649,7 @@ class ArbitrageMonitor:
                 # maps "Unassigned" -> SPY (market-wide beacon) via BEACON_ASSETS.get(...).
                 # Defaulting to "Technology" caused NVDA's 4.63% drop on 2026-04-30
                 # to veto every unmapped pair (PNC/USB, healthcare, energy, etc.).
-                pair_sector = settings.PAIR_SECTORS.get(
-                    pair['id'],
-                    settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "Unassigned")
-                )
+                pair_sector = resolve_pair_sector(pair["id"], t_a, t_b, settings.PAIR_SECTORS)
                 signal_context = {
                     "ticker_a": t_a, "ticker_b": t_b,
                     "z_score": z_score, "dynamic_beta": state_vec[1],
@@ -621,7 +657,7 @@ class ArbitrageMonitor:
                     "sector": pair_sector,
                 }
 
-                # Wrap orchestrator in a hard 8 s deadline.
+                # Wrap orchestrator in a configurable hard deadline.
                 # If any LLM call or Redis read hangs, we veto the signal rather
                 # than stalling the entire scan loop for all other pairs.
                 try:
@@ -630,29 +666,59 @@ class ArbitrageMonitor:
                         timeout=settings.ORCHESTRATOR_TIMEOUT_SECONDS
                     )
                 except asyncio.TimeoutError:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="VETOED_TIMEOUT",
+                        confidence=0.0,
+                    )
                     logger.warning(
-                        f"ORCHESTRATOR [{t_a}/{t_b}] timed out after 8 s. "
-                        f"Vetoing signal to protect scan loop."
+                        "ORCHESTRATOR [%s/%s] timed out after %.1f s. "
+                        "Vetoing signal to protect scan loop.",
+                        t_a,
+                        t_b,
+                        float(settings.ORCHESTRATOR_TIMEOUT_SECONDS),
                     )
                     return diagnostic
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
 
                 if decision_state['final_confidence'] > settings.MONITOR_MIN_AI_CONFIDENCE:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="APPROVED",
+                        confidence=float(decision_state["final_confidence"]),
+                    )
                     approved = await notification_service.request_approval(f"Opportunity in {t_a}/{t_b}. Z:{z_score:.2f}")
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
                         await self.execute_trade(pair, direction, price_a, price_b, signal_id)
+                        await self._upsert_active_signal(
+                            t_a,
+                            t_b,
+                            z_score=z_score,
+                            status="EXECUTED",
+                            confidence=float(decision_state["final_confidence"]),
+                        )
                         diagnostic["verdict"] = "EXECUTED"
                 else:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="VETOED",
+                        confidence=float(decision_state["final_confidence"]),
+                    )
                     logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
                     diagnostic["verdict"] = "VETOED"
 
                 diagnostic["confidence"] = decision_state['final_confidence']
             else:
                 # Cleanup inactive signals
-                async with self._signals_lock:
-                    self.active_signals = [s for s in self.active_signals if not (s['ticker_a'] == t_a and s['ticker_b'] == t_b)]
+                await self._remove_active_signal(t_a, t_b)
 
             return diagnostic
 
@@ -684,18 +750,17 @@ class ArbitrageMonitor:
 
         # Feature 037.B & BudgetService: Use isolated budget caps per venue
         venue = self.brokerage.get_venue(t_a)
-        is_crypto_pair = venue == "WEB3"
-        venue_budget_cap = settings.WEB3_BUDGET_USD if venue == "WEB3" else settings.T212_BUDGET_USD
+        crypto_pair = is_crypto_pair(t_a, t_b)
+        venue_budget_cap = getattr(settings, f"{venue}_BUDGET_USD", 0.0)
         
         total_cash = None
         pending_value = 0.0
         budget_source = "unknown"
 
-        # Feature 037.C: Keep venue budgeting logic consistent.
-        # - T212: free cash minus pending BUY commitments (sync → to_thread).
-        # - WEB3: wallet base-token balance converted to USD (async native).
-        # Both paths return a raw balance; budget_service.get_effective_cash()
-        # below applies the venue cap uniformly for both venues.
+        # Feature 037.C: Keep venue budgeting logic consistent. Web3 wallet
+        # configuration is intentionally separate from crypto execution: crypto
+        # pairs keep 24/7 scanning, while live orders are sized from the selected
+        # broker venue, typically Alpaca.
         if settings.PAPER_TRADING:
             total_cash = (
                 venue_budget_cap
@@ -703,7 +768,7 @@ class ArbitrageMonitor:
                 else settings.PAPER_TRADING_STARTING_CASH
             )
             budget_source = "paper_starting_cash"
-        elif is_crypto_pair:
+        elif venue == "WEB3":
             try:
                 maybe_cash = self.brokerage.get_web3_account_cash()
                 total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
@@ -716,14 +781,19 @@ class ArbitrageMonitor:
                 logger.warning(f"WEB3 account cash fetch failed for {t_a}/{t_b}: {e}")
                 total_cash = None
         else:
-            # Bug H-02: Wrap sync brokerage call in asyncio.to_thread
-            total_cash = await asyncio.to_thread(self.brokerage.get_account_cash)
-            budget_source = "t212_free_cash"
+            maybe_cash = self.brokerage.get_account_cash()
+            total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
+            asset_class = "crypto" if crypto_pair else "equity"
+            budget_source = f"{venue.lower()}_{asset_class}_cash"
             if total_cash is not None:
                 try:
-                    pending_value = max(0.0, float(await self.brokerage.get_pending_orders_value()))
+                    maybe_pending = self.brokerage.get_pending_orders_value()
+                    pending_value_raw = (
+                        await maybe_pending if inspect.isawaitable(maybe_pending) else maybe_pending
+                    )
+                    pending_value = max(0.0, float(pending_value_raw))
                 except Exception as e:
-                    logger.warning(f"T212 pending-orders budget read failed for {t_a}/{t_b}: {e}")
+                    logger.warning(f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}")
 
         # If balance probes are unavailable, allow operator-defined cap-only mode.
         if total_cash is None:
@@ -778,9 +848,7 @@ class ArbitrageMonitor:
         # is evaluated BEFORE the trade is placed, not after.  This prevents two
         # signals in the same scan window from independently passing the 30 % cap
         # and then together pushing the sector to 60 %.
-        pair_sector = settings.PAIR_SECTORS.get(
-            pair['id'], settings.PAIR_SECTORS.get(f"{t_b}_{t_a}", "Unassigned")
-        )
+        pair_sector = resolve_pair_sector(pair["id"], t_a, t_b, settings.PAIR_SECTORS)
         current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
         if current_portfolio:
             total_size = sum(p['size'] for p in current_portfolio)
@@ -811,8 +879,8 @@ class ArbitrageMonitor:
         exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
 
-        # Feature 037: only paper mode is forced to shadow execution.
-        # In live mode, crypto routes through the brokerage dispatcher to Web3.
+        # Feature 037: only paper mode is forced to shadow execution. In live
+        # mode, crypto routes through the configured brokerage provider.
         if settings.PAPER_TRADING:
             # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
             # R4 fix (2026-04-19): propagate signal_id so the shadow TradeLedger row
@@ -1192,17 +1260,10 @@ class ArbitrageMonitor:
                     except Exception as e:
                         logger.error(f"Error evaluating open signals for exits: {e}")
 
-                    scan_pairs = []
-                    all_tickers = []
-                    for p in self.active_pairs:
-                        t_a, t_b = p['ticker_a'], p['ticker_b']
-                        is_crypto = "-USD" in t_a or "-USD" in t_b
-                        if not p.get('is_cointegrated', True):
-                            continue
-                        if not is_crypto and not self.is_market_open(t_a):
-                            continue
-                        scan_pairs.append(p)
-                        all_tickers.extend([t_a, t_b])
+                    scan_pairs, all_tickers = build_scan_pairs(
+                        self.active_pairs,
+                        is_market_open=self.is_market_open,
+                    )
 
                     progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
                     latest_prices = (
@@ -1240,17 +1301,16 @@ class ArbitrageMonitor:
                     progress.update(scan_task, completed=len(scan_pairs), description="Scan iteration complete")
 
                     # L-14: Enriched heartbeat
-                    active_signals = [
-                        r for r in results
-                        if r and r.get('confidence', 0) > settings.MONITOR_MIN_AI_CONFIDENCE
-                    ]
-                    vetoed = [r for r in results if r and r.get('verdict') == "VETOED"]
+                    active_signal_count, vetoed_count = summarize_scan_iteration(
+                        results,
+                        settings.MONITOR_MIN_AI_CONFIDENCE,
+                    )
                     
                     summary_msg = (
                         f"[bold green]Iteration Complete[/] | "
                         f"Scanned: {len(scan_pairs)}/{len(self.active_pairs)} | "
-                        f"Signals: {len(active_signals)} | "
-                        f"Vetoed: {len(vetoed)} | "
+                        f"Signals: {active_signal_count} | "
+                        f"Vetoed: {vetoed_count} | "
                         f"Open: {len(open_signals)}"
                     )
                     logger.info(summary_msg)
@@ -1311,20 +1371,13 @@ class ArbitrageMonitor:
         sig_id = signal["signal_id"]
         logger.info(f"Closing position {sig_id} Reason: {reason.value}")
 
-        close_orders = []
-        for leg in signal["legs"]:
-            ticker = leg["ticker"]
-            qty = float(leg["quantity"])
-            side = "SELL" if leg["side"] == "BUY" else "BUY"
-            exec_t = settings.DEV_EXECUTION_TICKERS.get(ticker, ticker) if settings.DEV_MODE else ticker
-            price = price_a if ticker == signal["legs"][0]["ticker"] else price_b
-            close_orders.append({
-                "ticker": exec_t,
-                "display_ticker": ticker,
-                "side": side,
-                "quantity": qty,
-                "price": float(price),
-            })
+        close_orders = build_close_orders(
+            signal,
+            price_a=price_a,
+            price_b=price_b,
+            dev_mode=settings.DEV_MODE,
+            dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
+        )
 
         if not settings.PAPER_TRADING:
             t212_sell_orders = [
@@ -1367,13 +1420,11 @@ class ArbitrageMonitor:
 
         # M-04: Compute realized PnL from entry vs exit price per leg
         leg_a, leg_b = signal["legs"][0], signal["legs"][1]
-        exit_prices = {leg_a["ticker"]: price_a, leg_b["ticker"]: price_b}
-        pnl = 0.0
-        for leg in signal["legs"]:
-            qty = leg["quantity"]
-            entry = leg["price"]
-            exit_p = exit_prices[leg["ticker"]]
-            pnl += (exit_p - entry) * qty if leg["side"] == "BUY" else (entry - exit_p) * qty
+        exit_prices, pnl = calculate_realized_pnl(
+            signal,
+            price_a=price_a,
+            price_b=price_b,
+        )
 
         # N2 fix: in paper mode, route through shadow_service so the shadow ledger
         # gets a proper close log with directional PnL breakdown.

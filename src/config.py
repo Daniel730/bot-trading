@@ -241,6 +241,10 @@ class Settings(BaseSettings):
     KALMAN_R: float = 0.001
     MONITOR_ENTRY_ZSCORE: float = Field(default=2.0, validation_alias="MONITOR_ENTRY_ZSCORE")
     MONITOR_MIN_AI_CONFIDENCE: float = Field(default=0.5, validation_alias="MONITOR_MIN_AI_CONFIDENCE")
+    ELITE_ROTATION_SORTINO_THRESHOLD: float = Field(
+        default=2.0,
+        validation_alias="ELITE_ROTATION_SORTINO_THRESHOLD",
+    )
     ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
     MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
     MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")

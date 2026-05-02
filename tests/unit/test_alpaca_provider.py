@@ -44,6 +44,13 @@ def test_alpaca_connection_uses_account_probe(alpaca_rest):
     assert provider.test_connection() is False
 
 
+def test_alpaca_crypto_symbol_helpers():
+    assert AlpacaProvider.normalize_symbol("BTC-USD") == "BTC/USD"
+    assert AlpacaProvider.to_bot_symbol("ETH/USD") == "ETH-USD"
+    assert AlpacaProvider.is_supported_symbol("BTC-USD") is True
+    assert AlpacaProvider.order_time_in_force("BTC-USD") == "gtc"
+
+
 @pytest.mark.asyncio
 async def test_place_market_order_submits_alpaca_market_payload(alpaca_rest):
     _, client = alpaca_rest
@@ -70,6 +77,30 @@ async def test_place_market_order_submits_alpaca_market_payload(alpaca_rest):
         type="market",
         time_in_force="day",
         client_order_id="cid-market",
+    )
+
+
+@pytest.mark.asyncio
+async def test_place_market_order_submits_alpaca_crypto_payload(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.return_value = _order("ord-crypto", "cid-crypto")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_market_order(
+        "BTC-USD",
+        0.001,
+        "BUY",
+        client_order_id="cid-crypto",
+    )
+
+    assert result["order_id"] == "ord-crypto"
+    client.submit_order.assert_called_once_with(
+        symbol="BTC/USD",
+        qty=0.001,
+        side="buy",
+        type="market",
+        time_in_force="gtc",
+        client_order_id="cid-crypto",
     )
 
 
@@ -125,6 +156,30 @@ async def test_place_value_order_uses_alpaca_notional_orders(alpaca_rest):
         type="market",
         time_in_force="day",
         client_order_id="cid-value",
+    )
+
+
+@pytest.mark.asyncio
+async def test_place_value_order_uses_alpaca_crypto_notional_orders(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.return_value = _order("ord-crypto-notional", "cid-crypto-value")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_value_order(
+        "ETH-USD",
+        25.0,
+        "BUY",
+        client_order_id="cid-crypto-value",
+    )
+
+    assert result["order_id"] == "ord-crypto-notional"
+    client.submit_order.assert_called_once_with(
+        symbol="ETH/USD",
+        notional=25.0,
+        side="buy",
+        type="market",
+        time_in_force="gtc",
+        client_order_id="cid-crypto-value",
     )
 
 
@@ -213,6 +268,23 @@ def test_alpaca_positions_are_normalized(alpaca_rest):
             "marketValue": 666.75,
         }
     ]
+
+
+def test_alpaca_crypto_positions_are_normalized_to_bot_symbol(alpaca_rest):
+    _, client = alpaca_rest
+    client.list_positions.return_value = [
+        SimpleNamespace(
+            symbol="BTC/USD",
+            qty="0.02",
+            qty_available="0.01",
+            avg_entry_price="65000.00",
+            current_price="66000.00",
+            market_value="1320.00",
+        )
+    ]
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    assert provider.get_portfolio()[0]["ticker"] == "BTC-USD"
 
 
 def test_alpaca_pending_orders_are_normalized(alpaca_rest):
