@@ -844,8 +844,6 @@ class DashboardService:
             ticker_b = str(pair.get("ticker_b") or "").strip().upper()
             if not ticker_a or not ticker_b:
                 continue
-            if "-USD" in ticker_a or "-USD" in ticker_b:
-                continue
 
             is_coint = pair.get("is_cointegrated") is True
             category = "coint" if is_coint else "broken_eligible"
@@ -875,6 +873,8 @@ class DashboardService:
                     continue
                 provider = brokerage_service.provider
                 if hasattr(provider, "is_supported_symbol") and not provider.is_supported_symbol(ticker):
+                    continue
+                if hasattr(provider, "is_asset_active") and not provider.is_asset_active(ticker):
                     continue
                 entry = candidates.setdefault(
                     ticker,
@@ -1116,9 +1116,9 @@ class DashboardService:
         if not recommendations and skipped:
             message = "Every eligible recommendation is already owned or pending."
         elif not recommendations:
-            message = f"No {brokerage_service.provider_name} stock recommendations are available for the current filters."
+            message = f"No {brokerage_service.provider_name} recommendations are available for the current filters."
         else:
-            message = f"Calculated {len(recommendations)} recommended {brokerage_service.provider_name} stock buys."
+            message = f"Calculated {len(recommendations)} recommended {brokerage_service.provider_name} buys."
 
         return _scrub_non_finite(
             {
@@ -1286,13 +1286,14 @@ class DashboardService:
             ticker_b = str(pair.get("ticker_b") or "").strip().upper()
             if not ticker_a or not ticker_b:
                 continue
-            if "-USD" in ticker_a or "-USD" in ticker_b:
-                continue
             is_coint = pair.get("is_cointegrated") is True
             if is_coint:
                 coint_pairs += 1
             for ticker in (ticker_a, ticker_b):
                 if brokerage_service.get_venue(ticker) == active_provider and ticker not in tickers:
+                    provider = brokerage_service.provider
+                    if hasattr(provider, "is_asset_active") and not provider.is_asset_active(ticker):
+                        continue
                     tickers.append(ticker)
 
         return coint_pairs, tickers

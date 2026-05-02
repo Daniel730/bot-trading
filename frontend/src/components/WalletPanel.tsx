@@ -204,7 +204,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
           <div className="wallet-title">
             <Wallet size={18} />
             <div>
-              <strong>Today&apos;s Stock Plan</strong>
+              <strong>Today&apos;s Trading Plan</strong>
               <span>{plan ? `${plan.recommended_tickers.length} recommended / ${plan.skipped.length} skipped` : 'Waiting for wallet state'}</span>
             </div>
           </div>

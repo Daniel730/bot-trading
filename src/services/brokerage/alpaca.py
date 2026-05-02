@@ -12,6 +12,8 @@ class AlpacaProvider(AbstractBrokerageProvider):
     _US_SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}([.-][A-Z])?$")
     _CRYPTO_PAIR_PATTERN = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,4}$")
     _CRYPTO_DASH_PAIR_PATTERN = re.compile(r"^[A-Z0-9]{2,15}-[A-Z]{3,4}$")
+    _active_symbols_cache: Optional[set] = None
+    _active_symbols_last_fetch: float = 0
 
     @classmethod
     def normalize_symbol(cls, ticker: str) -> str:
@@ -96,10 +98,35 @@ class AlpacaProvider(AbstractBrokerageProvider):
         """
         try:
             self.api.get_account()
+            # Refresh active symbols cache on connection test
+            self._get_active_symbols()
             return True
         except Exception as e:
             logger.error(f"Alpaca connection failed: {e}")
             return False
+
+    def _get_active_symbols(self) -> set:
+        """Fetch and cache the set of active symbols from Alpaca."""
+        import time
+        now = time.time()
+        # Cache for 1 hour
+        if self._active_symbols_cache is None or now - self._active_symbols_last_fetch > 3600:
+            try:
+                assets = self.api.list_assets(status='active')
+                self._active_symbols_cache = {a.symbol for a in assets}
+                self._active_symbols_last_fetch = now
+                logger.info(f"AlpacaProvider: Cached {len(self._active_symbols_cache)} active symbols")
+            except Exception as e:
+                logger.error(f"AlpacaProvider: Failed to fetch active assets: {e}")
+                if self._active_symbols_cache is None:
+                    return set()
+        return self._active_symbols_cache
+
+    def is_asset_active(self, ticker: str) -> bool:
+        """Check if a ticker is currently active and tradable on Alpaca."""
+        symbol = self.normalize_symbol(ticker)
+        active_set = self._get_active_symbols()
+        return symbol in active_set
 
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         """
@@ -122,6 +149,9 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return {"status": "error", "message": f"Ticker {ticker} is not supported by Alpaca"}
 
         broker_symbol = self.normalize_symbol(ticker)
+        if not self.is_asset_active(ticker):
+            logger.error(f"Alpaca: {broker_symbol} is currently inactive/non-tradable")
+            return {"status": "error", "message": f"Asset {broker_symbol} is not active on Alpaca"}
         try:
             order_type = 'limit' if limit_price else 'market'
             params = {
@@ -167,6 +197,9 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return {"status": "error", "message": f"Ticker {ticker} is not supported by Alpaca"}
 
         broker_symbol = self.normalize_symbol(ticker)
+        if not self.is_asset_active(ticker):
+            logger.error(f"Alpaca: {broker_symbol} is currently inactive/non-tradable (value order)")
+            return {"status": "error", "message": f"Asset {broker_symbol} is not active on Alpaca"}
         try:
             # Alpaca supports notional orders (value-based) natively for many assets
             params = {

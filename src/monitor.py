@@ -397,7 +397,13 @@ class ArbitrageMonitor:
                     )
                     continue
 
-                is_coint, p_val, hedge = arbitrage_service.check_cointegration(hist_data[col_a], hist_data[col_b])
+                is_crypto = is_crypto_pair(ticker_a, ticker_b)
+                p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+                pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
+
+                is_coint, p_val, hedge = arbitrage_service.check_cointegration(
+                    hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
+                )
                 logger.info(f"DEBUG {ticker_a}/{ticker_b}: Coint={is_coint}, p={p_val:.4f}, hedge={hedge:.4f}")
 
                 # Spec 037: rolling-window stability check on top of the
@@ -411,7 +417,8 @@ class ArbitrageMonitor:
                         hist_data[col_b],
                         window=settings.COINTEGRATION_ROLLING_WINDOW,
                         step=settings.COINTEGRATION_ROLLING_STEP,
-                        min_pass_rate=settings.COINTEGRATION_ROLLING_PASS_RATE,
+                        min_pass_rate=pass_thresh,
+                        pvalue_threshold=p_thresh,
                     )
                     if not stability["stable"]:
                         is_coint = False
@@ -1115,8 +1122,12 @@ class ArbitrageMonitor:
             if not col_a or not col_b:
                 return
 
+            is_crypto = is_crypto_pair(t_a, t_b)
+            p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+            pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
+
             is_coint, p_val, _ = arbitrage_service.check_cointegration(
-                hist_data[col_a], hist_data[col_b]
+                hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
             )
 
             # Spec 037: rolling-window stability. If the pair was statically
@@ -1129,7 +1140,8 @@ class ArbitrageMonitor:
                     hist_data[col_b],
                     window=settings.COINTEGRATION_ROLLING_WINDOW,
                     step=settings.COINTEGRATION_ROLLING_STEP,
-                    min_pass_rate=settings.COINTEGRATION_ROLLING_PASS_RATE,
+                    min_pass_rate=pass_thresh,
+                    pvalue_threshold=p_thresh,
                 )
                 pair["coint_stability"] = stability
                 if not stability["stable"]:

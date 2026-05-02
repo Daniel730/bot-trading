@@ -87,7 +87,11 @@ class ArbitrageService:
 
     @staticmethod
     @agent_trace("ArbitrageService.check_cointegration")
-    def check_cointegration(ticker_a_series: pd.Series, ticker_b_series: pd.Series) -> Tuple[bool, float, float]:
+    def check_cointegration(
+        ticker_a_series: pd.Series, 
+        ticker_b_series: pd.Series,
+        pvalue_threshold: Optional[float] = None
+    ) -> Tuple[bool, float, float]:
         """
         Performs ADF test on the spread of two series.
         Returns: (is_cointegrated, p_value, hedge_ratio)
@@ -110,8 +114,8 @@ class ArbitrageService:
         adf_result = adfuller(spread)
         p_value = float(adf_result[1])
 
-        return p_value < settings.COINTEGRATION_PVALUE_THRESHOLD, p_value, hedge_ratio
-
+        pvalue_threshold = pvalue_threshold if pvalue_threshold is not None else settings.COINTEGRATION_PVALUE_THRESHOLD
+        return p_value < pvalue_threshold, p_value, hedge_ratio
     @staticmethod
     @agent_trace("ArbitrageService.check_rolling_cointegration")
     def check_rolling_cointegration(
