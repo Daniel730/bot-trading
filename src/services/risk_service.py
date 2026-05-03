@@ -9,7 +9,15 @@ class FeeAnalyzer:
     def __init__(self, max_friction_pct: Optional[float] = None):
         self.max_friction_pct = settings.MAX_FRICTION_PCT if max_friction_pct is None else max_friction_pct
 
-    def check_fees(self, ticker: str, amount_fiat: float, commission: float = 0.0, fx_fee: float = 0.0, spread_est: float = 0.0, flat_spread: float = 0.5) -> Dict:
+    def check_fees(
+        self,
+        ticker: str,
+        amount_fiat: float,
+        commission: float = 0.0,
+        fx_fee: float = 0.0,
+        spread_est: float = 0.0,
+        flat_spread: Optional[float] = None,
+    ) -> Dict:
         """
         Calculates total friction and determines if the trade is acceptable.
         """
@@ -21,11 +29,12 @@ class FeeAnalyzer:
                 "rejection_reason": "Amount must be greater than zero"
             }
 
-        total_friction = commission + fx_fee + spread_est + flat_spread
+        flat_cost = settings.FLAT_ORDER_FRICTION_USD if flat_spread is None else flat_spread
+        total_friction = commission + fx_fee + spread_est + flat_cost
         friction_pct = total_friction / amount_fiat
-        
+
         is_acceptable = friction_pct <= self.max_friction_pct
-        
+
         return {
             "ticker": ticker,
             "is_acceptable": is_acceptable,
@@ -44,10 +53,10 @@ class KellyCalculator:
         """
         if win_loss_ratio <= 0:
             return 0.0
-            
+
         loss_prob = 1 - win_prob
         kelly_f = (win_prob * win_loss_ratio - loss_prob) / win_loss_ratio
-        
+
         # Apply fractional Kelly and clamp to [0, 1]
         size = max(0.0, kelly_f * self.fractional_kelly)
         return min(size, 1.0)
@@ -78,14 +87,14 @@ class RiskService:
             perf_metrics = await perf_metrics
         sharpe = perf_metrics.get("sharpe_ratio", 1.0)
         drawdown = perf_metrics.get("max_drawdown", 0.0)
-        
+
         # SC-001: Position size scales linearly with drawdown: 0% at 15% drawdown
         risk_multiplier = 1.0
         if drawdown >= settings.RISK_DRAWDOWN_ZERO_PCT:
             risk_multiplier = 0.0
         elif drawdown > 0:
             risk_multiplier = max(0.0, 1.0 - (drawdown / settings.RISK_DRAWDOWN_ZERO_PCT))
-            
+
         # User Story 1 Acceptance 2: Sharpe ratio < 0.5 => Kelly fraction capped at 0.1
         if sharpe < settings.RISK_SHARPE_FLOOR:
             risk_multiplier = min(risk_multiplier, settings.RISK_MULTIPLIER_CAP_LOW_SHARPE)
@@ -97,13 +106,13 @@ class RiskService:
         l2_entropy = volatility_service.get_l2_entropy(ticker)
         if inspect.isawaitable(l2_entropy):
             l2_entropy = await l2_entropy
-        
+
         # Default slippage 0.1% (0.001)
         # Acceptance Scenario: Reduce from 0.001 to 0.0005 in high vol
         max_slippage = settings.RISK_SLIPPAGE_NORMAL
         if vol_status == "HIGH_VOLATILITY":
             max_slippage = settings.RISK_SLIPPAGE_HIGH_VOL
-            
+
         # FR-003, US1: Broadcast risk parameters for Dashboard
         from src.services.telemetry_service import telemetry_service
         telemetry_service.broadcast("risk", {
@@ -112,7 +121,7 @@ class RiskService:
             "volatility_status": vol_status,
             "l2_entropy": l2_entropy
         })
-            
+
         return {
             "risk_multiplier": risk_multiplier,
             "max_slippage_pct": max_slippage,
@@ -128,15 +137,15 @@ class RiskService:
         """
         if hedging_state == "NORMAL":
             return {"status": "SAFE", "hedges": []}
-        
+
         try:
             from src.config import settings
         except ImportError:
             class DummySettings: REGION = "US"
             settings = DummySettings()
-            
+
         region = getattr(settings, 'REGION', 'US')
-        
+
         # FR-005: Hardcoded UCITS compliance mapping
         hedge_map = {
             "US": {
@@ -151,13 +160,13 @@ class RiskService:
                 "IWM": "R2SC.L"  # SPDR Russell 2000 US Small Cap UCITS
             }
         }
-        
+
         current_map = hedge_map.get(region, hedge_map["US"])
         from src.services.brokerage_service import brokerage_service
         portfolio = brokerage_service.get_portfolio()
         if inspect.isawaitable(portfolio):
             portfolio = await portfolio
-        
+
         suggested_hedges = []
         for pos in portfolio:
             ticker = pos.get('ticker', '').split('_')[0]
@@ -172,7 +181,7 @@ class RiskService:
             elif region == "EU":
                 # FR-006: Bypass hedge and log critical alert for unmapped assets in EU
                 print(f"AGENT_LOGGER: CRITICAL - EU Compliance Mapping missing for {ticker}. Hedge bypassed.")
-        
+
         return {
             "status": "DEFCON_1",
             "region": region,
@@ -204,14 +213,14 @@ class RiskService:
                 "status": "ACCEPTED" if friction_pct <= settings.MAX_FRICTION_PCT else "FRICTION_REJECT",
                 "rejection_reason": None if friction_pct <= settings.MAX_FRICTION_PCT else "Friction exceeds limit",
             }
-        spread = settings.T212_FLAT_SPREAD_USD if flat_spread is None else flat_spread
+        spread = settings.FLAT_ORDER_FRICTION_USD if flat_spread is None else flat_spread
         res = self.fee_analyzer.check_fees(ticker=ticker, amount_fiat=amount, flat_spread=spread)
-        
+
         status = "ACCEPTED"
         # Decision 4 / FR-007: Micro-budget threshold check
         if amount < settings.MICRO_TRADE_THRESHOLD_USD and not res["is_acceptable"]:
             status = "FRICTION_REJECT"
-            
+
         return {
             "status": status,
             "is_acceptable": res["is_acceptable"] if status == "ACCEPTED" else False,
@@ -248,8 +257,8 @@ class RiskService:
         hedging_state: str = "NORMAL",
     ) -> Dict:
         """
-        Performs full risk validation for a proposed trade.
-        Uses Half-Kelly and enforces max configured portfolio exposure per trade.
+        Performs full risk validation for a proposed pair trade.
+        final_amount is the gross notional for both legs combined.
         """
         # DEFCON 1 Veto: Reject high-volatility long trades if market risk is extreme
         if hedging_state == "DEFCON_1" and ticker not in self.inverse_etfs.values():
@@ -260,16 +269,16 @@ class RiskService:
             }
 
         # User-defined overrides for Kelly inputs.
+        # This already respects settings.KELLY_FRACTION (default 0.25).
         kelly_fraction = self.kelly_calculator.calculate_size(win_prob, win_loss_ratio)
-        
-        # HALF-KELLY constraint
-        half_kelly_fraction = kelly_fraction / 2.0
-        
+
         # Max allocation cap of portfolio total value per position
         max_allowed_fiat = total_portfolio_cash * (settings.MAX_ALLOCATION_PERCENTAGE / 100.0)
-        
-        # Proposed value using the adjusted Kelly multiplied by the configured standard allocation or the entire portfolio (scaled). We fallback to minimum of calculated ones.
-        proposed_fiat = amount_fiat * half_kelly_fraction
+
+        # Proposed value using the Kelly fraction multiplied by the base (portfolio cash).
+        # We use the full kelly_fraction as settings.KELLY_FRACTION is already conservative (default 0.25).
+        proposed_fiat = amount_fiat * kelly_fraction
+
         # L-11: Use Decimal arithmetic and round to cents to avoid float drift in 5%-equity enforcement
         final_amount = float(
             min(
@@ -277,7 +286,7 @@ class RiskService:
                 Decimal(str(max_allowed_fiat))
             ).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
         )
-        
+
         if final_amount < settings.MIN_TRADE_VALUE:
             fee_check = {
                 "ticker": ticker,
@@ -289,12 +298,14 @@ class RiskService:
         else:
             fee_check = self.fee_analyzer.check_fees(ticker, final_amount)
             is_acceptable = fee_check["is_acceptable"]
-        
+
         return {
             "ticker": ticker,
             "is_acceptable": is_acceptable,
             "fee_status": fee_check,
-            "kelly_fraction": half_kelly_fraction,
+            "kelly_fraction": kelly_fraction,
+            "proposed_amount": proposed_fiat,
+            "max_allowed_fiat": max_allowed_fiat,
             "final_amount": final_amount if is_acceptable else 0.0,
             "rejection_reason": fee_check["rejection_reason"] if not is_acceptable else ""
         }
@@ -310,7 +321,7 @@ class RiskService:
         Returns True if Kill switch triggered (abort position).
         """
         if position_cost_basis <= 0: return False
-        
+
         loss_pct = (position_cost_basis - position_current_value) / position_cost_basis
         if loss_pct >= max_loss_pct:
             return True
@@ -323,20 +334,20 @@ class RiskService:
         """
         if not portfolio:
             return {}
-            
+
         total_size = sum(p.get("size", 0.0) for p in portfolio)
         if total_size == 0.0:
             return {}
-            
+
         exposures = {}
         for p in portfolio:
             sector = p.get("sector", "General")
             size = p.get("size", 0.0)
             exposures[sector] = exposures.get(sector, 0.0) + size
-            
+
         for sector in exposures:
             exposures[sector] = exposures[sector] / total_size
-            
+
         return exposures
 
 risk_service = RiskService()

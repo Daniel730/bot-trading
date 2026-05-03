@@ -13,6 +13,13 @@ def _order(order_id="ord-1", client_order_id="client-1"):
 @pytest.fixture
 def alpaca_rest():
     with patch("src.services.brokerage.alpaca.tradeapi.REST") as rest_cls:
+        rest_cls.return_value.list_assets.return_value = [
+            SimpleNamespace(symbol="AAPL"),
+            SimpleNamespace(symbol="BTC/USD"),
+            SimpleNamespace(symbol="ETH/USD"),
+            SimpleNamespace(symbol="MSFT"),
+            SimpleNamespace(symbol="NVDA"),
+        ]
         yield rest_cls, rest_cls.return_value
 
 
@@ -180,6 +187,31 @@ async def test_place_value_order_uses_alpaca_crypto_notional_orders(alpaca_rest)
         type="market",
         time_in_force="gtc",
         client_order_id="cid-crypto-value",
+    )
+
+
+@pytest.mark.asyncio
+async def test_place_value_sell_order_uses_quantity_with_price(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.return_value = _order("ord-sell", "cid-sell")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_value_order(
+        "MSFT",
+        500.0,
+        "SELL",
+        price=250.0,
+        client_order_id="cid-sell",
+    )
+
+    assert result["order_id"] == "ord-sell"
+    client.submit_order.assert_called_once_with(
+        symbol="MSFT",
+        qty=2.0,
+        side="sell",
+        type="market",
+        time_in_force="day",
+        client_order_id="cid-sell",
     )
 
 

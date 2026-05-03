@@ -6,7 +6,7 @@ Adding tickers from new sessions (HK, EU, LSE) is tempting because it gives the
 bot more "uptime", but most cross-region pairs do not cointegrate in any
 economically useful sense - FX moves and macro regime divergence dominate the
 residual that the Kalman filter is supposed to mean-revert. Even when
-cointegration holds, hidden trading costs (UK stamp duty 0.5 %, Trading 212 FX
+cointegration holds, hidden trading costs (UK stamp duty 0.5 %, FX
 fee 0.15 % per conversion, wider HK spreads) often exceed the statistical
 edge.
 
@@ -25,8 +25,8 @@ allocated. The rules are:
 4. LSE pairs may be excluded for short-hold strategies because of the 0.5 %
    SDRT (UK stamp duty) on every buy leg.
 
-Crypto pairs are admitted unconditionally because they share a single
-24/7 session and have a different cost structure routed through Web3.
+Crypto pairs share a single 24/7 session, but they still have to be active on
+Alpaca before entering the live universe.
 """
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ from src.services.venue_metadata import (
     same_currency,
     same_session,
 )
+from src.services.brokerage_service import brokerage_service
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def _is_crypto(ticker: str) -> bool:
     return "-USD" in ticker.upper()
 
 
-def evaluate_pair(
+async def evaluate_pair(
     ticker_a: str,
     ticker_b: str,
     *,
@@ -81,24 +82,22 @@ def evaluate_pair(
     a = ticker_a.strip().upper()
     b = ticker_b.strip().upper()
 
-    if _is_crypto(a) and _is_crypto(b):
-        cost = estimate_round_trip_cost_pct(a, b, account_currency=account_currency)
-        return EligibilityResult(True, "crypto_pair", cost)
+    crypto_pair = _is_crypto(a) and _is_crypto(b)
 
     if _is_crypto(a) ^ _is_crypto(b):
         return EligibilityResult(False, "mixed_crypto_equity_pair_not_supported", 0.0)
 
-    if not same_session(a, b, allow_eu_continental_overlap=allow_eu_continental_overlap):
+    if not crypto_pair and not same_session(a, b, allow_eu_continental_overlap=allow_eu_continental_overlap):
         v_a = get_venue_profile(a).market_id
         v_b = get_venue_profile(b).market_id
         return EligibilityResult(False, f"different_sessions:{v_a}_vs_{v_b}", 0.0)
 
-    if block_cross_currency and not same_currency(a, b):
+    if not crypto_pair and block_cross_currency and not same_currency(a, b):
         c_a = get_venue_profile(a).currency
         c_b = get_venue_profile(b).currency
         return EligibilityResult(False, f"cross_currency:{c_a}_vs_{c_b}", 0.0)
 
-    if block_lse_short_hold:
+    if not crypto_pair and block_lse_short_hold:
         v_a = get_venue_profile(a).market_id
         v_b = get_venue_profile(b).market_id
         if v_a == "LSE" or v_b == "LSE":
@@ -112,10 +111,18 @@ def evaluate_pair(
             cost,
         )
 
-    return EligibilityResult(True, "admitted", cost)
+    # Spec 045: Ensure both legs are accessible in the active brokerage.
+    # This prevents the "legs not working" errors during execution by failing
+    # the pair earlier, before any Kalman/math is performed.
+    if not await brokerage_service.is_asset_active(a):
+        return EligibilityResult(False, f"asset_not_active_in_brokerage:{a}", 0.0)
+    if not await brokerage_service.is_asset_active(b):
+        return EligibilityResult(False, f"asset_not_active_in_brokerage:{b}", 0.0)
+
+    return EligibilityResult(True, "crypto_pair" if crypto_pair else "admitted", cost)
 
 
-def filter_pair_universe(
+async def filter_pair_universe(
     pairs: list,
     *,
     account_currency: str = "EUR",
@@ -128,7 +135,7 @@ def filter_pair_universe(
     admitted = []
     rejected = []
     for pair in pairs:
-        verdict = evaluate_pair(
+        verdict = await evaluate_pair(
             pair["ticker_a"],
             pair["ticker_b"],
             account_currency=account_currency,

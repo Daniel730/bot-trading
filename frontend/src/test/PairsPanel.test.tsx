@@ -1,9 +1,9 @@
 /**
  * Tests for PairsPanel.tsx changes in this PR:
  *
- * - Uses syncWallet (renamed from syncT212Wallet) from api.ts
- * - Wallet section label is "Broker Wallet" (not "T212 Wallet")
- * - Button title is "Buy missing broker tickers" (not "Buy missing T212 tickers")
+ * - Uses syncWallet from api.ts
+ * - Wallet section label is "Broker Wallet"
+ * - Button title is "Buy missing broker tickers"
  * - Confirm dialog says "Place broker BUY orders for missing stock tickers..."
  * - Error fallback message is "Failed to sync broker wallet"
  */
@@ -124,7 +124,7 @@ describe('PairsPanel wallet sync interaction', () => {
   it('calls syncWallet (not syncT212Wallet) when user confirms', async () => {
     mockSyncWallet.mockResolvedValue({
       status: 'ok',
-      mode: 'T212',
+      mode: 'ALPACA',
       message: 'Submitted 2/2 BUY orders.',
       coint_pairs: 1,
       candidate_tickers: ['AAPL', 'MSFT'],
@@ -209,7 +209,7 @@ describe('PairsPanel wallet sync interaction', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockSyncWallet.mockResolvedValue({
       status: 'ok',
-      mode: 'T212',
+      mode: 'ALPACA',
       message: 'Submitted 1/1 BUY orders.',
       coint_pairs: 1,
       candidate_tickers: ['AAPL'],

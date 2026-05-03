@@ -142,7 +142,7 @@ class NotificationService:
             if result.get("status") == "error":
                 await update.message.reply_text(f"❌ Failed: {result.get('message')}")
             else:
-                # result normally contains the order object from T212
+                # result normally contains the broker order object
                 order_id = result.get('orderId', 'N/A')
                 await update.message.reply_text(f"✅ SUCCESS: Invested ${amount:.2f} in {ticker}\nOrder ID: {order_id}")
                 

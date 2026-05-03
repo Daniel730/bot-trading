@@ -57,7 +57,7 @@ class ExitReason(enum.Enum):
 
 class TradeLedger(Base):
     __tablename__ = "trade_ledger"
-    
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     order_id: Mapped[Optional[str]] = mapped_column(String(100), index=True)
     signal_id: Mapped[Optional[uuid.UUID]] = mapped_column(index=True)
@@ -67,15 +67,16 @@ class TradeLedger(Base):
     price: Mapped[float] = mapped_column(Numeric(20, 10))
     fee: Mapped[float] = mapped_column(Numeric(20, 10), default=0.0)
     status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), default=OrderStatus.COMPLETED)
-    venue: Mapped[str] = mapped_column(String(20), server_default="T212", index=True)
+    venue: Mapped[str] = mapped_column(String(20), server_default="ALPACA", index=True)
     execution_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, name="metadata")
     latency_rtt_ns: Mapped[Optional[int]] = mapped_column(Integer)
     clock_sync_status: Mapped[Optional[bool]] = mapped_column(Boolean)
 
 class FillAnalysis(Base):
     __tablename__ = "fill_analysis"
-    
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     trade_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("trade_ledger.id"), index=True)
     theoretical_mid_price: Mapped[float] = mapped_column(Numeric(20, 10))
@@ -86,7 +87,7 @@ class FillAnalysis(Base):
 
 class AgentReasoning(Base):
     __tablename__ = "agent_reasoning"
-    
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     trace_id: Mapped[uuid.UUID] = mapped_column(index=True)
     agent_name: Mapped[str] = mapped_column(String(50))
@@ -98,7 +99,7 @@ class AgentReasoning(Base):
 
 class AgentPerformance(Base):
     __tablename__ = "agent_performance"
-    
+
     agent_name: Mapped[str] = mapped_column(String(50), primary_key=True)
     successes: Mapped[int] = mapped_column(Integer, default=1)
     failures: Mapped[int] = mapped_column(Integer, default=1)
@@ -106,7 +107,7 @@ class AgentPerformance(Base):
 
 class DCASchedules(Base):
     __tablename__ = "dca_schedules"
-    
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     target_ticker: Mapped[str] = mapped_column(String(20))
     amount: Mapped[float] = mapped_column(Numeric(20, 10))
@@ -119,7 +120,7 @@ class DCASchedules(Base):
 
 class TradingPair(Base):
     __tablename__ = "trading_pairs"
-    
+
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     ticker_a: Mapped[str] = mapped_column(String(20))
     ticker_b: Mapped[str] = mapped_column(String(20))
@@ -129,13 +130,13 @@ class TradingPair(Base):
 
 class SystemState(Base):
     __tablename__ = "system_state"
-    
+
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text)
 
 class PortfolioPerformance(Base):
     __tablename__ = "portfolio_performance"
-    
+
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, server_default=func.now())
     total_equity: Mapped[float] = mapped_column(Numeric(20, 10))
     daily_return: Mapped[float] = mapped_column(Numeric(20, 10))
@@ -144,7 +145,7 @@ class PortfolioPerformance(Base):
 
 class MarketRegimeHistory(Base):
     __tablename__ = "market_regime_history"
-    
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     regime: Mapped[MarketRegime] = mapped_column(Enum(MarketRegime))
     confidence: Mapped[float] = mapped_column(Numeric(5, 4))
@@ -153,7 +154,7 @@ class MarketRegimeHistory(Base):
 
 class TradeJournal(Base):
     __tablename__ = "trade_journal"
-    
+
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     signal_id: Mapped[uuid.UUID] = mapped_column(index=True, unique=True)
     entry_regime: Mapped[MarketRegime] = mapped_column(Enum(MarketRegime))
@@ -166,14 +167,14 @@ class TradeJournal(Base):
 
 class OptimizedAllocation(Base):
     __tablename__ = "optimized_allocations"
-    
+
     ticker: Mapped[str] = mapped_column(String(20), primary_key=True)
     target_weight: Mapped[float] = mapped_column(Numeric(10, 6))
     last_updated: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 class UniverseCandidate(Base):
     __tablename__ = "universe_candidates"
-    
+
     pair_id: Mapped[str] = mapped_column(String(50), primary_key=True) # ticker_a_ticker_b
     sector: Mapped[str] = mapped_column(String(50))
     p_value: Mapped[float] = mapped_column(Numeric(10, 6))
@@ -207,25 +208,26 @@ class PersistenceService:
         """Initializes the database schema and performs necessary migrations."""
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            
-            # Runtime Migration: Add 'venue' column if it doesn't exist
-            # We use a raw SQL block for safety against existing data.
+
+            # Runtime Migration: Add columns if they don't exist
             try:
                 from sqlalchemy import text
-                await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS venue VARCHAR(20) DEFAULT 'T212'"))
+                await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS venue VARCHAR(20) DEFAULT 'ALPACA'"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_ledger_venue ON trade_ledger (venue)"))
+                await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE"))
+                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_ledger_closed_at ON trade_ledger (closed_at)"))
             except Exception as e:
-                logger.warning(f"PersistenceService: Migration notice (venue column): {e}")
+                logger.warning(f"PersistenceService: Migration notice: {e}")
 
     async def log_trade(self, trade_data: dict):
         """Logs a trade execution to the ledger with automatic venue detection."""
         if 'signal_id' in trade_data and isinstance(trade_data['signal_id'], str):
             trade_data['signal_id'] = uuid.UUID(trade_data['signal_id'])
-            
+
         # Automatic Venue Detection
         if "venue" not in trade_data or not trade_data["venue"]:
             ticker = trade_data.get("ticker", "").upper()
-            trade_data["venue"] = "WEB3" if "-USD" in ticker else "T212"
+            trade_data["venue"] = "ALPACA"
 
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
@@ -300,10 +302,11 @@ class PersistenceService:
             async with session.begin():
                 stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(
                     status=OrderStatus.CLOSED,
+                    closed_at=func.now(),
                     metadata_json={"exit_prices": exit_prices, "pnl": pnl, "exit_reason": exit_reason.value if exit_reason else None}
                 )
                 await session.execute(stmt)
-                
+
                 # Update TradeJournal if it exists
                 if exit_reason:
                     stmt_j = update(TradeJournal).where(TradeJournal.signal_id == signal_id).values(
@@ -316,20 +319,15 @@ class PersistenceService:
         asyncio.create_task(reflection_agent.reflect_on_trade(str(signal_id)))
 
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
-        """
-        Retrieves all currently OPEN positions grouped by signal_id, 
-        optionally filtered by venue.
-        """
+        """Retrieves all currently OPEN positions grouped by signal_id."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
-            # We fetch all OPEN orders that represent trades
             stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.OPEN)
             if venue:
                 stmt = stmt.where(TradeLedger.venue == venue)
             result = await session.execute(stmt)
             trades = result.scalars().all()
-            
-            # Map grouped by signal_id
+
             signals = {}
             for t in trades:
                 sig = str(t.signal_id)
@@ -348,7 +346,7 @@ class PersistenceService:
                     "execution_timestamp": t.execution_timestamp
                 })
                 signals[sig]["total_cost_basis"] += float(t.quantity * t.price)
-                
+
             return list(signals.values())
 
     async def get_active_dca_schedules(self) -> List[DCASchedules]:
@@ -389,30 +387,18 @@ class PersistenceService:
             return val if val is not None else default
 
     async def get_active_trading_universe(self) -> List[str]:
-        """
-        List all unique tickers present in trading pairs with status "Active".
-        
-        Returns:
-            List[str]: A sorted list of unique ticker symbols gathered from `ticker_a` and `ticker_b` of trading pairs whose `status` equals "Active".
-        """
+        """List all unique tickers present in active trading pairs."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
-            # Query all tickers from both A and B sides of the pairs
             stmt_a = select(TradingPair.ticker_a).where(TradingPair.status == "Active")
             stmt_b = select(TradingPair.ticker_b).where(TradingPair.status == "Active")
-            
             result_a = await session.execute(stmt_a)
             result_b = await session.execute(stmt_b)
-            
             tickers = set(result_a.scalars().all()) | set(result_b.scalars().all())
             return sorted(list(tickers))
 
     async def get_active_trading_pairs(self) -> List[dict]:
-        """
-        List active trading pairs as dictionaries.
-        
-        @returns A list of dictionaries, each containing the keys `id`, `ticker_a`, `ticker_b`, `hedge_ratio` (float), `is_cointegrated`, and `status`.
-        """
+        """List active trading pairs as dictionaries."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
             stmt = select(TradingPair).where(TradingPair.status == "Active")
@@ -431,18 +417,7 @@ class PersistenceService:
             ]
 
     async def save_trading_pairs(self, pairs: List[dict]):
-        """
-        Upserts trading pair records from a list of pair dictionaries into the database.
-        
-        Parameters:
-            pairs (List[dict]): List of dictionaries describing trading pairs. Each dictionary must include
-                `ticker_a` and `ticker_b`. Optional keys:
-                    - `id`: explicit record id; if omitted, `"{ticker_a}_{ticker_b}"` is used.
-                    - `hedge_ratio` (float): defaults to 0.0 when absent.
-                    - `is_cointegrated` (bool): defaults to False when absent.
-                    - `status` (str): defaults to "Active" when absent.
-                Providing an empty list is a no-op.
-        """
+        """Upserts trading pair records into the database."""
         from sqlalchemy.dialects.postgresql import insert
         if not pairs:
             return
@@ -468,17 +443,7 @@ class PersistenceService:
                     await session.execute(stmt)
 
     async def get_daily_returns(self, venue: Optional[str] = None) -> Dict[str, float]:
-        """
-        Compute aggregated daily PnL per calendar day from closed trades.
-        
-        Filters closed trades (optionally by venue), reads per-signal PnL from each trade's `metadata_json["pnl"]`, deduplicates multiple legs by `signal_id` (or trade `id` when `signal_id` is missing), and sums those signal-level PnLs into a mapping keyed by YYYY-MM-DD.
-        
-        Parameters:
-        	venue (Optional[str]): If provided, restrict results to trades from this exact venue.
-        
-        Returns:
-        	daily_pnl (Dict[str, float]): Mapping from day string `'YYYY-MM-DD'` to the sum of signal-level PnL for that day.
-        """
+        """Aggregated daily PnL per calendar day from closed trades."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
             stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.CLOSED)
@@ -486,14 +451,15 @@ class PersistenceService:
                 stmt = stmt.where(TradeLedger.venue == venue)
             result = await session.execute(stmt)
             trades = result.scalars().all()
-            
-            # Deduplicate by signal_id because close_trade writes the same
-            # signal-level pnl into each closed leg metadata row.
+
             signal_day_pnl: Dict[tuple[str, str], float] = {}
             for t in trades:
                 if not t.metadata_json or "pnl" not in t.metadata_json:
                     continue
-                day_str = t.execution_timestamp.strftime("%Y-%m-%d")
+                # REALIZED P&L BUG FIX: Attribute profit to the date it was CLOSED,
+                # not when the trade was opened (execution_timestamp).
+                target_date = t.closed_at or t.execution_timestamp
+                day_str = target_date.strftime("%Y-%m-%d")
                 sig = str(t.signal_id) if t.signal_id is not None else str(t.id)
                 key = (day_str, sig)
                 if key not in signal_day_pnl:
@@ -651,7 +617,7 @@ class PersistenceService:
         }
 
     async def get_chart_series(self, metric: str) -> Dict[str, Any]:
-        """Returns time-series data for a small set of dashboard chart metrics."""
+        """Returns time-series data for dashboard chart metrics."""
         metric_key = (metric or "").lower()
         daily_returns = await self.get_daily_returns()
         ordered_days = sorted(daily_returns.keys())
@@ -705,7 +671,7 @@ class PersistenceService:
             ap = result.scalar_one_or_none()
             if ap:
                 return ap.successes, ap.failures
-            return 1, 1 # Beta(1,1) uniform prior
+            return 1, 1
 
     async def update_agent_metrics(self, agent_name: str, is_success: bool):
         """Increments success or failure count for a given agent via an UPSERT."""
@@ -767,42 +733,21 @@ class PersistenceService:
             return [row[0] for row in result.all()]
 
     async def save_universe_candidates(self, candidates: List[UniverseCandidate]):
-        """
-        Insert multiple UniverseCandidate objects into the database within a single transaction.
-        
-        Parameters:
-            candidates (List[UniverseCandidate]): Iterable of UniverseCandidate ORM instances to persist. If the list is empty, the function returns without performing any database operations.
-        
-        Notes:
-            - Each provided candidate is added as a new row; existing rows are not updated (no upsert is performed).
-            - All inserts occur inside a single transactional context and will be committed together.
-        """
+        """Persists multiple UniverseCandidate objects."""
         if not candidates:
             return
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 for c in candidates:
                     session.add(c)
-                # Or use bulk_save_objects if needed, but session.add in a loop within a transaction is usually fine for small/medium batches in async
 
     async def get_top_candidates(self, limit: int = 20) -> List[dict]:
-        """
-        Retrieve the top universe candidates ordered by Sortino ratio.
-        
-        Parameters:
-            limit (int): Maximum number of candidates to return (default 20).
-        
-        Returns:
-            List[dict]: A list of candidate dictionaries, each containing:
-                - "pair_id": candidate identifier (str)
-                - "sector": sector name (str)
-                - "sortino": Sortino ratio as a float (defaults to 0.0 if missing)
-                - "p_value": p-value as a float (defaults to 1.0 if missing)
-        """
+        """Retrieve the top universe candidates ordered by Sortino ratio."""
         from sqlalchemy import select, desc
         async with self.AsyncSessionLocal() as session:
             stmt = select(UniverseCandidate).order_by(desc(UniverseCandidate.sortino)).limit(limit)
             result = await session.execute(stmt)
+            candidates = result.scalars().all()
             return [
                 {
                     "pair_id": c.pair_id,
@@ -810,17 +755,11 @@ class PersistenceService:
                     "sortino": float(c.sortino or 0.0),
                     "p_value": float(c.p_value or 1.0)
                 }
-                for c in result.scalars().all()
+                for c in candidates
             ]
 
     async def update_pair_status(self, pair_id: str, status: str):
-        """
-        Change the stored status of a trading pair identified by its id.
-        
-        Parameters:
-            pair_id (str): Identifier of the trading pair to update.
-            status (str): New status value for the pair (e.g., "Active", "Benched").
-        """
+        """Updates the status of a trading pair."""
         from sqlalchemy import update
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
@@ -828,4 +767,3 @@ class PersistenceService:
                 await session.execute(stmt)
 
 persistence_service = PersistenceService()
-
