@@ -252,7 +252,8 @@ class DataService:
             
             # Use Alpaca bar fetching (RFC3339 UTC format)
             # Free Tier constraint: historical data (SIP) must be at least 15-20 minutes old.
-            end_dt = datetime.now(timezone.utc) - timedelta(minutes=16)
+            # Using 21 minutes to be safe.
+            end_dt = datetime.now(timezone.utc) - timedelta(minutes=21)
             start_dt = end_dt - timedelta(days=days)
             
             # Format as RFC3339 string without microseconds
@@ -265,7 +266,7 @@ class DataService:
                 timeframe,
                 start=start_str,
                 end=end_str,
-                adjustment="all"
+                adjustment="raw" # Use 'raw' for broader compatibility with free tier
             ).df
             
             if not bars.empty:
