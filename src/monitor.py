@@ -8,6 +8,7 @@ from rich.table import Table
 from rich.live import Live
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 import pandas as pd
+import numpy as np
 import yfinance as yf
 from datetime import datetime
 from src.config import settings
@@ -26,6 +27,7 @@ from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service
+from src.services.trade_math import build_pair_legs, cap_pair_notional, estimate_pair_profit
 import uuid
 import pytz
 import inspect
@@ -62,9 +64,9 @@ def setup_logging():
     # Remove existing handlers
     """
     Configure the root Python logger to use Rich for formatted console output and reduce noise from common third-party libraries.
-    
+
     This function clears any existing root logger handlers, installs a RichHandler that displays message-only output with timestamps and paths, sets the root logger level to INFO, and lowers verbosity for `urllib3` and `yfinance`.
-    
+
     Returns:
         logging.Logger: A logger scoped to this module's __name__.
     """
@@ -83,11 +85,11 @@ def setup_logging():
     rich_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger.addHandler(rich_handler)
     root_logger.setLevel(logging.INFO)
-    
+
     # Silence some noisy loggers
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("yfinance").setLevel(logging.ERROR)
-    
+
     return logging.getLogger(__name__)
 
 logger = setup_logging()
@@ -98,7 +100,7 @@ class ArbitrageMonitor:
         self.mode = mode
         self.active_pairs = []
         self.active_signals = []
-        self._signals_lock = asyncio.Lock()
+        self._signals_lock: Optional[asyncio.Lock] = None
         self.last_dev_warning = datetime.min
         self.current_day = None
         self.daily_start_cash = 0.0
@@ -117,8 +119,11 @@ class ArbitrageMonitor:
         z_score: float,
         status: str,
         confidence: float | None = None,
+        hedge_ratio: float | None = None,
     ) -> None:
         """Keep dashboard-facing signal state live for z-score and confidence."""
+        if self._signals_lock is None:
+            self._signals_lock = asyncio.Lock()
         async with self._signals_lock:
             signal_entry = next(
                 (s for s in self.active_signals if s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b),
@@ -131,8 +136,12 @@ class ArbitrageMonitor:
             signal_entry["status"] = status
             if confidence is not None:
                 signal_entry["confidence"] = confidence
+            if hedge_ratio is not None:
+                signal_entry["hedge_ratio"] = hedge_ratio
 
     async def _remove_active_signal(self, ticker_a: str, ticker_b: str) -> None:
+        if self._signals_lock is None:
+            self._signals_lock = asyncio.Lock()
         async with self._signals_lock:
             self.active_signals = [
                 s
@@ -214,11 +223,11 @@ class ArbitrageMonitor:
         """
         mode = "PAPER" if settings.PAPER_TRADING else "LIVE"
         next_open = self.next_market_open()
-        
+
         table = Table(title="Bot Pre-flight Configuration", show_header=False, box=None)
         table.add_row("Mode", f"[bold cyan]{mode}[/]")
         table.add_row("Dev Mode", f"{'[green]Enabled[/]' if settings.DEV_MODE else '[yellow]Disabled[/]'}")
-        
+
         if settings.DEV_MODE:
             pair_count = len(settings.CRYPTO_TEST_PAIRS)
             table.add_row("Pair Universe", f"{pair_count} crypto pairs")
@@ -232,7 +241,7 @@ class ArbitrageMonitor:
         console.print(Panel(table, title="[bold blue]Arbitrage Elite Engine[/]", border_style="blue"))
 
     async def _preflight_live_sell_inventory(self, legs: list[dict]) -> bool:
-        """Fail closed if a live T212 sell leg tries to sell more than owned."""
+        """Fail closed if a live sell leg tries to sell more than owned."""
         for leg in legs:
             if leg["side"].upper() != "SELL":
                 continue
@@ -255,7 +264,7 @@ class ArbitrageMonitor:
             if available + 1e-9 < required:
                 msg = (
                     f"Execution skipped before broker for {leg['display_ticker']}: "
-                    f"SELL leg requires {required:.6f} shares, but Trading212 reports "
+                    f"SELL leg requires {required:.6f} shares, but the broker reports "
                     f"{available:.6f} available. This prevents 'selling more than owned'."
                 )
                 logger.warning(msg)
@@ -270,13 +279,13 @@ class ArbitrageMonitor:
         Refuses to boot if baselines are missing for any active pair when LIVE_CAPITAL_DANGER=True.
         """
         logger.info(f"VALIDATING L2 ENTROPY BASELINES FOR {len(pairs)} PAIRS (LIVE_CAPITAL_DANGER=True)...")
-        
+
         # Extract unique tickers to minimize Redis calls
         unique_tickers = set()
         for p in pairs:
             unique_tickers.add(p['ticker_a'])
             unique_tickers.add(p['ticker_b'])
-            
+
         missing_baselines = []
         for ticker in unique_tickers:
             # Entropy service stores baselines as 'entropy_baseline:{ticker}'
@@ -296,7 +305,7 @@ class ArbitrageMonitor:
     async def initialize_pairs(self):
         """
         Initialize the monitor's active pair universe and prepare cointegration and Kalman filter state for each eligible pair.
-        
+
         Selects candidate pairs (from persisted active pairs or config), applies eligibility gates, validates cointegration (optionally with rolling-window stability), sanitizes hedge ratios, warms or restores Kalman filter state, computes spread metrics, and registers prepared pair records in self.active_pairs. Updates dashboard pre-warming progress and records last_cointegration_check dates; may persist a bootstrapped active-pair list when the database is empty.
         """
         db_pairs = await persistence_service.get_active_trading_pairs()
@@ -322,7 +331,7 @@ class ArbitrageMonitor:
         # LSE-stamp-duty and cost-above-ceiling pairs *before* allocating
         # Kalman state for them. This avoids spending compute and Redis state
         # on pairs that the strategy can never profitably trade.
-        pairs_to_init, rejected = filter_pair_universe(
+        pairs_to_init, rejected = await filter_pair_universe(
             candidate_pairs,
             account_currency=settings.ACCOUNT_CURRENCY,
             max_round_trip_cost_pct=settings.PAIR_MAX_ROUND_TRIP_COST_PCT,
@@ -404,7 +413,6 @@ class ArbitrageMonitor:
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(
                     hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
                 )
-                logger.info(f"DEBUG {ticker_a}/{ticker_b}: Coint={is_coint}, p={p_val:.4f}, hedge={hedge:.4f}")
 
                 # Spec 037: rolling-window stability check on top of the
                 # static ADF. A pair that flunked stability across rolling
@@ -433,7 +441,6 @@ class ArbitrageMonitor:
                         )
 
                 # Bug L-01: Guard against NaN/Inf hedge ratio
-                import numpy as np
                 if pd.isna(hedge) or np.isinf(hedge):
                     logger.warning(f"Invalid hedge ratio for {ticker_a}/{ticker_b}: {hedge}. Using 1.0.")
                     hedge = 1.0
@@ -470,12 +477,12 @@ class ArbitrageMonitor:
                 # in the scan loop doesn't immediately fire again 15 s after boot.
                 self.last_cointegration_check[pair_id] = datetime.now().date()
                 logger.info(f"SUCCESS: Pair {ticker_a}/{ticker_b} initialized.")
-                
+
                 # Pacing: Avoid blasting the data API (Yahoo/Polygon) during boot
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"FATAL ERROR initializing {ticker_a}/{ticker_b}: {e}")
-        
+
         logger.info(f"Initialization Summary: {len(self.active_pairs)}/{total_pairs} pairs successfully loaded.")
         if total_pairs > 0:
             await dashboard_service.update(
@@ -489,11 +496,11 @@ class ArbitrageMonitor:
         Swaps the worst performing active pairs with the best candidates.
         """
         logger.info("ELITE SQUAD: Checking for potential pair rotation...")
-        
+
         # 1. Get current active pairs
         active_pairs = await persistence_service.get_active_trading_pairs()
         if not active_pairs: return
-        
+
         # 2. Get top candidates from scouting
         top_candidates = await persistence_service.get_top_candidates(limit=10)
         if not top_candidates:
@@ -503,29 +510,29 @@ class ArbitrageMonitor:
         # 3. Find worst performing or broken active pair
         # Simple heuristic: prioritize pairs that are no longer cointegrated.
         worst_active = sorted(active_pairs, key=lambda p: p.get('is_cointegrated', True))[0]
-        
+
         # Get the best candidate that isn't already active
         active_ids = {p['id'] for p in active_pairs}
         eligible_candidates = [c for c in top_candidates if c['pair_id'] not in active_ids]
-        
+
         if not eligible_candidates:
             logger.info("ELITE SQUAD: All top candidates are already active.")
             return
-            
+
         best_candidate = eligible_candidates[0]
-        
+
         # 4. Rotation Logic: Rotate if active is broken OR candidate Sortino is significantly high
         should_rotate = (
             not worst_active.get("is_cointegrated")
             or best_candidate["sortino"] > settings.ELITE_ROTATION_SORTINO_THRESHOLD
         )
-        
+
         if should_rotate:
             logger.info(f"ELITE SQUAD: Rotating {worst_active['id']} out for {best_candidate['pair_id']}.")
-            
+
             # Update DB
             await persistence_service.update_pair_status(worst_active['id'], "Benched")
-            
+
             # Promote candidate to Active
             ticker_a, ticker_b = best_candidate['pair_id'].split('_')
             await persistence_service.save_trading_pairs([{
@@ -534,7 +541,7 @@ class ArbitrageMonitor:
                 "status": "Active",
                 "is_cointegrated": True
             }])
-            
+
             # Reload in-memory state
             await self.reload_pairs()
         else:
@@ -556,18 +563,18 @@ class ArbitrageMonitor:
             initial_delay / 60,
         )
         await asyncio.sleep(initial_delay)
-        
+
         while True:
             try:
                 logger.info("AUTO-UPDATE: Starting periodic Scouting & Rotation cycle...")
-                
+
                 # 1. Scouting: Find new candidates
                 from src.agents.portfolio_manager_agent import portfolio_manager
                 await portfolio_manager.run_discovery()
-                
+
                 # 2. Rotation: Promote best candidates
                 await self._rotate_elite_pairs()
-                
+
                 logger.info(f"AUTO-UPDATE: Cycle complete. Next run in {settings.SCOUT_INTERVAL_HOURS} hours.")
                 await asyncio.sleep(settings.SCOUT_INTERVAL_HOURS * 3600)
             except Exception as e:
@@ -579,7 +586,7 @@ class ArbitrageMonitor:
     async def reload_pairs(self):
         """
         Reload the active pair universe from settings and update in-memory state.
-        
+
         Builds a new list of active pairs by calling initialize_pairs() while holding the signals lock;
         replaces the existing active_pairs and resets last_cointegration_check. After reloading,
         removes any in-memory Kalman filters that correspond to pairs no longer active to prevent
@@ -624,7 +631,21 @@ class ArbitrageMonitor:
                 f"(+{len(new_ids - old_ids)} new, -{len(removed)} removed)"
             )
 
-    async def process_pair(self, pair: dict, latest_prices: dict) -> dict:
+    async def _get_sizing_base(self) -> float:
+        """Helper to fetch the current account equity/cash for sizing calculations."""
+        if settings.PAPER_TRADING:
+            venue_budget_cap = settings.ALPACA_BUDGET_USD
+            return venue_budget_cap if venue_budget_cap > 0 else settings.PAPER_TRADING_STARTING_CASH
+
+        try:
+            maybe_equity = self.brokerage.get_account_equity()
+            equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
+            return float(equity or 0.0)
+        except Exception as e:
+            logger.warning(f"Failed to fetch sizing base from brokerage: {e}. Falling back to default.")
+            return settings.PAPER_TRADING_STARTING_CASH
+
+    async def process_pair(self, pair: dict, latest_prices: dict, sizing_base: float = 0.0) -> dict:
         """Processes a single pair for signals and validation."""
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
         try:
@@ -650,7 +671,7 @@ class ArbitrageMonitor:
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
                 return diagnostic
-            
+
             # Spec 037: Session-boundary Q/P adjustment applied BEFORE this
             # tick's update so the inflated noise is in effect for the very
             # first bar after market open. inflate_q() then decays Q linearly
@@ -706,7 +727,12 @@ class ArbitrageMonitor:
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
                 # Update Active Signals for Dashboard
-                await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="Analyzing")
+                await self._upsert_active_signal(
+                    t_a, t_b,
+                    z_score=z_score,
+                    status="Analyzing",
+                    hedge_ratio=float(pair.get("hedge_ratio", 1.0))
+                )
 
                 # AI Validation
                 # Look up this pair's sector so the orchestrator uses the right beacon asset.
@@ -737,6 +763,7 @@ class ArbitrageMonitor:
                         z_score=z_score,
                         status="VETOED_TIMEOUT",
                         confidence=0.0,
+                        hedge_ratio=float(pair.get("hedge_ratio", 1.0))
                     )
                     logger.warning(
                         "ORCHESTRATOR [%s/%s] timed out after %.1f s. "
@@ -749,6 +776,76 @@ class ArbitrageMonitor:
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
 
+                # Calculate expected profit/loss from the same gross pair
+                # notional that execution will use.
+                hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+                effective_sizing_base = sizing_base if sizing_base > 0 else settings.PAPER_TRADING_STARTING_CASH
+                risk_res = risk_service.validate_trade(
+                    ticker=f"{t_a}_{t_b}",
+                    total_portfolio_cash=effective_sizing_base,
+                    amount_fiat=effective_sizing_base,
+                    win_prob=settings.DEFAULT_WIN_PROBABILITY,
+                    win_loss_ratio=settings.DEFAULT_WIN_LOSS_RATIO
+                )
+                desired_notional = cap_pair_notional(
+                    float(risk_res["final_amount"]),
+                    effective_sizing_base,
+                    min_trade_value=settings.MIN_TRADE_VALUE,
+                )
+                if settings.TARGET_CASH_PER_LEG > 0:
+                    desired_notional = min(desired_notional, settings.TARGET_CASH_PER_LEG * 2.0)
+
+                if desired_notional <= 0:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="VETOED_SIZE",
+                        confidence=0.0,
+                        hedge_ratio=hedge_ratio,
+                    )
+                    return diagnostic
+
+                direction = "Short-Long" if z_score > 0 else "Long-Short"
+                legs = build_pair_legs(
+                    price_a=price_a,
+                    price_b=price_b,
+                    hedge_ratio=hedge_ratio,
+                    gross_notional=desired_notional,
+                    direction=direction,
+                )
+                est_friction_pct = max(
+                    float(risk_res["fee_status"].get("total_friction_percent", 0.0)),
+                    float(pair.get("estimated_cost_pct") or 0.0),
+                )
+                preview = estimate_pair_profit(
+                    quantity_a=legs.quantity_a,
+                    gross_notional=legs.gross_notional,
+                    spread=spread,
+                    z_score=z_score,
+                    innovation_variance=innovation_var,
+                    friction_pct=est_friction_pct,
+                    take_profit_zscore=settings.TAKE_PROFIT_ZSCORE,
+                    stop_loss_zscore=settings.STOP_LOSS_ZSCORE,
+                )
+
+                if preview.net_profit <= 0:
+                    logger.info(f"PROFIT GUARD [{t_a}/{t_b}]: Net profit ${preview.net_profit:.2f} is non-positive. Vetoing.")
+                    await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="VETOED_UNPROFITABLE", confidence=0.0, hedge_ratio=hedge_ratio)
+                    return diagnostic
+
+                trade_summary = (
+                    f"*Opportunity Found: {t_a} / {t_b}*\n\n"
+                    f"*Gross Pair Notional*: ${legs.gross_notional:.2f} "
+                    f"(${legs.notional_a:.2f} {legs.side_a} {t_a} / ${legs.notional_b:.2f} {legs.side_b} {t_b})\n"
+                    f"*Expected Net Profit*: ${preview.net_profit:.2f} ({preview.profit_margin_pct:.2f}%) "
+                    f"[Gross: ${preview.gross_profit:.2f}]\n"
+                    f"*Max Loss Risk*: ${preview.expected_loss:.2f} ({preview.loss_margin_pct:.2f}%)\n"
+                    f"*Est. Friction*: ${preview.friction_usd:.2f} ({est_friction_pct:.2%})\n\n"
+                    f"*Stats*: Z-Score {z_score:.2f} | Hedge {hedge_ratio:.3f} | Conf {decision_state['final_confidence']:.1%}\n"
+                    f"*Sizing*: Kelly {risk_res['kelly_fraction']:.2%} of base (${float(risk_res['final_amount']):.2f} gross pair notional)."
+                )
+
                 if decision_state['final_confidence'] > settings.MONITOR_MIN_AI_CONFIDENCE:
                     await self._upsert_active_signal(
                         t_a,
@@ -756,8 +853,9 @@ class ArbitrageMonitor:
                         z_score=z_score,
                         status="APPROVED",
                         confidence=float(decision_state["final_confidence"]),
+                        hedge_ratio=hedge_ratio,
                     )
-                    approved = await notification_service.request_approval(f"Opportunity in {t_a}/{t_b}. Z:{z_score:.2f}")
+                    approved = await notification_service.request_approval(trade_summary)
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
                         await self.execute_trade(pair, direction, price_a, price_b, signal_id)
@@ -767,6 +865,7 @@ class ArbitrageMonitor:
                             z_score=z_score,
                             status="EXECUTED",
                             confidence=float(decision_state["final_confidence"]),
+                            hedge_ratio=hedge_ratio,
                         )
                         diagnostic["verdict"] = "EXECUTED"
                 else:
@@ -776,6 +875,7 @@ class ArbitrageMonitor:
                         z_score=z_score,
                         status="VETOED",
                         confidence=float(decision_state["final_confidence"]),
+                        hedge_ratio=hedge_ratio,
                     )
                     logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
                     diagnostic["verdict"] = "VETOED"
@@ -813,19 +913,18 @@ class ArbitrageMonitor:
         else:
             logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
 
-        # Feature 037.B & BudgetService: Use isolated budget caps per venue
         venue = self.brokerage.get_venue(t_a)
         crypto_pair = is_crypto_pair(t_a, t_b)
-        venue_budget_cap = getattr(settings, f"{venue}_BUDGET_USD", 0.0)
-        
+        venue_budget_cap = settings.ALPACA_BUDGET_USD
+
         total_cash = None
+        total_equity = None
+        buying_power = None
+        sizing_base = 0.0
+        available_for_exec = 0.0
         pending_value = 0.0
         budget_source = "unknown"
 
-        # Feature 037.C: Keep venue budgeting logic consistent. Web3 wallet
-        # configuration is intentionally separate from crypto execution: crypto
-        # pairs keep 24/7 scanning, while live orders are sized from the selected
-        # broker venue, typically Alpaca.
         if settings.PAPER_TRADING:
             total_cash = (
                 venue_budget_cap
@@ -833,23 +932,20 @@ class ArbitrageMonitor:
                 else settings.PAPER_TRADING_STARTING_CASH
             )
             budget_source = "paper_starting_cash"
-        elif venue == "WEB3":
-            try:
-                maybe_cash = self.brokerage.get_web3_account_cash()
-                total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
-                if not isinstance(total_cash, (int, float)):
-                    snapshot = self.brokerage.web3.get_budget_snapshot()
-                    snapshot = await snapshot if inspect.isawaitable(snapshot) else snapshot
-                    total_cash = float(snapshot.get("balance_usd", snapshot.get("available_usd", 0.0)))
-                budget_source = "web3_wallet_usd"
-            except Exception as e:
-                logger.warning(f"WEB3 account cash fetch failed for {t_a}/{t_b}: {e}")
-                total_cash = None
+            sizing_base = total_cash
+            available_for_exec = total_cash
         else:
             maybe_cash = self.brokerage.get_account_cash()
+            maybe_equity = self.brokerage.get_account_equity()
+            maybe_bp = self.brokerage.get_account_buying_power()
+
             total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
+            total_equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
+            buying_power = await maybe_bp if inspect.isawaitable(maybe_bp) else maybe_bp
+
             asset_class = "crypto" if crypto_pair else "equity"
             budget_source = f"{venue.lower()}_{asset_class}_cash"
+
             if total_cash is not None:
                 try:
                     maybe_pending = self.brokerage.get_pending_orders_value()
@@ -860,33 +956,49 @@ class ArbitrageMonitor:
                 except Exception as e:
                     logger.warning(f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}")
 
+            # Use equity as the basis for sizing calculations if available
+            sizing_base = total_equity if total_equity and total_equity > 0 else total_cash
+            # Use buying power as the hard limit for execution
+            available_for_exec = buying_power if buying_power is not None else total_cash
+
+            # Feature 038: For crypto pairs, leverage is not available on Alpaca.
+            # Hard-cap the available amount to actual cash to prevent "Insufficient Balance" errors
+            # when buying power (which includes stock leverage) exceeds cash.
+            if crypto_pair and available_for_exec is not None and total_cash is not None:
+                available_for_exec = min(available_for_exec, total_cash)
+
         # If balance probes are unavailable, allow operator-defined cap-only mode.
         if total_cash is None:
             venue_budget_info = budget_service.get_venue_budget_info(venue)
             total_cash = venue_budget_info["total"] if venue_budget_info["total"] > 0 else 0.0
+            sizing_base = total_cash
+            available_for_exec = total_cash
             budget_source = "venue_cap_only" if total_cash > 0 else "unavailable"
 
         # Integrate BudgetService for tracking across sessions
-        actual_available = max(0.0, float(total_cash) - pending_value)
+        actual_available = max(0.0, float(available_for_exec) - pending_value)
         effective_cash = budget_service.get_effective_cash(venue, actual_available)
         budget_info = budget_service.get_venue_budget_info(venue)
+
+        # Sizing base also needs to be adjusted by pending value to be conservative
+        sizing_base = max(0.0, float(sizing_base) - pending_value)
 
         if effective_cash <= 0:
             logger.warning(
                 "Venue budget exhausted/unavailable for %s (%s/%s). "
                 "source=%s total=%.2f pending=%.2f used=%.2f/%.2f. "
                 "Replenish budget or account balance.",
-                venue, t_a, t_b, budget_source, float(total_cash), pending_value, 
+                venue, t_a, t_b, budget_source, float(total_cash), pending_value,
                 budget_info["used"], budget_info["total"]
             )
             return
 
         # Risk sizing is applied inside RiskService (Kelly + allocation cap).
-        # Pass the full effective cash base so we do not double-apply 5% caps.
+        # Pass the sizing_base (equity) so sizing is calculated according to total wallet.
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
-            total_portfolio_cash=effective_cash,
-            amount_fiat=effective_cash,
+            total_portfolio_cash=sizing_base,
+            amount_fiat=sizing_base,
             win_prob=settings.DEFAULT_WIN_PROBABILITY,
             win_loss_ratio=settings.DEFAULT_WIN_LOSS_RATIO
         )
@@ -899,14 +1011,35 @@ class ArbitrageMonitor:
             )
             return
 
-        target_cash = min(float(risk_res["final_amount"]), effective_cash)
-        logger.info(
-            "RISK APPROVED SIZE: %.2f per leg for %s/%s (Kelly: %.4f, venue=%s, cash=%.2f, cap=%.2f)",
-            target_cash, t_a, t_b, risk_res["kelly_fraction"], venue, effective_cash, float(venue_budget_cap)
+        desired_notional = cap_pair_notional(
+            float(risk_res["final_amount"]),
+            effective_cash,
+            min_trade_value=settings.MIN_TRADE_VALUE,
         )
+        if settings.TARGET_CASH_PER_LEG > 0:
+            desired_notional = min(desired_notional, settings.TARGET_CASH_PER_LEG * 2.0)
 
-        size_a = round(target_cash / price_a, 6)
-        size_b = round(target_cash / price_b, 6)
+        if desired_notional <= 0:
+            logger.info("Sized pair notional is below MIN_TRADE_VALUE. Skipping trade.")
+            return
+
+        hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+        legs = build_pair_legs(
+            price_a=price_a,
+            price_b=price_b,
+            hedge_ratio=hedge_ratio,
+            gross_notional=desired_notional,
+            direction=direction,
+        )
+        size_a = legs.quantity_a
+        size_b = legs.quantity_b
+        target_cash_a = legs.notional_a
+        target_cash_b = legs.notional_b
+
+        logger.info(
+            "RISK APPROVED SIZE: Gross=$%.2f, LegA=$%.2f, LegB=$%.2f for %s/%s (Hedge: %.4f, Kelly: %.4f, Base: $%.2f, MaxCap: $%.2f)",
+            legs.gross_notional, target_cash_a, target_cash_b, t_a, t_b, hedge_ratio, risk_res["kelly_fraction"], sizing_base, risk_res["max_allowed_fiat"]
+        )
 
         # Feature 008 - Sector Cluster Guard (prospective, race-condition-safe).
         # Both legs are counted as new exposure (target_cash each) so the check
@@ -915,18 +1048,23 @@ class ArbitrageMonitor:
         # and then together pushing the sector to 60 %.
         pair_sector = resolve_pair_sector(pair["id"], t_a, t_b, settings.PAIR_SECTORS)
         current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
-        if current_portfolio:
-            total_size = sum(p['size'] for p in current_portfolio)
-            sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
-            new_trade_size = target_cash * 2  # two legs of equal value
-            projected_exposure = (sector_size + new_trade_size) / (total_size + new_trade_size)
-            if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
-                logger.warning(
-                    f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
-                    f"'{pair_sector}' exposure to {projected_exposure:.1%}, "
-                    f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
-                )
-                return
+        total_size = sum(p['size'] for p in current_portfolio)
+        sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
+        new_trade_size = target_cash_a + target_cash_b  # sum of both legs
+
+        # Feature 008 Fix: prevent "Empty Portfolio Trap" where the first trade
+        # is always 100% exposure. We use the larger of actual total size or
+        # a theoretical 'full portfolio' base (e.g. 5x target leg cash).
+        denominador = max(total_size + new_trade_size, sizing_base)
+        projected_exposure = (sector_size + new_trade_size) / denominador
+
+        if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
+            logger.warning(
+                f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
+                f"'{pair_sector}' exposure to {projected_exposure:.1%} (base: ${denominador:.2f}), "
+                f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
+            )
+            return
 
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
@@ -938,9 +1076,8 @@ class ArbitrageMonitor:
                 "features": {},
             }
 
-        # Determina a direcao (Side) para cada perna
-        side_a = "SELL" if direction == "Short-Long" else "BUY"
-        side_b = "BUY" if direction == "Short-Long" else "SELL"
+        side_a = legs.side_a
+        side_b = legs.side_b
         exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
 
@@ -960,32 +1097,13 @@ class ArbitrageMonitor:
             )
             return
 
-        # Chamada ao broker (T212 via Fractional Engine)
-        if venue == "T212":
-            can_execute = await self._preflight_live_sell_inventory([
-                {
-                    "ticker": exec_t_a,
-                    "display_ticker": t_a,
-                    "side": side_a,
-                    "quantity": size_a,
-                },
-                {
-                    "ticker": exec_t_b,
-                    "display_ticker": t_b,
-                    "side": side_b,
-                    "quantity": size_b,
-                },
-            ])
-            if not can_execute:
-                return
-
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
         res_a = await self.brokerage.place_value_order(
             exec_t_a,
-            target_cash,
+            target_cash_a,
             side_a,
             price=price_a,
             client_order_id=f"{signal_id}-A",
@@ -1008,13 +1126,13 @@ class ArbitrageMonitor:
             )
             return
 
-        # Delay between legs to respect T212 Rate Limits
+        # Small delay between legs to avoid broker-side burst throttling.
         await asyncio.sleep(1.0)
 
         # Leg B
         res_b = await self.brokerage.place_value_order(
             exec_t_b,
-            target_cash,
+            target_cash_b,
             side_b,
             price=price_b,
             client_order_id=f"{signal_id}-B",
@@ -1030,7 +1148,13 @@ class ArbitrageMonitor:
                 f"Placing emergency close on Leg A to prevent orphaned directional exposure."
             )
             close_side_a = "BUY" if side_a == "SELL" else "SELL"
-            close_res = await self.brokerage.place_value_order(exec_t_a, target_cash, close_side_a)
+            close_res = await self.brokerage.place_value_order(
+                exec_t_a,
+                target_cash_a,
+                close_side_a,
+                price=price_a,
+                client_order_id=f"{signal_id}-A-EMERGENCY-CLOSE",
+            )
             if close_res.get("status") == "error":
                 orphan_msg = (
                     f"CRITICAL - EMERGENCY CLOSE FAILED\n"
@@ -1052,7 +1176,7 @@ class ArbitrageMonitor:
                     "quantity": size_a,
                     "price": price_a,
                     "status": OrderStatus.FAILED,
-                    "metadata": {
+                    "metadata_json": {
                         "orphaned": True,
                         "reason": "emergency_close_failed",
                         "broker_response": close_res,
@@ -1195,7 +1319,7 @@ class ArbitrageMonitor:
         # before a single log line about infra appears.
         """
         Start and run the continuous monitoring loop that initializes services, performs startup health checks, and continuously scans active arbitrage pairs.
-        
+
         This method performs startup routines (preflight display, database and pair initialization, dashboard and notification listeners), runs health checks for PostgreSQL, Redis, and the brokerage API, resets circuit-breaker state, launches background scouting/rotation, and enters the main Rich Live scan loop. While running it:
         - updates dashboard metrics and progress,
         - evaluates open-position exit conditions,
@@ -1244,21 +1368,21 @@ class ArbitrageMonitor:
             await notification_service.send_alert(msg)
             return
 
-        # 3. Trading 212 API Check (if not exclusively paper/mocked)
+        # 3. Alpaca API check (if not exclusively paper/mocked)
         if not settings.PAPER_TRADING:
             await asyncio.sleep(1)  # Rate limit safety delay
             try:
                 # Await async brokerage call
                 test_ping = await self.brokerage.get_portfolio()
                 if isinstance(test_ping, dict) and test_ping.get("status") == "error":
-                    raise Exception(f"T212 error: {test_ping.get('message')}")
+                    raise Exception(f"Alpaca error: {test_ping.get('message')}")
             except Exception as e:
-                msg = f"CRITICAL INIT ERROR: Trading 212 API connection failed! {e}"
+                msg = f"CRITICAL INIT ERROR: Alpaca API connection failed! {e}"
                 logger.error(msg)
                 await notification_service.send_alert(msg)
                 return
 
-        logger.info("All Health Checks Passed (Postgres, Redis, T212). Bot is active.")
+        logger.info("All Health Checks Passed (Postgres, Redis, Alpaca). Bot is active.")
 
         # Sprint J: Signal the user via Telegram that we are entering MISSION MODE
         await notification_service.send_message("System Health: All Checks Passed.\n\nMode: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
@@ -1281,9 +1405,9 @@ class ArbitrageMonitor:
                 TaskProgressColumn(),
                 expand=True
             )
-            
+
             scan_task = progress.add_task("Monitoring...", total=len(self.active_pairs))
-            
+
             with Live(progress, console=console, refresh_per_second=4, vertical_overflow="visible"):
                 while True:
                     try:
@@ -1294,7 +1418,7 @@ class ArbitrageMonitor:
                             await dashboard_service.update("PAUSED", "Bot is stopped via dashboard.")
                             await asyncio.sleep(5)
                             continue
-                        
+
                         if desired == "RESTARTING":
                             await dashboard_service.update("RESTARTING", "Reloading pairs and resetting state...")
                             await self.reload_pairs()
@@ -1310,12 +1434,13 @@ class ArbitrageMonitor:
                         await dashboard_service.update(
                             stage="Monitoring",
                             details=f"Scanning {len(self.active_pairs)} pairs...",
-                            pnl=pnl
+                            pnl=pnl,
+                            active_signals=self.active_signals
                         )
                     except Exception as e:
                         logger.error(f"Error pushing metrics to dashboard: {e}")
                         await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
-                    
+
                     # Exit Strategy Loop - M-06: run all exit evaluations concurrently
                     open_signals = []
                     try:
@@ -1370,16 +1495,19 @@ class ArbitrageMonitor:
                             self.last_cointegration_check[pair['id']] = today
 
                     results = []
+                    # Fetch sizing base once per iteration to avoid API spam in process_pair
+                    current_sizing_base = await self._get_sizing_base()
+
                     for i, pair in enumerate(scan_pairs):
                         progress.update(scan_task, description=f"Scanning [magenta]{pair['ticker_a']}/{pair['ticker_b']}[/]", completed=i)
-                        res = await self.process_pair(pair, latest_prices)
+                        res = await self.process_pair(pair, latest_prices, sizing_base=current_sizing_base)
                         results.append(res)
                         # Small delay between pairs to spread out API load
                         if i < len(scan_pairs) - 1:
                             # Use a sub-task for the delay so it's visible? Or just update description.
                             progress.update(scan_task, description=f"Waiting 2s... ([dim]{pair['ticker_a']}/{pair['ticker_b']} done[/])")
                             await asyncio.sleep(2.0)
-                    
+
                     progress.update(scan_task, completed=len(scan_pairs), description="Scan iteration complete")
 
                     # L-14: Enriched heartbeat
@@ -1387,7 +1515,7 @@ class ArbitrageMonitor:
                         results,
                         settings.MONITOR_MIN_AI_CONFIDENCE,
                     )
-                    
+
                     summary_msg = (
                         f"[bold green]Iteration Complete[/] | "
                         f"Scanned: {len(scan_pairs)}/{len(self.active_pairs)} | "
@@ -1462,34 +1590,19 @@ class ArbitrageMonitor:
         )
 
         if not settings.PAPER_TRADING:
-            t212_sell_orders = [
-                order for order in close_orders
-                if self.brokerage.get_venue(order["ticker"]) == "T212" and order["side"] == "SELL"
-            ]
-            if t212_sell_orders and not await self._preflight_live_sell_inventory(t212_sell_orders):
+            sell_orders = [order for order in close_orders if order["side"] == "SELL"]
+            if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
                 return
 
             for order in close_orders:
-                if self.brokerage.get_venue(order["ticker"]) == "T212":
-                    slip = settings.T212_LIMIT_SLIPPAGE_PCT
-                    limit_price = (
-                        order["price"] * (1 + slip)
-                        if order["side"] == "BUY"
-                        else order["price"] * (1 - slip)
-                    )
-                    res = await self.brokerage.place_market_order(
-                        order["ticker"],
-                        order["quantity"],
-                        order["side"],
-                        limit_price=limit_price,
-                        client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
-                    )
-                else:
-                    res = await self.brokerage.place_value_order(
-                        order["ticker"],
-                        float(order["quantity"] * order["price"]),
-                        order["side"],
-                    )
+                notional = float(order["quantity"] * order["price"])
+                res = await self.brokerage.place_value_order(
+                    order["ticker"],
+                    round(notional, 2),
+                    order["side"],
+                    price=order["price"],
+                    client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
+                )
 
                 if res.get("status") == "error":
                     msg = (

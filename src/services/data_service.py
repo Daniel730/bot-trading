@@ -7,6 +7,8 @@ from typing import Callable, List, Optional, TypeVar
 from src.config import settings
 import asyncio
 import inspect
+from datetime import datetime, timedelta, timezone
+import alpaca_trade_api as tradeapi
 from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
@@ -26,6 +28,11 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 class DataService:
     def __init__(self):
         self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY)
+        self.alpaca_client = tradeapi.REST(
+            key_id=settings.ALPACA_API_KEY,
+            secret_key=settings.ALPACA_API_SECRET,
+            base_url=settings.ALPACA_BASE_URL
+        )
         self._ws_client: Optional[WebSocketClient] = None
 
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
@@ -100,6 +107,22 @@ class DataService:
             import random
             return value * (1 + random.uniform(-0.015, 0.015))
         return value
+
+    def _update_redis_cache(self, ticker: str, price: float):
+        """Helper to fire-and-forget Redis price updates safely from sync context."""
+        try:
+            coro = redis_service.set_price(ticker, price)
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.run_coroutine_threadsafe(coro, loop)
+                else:
+                    # Close it to avoid warning if we can't run it
+                    if inspect.isawaitable(coro): coro.close()
+            except Exception:
+                if inspect.isawaitable(coro): coro.close()
+        except Exception:
+            pass
 
     async def _run_sync_backend(
         self,
@@ -185,6 +208,12 @@ class DataService:
 
         series = series.dropna()
         if series.empty:
+            # Check if we can find any valid column by fuzzy match (e.g. MSFT instead of MSFT_Close)
+            fuzzy_cols = [c for c in close_data.columns if ticker in c]
+            if fuzzy_cols:
+                series = close_data[fuzzy_cols[0]].dropna()
+                if not series.empty:
+                    return float(series.iloc[-1])
             return None
         return float(series.iloc[-1])
 
@@ -197,9 +226,62 @@ class DataService:
     )
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
         """
-        Fetches historical data using yfinance with auto_adjust=True, falling back to Polygon if yfinance fails.
+        Fetches historical data using Alpaca, falling back to yfinance and Polygon.
         """
-        # 1. Try yfinance
+        tickers = self._dedupe_tickers(tickers)
+        
+        # 1. Try Alpaca first (Fastest and most reliable for our Alpaca-only setup)
+        try:
+            # Map tickers for Alpaca
+            # Note: For crypto tickers (e.g. BTC-USD), we fallback to yf/Polygon 
+            # because Alpaca historical crypto bars often require a separate 'crypto' subscription
+            # and can throw 'invalid symbol' on basic stock plans.
+            alpaca_tickers = [t for t in tickers if not t.endswith("-USD")]
+            
+            if not alpaca_tickers:
+                raise ValueError("No stock tickers in batch for Alpaca")
+            
+            # Map period to days
+            days = 30
+            if "d" in period: days = int(period.replace("d", ""))
+            elif "mo" in period: days = int(period.replace("mo", "")) * 30
+            elif "y" in period: days = int(period.replace("y", "")) * 365
+            
+            # Map interval to Alpaca timeframe
+            timeframe = "1Hour" if interval == "1h" else "1Min"
+            
+            # Use Alpaca bar fetching (RFC3339 UTC format)
+            # Free Tier constraint: historical data (SIP) must be at least 15-20 minutes old.
+            end_dt = datetime.now(timezone.utc) - timedelta(minutes=16)
+            start_dt = end_dt - timedelta(days=days)
+            
+            # Format as RFC3339 string without microseconds
+            start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            # Fetch bars
+            bars = self.alpaca_client.get_bars(
+                alpaca_tickers,
+                timeframe,
+                start=start_str,
+                end=end_str,
+                adjustment="all"
+            ).df
+            
+            if not bars.empty:
+                # Alpaca returns a multi-index (symbol, timestamp) or just timestamp
+                if "symbol" in bars.index.names:
+                    # Pivoting to get tickers as columns
+                    df = bars.reset_index().pivot(index="timestamp", columns="symbol", values="close")
+                    # Map back tickers
+                    df.columns = [c.replace("/", "-") for c in df.columns]
+                    return df
+                else:
+                    return bars["close"]
+        except Exception as e:
+            logger.warning(f"DataService: Alpaca historical data failed: {e}")
+
+        # 2. Try yfinance fallback
         try:
             # Bug 1.2: Enforce auto_adjust=True to handle splits and dividends correctly
             df = self._download_yfinance(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
@@ -221,8 +303,6 @@ class DataService:
             try:
                 logger.info(f"DataService: Falling back to Polygon for {tickers} historical data...")
                 # Polygon is per-ticker, so we fetch one by one and merge
-                import pandas as pd
-                from datetime import datetime, timedelta
                 
                 # Approximate 30d -> dates
                 # interval 1h -> 1, "hour"
@@ -301,19 +381,62 @@ class DataService:
         if not remaining_tickers:
             return latest
 
-        # 2. Fallback to yfinance for remaining with retry logic
+        # 2. Try Alpaca Snapshot (Batch) for Stocks and Crypto
+        if remaining_tickers:
+            try:
+                # Alpaca Snapshots are very fast and return multiple tickers in one call
+                # Note: For crypto tickers like BTC-USD, we might need to map them to Alpaca format
+                alpaca_tickers = []
+                for t in remaining_tickers:
+                    if t.endswith("-USD"):
+                        # Alpaca crypto format is often BTC/USD or just BTCUSD depending on the endpoint
+                        # Snapshots endpoint usually expects BTC/USD or BTC/USDT
+                        alpaca_tickers.append(t.replace("-", "/"))
+                    else:
+                        alpaca_tickers.append(t)
+                
+                snapshots = self.alpaca_client.get_snapshots(alpaca_tickers)
+                for ticker_key, snapshot in snapshots.items():
+                    # Map back to our ticker format
+                    internal_ticker = ticker_key.replace("/", "-")
+                    if internal_ticker in remaining_tickers:
+                        price = float(snapshot.latest_trade.p)
+                        if price > 0:
+                            latest[internal_ticker] = price
+                            self._update_redis_cache(internal_ticker, price)
+                
+                remaining_tickers = [t for t in remaining_tickers if t not in latest]
+            except Exception as e:
+                logger.warning(f"DataService: Alpaca snapshot failed: {e}")
+
+        if not remaining_tickers:
+            return latest
+
+        # 3. Try Polygon for remaining
+        if settings.POLYGON_API_KEY and remaining_tickers:
+            poly_prices = self._get_latest_price_polygon(remaining_tickers)
+            for ticker, price in poly_prices.items():
+                latest[ticker] = price
+                try:
+                    self._update_redis_cache(ticker, price)
+                except Exception:
+                    pass
+                remaining_tickers = [t for t in remaining_tickers if t not in latest]
+
+        if not remaining_tickers:
+            return AwaitableDict(latest)
+
+        # 3. Fallback to yfinance for remaining with retry logic
         try:
             yfinance_prices = self._get_latest_price_yfinance_with_retry(remaining_tickers)
             for ticker, price in yfinance_prices.items():
                 try:
-                    stored = redis_service.set_price(ticker, price)
-                    if asyncio.iscoroutine(stored):
-                        stored.close()
+                    self._update_redis_cache(ticker, price)
                 except Exception:
                     pass
-            latest.update(yfinance_prices)
+                latest.update(yfinance_prices)
         except Exception as e:
-            logger.error(f"DataService: retry failed after 3 attempts for {remaining_tickers}: {e}")
+            logger.error(f"DataService: yfinance retry failed for {remaining_tickers}: {e}")
             
         return AwaitableDict(latest)
 
@@ -398,6 +521,44 @@ class DataService:
             )
 
         return AwaitableDict(latest)
+
+    def _get_latest_price_polygon(self, tickers: List[str]) -> dict:
+        """
+        Fetch latest prices from Polygon for crypto tickers.
+        Uses snapshots for immediate price lookup without historical aggregation.
+        """
+        if not settings.POLYGON_API_KEY:
+            return {}
+        
+        results = {}
+        # Only attempt Polygon for crypto tickers (-USD) or if explicitly prefixed
+        crypto_candidates = [t for t in tickers if "-" in t or ":" in t]
+        
+        for ticker in crypto_candidates:
+            try:
+                # Map yfinance BTC-USD to Polygon X:BTCUSD
+                poly_symbol = ticker
+                if ticker.endswith("-USD"):
+                    poly_symbol = f"X:{ticker.replace('-USD', 'USD')}"
+                
+                # get_snapshot_ticker is usually faster and more direct than list_aggs for 'latest'
+                snapshot = self.polygon_client.get_snapshot_ticker("crypto", poly_symbol)
+                
+                # Check for trade price first, then fallback to last minute close
+                price = None
+                if hasattr(snapshot, 'last_trade') and snapshot.last_trade and snapshot.last_trade.price:
+                    price = float(snapshot.last_trade.price)
+                elif hasattr(snapshot, 'min') and snapshot.min and snapshot.min.c:
+                    price = float(snapshot.min.c)
+                elif hasattr(snapshot, 'prev_day') and snapshot.prev_day and snapshot.prev_day.c:
+                    price = float(snapshot.prev_day.c)
+                
+                if price:
+                    results[ticker] = self._maybe_randomize_price(price)
+            except Exception:
+                # Silently fail for individual tickers to allow yfinance fallback
+                continue
+        return results
 
     def _get_latest_price_yfinance_batch(self, tickers: List[str]) -> dict:
         """Fetch latest prices for a chunk of tickers in one yfinance request."""

@@ -22,8 +22,7 @@ export interface PortfolioMetrics {
   spendable_cash: number | null;
   daily_budget: number | null;
   daily_usage_pct: number | null;
-  t212?: VenueMetrics;
-  web3?: VenueMetrics;
+  equity?: VenueMetrics;
 }
 
 export interface Signal {
@@ -31,6 +30,8 @@ export interface Signal {
   ticker_b: string;
   z_score: number;
   status: string;
+  confidence?: number;
+  hedge_ratio?: number;
 }
 
 export interface TerminalMessage {
@@ -126,7 +127,6 @@ export interface WalletSyncOrder {
   order_id?: string | null;
   message?: string | null;
   broker_ticker?: string | null;
-  t212_ticker?: string | null;
   price?: number | null;
 }
 
@@ -160,7 +160,6 @@ export interface WalletRecommendationPair {
 export interface WalletRecommendation {
   ticker: string;
   broker_ticker: string;
-  t212_ticker?: string | null;
   category: 'coint' | 'broken_eligible' | 'manual_override';
   categories: Array<'coint' | 'broken_eligible' | 'manual_override'>;
   pairs: WalletRecommendationPair[];
@@ -209,14 +208,6 @@ export interface WalletRecommendationBuyResponse {
   orders: WalletSyncOrder[];
   failures: number;
 }
-
-export type T212WalletSyncOrder = WalletSyncOrder;
-export type T212WalletSyncResponse = WalletSyncResponse;
-export type T212WalletRecommendationPair = WalletRecommendationPair;
-export type T212WalletRecommendation = WalletRecommendation;
-export type T212WalletRecommendationSkip = WalletRecommendationSkip;
-export type T212WalletRecommendationResponse = WalletRecommendationResponse;
-export type T212WalletRecommendationBuyResponse = WalletRecommendationBuyResponse;
 
 export interface OpenPosition {
   signal_id: string;
@@ -361,7 +352,6 @@ export interface ConfigResponse {
     brokerage_provider?: string;
     alpaca_configured?: boolean;
     alpaca_base_url?: string;
-    t212_configured?: boolean;
   };
 }
 
@@ -643,17 +633,7 @@ export const syncWallet = async (
         body: JSON.stringify({ budget }),
       },
     },
-    {
-      path: '/api/t212/wallet/sync',
-      init: {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ budget }),
-      },
-    },
   ], token, sessionToken, 'wallet.sync');
-
-export const syncT212Wallet = syncWallet;
 
 export const fetchWalletRecommendations = async (
   token: string | null,
@@ -673,7 +653,6 @@ export const fetchWalletRecommendations = async (
   });
   return requestJsonWithFallbacks<WalletRecommendationResponse>([
     { path: `/api/wallet/recommendations?${query.toString()}` },
-    { path: `/api/t212/wallet/recommendations?${query.toString()}` },
   ], token, sessionToken, 'wallet.recommendations');
 };
 
@@ -692,21 +671,6 @@ export const buyWalletRecommendations = async (
   requestJsonWithFallbacks<WalletRecommendationBuyResponse>([
     {
       path: '/api/wallet/recommendations/buy',
-      init: {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          budget: payload.budget,
-          include_broken: payload.includeBroken ?? false,
-          tickers: payload.tickers,
-          skip_owned: payload.skipOwned ?? true,
-          skip_pending: payload.skipPending ?? true,
-          delay_seconds: payload.delaySeconds ?? 0.5,
-        }),
-      },
-    },
-    {
-      path: '/api/t212/wallet/recommendations/buy',
       init: {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

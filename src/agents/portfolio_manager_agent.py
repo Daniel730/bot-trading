@@ -15,6 +15,7 @@ from src.services.data_service import DataService
 from src.services.arbitrage_service import ArbitrageService
 from src.services.agent_log_service import agent_trace
 from src.agents.macro_economic_agent import macro_economic_agent
+from src.services.brokerage_service import brokerage_service
 
 logger = logging.getLogger(__name__)
 
@@ -301,6 +302,12 @@ class PortfolioManagerAgent:
             if pair_id in existing_ids:
                 continue
 
+            # Spec 045: Ensure both legs are accessible in the active brokerage
+            # before doing any math or persisting the candidate.
+            if not await brokerage_service.is_asset_active(t_a) or not await brokerage_service.is_asset_active(t_b):
+                logger.debug(f"SCOUT SKIP {pair_id}: one or both legs inactive in broker.")
+                continue
+
             try:
                 df = await self.data_service.get_historical_data_async(
                     [t_a, t_b],
@@ -366,6 +373,10 @@ class PortfolioManagerAgent:
                 pair_id = f"{t_a}_{t_b}"
                 
                 if pair_id in existing_ids:
+                    continue
+
+                # Spec 045: Ensure both legs are accessible in the active brokerage
+                if not await brokerage_service.is_asset_active(t_a) or not await brokerage_service.is_asset_active(t_b):
                     continue
 
                 try:

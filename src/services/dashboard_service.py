@@ -77,7 +77,7 @@ def _bearer_token(authorization: Optional[str]) -> Optional[str]:
 async def _call_brokerage(func, *args, **kwargs):
     """
     Execute a possibly-blocking brokerage call and return its result, awaiting it if it returns an awaitable.
-    
+
     Returns:
         The value returned by the brokerage call; if the call returns an awaitable, the awaited result.
     """
@@ -90,30 +90,33 @@ async def _call_brokerage(func, *args, **kwargs):
 def _format_brokerage_ticker(ticker: str) -> str:
     """
     Normalize a ticker string for the active brokerage provider.
-    
+
     Parameters:
         ticker (str): Ticker symbol (may include surrounding whitespace or mixed case).
-    
+
     Returns:
-        str: A normalized ticker suitable for the active brokerage. Leading/trailing whitespace is removed and letters are uppercased; when the active provider is T212 and a provider-specific formatter is available, the provider formatter is used instead.
+        str: A normalized ticker suitable for the active brokerage. Leading/trailing whitespace is removed and letters are uppercased.
     """
-    ticker = (ticker or "").strip().upper()
-    if brokerage_service.provider_name == "T212":
-        if wallet_seed is not None and hasattr(wallet_seed, "format_t212_ticker"):
-            return wallet_seed.format_t212_ticker(ticker)
-    return ticker
+    return (ticker or "").strip().upper()
+
+
+async def _brokerage_asset_active(ticker: str) -> bool:
+    result = brokerage_service.is_asset_active(ticker)
+    if inspect.isawaitable(result):
+        return bool(await result)
+    return bool(result)
 
 
 def _position_ticker(position: dict) -> str:
     """
     Derive an uppercase instrument ticker from a position mapping.
-    
+
     Checks the following keys (in order) and returns the first present value converted to uppercase:
     `ticker`, `instrumentCode`, and `instrument["ticker"]`. If none are present, returns an empty string.
-    
+
     Parameters:
     	position (dict): Position mapping that may contain `ticker`, `instrumentCode`, or an `instrument` dict.
-    
+
     Returns:
     	ticker (str): Uppercase ticker string, or an empty string if no ticker is found.
     """
@@ -664,10 +667,6 @@ class WalletRecommendationBuyRequest(WalletRecommendationRequest):
     delay_seconds: float = Field(default=0.5, ge=0, le=10)
 
 
-T212WalletSyncRequest = WalletSyncRequest
-T212WalletRecommendationRequest = WalletRecommendationRequest
-T212WalletRecommendationBuyRequest = WalletRecommendationBuyRequest
-
 
 class DashboardConfigUpdateRequest(BaseModel):
     actor: str = "dashboard"
@@ -743,25 +742,15 @@ class DashboardService:
                 "type": "str",
                 "sensitive": True,
                 "masked": False,
-                "options": ["T212", "ALPACA"],
+                "options": ["ALPACA"],
             },
-            "T212_BUDGET_USD": {"type": "float", "sensitive": False},
-            "WEB3_BUDGET_USD": {"type": "float", "sensitive": False},
-            "TRADING_212_MODE": {
-                "type": "str",
-                "sensitive": True,
-                "masked": False,
-                "options": ["demo", "live"],
-            },
+            "ALPACA_BUDGET_USD": {"type": "float", "sensitive": False},
             "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True},
             "PAPER_TRADING": {"type": "bool", "sensitive": True},
             "DEV_MODE": {"type": "bool", "sensitive": True},
             "OPENAI_API_KEY": {"type": "str", "sensitive": True},
             "GEMINI_API_KEY": {"type": "str", "sensitive": True},
             "POLYGON_API_KEY": {"type": "str", "sensitive": True},
-            "T212_API_KEY": {"type": "str", "sensitive": True},
-            "T212_API_SECRET": {"type": "str", "sensitive": True},
-            "TRADING_212_API_KEY": {"type": "str", "sensitive": True},
             "ALPACA_API_KEY": {"type": "str", "sensitive": True},
             "ALPACA_API_SECRET": {"type": "str", "sensitive": True},
             "ALPACA_BASE_URL": {"type": "str", "sensitive": True, "masked": False},
@@ -769,8 +758,6 @@ class DashboardService:
             "SEC_USER_AGENT": {"type": "str", "sensitive": False},
             "TELEGRAM_BOT_TOKEN": {"type": "str", "sensitive": True},
             "TELEGRAM_CHAT_ID": {"type": "str", "sensitive": False},
-            "WEB3_PRIVATE_KEY": {"type": "str", "sensitive": True},
-            "WEB3_RPC_URL": {"type": "str", "sensitive": True},
         }
 
     def attach_monitor(self, monitor):
@@ -779,13 +766,13 @@ class DashboardService:
     async def _wallet_pair_z_scores(self, pair_ids: list[str]) -> dict[str, float]:
         """
         Fetch Kalman z-scores for the given pair IDs from the Redis-backed Kalman state store.
-        
+
         Parameters:
             pair_ids (list[str]): Iterable of pair identifier strings to query.
-        
+
         Returns:
             dict[str, float]: Mapping of pair_id to its parsed z-score. Pair IDs with missing, non-finite, or unparsable z-scores are omitted.
-        
+
         Notes:
             - Individual fetch errors for a pair_id are suppressed and that pair will be skipped.
             - If the Redis backend cannot be contacted, a warning is logged and an empty mapping (or any successfully collected scores) is returned.
@@ -810,13 +797,13 @@ class DashboardService:
     async def _collect_wallet_candidates(self, include_broken: bool) -> tuple[dict[str, int], dict[str, dict]]:
         """
         Collect candidate tickers from the monitor's active pairs for wallet recommendations.
-        
+
         Parameters:
         	include_broken (bool): If True, include tickers that come only from pairs not marked as cointegrated; if False, exclude those tickers.
-        
+
         Raises:
         	HTTPException: 409 if the bot monitor is not attached.
-        
+
         Returns:
         	counts (dict): Counters with keys "coint" and "broken_eligible" representing how many pairs were seen in each category.
         	candidates (dict): Mapping from uppercased ticker to metadata with keys:
@@ -874,7 +861,7 @@ class DashboardService:
                 provider = brokerage_service.provider
                 if hasattr(provider, "is_supported_symbol") and not provider.is_supported_symbol(ticker):
                     continue
-                if hasattr(provider, "is_asset_active") and not provider.is_asset_active(ticker):
+                if not await _brokerage_asset_active(ticker):
                     continue
                 entry = candidates.setdefault(
                     ticker,
@@ -909,14 +896,14 @@ class DashboardService:
     def _build_weighted_wallet_plan(total_budget: float, recommendations: list[dict]) -> list[tuple[str, Decimal]]:
         """
         Builds a weighted allocation plan that distributes a total budget across recommended tickers proportional to their scores.
-        
+
         Parameters:
             total_budget (float): Total budget in decimal currency units to allocate.
             recommendations (list[dict]): List of recommendation objects. Each item must include "ticker" (str) and may include "score" (numeric). This function will add/overwrite "rank" (int, 1-based) and "suggested_amount" (float) on each recommendation dict.
-        
+
         Returns:
             list[tuple[str, Decimal]]: Ordered list of (ticker, amount) pairs where amount is a Decimal currency value representing the suggested allocation for that ticker.
-        
+
         Raises:
             ValueError: If the provided budget is too small to allocate at least $0.01 to each recommendation.
         """
@@ -958,7 +945,7 @@ class DashboardService:
     async def _get_brokerage_wallet_state(self) -> dict:
         """
         Fetches the current brokerage wallet state including positions, pending orders, owned and pending tickers, and cash balances.
-        
+
         Returns:
             dict: A mapping with the following keys:
                 - positions (list): Raw positions returned by the brokerage.
@@ -969,7 +956,7 @@ class DashboardService:
                 - pending_value (float): Total value reserved by pending orders.
                 - spendable_cash (float): Available cash after subtracting pending_value (not negative).
                 - effective_cash (float): Budget-service–adjusted available cash for the active provider.
-        
+
         Raises:
             HTTPException: Status 502 if brokerage calls fail or cannot be read.
         """
@@ -1015,12 +1002,12 @@ class DashboardService:
     async def calculate_wallet_recommendations(self, request: WalletRecommendationRequest) -> dict:
         """
         Calculate wallet buy recommendations based on active pairs, candidate scoring, and available brokerage cash.
-        
+
         Produces ranked recommendations and skipped items after filtering by ownership and pending orders, and evaluates whether the requested budget is feasible given the broker's effective cash.
-        
+
         Parameters:
             request (WalletRecommendationRequest): Request containing `budget`, `include_broken`, `skip_owned`, and `skip_pending` flags that control candidate inclusion and filtering.
-        
+
         Returns:
             dict: A summary object with the following keys:
                 - status: Operation status, always `"ok"` on success.
@@ -1044,7 +1031,7 @@ class DashboardService:
                     - pairs (list), sectors (list), score (numeric), max_abs_z_score (numeric),
                     - estimated_cost_pct (numeric), rank (assigned by planner or `null`), suggested_amount (numeric), status.
                 - skipped: List of skipped candidate objects (same fields as recommendations plus `reason` string).
-        
+
         The returned structure has non-finite float values replaced with `null` for safe JSON serialization.
         """
         if not brokerage_service.test_connection():
@@ -1146,16 +1133,16 @@ class DashboardService:
     async def buy_wallet_recommendations(self, request: WalletRecommendationBuyRequest) -> dict:
         """
         Place BUY orders for wallet recommendations computed from the current market state, optionally restricted to a user-selected set of tickers.
-        
+
         Accepts a WalletRecommendationBuyRequest containing the desired budget, optional explicit ticker list, include_broken flag, and inter-order delay. Validates brokerage connectivity, obtains a recommendation snapshot, applies any ticker overrides (allowing manual overrides for active but non-recommended tickers), builds a weighted allocation plan, places value-based BUY orders, and records a system message.
-        
+
         Parameters:
             request (WalletRecommendationBuyRequest): Request payload with fields:
                 - budget: total amount to spend.
                 - tickers (optional): list of tickers to restrict purchases to (case-insensitive).
                 - include_broken (optional): whether to include candidates from broken/eligible pairs.
                 - delay_seconds (optional): delay between sequential orders.
-        
+
         Returns:
             dict: Summary of the buy operation with keys:
                 - status: "ok" if all orders succeeded, otherwise "partial".
@@ -1167,7 +1154,7 @@ class DashboardService:
                 - skipped: list of any skipped orders (currently may be empty).
                 - orders: list of per-order result objects from the brokerage.
                 - failures: integer count of failed orders.
-        
+
         Raises:
             HTTPException: if the brokerage is unreachable/configured, if no recommendations are available, if user-provided tickers are not in the active provider universe, or if the weighted plan cannot be built.
         """
@@ -1190,7 +1177,7 @@ class DashboardService:
             known_tickers = {item["ticker"] for item in recommendations}
             unknown = sorted(selected_tickers - known_tickers)
             if unknown:
-                _, active_universe = self._get_active_tickers()
+                _, active_universe = await self._get_active_tickers()
                 active_universe_set = set(active_universe)
                 truly_unknown = [t for t in unknown if t not in active_universe_set]
                 if truly_unknown:
@@ -1264,13 +1251,13 @@ class DashboardService:
                 "failures": failures,
             }
         )
-    def _get_active_tickers(self) -> tuple[int, list[str]]:
+    async def _get_active_tickers(self) -> tuple[int, list[str]]:
         """
         Collect active tickers that belong to the configured brokerage provider and count cointegrated pairs.
-        
+
         Returns:
             tuple: (coint_pairs, tickers) where `coint_pairs` is the number of active pairs marked as cointegrated, and `tickers` is a list of unique, uppercased tickers that match the active brokerage provider (tickers containing "-USD" are excluded).
-        
+
         Raises:
             HTTPException: with status 409 if the bot monitor is not attached.
         """
@@ -1291,8 +1278,7 @@ class DashboardService:
                 coint_pairs += 1
             for ticker in (ticker_a, ticker_b):
                 if brokerage_service.get_venue(ticker) == active_provider and ticker not in tickers:
-                    provider = brokerage_service.provider
-                    if hasattr(provider, "is_asset_active") and not provider.is_asset_active(ticker):
+                    if not await _brokerage_asset_active(ticker):
                         continue
                     tickers.append(ticker)
 
@@ -1305,11 +1291,11 @@ class DashboardService:
     ) -> tuple[list[dict], int, list[dict]]:
         """
         Place buy orders for each (ticker, amount) in the provided plan and return per-order results.
-        
+
         Parameters:
             plan (list[tuple[str, Decimal]]): Ordered list of (ticker, amount) pairs specifying the target value to buy for each ticker.
             delay_seconds (float): Seconds to wait between placing consecutive orders; no delay if <= 0.
-        
+
         Returns:
             tuple[list[dict], int, list[dict]]: A tuple containing:
                 - orders: list of per-order result dicts with keys including `ticker`, `amount`, `status` and, on success, `order_id` or, on failure, `message`.
@@ -1353,14 +1339,14 @@ class DashboardService:
     async def sync_wallet_for_coint(self, request: WalletSyncRequest) -> dict:
         """
         Syncs the account by placing equal-value BUY orders across active cointegrated tickers.
-        
+
         Parameters:
             request (WalletSyncRequest): Request payload containing:
                 - budget: total budget to allocate (decimal-like/number).
                 - skip_owned: if true, skip tickers already owned.
                 - skip_pending: if true, skip tickers with pending buy orders.
                 - delay_seconds: delay between placed orders.
-        
+
         Returns:
             dict: Result summary containing:
                 - status: "ok" if all orders succeeded, "partial" if some failed.
@@ -1379,7 +1365,7 @@ class DashboardService:
         if not brokerage_service.test_connection():
             raise HTTPException(status_code=400, detail=f"Brokerage provider {brokerage_service.provider_name} is not configured or reachable.")
 
-        coint_pair_count, candidate_tickers = self._get_active_tickers()
+        coint_pair_count, candidate_tickers = await self._get_active_tickers()
         if not candidate_tickers:
             raise HTTPException(status_code=400, detail=f"No active equity tickers are configured for {brokerage_service.provider_name}.")
 
@@ -1485,46 +1471,10 @@ class DashboardService:
             "failures": failures,
         }
 
-    async def sync_t212_wallet_for_coint(self, request: WalletSyncRequest) -> dict:
-        """
-        Sync active cointegrated tickers by placing equal-value BUY orders according to the provided request.
-        
-        Parameters:
-            request (WalletSyncRequest): Sync parameters including budget, skip flags for owned/pending tickers, and optional delay between orders.
-        
-        Returns:
-            dict: Result summary with keys including `status` ("ok" or "partial"), `orders` (list of placed order records), `failures` (number of failed orders), and `skipped` (list of skipped tickers).
-        """
-        return await self.sync_wallet_for_coint(request)
-
-    async def calculate_t212_wallet_recommendations(self, request: WalletRecommendationRequest) -> dict:
-        """
-        Compute wallet recommendations for a Trading212-compatible request.
-        
-        Parameters:
-            request (WalletRecommendationRequest): Recommendation parameters (budget, skip_owned, skip_pending, include_broken, etc.).
-        
-        Returns:
-            dict: Recommendation payload containing recommended tickers with scores and suggested allocations, skipped items with reasons, budget and cash fields (including `effective_cash` and `cash_limited`), warnings, and any errors or placement-related metadata.
-        """
-        return await self.calculate_wallet_recommendations(request)
-
-    async def buy_t212_wallet_recommendations(self, request: WalletRecommendationBuyRequest) -> dict:
-        """
-        Compatibility wrapper for the legacy Trading212 buy-recommendations endpoint that executes the dashboard's wallet buy flow using the provided request.
-        
-        Parameters:
-            request (WalletRecommendationBuyRequest): Payload describing budget, optional ticker overrides, and order placement options.
-        
-        Returns:
-            dict: Result object containing overall `status` ("ok" or "partial"), `orders` (list of placed order records), `failures` (integer count of failed orders), and `skipped` (list of skipped items).
-        """
-        return await self.buy_wallet_recommendations(request)
-
     def _coerce_config_value(self, key: str, value: Any) -> Any:
         """
         Coerces and validates a dashboard-editable configuration value according to the editable_config specification.
-        
+
         Parameters:
             key (str): Editable config key; must exist in self.editable_config or a 400 HTTPException is raised.
             value (Any): Input value to coerce. Accepted coercions:
@@ -1532,10 +1482,10 @@ class DashboardService:
                 - "int": converted with int(value)
                 - "bool": accepts booleans or the strings "1","true","yes","on" => True and "0","false","no","off" => False (case-insensitive)
                 - "str": trimmed string; if the spec provides `options`, matching is case-insensitive and the canonical option string is returned
-        
+
         Returns:
             Any: The coerced value suitable for assigning to the corresponding settings key.
-        
+
         Raises:
             HTTPException: status 400 if the key is not editable or the value cannot be coerced to the configured type.
         """
@@ -1592,7 +1542,7 @@ class DashboardService:
     def get_dashboard_config(self) -> dict:
         """
         Assembles the dashboard's editable configuration, two-factor public status, recent configuration audit entries, and runtime integration flags.
-        
+
         Returns:
             config (dict): A mapping with the following keys:
                 - items (list[dict]): Editable configuration entries. Each entry contains:
@@ -1607,17 +1557,16 @@ class DashboardService:
                     - brokerage_provider (str): Active brokerage provider name.
                     - alpaca_configured (bool): Whether Alpaca API credentials appear configured.
                     - alpaca_base_url (str): Configured Alpaca base URL.
-                    - t212_configured (bool): Whether a Trading212 key appears configured.
         """
         items = []
         for key, spec in self.editable_config.items():
             raw_value = getattr(settings, key)
             should_mask = spec.get("masked", spec["sensitive"])
-            
+
             # Smart masking: don't mask booleans or items with enumerated options
             if spec["type"] == "bool" or spec.get("options"):
                 should_mask = False
-                
+
             item = {
                 "key": key,
                 "value": self._mask_sensitive_value(raw_value) if should_mask else raw_value,
@@ -1646,27 +1595,26 @@ class DashboardService:
                 "brokerage_provider": settings.BROKERAGE_PROVIDER,
                 "alpaca_configured": bool(settings.ALPACA_API_KEY.strip() and settings.ALPACA_API_SECRET.strip()),
                 "alpaca_base_url": settings.ALPACA_BASE_URL,
-                "t212_configured": bool(settings.effective_t212_key.strip()),
             },
         }
 
     async def update_dashboard_config(self, actor: str, updates: Dict[str, Any], otp_token: Optional[str]) -> dict:
         """
         Update dashboard configuration keys with provided values, persist overrides, audit changes, and return the current dashboard configuration.
-        
+
         Parameters:
             actor (str): Identifier of the actor performing the change for audit messages.
             updates (Dict[str, Any]): Mapping of configuration keys (case-insensitive) to new values. Keys must be declared in the service's editable_config; masked placeholder values for sensitive keys are ignored.
             otp_token (Optional[str]): One-time password or backup code required when any updated key is marked sensitive.
-        
+
         Returns:
             dict: The updated dashboard configuration as returned by get_dashboard_config().
-        
+
         Raises:
             HTTPException(400): If no updates are provided, if no actual changes remain after filtering masked placeholders, or if an unsupported configuration key is included.
             HTTPException(412): If a sensitive key is being changed but two-factor authentication is not enabled.
             HTTPException(403): If a sensitive change is attempted without a valid 2FA token or backup code.
-        
+
         Side effects:
             - Persists each applied override via save_settings_override.
             - Records an audit entry for each changed key via persistence.log_config_change (sensitive values are masked in the audit).
@@ -1713,10 +1661,6 @@ class DashboardService:
 
         brokerage_config_keys = {
             "BROKERAGE_PROVIDER",
-            "T212_API_KEY",
-            "T212_API_SECRET",
-            "TRADING_212_API_KEY",
-            "TRADING_212_MODE",
             "ALPACA_API_KEY",
             "ALPACA_API_SECRET",
             "ALPACA_BASE_URL",
@@ -1851,7 +1795,7 @@ class DashboardService:
     async def build_summary(self) -> dict:
         """
         Builds a snapshot summary of trading and system metrics for the dashboard.
-        
+
         Returns:
             dict: A scrubbed mapping containing:
                 - `current_balance` (float|None): Available cash from portfolio metrics.
@@ -1912,10 +1856,10 @@ class DashboardService:
         This runs in the background to avoid blocking the dashboard.
         """
         from src.agents.portfolio_manager_agent import portfolio_manager
-        
+
         # We run it as a background task
         asyncio.create_task(portfolio_manager.run_discovery())
-        
+
         await dashboard_state.add_message(
             "SYSTEM",
             f"Global pair discovery triggered by {actor}.",
@@ -1926,7 +1870,7 @@ class DashboardService:
     async def start(self):
         """
         Start the dashboard service: begin telemetry broadcasting, launch the ASGI server, and schedule background polling tasks.
-        
+
         Initializes and starts the telemetry broadcast loop, creates and starts the Uvicorn server on 0.0.0.0:8080, and schedules periodic background tasks for metrics and system health polling. Errors during startup are logged.
         """
         try:
@@ -1952,9 +1896,7 @@ class DashboardService:
 
     async def _poll_metrics(self):
         """
-        Periodically polls brokerage, budget, and persistence services to refresh dashboard metrics, market regime, and global strategy accuracy, then updates and broadcasts the dashboard state.
-        
-        This background coroutine runs an infinite loop that gathers provider-specific and WEB3 cash, pending orders, budget usage, daily and total PnL, and invested amounts from configured services, composes a consolidated metrics payload (including a backward-compatibility alias for the legacy `t212` key), fetches the latest market regime and global accuracy, and applies these updates to the shared dashboard state for broadcasting to listeners. Errors encountered while fetching data are logged; the loop pauses between iterations.
+        Periodically polls Alpaca, budget, and persistence services to refresh dashboard metrics, market regime, and global strategy accuracy, then updates and broadcasts the dashboard state.
         """
         while True:
             try:
@@ -1979,28 +1921,14 @@ class DashboardService:
                 equity_total_pnl = await persistence_service.get_total_pnl(venue=active_provider)
                 equity_invested = await persistence_service.get_current_investment(venue=active_provider)
 
-                web3_cash: Optional[float] = None
-                if settings.web3_enabled:
-                    try:
-                        web3_cash = await brokerage_service.get_web3_account_cash()
-                    except Exception as exc:
-                        logger.warning("DASHBOARD: Could not fetch WEB3 cash: %s", exc)
-
-                web3_budget_info = budget_service.get_venue_budget_info("WEB3")
-                web3_daily_budget = web3_budget_info["total"] if web3_budget_info["total"] > 0 else ((web3_cash * 0.25) if web3_cash is not None else None)
-                web3_daily_used = web3_budget_info["used"]
-                web3_daily_pnl = await persistence_service.get_daily_pnl_for_date(today, venue="WEB3")
-                web3_total_pnl = await persistence_service.get_total_pnl(venue="WEB3")
-                web3_invested = await persistence_service.get_current_investment(venue="WEB3")
-
-                global_cash = sum(c for c in [equity_cash, web3_cash] if c is not None) or None
+                global_cash = equity_cash
                 global_pending = equity_pending
                 global_spendable = (global_cash - global_pending) if global_cash is not None else None
-                global_daily_budget = sum(b for b in [equity_daily_budget, web3_daily_budget] if b is not None) or None
-                global_daily_used = equity_daily_used + web3_daily_used
-                global_daily_pnl = await persistence_service.get_daily_pnl_for_date(today)
-                global_total_pnl = await persistence_service.get_total_pnl()
-                global_invested = await persistence_service.get_current_investment()
+                global_daily_budget = equity_daily_budget
+                global_daily_used = equity_daily_used
+                global_daily_pnl = equity_daily_pnl
+                global_total_pnl = equity_total_pnl
+                global_invested = equity_invested
 
                 metrics = {
                     "total_revenue": global_total_pnl,
@@ -2023,20 +1951,7 @@ class DashboardService:
                         "total_revenue": equity_total_pnl,
                         "total_invested": equity_invested,
                     },
-                    "web3": {
-                        "available_cash": web3_cash,
-                        "pending_orders_value": 0.0,
-                        "spendable_cash": web3_cash,
-                        "daily_budget": web3_daily_budget,
-                        "daily_used": web3_daily_used,
-                        "daily_usage_pct": ((web3_daily_used / web3_daily_budget * 100) if web3_daily_budget and web3_daily_budget > 0 else None),
-                        "daily_profit": web3_daily_pnl,
-                        "total_revenue": web3_total_pnl,
-                        "total_invested": web3_invested,
-                    },
                 }
-                # Alias for backward compatibility
-                metrics["t212"] = metrics["equity"]
 
                 regime = await persistence_service.get_latest_market_regime()
                 accuracy_str = await persistence_service.get_system_state(
@@ -2346,16 +2261,16 @@ async def initiate_2fa(token: str = Query(None), session: str = Query(None)):
 async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), session: str = Query(None)):
     """
     Verify a submitted TOTP or backup code and enable or confirm two-factor authentication for the dashboard.
-    
+
     Parameters:
         request (TOTPVerifyRequest): Payload containing the TOTP/backup token to verify.
         token (str, optional): Optional dashboard API security token or bearer value used to authenticate the request prior to 2FA verification.
         session (str, optional): Optional dashboard session identifier used to authenticate the request prior to 2FA verification.
-    
+
     Returns:
         dict: If the request enables 2FA, returns {"status": "ok", "two_factor": <public_status>}.
               If the request only verifies a token, returns {"status": "ok", "verified": True, "two_factor": <public_status>}.
-    
+
     Raises:
         HTTPException: 403 if the provided TOTP or backup code is invalid.
     """
@@ -2371,9 +2286,9 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
 async def discover_pairs(token: str = Query(None), session: str = Query(None)):
     """
     Initiates a background pair discovery task for the dashboard.
-    
+
     Starts the pair discovery workflow and returns a record describing the initiated request and its acceptance status.
-    
+
     Returns:
     	A serializable object (typically a dict) describing the scheduled discovery task and its acceptance/status metadata.
     """
@@ -2384,13 +2299,13 @@ async def discover_pairs(token: str = Query(None), session: str = Query(None)):
 async def list_pairs(token: str = Query(None), session: str = Query(None)):
     """
     Return a snapshot of pair discovery state with active pairs enriched by latest z-scores and last cointegration check timestamps.
-    
+
     The response contains:
     - `active_pairs`: list of pair objects augmented with `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
     - `configured_pairs`: list of pairs configured in settings (`settings.ARBITRAGE_PAIRS`).
     - `crypto_test_pairs`: list of crypto test pairs from settings (`settings.CRYPTO_TEST_PAIRS`).
     - `dev_mode`: boolean flag from settings (`settings.DEV_MODE`).
-    
+
     Returns:
         dict: A scrubbed response object with the keys above; non-finite numeric values are replaced with `None`.
     """
@@ -2443,7 +2358,7 @@ async def list_pairs(token: str = Query(None), session: str = Query(None)):
 async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), session: str = Query(None)):
     """
     Update the configured arbitrage pairs (and optional crypto pairs), persist the overrides, and optionally hot-reload the monitoring service.
-    
+
     Parameters:
         request (PairsUpdateRequest): Payload containing `pairs`, optional `crypto_pairs`, and `apply_now` flag.
             - `pairs`: list of pair objects; each pair must contain two distinct tickers.
@@ -2451,10 +2366,10 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
             - `apply_now` (bool): if true and a monitor is attached, attempts to hot-reload pairs immediately.
         token (str): Dashboard security token (from query/header; validated via verify_token). Omit documenting if provided by middleware.
         session (str): Dashboard session token (from query/header; validated via verify_token). Omit documenting if provided by middleware.
-    
+
     Raises:
         HTTPException: 400 if no valid pairs are provided or if any pair has identical tickers.
-    
+
     Returns:
         dict: {
             "status": "ok",
@@ -2528,14 +2443,13 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
 
 
 @app.post("/api/wallet/sync")
-@app.post("/api/t212/wallet/sync")
 async def sync_wallet(request: WalletSyncRequest, token: str = Query(None), session: str = Query(None)):
     """
     Synchronize the wallet by placing buy orders to equalize allocation across active cointegrated tickers.
-    
+
     Parameters:
         request (WalletSyncRequest): Desired budget and options for syncing (e.g., budget amount, skip_owned, skip_pending, delay_seconds).
-    
+
     Returns:
         dict: Operation result containing at least `status` (`"ok"` or `"partial"`), `orders` (placed order records), and `failures` (number of failed orders). Additional fields such as `skipped` may be present.
     """
@@ -2545,9 +2459,7 @@ async def sync_wallet(request: WalletSyncRequest, token: str = Query(None), sess
 
 
 @app.get("/api/wallet/recommendations")
-@app.get("/api/wallet/recommendations/") 
-@app.get("/api/t212/wallet/recommendations")
-@app.get("/api/t212/wallet/recommendations/")
+@app.get("/api/wallet/recommendations/")
 async def get_wallet_recommendations(
     budget: float = Query(..., gt=0),
     include_broken: bool = Query(False),
@@ -2558,7 +2470,7 @@ async def get_wallet_recommendations(
 ):
     """
     Return wallet buy recommendations based on the provided budget and filters.
-    
+
     Returns:
         dict: A response containing recommended tickers with suggested allocations, skipped entries and reasons, budget and cash metadata, flags such as `can_buy` and `cash_limited`, and any warnings.
     """
@@ -2574,7 +2486,6 @@ async def get_wallet_recommendations(
 
 
 @app.post("/api/wallet/recommendations/buy")
-@app.post("/api/t212/wallet/recommendations/buy")
 async def buy_wallet_recommendations(
     request: WalletRecommendationBuyRequest,
     token: str = Query(None),
@@ -2582,14 +2493,14 @@ async def buy_wallet_recommendations(
 ):
     """
     Place buy orders for weighted wallet recommendations based on the provided request.
-    
+
     Validates dashboard authentication using the optional `token` or `session` query parameters and delegates to the dashboard service to compute recommendations and place orders.
-    
+
     Parameters:
         request (WalletRecommendationBuyRequest): Request payload containing `budget` and optional `tickers` to restrict purchases.
         token (str, optional): Optional security token; used for authentication when provided.
         session (str, optional): Optional dashboard session token; used for authentication when provided.
-    
+
     Returns:
         dict: Result object containing `status` (`"ok"` or `"partial"`), `orders` (list of placed order records), `failures` (number of failed orders), and `skipped` (list of skipped tickers).
     """

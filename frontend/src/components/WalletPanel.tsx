@@ -352,7 +352,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
                     </td>
                     <td>
                       <strong>{item.ticker}</strong>
-                      <div className="muted">{item.broker_ticker || item.t212_ticker || item.ticker}</div>
+                      <div className="muted">{item.broker_ticker || item.ticker}</div>
                     </td>
                     <td>
                       <span className={`badge ${item.category === 'coint' ? 'badge-green' : 'badge-blue'}`}>

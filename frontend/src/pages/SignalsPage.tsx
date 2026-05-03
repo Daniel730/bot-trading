@@ -39,6 +39,8 @@ const SignalsPage: React.FC<SignalsPageProps> = ({ signals }) => {
                   <tr>
                     <th>Pair</th>
                     <th>Z-Score</th>
+                    <th>Hedge</th>
+                    <th>Conf</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -52,6 +54,18 @@ const SignalsPage: React.FC<SignalsPageProps> = ({ signals }) => {
                         {typeof sig.z_score === 'number' ? (
                           <span className={Math.abs(sig.z_score) > 2 ? (sig.z_score > 0 ? 'negative' : 'positive') : ''}>
                             {sig.z_score.toFixed(2)}
+                          </span>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td>
+                        {typeof sig.hedge_ratio === 'number' ? sig.hedge_ratio.toFixed(3) : <span className="muted">—</span>}
+                      </td>
+                      <td>
+                        {typeof sig.confidence === 'number' ? (
+                          <span className={sig.confidence > 0.7 ? 'positive' : sig.confidence < 0.4 ? 'negative' : ''}>
+                            {(sig.confidence * 100).toFixed(0)}%
                           </span>
                         ) : (
                           <span className="muted">—</span>

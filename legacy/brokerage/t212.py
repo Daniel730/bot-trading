@@ -299,6 +299,24 @@ class T212Provider(AbstractBrokerageProvider):
         response = self.session.get(url, timeout=10)
         return float(response.json().get('free', 0.0)) if response.status_code == 200 else 0.0
 
+    def get_account_equity(self) -> float:
+        """
+        Fetches the account's total equity (cash + position value) from Trading212.
+        
+        Returns:
+            The total account value as a float, or 0.0 if the request fails.
+        """
+        url = f"{self.base_url}/equity/account/cash"
+        response = self.session.get(url, timeout=10)
+        return float(response.json().get('total', 0.0)) if response.status_code == 200 else 0.0
+
+    def get_account_buying_power(self) -> float:
+        """
+        Fetches the account's available buying power from Trading212.
+        For T212, this is the same as free cash.
+        """
+        return self.get_account_cash()
+
     def get_pending_orders(self) -> List[Dict[str, Any]]:
         """
         Retrieve the list of pending orders from the brokerage.
@@ -309,3 +327,13 @@ class T212Provider(AbstractBrokerageProvider):
         url = f"{self.base_url}/equity/orders"
         response = self.session.get(url, timeout=10)
         return response.json() if response.status_code == 200 else []
+
+    async def is_asset_active(self, ticker: str) -> bool:
+        """
+        Determine whether a ticker is currently active and tradable on Trading 212.
+        
+        Checks the metadata cache for the presence of the instrument.
+        """
+        # get_symbol_metadata is sync but has internal retry/cache
+        metadata = self.get_symbol_metadata(ticker)
+        return bool(metadata and metadata.get("ticker"))

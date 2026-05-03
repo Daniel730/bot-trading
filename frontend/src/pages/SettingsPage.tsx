@@ -46,8 +46,6 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
   const getCategory = (key: string) => {
     if (
       key === 'BROKERAGE_PROVIDER' ||
-      key.startsWith('T212_') ||
-      key.startsWith('TRADING_212') ||
       key.startsWith('ALPACA_')
     ) {
       return 'Brokerage';
@@ -68,7 +66,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     General: config?.items.filter(item => getCategory(item.key) === 'General'),
   };
   const provider = configForm.BROKERAGE_PROVIDER
-    ?? String(config?.integrations?.brokerage_provider ?? config?.items.find((item) => item.key === 'BROKERAGE_PROVIDER')?.value ?? 'T212');
+    ?? String(config?.integrations?.brokerage_provider ?? config?.items.find((item) => item.key === 'BROKERAGE_PROVIDER')?.value ?? 'ALPACA');
   const hasAlpacaKey = Boolean(String(configForm.ALPACA_API_KEY ?? '').trim())
     || Boolean(config?.integrations?.alpaca_configured);
   const hasAlpacaSecret = Boolean(String(configForm.ALPACA_API_SECRET ?? '').trim())
@@ -137,8 +135,8 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                               style={{ flex: 1 }}
                             />
                             {item.sensitive && (
-                              <button 
-                                type="button" 
+                              <button
+                                type="button"
                                 onClick={() => toggleVisibility(item.key)}
                                 style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1.2rem', color: 'var(--text)' }}
                                 title={visibleFields.has(item.key) ? "Hide value" : "Show value"}
