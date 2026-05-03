@@ -1549,6 +1549,7 @@ class ArbitrageMonitor:
         if t_a not in prices or t_b not in prices: return
 
         p_a, p_b = prices[t_a], prices[t_b]
+        prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
 
         current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
         cost_basis = signal["total_cost_basis"]
@@ -1556,7 +1557,7 @@ class ArbitrageMonitor:
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis):
             logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH, prices_by_ticker=prices_by_ticker)
             return
 
         # 2. Statistical Stop Loss / Take profit
@@ -1570,21 +1571,30 @@ class ArbitrageMonitor:
         # Statistical Take Profit (Mean Reversion complete)
         if abs(z_score) <= settings.TAKE_PROFIT_ZSCORE:
             logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= settings.STOP_LOSS_ZSCORE:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
 
-    async def _close_position(self, signal: dict, price_a: float, price_b: float, reason: ExitReason):
+    async def _close_position(
+        self,
+        signal: dict,
+        price_a: float,
+        price_b: float,
+        reason: ExitReason,
+        prices_by_ticker: dict[str, float] | None = None,
+    ):
         sig_id = signal["signal_id"]
         logger.info(f"Closing position {sig_id} Reason: {reason.value}")
 
         close_orders = build_close_orders(
             signal,
-            price_a=price_a,
-            price_b=price_b,
+            prices_by_ticker=prices_by_ticker or {
+                signal["legs"][0]["ticker"]: float(price_a),
+                signal["legs"][1]["ticker"]: float(price_b),
+            },
             dev_mode=settings.DEV_MODE,
             dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
         )

@@ -64,7 +64,7 @@ def build_scan_pairs(active_pairs: list[dict], is_market_open: Callable[[str], b
     scan_pairs: list[dict] = []
     all_tickers: list[str] = []
     for pair in active_pairs:
-        ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
+       ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
         # Note: pairs admitted with is_cointegrated=False (rolling stability fail)
         # are NOT skipped here — process_pair checks the flag and skips signal
         # generation, but we still need prices fetched so z-scores update.
@@ -89,19 +89,29 @@ def summarize_scan_iteration(results: list[dict], min_ai_confidence: float) -> t
 def build_close_orders(
     signal: dict,
     *,
-    price_a: float,
-    price_b: float,
+    prices_by_ticker: dict[str, float] | None = None,
+    price_a: float | None = None,
+    price_b: float | None = None,
     dev_mode: bool,
     dev_execution_tickers: dict[str, str],
 ) -> list[dict]:
     close_orders: list[dict] = []
-    first_leg_ticker = signal["legs"][0]["ticker"]
+    if prices_by_ticker is None:
+        first_leg_ticker = signal["legs"][0]["ticker"]
+        second_leg_ticker = signal["legs"][1]["ticker"]
+        prices_by_ticker = {
+            first_leg_ticker: float(price_a if price_a is not None else 0.0),
+            second_leg_ticker: float(price_b if price_b is not None else 0.0),
+        }
+
     for leg in signal["legs"]:
         ticker = leg["ticker"]
         quantity = float(leg["quantity"])
         side = "SELL" if leg["side"] == "BUY" else "BUY"
         execution_ticker = dev_execution_tickers.get(ticker, ticker) if dev_mode else ticker
-        leg_price = price_a if ticker == first_leg_ticker else price_b
+        if ticker not in prices_by_ticker:
+            raise KeyError(f"Missing close price for ticker {ticker}")
+        leg_price = float(prices_by_ticker[ticker])
         close_orders.append(
             {
                 "ticker": execution_ticker,
@@ -116,7 +126,7 @@ def build_close_orders(
 
 def calculate_realized_pnl(signal: dict, *, price_a: float, price_b: float) -> tuple[dict[str, float], float]:
     leg_a, leg_b = signal["legs"][0], signal["legs"][1]
-    exit_prices = {leg_a["ticker"]: price_a, leg_b["ticker"]: price_b}
+    exit_prices = {leg_a["ticker"]: float(price_a), leg_b["ticker"]: float(price_b)}
     pnl = 0.0
     for leg in signal["legs"]:
         quantity = leg["quantity"]
