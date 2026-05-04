@@ -70,11 +70,50 @@ class BrokerageService:
         return AwaitableList(data)
 
     async def get_available_quantity(self, ticker: str) -> float:
+        """
+        Retrieve the available tradable quantity for a given ticker from the account's positions.
+        
+        Matches a position whose `ticker` equals the provided `ticker` or starts with it. Uses the position's `quantityAvailableForTrading` when present, otherwise falls back to `quantity`. Returns 0.0 if no matching position is found.
+        
+        Parameters:
+            ticker (str): The normalized ticker to look up; providers are expected to return normalized `ticker` values.
+        
+        Returns:
+            float: Available quantity for trading for the matched ticker, or 0.0 if none.
+        """
+        def _matches_symbol(position_symbol: str, requested: str) -> bool:
+            sym = str(position_symbol or "").upper()
+            req = str(requested or "").upper()
+            if not sym or not req:
+                return False
+            if sym == req:
+                return True
+            # Handle broker-formatted tickers such as "AAPL_US_EQ",
+            # "NASDAQ:AAPL", or provider payloads with suffixes.
+            compact = sym.replace("NASDAQ:", "").replace("NYSE:", "")
+            if compact == req or compact.startswith(f"{req}_") or compact.startswith(f"{req}."):
+                return True
+            return sym.startswith(req)
+
         positions = await self.get_positions(ticker)
         for pos in positions:
-            pos_ticker = pos.get("ticker", "")
-            if pos_ticker == ticker or pos_ticker.startswith(ticker):
-                return float(pos.get("quantityAvailableForTrading", pos.get("quantity", 0.0)) or 0.0)
+            pos_ticker = (
+                pos.get("ticker")
+                or pos.get("symbol")
+                or pos.get("instrumentTicker")
+                or pos.get("instrument")
+                or ""
+            )
+            if _matches_symbol(pos_ticker, ticker):
+                qty = (
+                    pos.get("quantityAvailableForTrading")
+                    or pos.get("availableQuantity")
+                    or pos.get("tradableQuantity")
+                    or pos.get("quantity")
+                    or pos.get("qty")
+                    or 0.0
+                )
+                return float(qty or 0.0)
         return 0.0
 
     async def get_pending_orders(self) -> List[Dict[str, Any]]:
