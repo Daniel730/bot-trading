@@ -95,8 +95,39 @@ class BrokerageService:
                 return True
             return sym.startswith(req)
 
+        def _matches_symbol(position_symbol: str, requested: str) -> bool:
+            sym = str(position_symbol or "").upper()
+            req = str(requested or "").upper()
+            if not sym or not req:
+                return False
+            if sym == req:
+                return True
+            # Handle broker-formatted tickers such as "AAPL_US_EQ",
+            # "NASDAQ:AAPL", or provider payloads with suffixes.
+            compact = sym.replace("NASDAQ:", "").replace("NYSE:", "")
+            if compact == req or compact.startswith(f"{req}_") or compact.startswith(f"{req}."):
+                return True
+            return sym.startswith(req)
+
         positions = await self.get_positions(ticker)
         for pos in positions:
+            pos_ticker = (
+                pos.get("ticker")
+                or pos.get("symbol")
+                or pos.get("instrumentTicker")
+                or pos.get("instrument")
+                or ""
+            )
+            if _matches_symbol(pos_ticker, ticker):
+                qty = (
+                    pos.get("quantityAvailableForTrading")
+                    or pos.get("availableQuantity")
+                    or pos.get("tradableQuantity")
+                    or pos.get("quantity")
+                    or pos.get("qty")
+                    or 0.0
+                )
+                return float(qty or 0.0)
             pos_ticker = (
                 pos.get("ticker")
                 or pos.get("symbol")
