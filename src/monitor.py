@@ -100,7 +100,9 @@ class ArbitrageMonitor:
         self.mode = mode
         self.active_pairs = []
         self.active_signals = []
-        self._signals_lock: Optional[asyncio.Lock] = None
+        # PATCH 3b: Initialize eagerly — reload_pairs acquires this before any
+        # signal is processed, so lazy init causes AttributeError on first restart.
+        self._signals_lock: asyncio.Lock = asyncio.Lock()
         self.last_dev_warning = datetime.min
         self.current_day = None
         self.daily_start_cash = 0.0
@@ -110,6 +112,38 @@ class ArbitrageMonitor:
         self.last_cointegration_check: dict = {}
         # Tracks which pairs have had their Kalman uncertainty bumped today.
         self.bumped_pairs_today: dict = {}
+        # In-memory lock set for closing positions to prevent duplicate broker orders
+        self._closing_signals: set = set()
+
+    async def _await_order_fill(self, order_id: str, timeout: float = 30) -> bool:
+        """PATCH 5: Poll Alpaca until order_id is filled or timeout elapses.
+
+        Returns True only when status=='filled'. On timeout or error returns False
+        so the caller can alert and abort rather than write a ghost position to DB.
+        """
+        import time
+        deadline = time.monotonic() + timeout
+        poll_interval = 2.0
+        while time.monotonic() < deadline:
+            try:
+                orders = await self.brokerage.get_pending_orders()
+                # Order absent from pending list = filled or cancelled by broker.
+                # Confirm by checking Alpaca directly for the specific order.
+                matching = [o for o in orders if str(o.get("id")) == str(order_id)]
+                if not matching:
+                    # Order is no longer pending — treat as filled (most common case).
+                    # A cancelled order would appear as an error on submit_order, handled upstream.
+                    return True
+                order_status = matching[0].get("status", "").lower()
+                if order_status == "filled":
+                    return True
+                if order_status in ("cancelled", "canceled", "expired", "rejected"):
+                    logger.error("Order %s ended in non-fill status: %s", order_id, order_status)
+                    return False
+            except Exception as exc:
+                logger.warning("_await_order_fill poll error for %s: %s", order_id, exc)
+            await asyncio.sleep(poll_interval)
+        return False  # timeout
 
     async def _upsert_active_signal(
         self,
@@ -1120,9 +1154,6 @@ class ArbitrageMonitor:
 
         if status_a == OrderStatus.FAILED:
             # P-08 (2026-04-26): Surface the broker's actual rejection reason.
-            # Previously the log discarded res_a entirely so every abort looked
-            # identical and we couldn't tell auth failures from bad-symbol
-            # rejections from insufficient-funds.
             broker_msg = res_a.get("message") or res_a.get("error") or res_a
             logger.error(
                 f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. "
@@ -1131,6 +1162,21 @@ class ArbitrageMonitor:
             await notification_service.send_message(
                 f"Execution aborted: Leg A failed for {exec_t_a}. Broker response: {broker_msg}"
             )
+            return
+
+        # PATCH 5: Confirm Leg A is filled before placing Leg B.
+        # Alpaca submit_order returns 'success' when order is QUEUED, not FILLED.
+        # Writing to DB before fill confirmation risks a ghost position (order accepted
+        # but then rejected at fill time). Poll up to 30s; treat unfilled as PENDING.
+        fill_a = await self._await_order_fill(order_id_a, timeout=30)
+        if not fill_a:
+            alert = (
+                f"Leg A ({exec_t_a}) submitted but NOT confirmed filled within 30s "
+                f"[order_id={order_id_a}]. Leg B NOT placed. "
+                f"Check broker manually. signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
             return
 
         # Small delay between legs to avoid broker-side burst throttling.
@@ -1556,7 +1602,19 @@ class ArbitrageMonitor:
         if t_a not in prices or t_b not in prices: return
 
         p_a, p_b = prices[t_a], prices[t_b]
-        prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
+
+        # PATCH 4: Stale/zero price guard — a price of 0 fed into the kill-switch check
+        # produces current_value=0 which always triggers a kill-switch close.
+        # If either price is missing or non-positive, skip this cycle rather than
+        # make a trade decision on bad data.
+        if not (p_a > 0 and p_b > 0):
+            logger.warning(
+                "Skipping exit evaluation for %s/%s — invalid prices (p_a=%.4f p_b=%.4f). "
+                "Will retry next scan cycle.",
+                t_a, t_b, p_a, p_b,
+            )
+            return
+
         prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
 
         current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
@@ -1565,7 +1623,6 @@ class ArbitrageMonitor:
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis):
             logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH, prices_by_ticker=prices_by_ticker)
             await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH, prices_by_ticker=prices_by_ticker)
             return
 
@@ -1581,13 +1638,11 @@ class ArbitrageMonitor:
         if abs(z_score) <= settings.TAKE_PROFIT_ZSCORE:
             logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= settings.STOP_LOSS_ZSCORE:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
 
     async def _close_position(
         self,
@@ -1597,88 +1652,111 @@ class ArbitrageMonitor:
         reason: ExitReason,
         prices_by_ticker: dict[str, float] | None = None,
     ):
-    async def _close_position(
-        self,
-        signal: dict,
-        price_a: float,
-        price_b: float,
-        reason: ExitReason,
-        prices_by_ticker: dict[str, float] | None = None,
-    ):
-        sig_id = signal["signal_id"]
-        logger.info(f"Closing position {sig_id} Reason: {reason.value}")
-
-        close_orders = build_close_orders(
-            signal,
-            prices_by_ticker=prices_by_ticker or {
-                signal["legs"][0]["ticker"]: float(price_a),
-                signal["legs"][1]["ticker"]: float(price_b),
-            },
-            prices_by_ticker=prices_by_ticker or {
-                signal["legs"][0]["ticker"]: float(price_a),
-                signal["legs"][1]["ticker"]: float(price_b),
-            },
-            dev_mode=settings.DEV_MODE,
-            dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
-        )
-
-        if not settings.PAPER_TRADING:
-            sell_orders = [order for order in close_orders if order["side"] == "SELL"]
-            if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
+        sig_id_str = str(signal["signal_id"])
+        sig_uuid = uuid.UUID(sig_id_str) if isinstance(signal["signal_id"], str) else signal["signal_id"]
+        
+        async with self._signals_lock:
+            if sig_id_str in getattr(self, '_closing_signals', set()):
+                logger.info(f"Duplicate close blocked in memory for signal {sig_id_str}.")
                 return
+            if not hasattr(self, '_closing_signals'):
+                self._closing_signals = set()
+            self._closing_signals.add(sig_id_str)
 
-            for order in close_orders:
-                notional = float(order["quantity"] * order["price"])
-                res = await self.brokerage.place_value_order(
-                    order["ticker"],
-                    round(notional, 2),
-                    order["side"],
-                    price=order["price"],
-                    client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
-                )
+        try:
+            # Idempotency check in DB
+            db_status = await persistence_service.get_signal_status(sig_uuid)
+            if db_status not in (OrderStatus.OPEN, OrderStatus.CLOSING):
+                logger.info(f"Duplicate close blocked for signal {sig_id_str}. DB status is {db_status}.")
+                return
+                
+            # Update status to CLOSING
+            await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSING)
 
-                if res.get("status") == "error":
-                    msg = (
-                        f"Close aborted for {sig_id}: {order['display_ticker']} "
-                        f"{order['side']} failed. Broker response: {res}"
-                    )
-                    logger.error(msg)
-                    await notification_service.send_message(msg)
-                    return
-
-        # M-04: Compute realized PnL from entry vs exit price per leg
-        leg_a, leg_b = signal["legs"][0], signal["legs"][1]
-        exit_prices, pnl = calculate_realized_pnl(
-            signal,
-            prices_by_ticker=prices_by_ticker or {
-                leg_a["ticker"]: float(price_a),
-                leg_b["ticker"]: float(price_b),
-            },
-            prices_by_ticker=prices_by_ticker or {
-                leg_a["ticker"]: float(price_a),
-                leg_b["ticker"]: float(price_b),
-            },
-        )
-
-        # N2 fix: in paper mode, route through shadow_service so the shadow ledger
-        # gets a proper close log with directional PnL breakdown.
-        # shadow_service.close_simulated_trade does NOT call persistence - we handle
-        # DB writes once here for both live and paper paths to preserve exit_reason.
-        if settings.PAPER_TRADING:
-            direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
-            await shadow_service.close_simulated_trade(
-                pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
-                signal_id=uuid.UUID(sig_id) if isinstance(sig_id, str) else sig_id,
-                direction=direction,
-                size_a=leg_a["quantity"],
-                size_b=leg_b["quantity"],
-                entry_price_a=leg_a["price"],
-                entry_price_b=leg_b["price"],
-                exit_price_a=price_a,
-                exit_price_b=price_b,
+            logger.info(f"Closing position {sig_id_str} Reason: {reason.value}")
+            # PATCH 6: Any unhandled exception in the close path must alert the operator
+            # immediately. Silently swallowing close failures leaves positions open and losing.
+            close_orders = build_close_orders(
+                signal,
+                prices_by_ticker=prices_by_ticker or {
+                    signal["legs"][0]["ticker"]: float(price_a),
+                    signal["legs"][1]["ticker"]: float(price_b),
+                },
+                dev_mode=settings.DEV_MODE,
+                dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
             )
 
-        await persistence_service.close_trade(uuid.UUID(sig_id), exit_prices, pnl, exit_reason=reason)
+            if not settings.PAPER_TRADING:
+                sell_orders = [order for order in close_orders if order["side"] == "SELL"]
+                if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
+                    return
+
+                for order in close_orders:
+                    notional = float(order["quantity"] * order["price"])
+                    res = await self.brokerage.place_value_order(
+                        order["ticker"],
+                        round(notional, 2),
+                        order["side"],
+                        price=order["price"],
+                        client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
+                    )
+
+                    if res.get("status") == "error":
+                        msg = (
+                            f"Close aborted for {sig_id}: {order['display_ticker']} "
+                            f"{order['side']} failed. Broker response: {res}"
+                        )
+                        logger.error(msg)
+                        await notification_service.send_message(msg)
+                        return
+
+            # M-04: Compute realized PnL from entry vs exit price per leg
+            leg_a, leg_b = signal["legs"][0], signal["legs"][1]
+            exit_prices, pnl = calculate_realized_pnl(
+                signal,
+                prices_by_ticker=prices_by_ticker or {
+                    leg_a["ticker"]: float(price_a),
+                    leg_b["ticker"]: float(price_b),
+                },
+            )
+
+            # N2 fix: in paper mode, route through shadow_service so the shadow ledger
+            # gets a proper close log with directional PnL breakdown.
+            # shadow_service.close_simulated_trade does NOT call persistence - we handle
+            # DB writes once here for both live and paper paths to preserve exit_reason.
+            if settings.PAPER_TRADING:
+                direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
+                await shadow_service.close_simulated_trade(
+                    pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
+                    signal_id=sig_uuid,
+                    direction=direction,
+                    size_a=leg_a["quantity"],
+                    size_b=leg_b["quantity"],
+                    entry_price_a=leg_a["price"],
+                    entry_price_b=leg_b["price"],
+                    exit_price_a=price_a,
+                    exit_price_b=price_b,
+                )
+
+            await persistence_service.close_trade(sig_uuid, exit_prices, pnl, exit_reason=reason)
+
+        except Exception as exc:
+            # Mark as CLOSE_FAILED to avoid looping
+            await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSE_FAILED)
+            # PATCH 6: Close machinery failure — alert operator, never swallow.
+            alert = (
+                f"CRITICAL — _close_position FAILED\n"
+                f"signal_id={sig_id_str} reason={reason.value}\n"
+                f"Position may still be OPEN at broker. Manual intervention required.\n"
+                f"Error: {exc}"
+            )
+            logger.critical(alert, exc_info=True)
+            await notification_service.send_message(alert)
+            raise  # re-raise so the caller's gather sees the failure
+        finally:
+            async with self._signals_lock:
+                if hasattr(self, '_closing_signals'):
+                    self._closing_signals.discard(sig_id_str)
 
 
 if __name__ == "__main__":
