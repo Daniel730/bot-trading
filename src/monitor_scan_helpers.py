@@ -103,7 +103,6 @@ def build_close_orders(
             first_leg_ticker: float(price_a if price_a is not None else 0.0),
             second_leg_ticker: float(price_b if price_b is not None else 0.0),
         }
-
     for leg in signal["legs"]:
         ticker = leg["ticker"]
         quantity = float(leg["quantity"])
@@ -124,9 +123,20 @@ def build_close_orders(
     return close_orders
 
 
-def calculate_realized_pnl(signal: dict, *, price_a: float, price_b: float) -> tuple[dict[str, float], float]:
-    leg_a, leg_b = signal["legs"][0], signal["legs"][1]
-    exit_prices = {leg_a["ticker"]: float(price_a), leg_b["ticker"]: float(price_b)}
+def calculate_realized_pnl(
+    signal: dict,
+    *,
+    prices_by_ticker: dict[str, float] | None = None,
+    price_a: float | None = None,
+    price_b: float | None = None,
+) -> tuple[dict[str, float], float]:
+    if prices_by_ticker is None:
+        leg_a, leg_b = signal["legs"][0], signal["legs"][1]
+        prices_by_ticker = {
+            leg_a["ticker"]: float(price_a if price_a is not None else 0.0),
+            leg_b["ticker"]: float(price_b if price_b is not None else 0.0),
+        }
+    exit_prices = {k: float(v) for k, v in prices_by_ticker.items()}
     pnl = 0.0
     for leg in signal["legs"]:
         quantity = leg["quantity"]

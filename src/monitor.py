@@ -1627,8 +1627,10 @@ class ArbitrageMonitor:
         leg_a, leg_b = signal["legs"][0], signal["legs"][1]
         exit_prices, pnl = calculate_realized_pnl(
             signal,
-            price_a=price_a,
-            price_b=price_b,
+            prices_by_ticker=prices_by_ticker or {
+                leg_a["ticker"]: float(price_a),
+                leg_b["ticker"]: float(price_b),
+            },
         )
 
         # N2 fix: in paper mode, route through shadow_service so the shadow ledger
