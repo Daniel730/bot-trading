@@ -219,7 +219,6 @@ class PortfolioManagerAgent:
             tickers,
             "1y",
             "1d",
-            timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
         )
         if df is None or df.empty:
             logger.warning(f"No historical data for optimization: {tickers}")
@@ -292,9 +291,18 @@ class PortfolioManagerAgent:
         existing_ids = await persistence_service.get_existing_candidate_ids(sector)
         new_candidates = []
 
+        # Batch fetch historical data for all sector tickers to avoid rate limits
+        try:
+            full_df = await self.data_service.get_historical_data_async(
+                sector_tickers,
+                "1y",
+                "1d",
+            )
+        except Exception as e:
+            logger.error(f"Batch fetch failed for sector {sector}: {e}")
+            full_df = pd.DataFrame()
+
         # This is a placeholder for a more complex chunked scanning logic
-        # In a real environment, this would run as a background task
-        # Mocking 10 pairs for now
         for i in range(min(10, len(sector_tickers)-1)):
             t_a, t_b = sector_tickers[i], sector_tickers[i+1]
             pair_id = f"{t_a}_{t_b}"
@@ -303,18 +311,22 @@ class PortfolioManagerAgent:
                 continue
 
             # Spec 045: Ensure both legs are accessible in the active brokerage
-            # before doing any math or persisting the candidate.
             if not await brokerage_service.is_asset_active(t_a) or not await brokerage_service.is_asset_active(t_b):
                 logger.debug(f"SCOUT SKIP {pair_id}: one or both legs inactive in broker.")
                 continue
 
             try:
-                df = await self.data_service.get_historical_data_async(
-                    [t_a, t_b],
-                    "1y",
-                    "1d",
-                    timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
-                )
+                # Use data from batch fetch if available
+                if not full_df.empty and t_a in full_df.columns and t_b in full_df.columns:
+                    df = full_df[[t_a, t_b]].dropna()
+                else:
+                    # Fallback to single fetch if missing from batch
+                    df = await self.data_service.get_historical_data_async(
+                        [t_a, t_b],
+                        "1y",
+                        "1d",
+                    )
+                
                 if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
                     continue
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
@@ -367,6 +379,13 @@ class PortfolioManagerAgent:
         existing_ids = await persistence_service.get_existing_candidate_ids("Crypto")
         new_candidates = []
 
+        # Batch fetch all crypto data in one call
+        try:
+            full_df = await self.data_service.get_historical_data_async(top_crypto, "1y", "1d")
+        except Exception as e:
+            logger.error(f"Batch fetch failed for crypto: {e}")
+            full_df = pd.DataFrame()
+
         for i in range(len(top_crypto)):
             for j in range(i + 1, len(top_crypto)):
                 t_a, t_b = top_crypto[i], top_crypto[j]
@@ -380,12 +399,15 @@ class PortfolioManagerAgent:
                     continue
 
                 try:
-                    df = await self.data_service.get_historical_data_async(
-                        [t_a, t_b],
-                        "1y",
-                        "1d",
-                        timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
-                    )
+                    if not full_df.empty and t_a in full_df.columns and t_b in full_df.columns:
+                        df = full_df[[t_a, t_b]].dropna()
+                    else:
+                        df = await self.data_service.get_historical_data_async(
+                            [t_a, t_b],
+                            "1y",
+                            "1d",
+                        )
+                    
                     if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
                         continue
                         
@@ -439,7 +461,6 @@ class PortfolioManagerAgent:
             all_tickers,
             "1y",
             "1d",
-            timeout=settings.MARKET_DATA_TIMEOUT_SECONDS * 2,
         )
         if df is None or df.empty:
             logger.warning("Portfolio optimization advice skipped: historical data unavailable for %s", all_tickers)

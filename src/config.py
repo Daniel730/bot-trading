@@ -251,8 +251,8 @@ class Settings(BaseSettings):
         default=2.0,
         validation_alias="ELITE_ROTATION_SORTINO_THRESHOLD",
     )
-    ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=15.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
-    MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=15.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
+    ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=60.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
+    MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=45.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
     MARKET_DATA_BATCH_SIZE: int = Field(default=30, validation_alias="MARKET_DATA_BATCH_SIZE")
     MARKET_DATA_BATCH_CONCURRENCY: int = Field(default=3, validation_alias="MARKET_DATA_BATCH_CONCURRENCY")
     SPREAD_GUARD_MAX_PCT: float = Field(default=0.003, validation_alias="SPREAD_GUARD_MAX_PCT")
@@ -699,54 +699,26 @@ class Settings(BaseSettings):
         {'ticker_a': 'SPOT',    'ticker_b': 'WMG'}
     ]
 
-    # Crypto pairs traded 24/7 — including weekends and outside US equity
-    # hours. The monitor loads these alongside ARBITRAGE_PAIRS in production
-    # mode; process_pair's `is_crypto` guard makes sure equity pairs pause
-    # off-hours while crypto pairs keep scanning.
+    # Crypto pairs traded 24/7 — 100% compatible with Alpaca Paper/Free tier.
     CRYPTO_TEST_PAIRS: list = [
         {'ticker_a': 'BTC-USD',   'ticker_b': 'ETH-USD'},
         # --- Layer 1 / smart-contract platforms ---
         {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
         {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
         {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
-        {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
         {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
         {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
         {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
-        {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
-        {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
         # --- Stores of value / Bitcoin forks ---
         {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
         {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
         {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
-        {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
-        # --- Payments / XRP-style ---
+        # --- Payments ---
         {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
-        {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},   # Competing payment networks
-        {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
-        # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
-        {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},   # replaces UNI/LINK
-        {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},    # replaces UNI/AAVE
+        # --- DeFi ---
         {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
-        {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},   # Cosmos DeFi
-        # --- Storage / utility ---
-        {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
-        # --- Cosmos ecosystem ---
-        {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},   # Celestia modular L1
-        # --- Infrastructure / enterprise ---
-        {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},   # Enterprise DLT pair
-        # --- Memes (high vol, mean-reverting spreads) ---
+        # --- Memes ---
         {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
-        {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},   # Solana memes
-        # --- Newer L1s ---
-        # Assets containing ALGO-USD removed 2026-05-02: Alpaca reports asset is not active.
-        # consistently reports as delisted (no spot data available):
-        #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
-        #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
-        #   JUP-USD, PEPE-USD.
-        # Re-add them once Yahoo Finance restores their feeds.
     ]
 
     DEV_EXECUTION_TICKERS: dict = {
