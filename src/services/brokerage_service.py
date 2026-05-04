@@ -103,26 +103,48 @@ class BrokerageService:
 
     async def get_pending_orders_value(self) -> float:
         orders = await self.get_pending_orders()
+        if not orders:
+            return AwaitableFloat(0.0)
+
+        # First pass: identify orders missing a limit price and collect their tickers
+        tickers_to_fetch = []
+        for order in orders:
+            try:
+                price = float(order.get('limitPrice') or order.get('price') or 0.0)
+            except (TypeError, ValueError):
+                price = 0.0
+            
+            if price <= 0.0:
+                ticker = order.get('ticker')
+                if ticker:
+                    tickers_to_fetch.append(ticker)
+
+        # Batch fetch all missing prices in one call
+        fetched_prices = {}
+        if tickers_to_fetch:
+            from src.services.data_service import data_service
+            fetched_prices = await data_service.get_latest_price_async(tickers_to_fetch)
+
+        # Second pass: calculate total value using batched prices where needed
         total_value = 0.0
         for order in orders:
             try:
                 qty = float(order.get('quantity', 0.0) or 0.0)
             except (TypeError, ValueError):
                 qty = 0.0
+            
             if qty > 0:
                 try:
                     price = float(order.get('limitPrice') or order.get('price') or 0.0)
                 except (TypeError, ValueError):
                     price = 0.0
+                
                 if price <= 0.0:
-                    from src.services.data_service import data_service
                     ticker = order.get('ticker')
-                    prices = await data_service.get_latest_price_async([ticker])
-                    try:
-                        price = float(prices.get(ticker, 0.0) or 0.0)
-                    except (TypeError, ValueError):
-                        price = 0.0
+                    price = float(fetched_prices.get(ticker, 0.0) or 0.0)
+                
                 total_value += (qty * price)
+        
         return AwaitableFloat(total_value)
 
 brokerage_service = BrokerageService()

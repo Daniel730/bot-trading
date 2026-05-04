@@ -112,8 +112,10 @@ class AlpacaProvider(AbstractBrokerageProvider):
         # Cache for 1 hour
         if self._active_symbols_cache is None or now - self._active_symbols_last_fetch > 3600:
             try:
-                assets = self.api.list_assets(status='active')
-                self._active_symbols_cache = {a.symbol for a in assets}
+                # Fetch only active US equities and Crypto to reduce payload and avoid plan-limit errors
+                equity_assets = self.api.list_assets(status='active', asset_class='us_equity')
+                crypto_assets = self.api.list_assets(status='active', asset_class='crypto')
+                self._active_symbols_cache = {a.symbol for a in equity_assets} | {a.symbol for a in crypto_assets}
                 self._active_symbols_last_fetch = now
                 logger.info(f"AlpacaProvider: Cached {len(self._active_symbols_cache)} active symbols")
             except Exception as e:

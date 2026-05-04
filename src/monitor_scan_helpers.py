@@ -64,7 +64,7 @@ def build_scan_pairs(active_pairs: list[dict], is_market_open: Callable[[str], b
     scan_pairs: list[dict] = []
     all_tickers: list[str] = []
     for pair in active_pairs:
-       ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
+        ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
         # Note: pairs admitted with is_cointegrated=False (rolling stability fail)
         # are NOT skipped here — process_pair checks the flag and skips signal
         # generation, but we still need prices fetched so z-scores update.

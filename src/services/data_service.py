@@ -27,7 +27,13 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 
 class DataService:
     def __init__(self):
-        self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY)
+        # Increase connection pool size to handle concurrent requests
+        self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY, num_pools=10)
+        # Directly tune the underlying urllib3 pool manager to avoid 'Connection pool is full' warnings
+        try:
+            self.polygon_client.client.connection_pool_kw['maxsize'] = 10
+        except Exception:
+            pass
         self.alpaca_client = tradeapi.REST(
             key_id=settings.ALPACA_API_KEY,
             secret_key=settings.ALPACA_API_SECRET,
@@ -162,7 +168,7 @@ class DataService:
         timeout: Optional[float] = None,
     ) -> pd.DataFrame:
         # Increase deadline for historical data to allow for yf delays + retries
-        deadline = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS * 3
+        deadline = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS * 6
         return await self._run_sync_backend(
             self.get_historical_data,
             tickers,
@@ -229,17 +235,17 @@ class DataService:
         Fetches historical data using Alpaca, falling back to yfinance and Polygon.
         """
         tickers = self._dedupe_tickers(tickers)
+        logger.info(f"DataService: Fetching historical data for {tickers} (period={period}, interval={interval})")
         
-        # 1. Try Alpaca first (Fastest and most reliable for our Alpaca-only setup)
+        # 1. Try Alpaca first
         try:
+            logger.debug(f"DataService: Attempting Alpaca historical for {tickers}...")
             # Map tickers for Alpaca
-            # Note: For crypto tickers (e.g. BTC-USD), we fallback to yf/Polygon 
-            # because Alpaca historical crypto bars often require a separate 'crypto' subscription
-            # and can throw 'invalid symbol' on basic stock plans.
-            alpaca_tickers = [t for t in tickers if not t.endswith("-USD")]
+            alpaca_stock_tickers = [t for t in tickers if not t.endswith("-USD")]
+            alpaca_crypto_tickers = [t for t in tickers if t.endswith("-USD")]
             
-            if not alpaca_tickers:
-                raise ValueError("No stock tickers in batch for Alpaca")
+            if not alpaca_stock_tickers and not alpaca_crypto_tickers:
+                raise ValueError("No tickers provided for Alpaca")
             
             # Map period to days
             days = 30
@@ -251,39 +257,66 @@ class DataService:
             timeframe = "1Hour" if interval == "1h" else "1Min"
             
             # Use Alpaca bar fetching (RFC3339 UTC format)
-            # Free Tier constraint: historical data (SIP) must be at least 15-20 minutes old.
-            # Using 21 minutes to be safe.
             end_dt = datetime.now(timezone.utc) - timedelta(minutes=21)
             start_dt = end_dt - timedelta(days=days)
-            
-            # Format as RFC3339 string without microseconds
             start_str = start_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             end_str = end_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            # Fetch bars
-            bars = self.alpaca_client.get_bars(
-                alpaca_tickers,
-                timeframe,
-                start=start_str,
-                end=end_str,
-                adjustment="raw" # Use 'raw' for broader compatibility with free tier
-            ).df
             
-            if not bars.empty:
-                # Alpaca returns a multi-index (symbol, timestamp) or just timestamp
-                if "symbol" in bars.index.names:
-                    # Pivoting to get tickers as columns
-                    df = bars.reset_index().pivot(index="timestamp", columns="symbol", values="close")
-                    # Map back tickers
-                    df.columns = [c.replace("/", "-") for c in df.columns]
+            dfs = []
+            
+            # 1a. Fetch Stock Bars
+            if alpaca_stock_tickers:
+                try:
+                    # Note: For Alpaca Free Tier, we MUST use feed='iex' to get real-time-ish (delayed) data
+                    # without a paid SIP subscription.
+                    s_bars = self.alpaca_client.get_bars(
+                        alpaca_stock_tickers, 
+                        timeframe, 
+                        start=start_str, 
+                        end=end_str, 
+                        adjustment="raw",
+                        feed="iex"
+                    ).df
+                    if not s_bars.empty:
+                        if "symbol" in s_bars.index.names:
+                            s_df = s_bars.reset_index().pivot(index="timestamp", columns="symbol", values="close")
+                        else:
+                            s_df = s_bars[["close"]].rename(columns={"close": alpaca_stock_tickers[0]})
+                        dfs.append(s_df)
+                except Exception as e:
+                    logger.debug(f"DataService: Alpaca stock bars failed: {e}")
+            
+            # 1b. Fetch Crypto Bars
+            if alpaca_crypto_tickers:
+                crypto_symbols = [t.replace("-", "/") for t in alpaca_crypto_tickers]
+                try:
+                    c_bars = self.alpaca_client.get_crypto_bars(
+                        crypto_symbols, timeframe, start=start_str, end=end_str, exchange='CBSE'
+                    ).df
+                    if not c_bars.empty:
+                        # Map "/" back to "-"
+                        if "symbol" in c_bars.index.names:
+                            c_bars = c_bars.reset_index()
+                            c_bars["symbol"] = c_bars["symbol"].str.replace("/", "-")
+                            c_df = c_bars.pivot(index="timestamp", columns="symbol", values="close")
+                        else:
+                            c_df = c_bars[["close"]].rename(columns={"close": alpaca_crypto_tickers[0]})
+                        dfs.append(c_df)
+                except Exception as e:
+                    logger.debug(f"DataService: Alpaca crypto bars failed: {e}")
+            
+            if dfs:
+                # Merge all DataFrames on timestamp
+                df = pd.concat(dfs, axis=1).sort_index()
+                if not df.empty:
+                    logger.info(f"DataService: Successfully fetched Alpaca historical for {tickers}")
                     return df
-                else:
-                    return bars["close"]
         except Exception as e:
             logger.warning(f"DataService: Alpaca historical data failed: {e}")
 
         # 2. Try yfinance fallback
         try:
+            logger.info(f"DataService: Falling back to yfinance for {tickers}...")
             # Bug 1.2: Enforce auto_adjust=True to handle splits and dividends correctly
             df = self._download_yfinance(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
             if not df.empty:
@@ -294,6 +327,7 @@ class DataService:
                     # In some cases yf returns a flat DF
                     cols = [c for c in df.columns if 'Close' in c]
                     if cols:
+                        logger.info(f"DataService: Successfully fetched yfinance historical for {tickers}")
                         return df[cols]
                     logger.warning(f"Adjusted 'Close' not found in yfinance columns: {df.columns}")
         except Exception as e:
@@ -382,29 +416,44 @@ class DataService:
         if not remaining_tickers:
             return latest
 
-        # 2. Try Alpaca Snapshot (Batch) for Stocks and Crypto
+        # 2. Try Alpaca Snapshot (Batch) for Stocks
         if remaining_tickers:
             try:
-                # Alpaca Snapshots are very fast and return multiple tickers in one call
-                # Note: For crypto tickers like BTC-USD, we might need to map them to Alpaca format
-                alpaca_tickers = []
-                for t in remaining_tickers:
-                    if t.endswith("-USD"):
-                        # Alpaca crypto format is often BTC/USD or just BTCUSD depending on the endpoint
-                        # Snapshots endpoint usually expects BTC/USD or BTC/USDT
-                        alpaca_tickers.append(t.replace("-", "/"))
-                    else:
-                        alpaca_tickers.append(t)
+                # Alpaca Snapshots are very fast and return multiple tickers in one call.
+                # We filter out crypto tickers (-USD) because they must be fetched from 
+                # a different endpoint or mapped differently, and mixing them in a 
+                # stocks/snapshots call returns a 400 error.
+                alpaca_stock_tickers = [t for t in remaining_tickers if not t.endswith("-USD")]
                 
-                snapshots = self.alpaca_client.get_snapshots(alpaca_tickers)
-                for ticker_key, snapshot in snapshots.items():
-                    # Map back to our ticker format
-                    internal_ticker = ticker_key.replace("/", "-")
-                    if internal_ticker in remaining_tickers:
-                        price = float(snapshot.latest_trade.p)
-                        if price > 0:
-                            latest[internal_ticker] = price
-                            self._update_redis_cache(internal_ticker, price)
+                if alpaca_stock_tickers:
+                    snapshots = self.alpaca_client.get_snapshots(alpaca_stock_tickers)
+                    for ticker_key, snapshot in snapshots.items():
+                        # Map back to our ticker format
+                        internal_ticker = ticker_key.replace("/", "-")
+                        if internal_ticker in remaining_tickers:
+                            price = float(snapshot.latest_trade.p)
+                            if price > 0:
+                                latest[internal_ticker] = price
+                                self._update_redis_cache(internal_ticker, price)
+                
+                # Fetch Crypto
+                alpaca_crypto_tickers = [t for t in remaining_tickers if t.endswith("-USD")]
+                if alpaca_crypto_tickers:
+                    # Alpaca crypto format: LTC/USD
+                    crypto_symbols = [t.replace("-", "/") for t in alpaca_crypto_tickers]
+                    try:
+                        # Note: get_crypto_snapshots is available in alpaca-trade-api
+                        # We use 'CBSE' as a reliable default exchange for Alpaca crypto data
+                        crypto_snapshots = self.alpaca_client.get_crypto_snapshots(crypto_symbols, exchange='CBSE')
+                        for ticker_key, snapshot in crypto_snapshots.items():
+                            internal_ticker = ticker_key.replace("/", "-")
+                            if internal_ticker in remaining_tickers:
+                                price = float(snapshot.latest_trade.p)
+                                if price > 0:
+                                    latest[internal_ticker] = price
+                                    self._update_redis_cache(internal_ticker, price)
+                    except Exception as e:
+                        logger.debug(f"DataService: Alpaca crypto snapshot failed (likely unsupported by plan): {e}")
                 
                 remaining_tickers = [t for t in remaining_tickers if t not in latest]
             except Exception as e:
