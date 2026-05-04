@@ -24,6 +24,9 @@ class OrderStatus(enum.Enum):
     FAILED = "FAILED"
     OPEN = "OPEN"
     CLOSED = "CLOSED"
+    CLOSING = "CLOSING"
+    CLOSE_FAILED = "CLOSE_FAILED"
+    NEEDS_MANUAL_RECONCILIATION = "NEEDS_MANUAL_RECONCILIATION"
 
 class AchievabilityStatus(enum.Enum):
     PERFECT = "PERFECT"
@@ -317,6 +320,21 @@ class PersistenceService:
         # Trigger reflection in the background
         from src.agents.reflection_agent import reflection_agent
         asyncio.create_task(reflection_agent.reflect_on_trade(str(signal_id)))
+
+    async def get_signal_status(self, signal_id: uuid.UUID) -> Optional[OrderStatus]:
+        from sqlalchemy import select
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(TradeLedger.status).where(TradeLedger.signal_id == signal_id).limit(1)
+            res = await session.execute(stmt)
+            status = res.scalar()
+            return status
+
+    async def update_signal_status(self, signal_id: uuid.UUID, status: OrderStatus):
+        from sqlalchemy import update
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(status=status)
+                await session.execute(stmt)
 
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """Retrieves all currently OPEN positions grouped by signal_id."""

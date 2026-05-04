@@ -85,6 +85,8 @@ class NotificationService:
             from src.models.persistence import PersistenceManager
             persistence = PersistenceManager(settings.DB_PATH)
             
+
+            
             for asset in assets:
                 persistence.save_portfolio_strategy(strategy_id, asset['ticker'], asset['weight'], "Balanced")
             
@@ -94,8 +96,19 @@ class NotificationService:
             await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
     async def _handle_invest(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Executes a value-based fractional order or schedules DCA: /invest [amount] of [ticker] OR /invest schedule amount=X frequency=Y strategy=S"""
+        """Executes a value-based fractional order or schedules DCA: /invest [amount] of [ticker] confirm OR /invest schedule amount=X frequency=Y strategy=S"""
         try:
+            # PATCH 2a: Validate sender is the configured operator.
+            # Without this, any member of the Telegram chat (group chats, leaked tokens)
+            # can place live market orders against the account.
+            sender_user_id = str(update.effective_user.id)
+            if sender_user_id != str(self.chat_id):
+                await update.message.reply_text("⛔ Unauthorized.")
+                await self.send_message(f"🚨 UNAUTHORIZED /invest ATTEMPT by user {sender_user_id} (@{update.effective_user.username})")
+                import logging
+                logging.getLogger("audit").critical(f"UNAUTHORIZED COMMAND: sender={sender_user_id} user=@{update.effective_user.username}")
+                return
+
             args = context.args
             if not args:
                 await update.message.reply_text("Usage:\n/invest [amount] of [ticker]\n/invest schedule amount=X frequency=Y strategy=S")
@@ -110,6 +123,10 @@ class NotificationService:
                         params[k] = v
                 
                 amount = float(params.get("amount", 0))
+                # PATCH 2b: Reject non-positive or excessively large DCA amounts.
+                if amount <= 0 or amount > 10_000:
+                    await update.message.reply_text("⛔ Amount must be between $0.01 and $10,000.")
+                    return
                 frequency = params.get("frequency", "weekly")
                 strategy_id = params.get("strategy", "safe")
                 
@@ -124,16 +141,58 @@ class NotificationService:
                 await update.message.reply_text(f"✅ DCA Scheduled: ${amount:.2f} {frequency} into '{strategy_id}'. First run: {next_run.strftime('%H:%M:%S')}")
                 return
 
-            if len(args) < 3 or args[1].lower() != "of":
-                await update.message.reply_text("Usage: /invest [amount] of [ticker]\nExample: /invest 10 of AAPL")
+            if len(args) < 4 or args[1].lower() != "of" or args[3].lower() != "confirm":
+                await update.message.reply_text("Usage: /invest [amount] of [ticker] confirm\nExample: /invest 10 of AAPL confirm")
                 return
             
             amount = float(args[0])
             ticker = args[2].upper()
-            
+
+            # PATCH 2c: Reject non-positive or excessively large amounts.
+            if amount <= 0 or amount > 10_000:
+                await update.message.reply_text("⛔ Amount must be between $0.01 and $10,000.")
+                return
+
+            # Check ticker format
+            if not ticker.isalnum() and "-" not in ticker:
+                await update.message.reply_text("⛔ Ambiguous or malformed ticker symbol.")
+                return
+
+            import logging
+            audit_logger = logging.getLogger("audit")
+
+            # PATCH 2d: In paper mode, log the intent but do NOT hit the real broker.
+            if settings.PAPER_TRADING:
+                await update.message.reply_text(
+                    f"📝 PAPER MODE: /invest ${amount:.2f} of {ticker} logged (no real order placed)."
+                )
+                audit_logger.info(f"AUDIT: /invest paper-logged. user={sender_user_id} ticker={ticker} amount={amount}")
+                return
+
+            if not getattr(settings, 'LIVE_CAPITAL_DANGER', False):
+                await update.message.reply_text("⛔ Trading commands are disabled by default in live mode. (LIVE_CAPITAL_DANGER not true)")
+                return
+
             from src.services.brokerage_service import BrokerageService
+            from src.services.budget_service import budget_service
             brokerage = BrokerageService()
+
+            actual_cash = await brokerage.get_account_cash()
+            effective_cash = budget_service.get_effective_cash("ALPACA", actual_cash)
+            if amount > effective_cash:
+                await update.message.reply_text(f"⛔ Insufficient effective cash. Requested: ${amount:.2f}, Available: ${effective_cash:.2f}")
+                audit_logger.warning(f"AUDIT: /invest rejected, insufficient budget. requested={amount} effective={effective_cash}")
+                return
+
+            # PATCH 2e: In live mode, require explicit approval before placing the order.
+            trade_summary = f"/invest command: BUY ${amount:.2f} of {ticker}"
+            approved = await self.request_approval(trade_summary, trade_value=amount, force_manual=True)
+            if not approved:
+                await update.message.reply_text(f"❌ Investment rejected by operator (or timed out).")
+                audit_logger.info(f"AUDIT: /invest rejected by operator. ticker={ticker} amount={amount}")
+                return
             
+            audit_logger.info(f"AUDIT: /invest APPROVED. Executing BUY ${amount} of {ticker}...")
             await update.message.reply_text(f"⏳ Processing investment: ${amount:.2f} of {ticker}...")
             
             # Execute value-based order
@@ -142,21 +201,19 @@ class NotificationService:
             if result.get("status") == "error":
                 await update.message.reply_text(f"❌ Failed: {result.get('message')}")
             else:
-                # result normally contains the broker order object
-                order_id = result.get('orderId', 'N/A')
-                await update.message.reply_text(f"✅ SUCCESS: Invested ${amount:.2f} in {ticker}\nOrder ID: {order_id}")
-                
+                budget_service.update_used_budget("ALPACA", amount)
+                await update.message.reply_text(f"✅ Order placed successfully.")
+            
         except Exception as e:
             await update.message.reply_text(f"⚠️ Error: {str(e)}")
 
     async def _handle_cash(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Displays account cash balance and SGOV sweep status: /cash"""
         try:
-            from src.services.brokerage_service import BrokerageService
             from src.services.cash_management_service import cash_management_service
+            from src.services.brokerage_service import BrokerageService
             brokerage = BrokerageService()
             
-            cash = brokerage.get_account_cash()
+            cash = await brokerage.get_account_cash()
             sweep_ticker = cash_management_service.sweep_ticker
             
             portfolio = await brokerage.get_portfolio()
@@ -164,7 +221,6 @@ class NotificationService:
             
             sweep_value = 0.0
             if sweep_pos:
-                # v0 doesn't always have current value, but we can approximate or use DataService
                 qty = sweep_pos.get('quantity', 0.0)
                 from src.services.data_service import data_service
                 prices = await data_service.get_latest_price_async([sweep_ticker])
@@ -204,6 +260,13 @@ class NotificationService:
     async def _handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
         
+        sender_user_id = str(query.from_user.id)
+        if sender_user_id != str(self.chat_id):
+            await query.answer("⛔ Unauthorized.", show_alert=True)
+            import logging
+            logging.getLogger("audit").critical(f"UNAUTHORIZED CALLBACK: sender={sender_user_id} user=@{query.from_user.username}")
+            return
+            
         # Always answer to stop the loading spinner, even if query is old
         try:
             await query.answer()
@@ -335,7 +398,7 @@ class NotificationService:
                 print(f"PAPER notify failed, non-fatal: {e}")
         asyncio.create_task(runner())
 
-    async def request_approval(self, trade_summary: str, trade_value: float = None) -> bool:
+    async def request_approval(self, trade_summary: str, trade_value: float = None, force_manual: bool = False) -> bool:
         """Gate a trade on operator approval.
 
         In live mode: sends inline-button Telegram message and waits for
@@ -360,10 +423,10 @@ class NotificationService:
 
         # Threshold auto-approval fast path. In live mode this is only allowed
         # after the operator's approval channel has been configured.
-        if trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
+        if not force_manual and trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
             self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
             return True
-
+            
         correlation_id = str(uuid.uuid4())[:8]
         keyboard = [
             [
