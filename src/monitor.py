@@ -247,6 +247,13 @@ class ArbitrageMonitor:
                 continue
 
             ticker = leg["ticker"]
+            if "-USD" in str(ticker).upper():
+                logger.debug(
+                    "Skipping T212 inventory preflight for crypto ticker %s; "
+                    "availability must be validated by the execution venue.",
+                    ticker,
+                )
+                continue
             required = float(leg["quantity"])
             try:
                 maybe_available = self.brokerage.get_available_quantity(ticker)
@@ -1550,6 +1557,7 @@ class ArbitrageMonitor:
 
         p_a, p_b = prices[t_a], prices[t_b]
         prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
+        prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
 
         current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
         cost_basis = signal["total_cost_basis"]
@@ -1557,6 +1565,7 @@ class ArbitrageMonitor:
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis):
             logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH, prices_by_ticker=prices_by_ticker)
             await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH, prices_by_ticker=prices_by_ticker)
             return
 
@@ -1572,12 +1581,22 @@ class ArbitrageMonitor:
         if abs(z_score) <= settings.TAKE_PROFIT_ZSCORE:
             logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= settings.STOP_LOSS_ZSCORE:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
 
+    async def _close_position(
+        self,
+        signal: dict,
+        price_a: float,
+        price_b: float,
+        reason: ExitReason,
+        prices_by_ticker: dict[str, float] | None = None,
+    ):
     async def _close_position(
         self,
         signal: dict,
@@ -1591,6 +1610,10 @@ class ArbitrageMonitor:
 
         close_orders = build_close_orders(
             signal,
+            prices_by_ticker=prices_by_ticker or {
+                signal["legs"][0]["ticker"]: float(price_a),
+                signal["legs"][1]["ticker"]: float(price_b),
+            },
             prices_by_ticker=prices_by_ticker or {
                 signal["legs"][0]["ticker"]: float(price_a),
                 signal["legs"][1]["ticker"]: float(price_b),
@@ -1627,6 +1650,10 @@ class ArbitrageMonitor:
         leg_a, leg_b = signal["legs"][0], signal["legs"][1]
         exit_prices, pnl = calculate_realized_pnl(
             signal,
+            prices_by_ticker=prices_by_ticker or {
+                leg_a["ticker"]: float(price_a),
+                leg_b["ticker"]: float(price_b),
+            },
             prices_by_ticker=prices_by_ticker or {
                 leg_a["ticker"]: float(price_a),
                 leg_b["ticker"]: float(price_b),
