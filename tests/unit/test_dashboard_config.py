@@ -25,3 +25,13 @@ def test_dashboard_config_validates_brokerage_provider_options():
 
     with pytest.raises(HTTPException):
         dashboard_service._coerce_config_value("BROKERAGE_PROVIDER", "IBKR")
+
+
+
+def test_dashboard_config_disallows_live_approval_override_runtime_edits():
+    config = dashboard_service.get_dashboard_config()
+    items = {item["key"]: item for item in config["items"]}
+    assert "ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM" not in items
+
+    with pytest.raises(HTTPException):
+        dashboard_service._coerce_config_value("ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM", True)

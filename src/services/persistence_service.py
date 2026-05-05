@@ -354,7 +354,13 @@ class PersistenceService:
         """Retrieves all currently OPEN positions grouped by signal_id."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
-            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.OPEN)
+            open_statuses = (
+                OrderStatus.OPEN,
+                OrderStatus.OPEN_PAIR,
+                OrderStatus.PARTIAL_EXPOSURE,
+                OrderStatus.CLOSING,
+            )
+            stmt = select(TradeLedger).where(TradeLedger.status.in_(open_statuses))
             if venue:
                 stmt = stmt.where(TradeLedger.venue == venue)
             result = await session.execute(stmt)
