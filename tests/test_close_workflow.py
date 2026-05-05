@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from src.monitor import ArbitrageMonitor
 from src.services.persistence_service import OrderStatus, ExitReason
@@ -34,11 +34,8 @@ async def test_duplicate_close_call(mock_notif, mock_settings, mock_persistence,
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
     
-    # DB initially OPEN, then CLOSING, then CLOSED
-    mock_persistence.get_signal_status.side_effect = [
-        OrderStatus.OPEN,
-        OrderStatus.CLOSED
-    ]
+    mock_persistence.mark_signal_closing_if_open.side_effect = [True, False]
+    mock_persistence.get_signal_status.return_value = OrderStatus.CLOSED
     
     # First call
     await monitor._close_position(signal, 155.0, 295.0, ExitReason.TAKE_PROFIT)
@@ -48,9 +45,7 @@ async def test_duplicate_close_call(mock_notif, mock_settings, mock_persistence,
     
     # Brokerage should only have placed orders for the first call (2 orders)
     assert monitor.brokerage.place_value_order.call_count == 2
-    mock_persistence.update_signal_status.assert_called_once_with(
-        uuid.UUID(signal["signal_id"]), OrderStatus.CLOSING
-    )
+    assert mock_persistence.mark_signal_closing_if_open.call_count == 2
 
 @pytest.mark.asyncio
 @patch("src.monitor.persistence_service")
@@ -60,13 +55,8 @@ async def test_concurrent_duplicate_close(mock_settings, mock_persistence, monit
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
     
+    mock_persistence.mark_signal_closing_if_open.return_value = True
     mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
-    
-    # Add an artificial delay to the DB update so the lock does the work
-    async def delayed_update(*args, **kwargs):
-        await asyncio.sleep(0.1)
-    
-    mock_persistence.update_signal_status.side_effect = delayed_update
     
     # Gather two concurrent close calls
     await asyncio.gather(
@@ -76,7 +66,7 @@ async def test_concurrent_duplicate_close(mock_settings, mock_persistence, monit
     
     # Only one should get past the lock and call the brokerage
     assert monitor.brokerage.place_value_order.call_count == 2
-    mock_persistence.update_signal_status.assert_called_once()
+    assert mock_persistence.mark_signal_closing_if_open.call_count == 1
 
 @pytest.mark.asyncio
 @patch("src.monitor.persistence_service")
@@ -87,6 +77,7 @@ async def test_first_leg_closes_second_leg_fails(mock_notif, mock_settings, mock
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
     
+    mock_persistence.mark_signal_closing_if_open.return_value = True
     mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
     
     # First place_value_order succeeds, second fails
@@ -115,6 +106,7 @@ async def test_close_function_raises_exception(mock_notif, mock_settings, mock_p
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
     
+    mock_persistence.mark_signal_closing_if_open.return_value = True
     mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
     
     # Brokerage raises an exception
@@ -139,6 +131,7 @@ async def test_kill_switch_close_failure(mock_notif, mock_settings, mock_persist
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
     
+    mock_persistence.mark_signal_closing_if_open.return_value = True
     mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
     
     # Force exception
@@ -157,16 +150,11 @@ async def test_kill_switch_close_failure(mock_notif, mock_settings, mock_persist
 
 @pytest.mark.asyncio
 @patch("src.monitor.persistence_service")
-async def test_bot_restart_while_closing(mock_persistence, monitor, signal):
-    """Test that if the DB state is CLOSING (from a previous crashed run), it doesn't duplicate but handles it."""
-    # If the DB says CLOSING, the idempotency check allows it to resume
+async def test_bot_restart_while_closing_is_blocked(mock_persistence, monitor, signal):
+    """CLOSING rows are treated as already in-flight and are never re-closed by this worker."""
+    mock_persistence.mark_signal_closing_if_open.return_value = False
     mock_persistence.get_signal_status.return_value = OrderStatus.CLOSING
-    
-    # It should proceed to close
-    monitor.brokerage.place_value_order.return_value = {"status": "success"}
-    
+
     await monitor._close_position(signal, 155.0, 295.0, ExitReason.TAKE_PROFIT)
-    
-    # Orders should have been placed
-    assert monitor.brokerage.place_value_order.call_count == 2
-    mock_persistence.update_signal_status.assert_called_with(uuid.UUID(signal["signal_id"]), OrderStatus.CLOSING)
+
+    assert monitor.brokerage.place_value_order.call_count == 0
