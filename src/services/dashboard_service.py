@@ -1999,15 +1999,12 @@ async def _login(payload: DashboardLoginRequest, request: Request):
         challenge = await login_challenge_manager.create(payload.actor, request)
         return {**challenge, "two_factor": dashboard_service.totp.public_status()}
     except HTTPException:
-        if status["enabled"]:
-            raise
-        session = session_manager.create(actor=payload.actor)
-        await dashboard_state.add_message(
-            "SYSTEM",
-            "Dashboard login succeeded without notification approval because notifications are unavailable.",
-            metadata={"type": "dashboard_login", "actor": payload.actor, "method": "token_only_fallback"},
+        # Fail closed: never allow token-only login when the approval channel is unavailable.
+        # Operator must use authenticator/back-up code for a second factor.
+        raise HTTPException(
+            status_code=503,
+            detail="Login approval channel unavailable. Use authenticator or backup code.",
         )
-        return {"status": "ok", **session, "two_factor": dashboard_service.totp.public_status()}
 
 
 @app.options("/api/auth/login")

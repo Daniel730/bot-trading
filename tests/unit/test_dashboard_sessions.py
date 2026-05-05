@@ -56,3 +56,23 @@ def test_dashboard_session_expires():
 
     assert exc.value.status_code == 401
     assert "expired" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_login_fails_closed_without_notification_channel():
+    from unittest.mock import patch
+    from src.services.dashboard_service import DashboardLoginRequest, _login
+
+    class DummyRequest:
+        headers = {}
+        client = None
+
+    payload = DashboardLoginRequest(actor="dashboard", security_token="test-token")
+
+    with patch("src.services.dashboard_service.verify_security_token", return_value=None), \
+         patch("src.services.dashboard_service.login_challenge_manager.create", side_effect=HTTPException(status_code=503, detail="approval unavailable")), \
+         patch("src.services.dashboard_service.dashboard_service.totp.public_status", return_value={"enabled": False}):
+        with pytest.raises(HTTPException) as exc:
+            await _login(payload, DummyRequest())
+
+    assert exc.value.status_code == 503
