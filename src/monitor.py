@@ -1540,6 +1540,14 @@ class ArbitrageMonitor:
         await persistence_service.set_system_state("operational_status", "NORMAL")
         await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         logger.info("Circuit breaker reset to NORMAL on startup.")
+        recovered = await persistence_service.reopen_all_closing_signals()
+        if recovered > 0:
+            msg = (
+                f"Startup recovery: reset {recovered} CLOSING ledger rows back to OPEN "
+                "after previous interrupted close workflow."
+            )
+            logger.warning(msg)
+            await notification_service.send_message(f"⚠️ {msg}")
 
         # Start periodic Scouting & Rotation background task
         asyncio.create_task(self._auto_scout_and_rotate_loop())
@@ -1759,14 +1767,12 @@ class ArbitrageMonitor:
             self._closing_signals.add(sig_id_str)
 
         try:
-            # Idempotency check in DB
-            db_status = await persistence_service.get_signal_status(sig_uuid)
-            if db_status not in (OrderStatus.OPEN, OrderStatus.CLOSING):
+            # Idempotency guard in DB (cross-process): only one worker may transition OPEN->CLOSING.
+            transitioned = await persistence_service.mark_signal_closing_if_open(sig_uuid)
+            if not transitioned:
+                db_status = await persistence_service.get_signal_status(sig_uuid)
                 logger.info(f"Duplicate close blocked for signal {sig_id_str}. DB status is {db_status}.")
                 return
-                
-            # Update status to CLOSING
-            await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSING)
 
             logger.info(f"Closing position {sig_id_str} Reason: {reason.value}")
             # PATCH 6: Any unhandled exception in the close path must alert the operator
@@ -1784,6 +1790,8 @@ class ArbitrageMonitor:
             if not settings.PAPER_TRADING:
                 sell_orders = [order for order in close_orders if order["side"] == "SELL"]
                 if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
+                    # Restore to OPEN so subsequent close attempts are not blocked
+                    await persistence_service.update_signal_status(sig_uuid, OrderStatus.OPEN)
                     return
 
                 for order in close_orders:
@@ -1793,16 +1801,18 @@ class ArbitrageMonitor:
                         round(notional, 2),
                         order["side"],
                         price=order["price"],
-                        client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
+                        client_order_id=f"{sig_id_str}-CLOSE-{order['display_ticker']}",
                     )
 
                     if res.get("status") == "error":
                         msg = (
-                            f"Close aborted for {sig_id}: {order['display_ticker']} "
+                            f"Close aborted for {sig_id_str}: {order['display_ticker']} "
                             f"{order['side']} failed. Broker response: {res}"
                         )
                         logger.error(msg)
                         await notification_service.send_message(msg)
+                        # Mark as CLOSE_FAILED to prevent blocking subsequent attempts
+                        await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSE_FAILED)
                         return
 
             # M-04: Compute realized PnL from entry vs exit price per leg

@@ -465,7 +465,15 @@ class NotificationService:
             print(f"TELEGRAM: Timeout waiting for approval {correlation_id}")
             return False
         except Exception as e:
+            self.pending_approvals.pop(correlation_id, None)
             print(f"TELEGRAM ERROR: {e}")
+            try:
+                from src.services.dashboard_service import dashboard_service
+                from src.services.persistence_service import persistence_service
+                await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", "Approval workflow failed; live execution paused.")
+                await persistence_service.set_system_state("operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW")
+            except Exception as pause_exc:
+                print(f"[APPROVAL] Failed to publish pause state after approval error: {pause_exc}")
             return False
 
     async def handle_dashboard_command(self, command: str, metadata: dict = None):
