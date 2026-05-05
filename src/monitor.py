@@ -115,11 +115,11 @@ class ArbitrageMonitor:
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
 
-    async def _await_order_fill(self, order_id: str, timeout: float = 30) -> bool:
+    async def _await_order_fill(self, order_id: str, timeout: float = 30) -> dict | None:
         """PATCH 5: Poll Alpaca until order_id is filled or timeout elapses.
 
-        Returns True only when status=='filled'. On timeout or error returns False
-        so the caller can alert and abort rather than write a ghost position to DB.
+        Returns normalized order snapshot when terminal (filled/partial/rejected),
+        else None on timeout/error.
         """
         import time
         deadline = time.monotonic() + timeout
@@ -127,23 +127,26 @@ class ArbitrageMonitor:
         while time.monotonic() < deadline:
             try:
                 orders = await self.brokerage.get_pending_orders()
-                # Order absent from pending list = filled or cancelled by broker.
-                # Confirm by checking Alpaca directly for the specific order.
                 matching = [o for o in orders if str(o.get("id")) == str(order_id)]
                 if not matching:
-                    # Order is no longer pending — treat as filled (most common case).
-                    # A cancelled order would appear as an error on submit_order, handled upstream.
-                    return True
+                    get_order = getattr(self.brokerage, "get_order", None)
+                    if get_order:
+                        snap = await get_order(order_id)
+                        if snap:
+                            return snap
+                    return {"status": "filled", "id": order_id}
                 order_status = matching[0].get("status", "").lower()
                 if order_status == "filled":
-                    return True
+                    return matching[0]
+                if order_status in ("partially_filled", "partial_fill"):
+                    return matching[0]
                 if order_status in ("cancelled", "canceled", "expired", "rejected"):
                     logger.error("Order %s ended in non-fill status: %s", order_id, order_status)
-                    return False
+                    return matching[0]
             except Exception as exc:
                 logger.warning("_await_order_fill poll error for %s: %s", order_id, exc)
             await asyncio.sleep(poll_interval)
-        return False  # timeout
+        return None  # timeout
 
     async def _upsert_active_signal(
         self,
@@ -1197,6 +1200,15 @@ class ArbitrageMonitor:
             logger.critical(alert)
             await notification_service.send_message(alert)
             return
+        status_raw_a = str(fill_a.get("status", "")).lower()
+        filled_qty_a = float(fill_a.get("filled_qty") or 0.0)
+        fill_price_a = float(fill_a.get("filled_avg_price") or 0.0)
+        if status_raw_a in ("partially_filled", "partial_fill"):
+            status_a = OrderStatus.LEG_A_PARTIAL
+        elif status_raw_a in ("rejected", "canceled", "cancelled", "expired"):
+            status_a = OrderStatus.LEG_A_REJECTED
+        else:
+            status_a = OrderStatus.LEG_A_FILLED
 
         # Small delay between legs to avoid broker-side burst throttling.
         await asyncio.sleep(1.0)
@@ -1209,9 +1221,13 @@ class ArbitrageMonitor:
             price=price_b,
             client_order_id=f"{signal_id}-B",
         )
-        await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
-        status_b = OrderStatus.ORDER_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
+        status_b = OrderStatus.LEG_B_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
+
+        if status_b == OrderStatus.LEG_B_REJECTED:
+          await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
+          status_b = OrderStatus.ORDER_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
+          order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
         await persistence_service.log_trade({
             "order_id": order_id_b,
@@ -1278,6 +1294,27 @@ class ArbitrageMonitor:
             else:
                 logger.info(f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed.")
             return
+        fill_b = await self._await_order_fill(order_id_b, timeout=30)
+        if not fill_b:
+            status_b = OrderStatus.LEG_B_SUBMITTED
+            await notification_service.send_message(
+                f"Leg B ({exec_t_b}) not terminal within 30s; signal {signal_id} requires follow-up."
+            )
+        else:
+            status_raw_b = str(fill_b.get('status', '')).lower()
+            if status_raw_b in ("partially_filled", "partial_fill"):
+                status_b = OrderStatus.LEG_B_PARTIAL
+            elif status_raw_b in ("rejected", "canceled", "cancelled", "expired"):
+                status_b = OrderStatus.LEG_B_REJECTED
+            else:
+                status_b = OrderStatus.LEG_B_FILLED
+        filled_qty_b = float((fill_b or {}).get("filled_qty") or 0.0)
+        fill_price_b = float((fill_b or {}).get("filled_avg_price") or 0.0)
+        pair_status = (
+            OrderStatus.OPEN_PAIR
+            if status_a == OrderStatus.LEG_A_FILLED and status_b == OrderStatus.LEG_B_FILLED
+            else OrderStatus.PARTIAL_EXPOSURE
+        )
 
         # M-05: Journal written only after both broker legs have returned successfully
         await persistence_service.log_trade_journal({
@@ -1291,7 +1328,49 @@ class ArbitrageMonitor:
             }
         })
 
-        await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.OPEN_PAIR)
+        # Log Leg A
+        await persistence_service.log_trade({
+            "order_id": order_id_a,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_a,
+            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+            "quantity": filled_qty_a or size_a,
+            "price": fill_price_a or price_a,
+            "status": status_a,
+            "venue": venue,
+            "metadata_json": {
+                "broker_order_id": order_id_a,
+                "submitted_qty": size_a,
+                "side": side_a,
+                "symbol": exec_t_a,
+                "order_status": status_a.value,
+                "pair_status": pair_status.value,
+                "broker_response": res_a,
+                "fill_snapshot": fill_a,
+            }
+        })
+
+        # Log Leg B
+        await persistence_service.log_trade({
+            "order_id": order_id_b,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_b,
+            "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
+            "quantity": filled_qty_b or size_b,
+            "price": fill_price_b or price_b,
+            "status": pair_status if pair_status == OrderStatus.OPEN_PAIR else status_b,
+            "venue": venue,
+            "metadata_json": {
+                "broker_order_id": order_id_b,
+                "submitted_qty": size_b,
+                "side": side_b,
+                "symbol": exec_t_b,
+                "order_status": status_b.value,
+                "pair_status": pair_status.value,
+                "broker_response": res_b,
+                "fill_snapshot": fill_b,
+            }
+        })
 
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}")
 
