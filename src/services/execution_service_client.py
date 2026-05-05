@@ -1,7 +1,6 @@
 import grpc
 import logging
 import time
-import uuid
 import inspect
 from decimal import Decimal
 from typing import List, Optional
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Exceeding this triggers immediate cancellation and fallback logic.
 # Bug M-11: Increased from 50ms to 500ms to avoid premature timeouts.
 _RPC_DEADLINE_SECONDS = 0.500
+_ATTEMPT_TTL_SECONDS = 3600
 
 def _to_decimal_str(value) -> str:
     """Serialise a numeric value to an exact decimal string, avoiding float repr."""
@@ -56,20 +56,48 @@ class ExecutionServiceClient:
         """
         from src.services.redis_service import redis_service
         from src.services.risk_service import risk_service
+        client_order_id = f"order-{signal_id}"
+        attempt_key = f"execution_attempt:{signal_id}"
 
-        lock_key = f"idempotency:{signal_id}"
-        is_locked = redis_service.set_nx(lock_key, "LOCKED", expire=60)
-        if inspect.isawaitable(is_locked):
-            is_locked = await is_locked
-        if not is_locked:
-            logger.warning(
-                "Idempotency: Signal %s already in-flight. Rejecting duplicate.", signal_id
-            )
+        async def _load_attempt() -> dict:
+            loaded = await redis_service.get_json(attempt_key)
+            if isinstance(loaded, dict):
+                return loaded
+            return {}
+
+        async def _save_attempt(state: str, note: str = "", **extra):
+            attempt = {
+                "signal_id": signal_id,
+                "client_order_id": client_order_id,
+                "state": state,
+                "updated_at_ns": time.time_ns(),
+                "note": note,
+            }
+            attempt.update(extra)
+            await redis_service.set_json(attempt_key, attempt, ex=_ATTEMPT_TTL_SECONDS)
+            logger.info("Idempotency transition signal=%s -> %s (%s)", signal_id, state, note)
+
+        attempt = await _load_attempt()
+        current_state = attempt.get("state")
+
+        if current_state in {"ACCEPTED", "LOCKED_IN_FLIGHT"}:
+            status = await self.get_trade_status(signal_id)
+            if status is not None:
+                await _save_attempt("ACCEPTED", "reconciled existing execution", last_status=int(status.status))
+                return status
+            await _save_attempt("UNKNOWN_REQUIRES_RECONCILIATION", "status probe inconclusive")
             return execution_pb2.ExecutionResponse(
                 signal_id=signal_id,
                 status=execution_pb2.STATUS_BROKER_ERROR,
-                message="Duplicate Request - Signal already in process",
+                message="Unknown broker state; reconciliation required before retry",
             )
+
+        if current_state == "UNKNOWN_REQUIRES_RECONCILIATION":
+            status = await self.get_trade_status(signal_id)
+            if status is not None:
+                await _save_attempt("ACCEPTED", "reconciled unknown state", last_status=int(status.status))
+                return status
+            await _save_attempt("FAILED_BEFORE_SUBMIT", "reconciliation found no order")
 
         try:
             if max_slippage is None or risk_multiplier is None:
@@ -100,9 +128,7 @@ class ExecutionServiceClient:
                 for leg in legs
             ]
 
-            # Bug H-01: Derive client_order_id deterministically from signal_id
-            # This ensures that retries carry the same ID for Redis deduplication.
-            client_order_id = f"order-{signal_id}"
+            await _save_attempt("LOCKED_IN_FLIGHT", "dispatching request")
             
             request = execution_pb2.ExecutionRequest(
                 signal_id=signal_id,
@@ -118,6 +144,13 @@ class ExecutionServiceClient:
             logger.info("gRPC: Sending ExecutionRequest %s to %s", signal_id, self.channel_url)
             stub = await self.get_stub()
             response = await stub.ExecuteTrade(request, timeout=_RPC_DEADLINE_SECONDS)
+            if response is None:
+                await _save_attempt("UNKNOWN_REQUIRES_RECONCILIATION", "server returned None after dispatch")
+                return None
+            if response.status == execution_pb2.STATUS_SUCCESS:
+                await _save_attempt("ACCEPTED", "broker accepted")
+            else:
+                await _save_attempt("REJECTED_RETRYABLE", "broker rejected", last_status=int(response.status), message=response.message)
             return response
 
         except grpc.aio.AioRpcError as e:
@@ -127,13 +160,16 @@ class ExecutionServiceClient:
                     signal_id,
                     _RPC_DEADLINE_SECONDS * 1000,
                 )
+                await _save_attempt("UNKNOWN_REQUIRES_RECONCILIATION", "deadline exceeded after dispatch")
             else:
                 logger.error(
                     "gRPC error executing trade %s: %s — %s", signal_id, e.code(), e.details()
                 )
+                await _save_attempt("UNKNOWN_REQUIRES_RECONCILIATION", f"grpc error after dispatch: {e.code()}")
             return None
         except Exception as e:
             logger.error("Unexpected error in ExecutionServiceClient.execute_trade: %s", e)
+            await _save_attempt("FAILED_BEFORE_SUBMIT", f"client exception before dispatch: {e}")
             return None
 
     async def get_trade_status(
