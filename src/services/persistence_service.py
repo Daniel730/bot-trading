@@ -350,6 +350,48 @@ class PersistenceService:
                 stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(status=status)
                 await session.execute(stmt)
 
+    async def mark_signal_closing_if_open(self, signal_id: uuid.UUID) -> bool:
+        """Atomically transition OPEN-ish signals to CLOSING.
+
+        Returns True only when at least one row was transitioned by this call.
+        """
+        from sqlalchemy import update
+
+        open_statuses = (
+            OrderStatus.OPEN,
+            OrderStatus.OPEN_PAIR,
+            OrderStatus.PARTIAL_EXPOSURE,
+        )
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = (
+                    update(TradeLedger)
+                    .where(TradeLedger.signal_id == signal_id)
+                    .where(TradeLedger.status.in_(open_statuses))
+                    .values(status=OrderStatus.CLOSING)
+                )
+                result = await session.execute(stmt)
+                return bool(getattr(result, "rowcount", 0))
+
+    async def reopen_all_closing_signals(self) -> int:
+        """Best-effort restart recovery: move CLOSING rows back to OPEN.
+
+        This is intentionally only for process-start recovery where prior
+        in-flight close attempts may have been interrupted by a crash/restart.
+        """
+        from sqlalchemy import update
+
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                stmt = (
+                    update(TradeLedger)
+                    .where(TradeLedger.status == OrderStatus.CLOSING)
+                    .where(TradeLedger.closed_at.is_(None))
+                    .values(status=OrderStatus.OPEN)
+                )
+                result = await session.execute(stmt)
+                return int(getattr(result, "rowcount", 0) or 0)
+
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """Retrieves all currently OPEN positions grouped by signal_id."""
         from sqlalchemy import select
