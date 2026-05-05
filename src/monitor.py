@@ -1149,10 +1149,10 @@ class ArbitrageMonitor:
             price=price_a,
             client_order_id=f"{signal_id}-A",
         )
-        status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
+        status_a = OrderStatus.ORDER_SUBMITTED if res_a.get("status") != "error" else OrderStatus.LEG_A_REJECTED
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
 
-        if status_a == OrderStatus.FAILED:
+        if status_a == OrderStatus.LEG_A_REJECTED:
             # P-08 (2026-04-26): Surface the broker's actual rejection reason.
             broker_msg = res_a.get("message") or res_a.get("error") or res_a
             logger.error(
@@ -1163,6 +1163,24 @@ class ArbitrageMonitor:
                 f"Execution aborted: Leg A failed for {exec_t_a}. Broker response: {broker_msg}"
             )
             return
+        await persistence_service.log_trade({
+            "order_id": order_id_a,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_a,
+            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+            "quantity": size_a,
+            "price": price_a,
+            "status": OrderStatus.LEG_A_SUBMITTED,
+            "venue": venue,
+            "metadata_json": {
+                "broker_order_id": order_id_a,
+                "submitted_qty": size_a,
+                "side": side_a,
+                "symbol": t_a,
+                "status": "submitted",
+                "broker_response": res_a,
+            }
+        })
 
         # PATCH 5: Confirm Leg A is filled before placing Leg B.
         # Alpaca submit_order returns 'success' when order is QUEUED, not FILLED.
@@ -1170,6 +1188,7 @@ class ArbitrageMonitor:
         # but then rejected at fill time). Poll up to 30s; treat unfilled as PENDING.
         fill_a = await self._await_order_fill(order_id_a, timeout=30)
         if not fill_a:
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
             alert = (
                 f"Leg A ({exec_t_a}) submitted but NOT confirmed filled within 30s "
                 f"[order_id={order_id_a}]. Leg B NOT placed. "
@@ -1190,10 +1209,31 @@ class ArbitrageMonitor:
             price=price_b,
             client_order_id=f"{signal_id}-B",
         )
-        status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
+        await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
+        status_b = OrderStatus.ORDER_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
         order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
-        if status_b == OrderStatus.FAILED:
+        await persistence_service.log_trade({
+            "order_id": order_id_b,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_b,
+            "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
+            "quantity": size_b,
+            "price": price_b,
+            "status": OrderStatus.LEG_B_SUBMITTED,
+            "venue": venue,
+            "metadata_json": {
+                "broker_order_id": order_id_b,
+                "submitted_qty": size_b,
+                "side": side_b,
+                "symbol": t_b,
+                "status": "submitted",
+                "broker_response": res_b,
+            }
+        })
+
+        if status_b == OrderStatus.LEG_B_REJECTED:
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION)
             broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
             logger.critical(
                 f"ATOMIC FAILURE: Leg A ({exec_t_a}) succeeded but Leg B ({exec_t_b}) failed. "
@@ -1228,7 +1268,7 @@ class ArbitrageMonitor:
                     "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
                     "quantity": size_a,
                     "price": price_a,
-                    "status": OrderStatus.FAILED,
+                    "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
                     "metadata_json": {
                         "orphaned": True,
                         "reason": "emergency_close_failed",
@@ -1251,33 +1291,9 @@ class ArbitrageMonitor:
             }
         })
 
-        # Log Leg A
-        await persistence_service.log_trade({
-            "order_id": order_id_a,
-            "signal_id": uuid.UUID(signal_id),
-            "ticker": t_a,
-            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-            "quantity": size_a,
-            "price": price_a,
-            "status": status_a,
-            "venue": venue,
-            "metadata_json": {"broker_response": res_a}
-        })
+        await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.OPEN_PAIR)
 
-        # Log Leg B
-        await persistence_service.log_trade({
-            "order_id": order_id_b,
-            "signal_id": uuid.UUID(signal_id),
-            "ticker": t_b,
-            "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
-            "quantity": size_b,
-            "price": price_b,
-            "status": status_b,
-            "venue": venue,
-            "metadata_json": {"broker_response": res_b}
-        })
-
-        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
+        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}")
 
     async def _recheck_cointegration(self, pair: dict):
         """
