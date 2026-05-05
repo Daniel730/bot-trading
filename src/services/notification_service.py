@@ -414,11 +414,15 @@ class NotificationService:
             return True
 
         if not self._telegram_enabled:
-            # Without Telegram, live trades cannot be human-gated.
-            if settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM:
-                print(f"[APPROVAL] Telegram not configured. Explicit override auto-approving live trade: {trade_summary}")
-                return True
-            print(f"[APPROVAL] Telegram not configured. Rejecting live trade: {trade_summary}")
+            # Live mode must fail-closed when human approval is required but unavailable.
+            print(f"[APPROVAL] Telegram approval channel unavailable. Pausing live trading for manual review: {trade_summary}")
+            try:
+                from src.services.dashboard_service import dashboard_service
+                from src.services.persistence_service import persistence_service
+                await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", "Telegram approval channel unavailable; live execution paused.")
+                await persistence_service.set_system_state("operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW")
+            except Exception as pause_exc:
+                print(f"[APPROVAL] Failed to publish pause state: {pause_exc}")
             return False
 
         # Threshold auto-approval fast path. In live mode this is only allowed

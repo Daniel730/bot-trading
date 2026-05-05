@@ -113,3 +113,39 @@ async def test_request_approval_live_without_telegram_fails_closed():
         settings.APPROVAL_THRESHOLD = original_threshold
         notification_service._telegram_enabled = original_telegram_enabled
         notification_service.pending_approvals.clear()
+
+
+@pytest.mark.asyncio
+async def test_request_approval_live_without_telegram_pauses_for_manual_review_even_with_override():
+    original_paper = settings.PAPER_TRADING
+    original_override = settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM
+    original_threshold = settings.APPROVAL_THRESHOLD
+    original_telegram_enabled = notification_service._telegram_enabled
+    notification_service.pending_approvals.clear()
+
+    try:
+        settings.PAPER_TRADING = False
+        settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = True
+        settings.APPROVAL_THRESHOLD = 1000.0
+        notification_service._telegram_enabled = False
+
+        with patch("src.services.dashboard_service.dashboard_service.update", new=AsyncMock()) as pause_update, \
+             patch("src.services.persistence_service.persistence_service.set_system_state", new=AsyncMock()) as set_state:
+            result = await notification_service.request_approval(
+                "live trade without approval channel",
+                trade_value=1.0,
+            )
+
+        assert result is False
+        pause_update.assert_awaited_once_with(
+            "PAUSED_REQUIRES_MANUAL_REVIEW",
+            "Telegram approval channel unavailable; live execution paused.",
+        )
+        set_state.assert_awaited_once_with("operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW")
+        assert notification_service.pending_approvals == {}
+    finally:
+        settings.PAPER_TRADING = original_paper
+        settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = original_override
+        settings.APPROVAL_THRESHOLD = original_threshold
+        notification_service._telegram_enabled = original_telegram_enabled
+        notification_service.pending_approvals.clear()
