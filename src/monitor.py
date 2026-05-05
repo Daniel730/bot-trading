@@ -1790,6 +1790,8 @@ class ArbitrageMonitor:
             if not settings.PAPER_TRADING:
                 sell_orders = [order for order in close_orders if order["side"] == "SELL"]
                 if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
+                    # Restore to OPEN so subsequent close attempts are not blocked
+                    await persistence_service.update_signal_status(sig_uuid, OrderStatus.OPEN)
                     return
 
                 for order in close_orders:
@@ -1809,6 +1811,8 @@ class ArbitrageMonitor:
                         )
                         logger.error(msg)
                         await notification_service.send_message(msg)
+                        # Mark as CLOSE_FAILED to prevent blocking subsequent attempts
+                        await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSE_FAILED)
                         return
 
             # M-04: Compute realized PnL from entry vs exit price per leg
