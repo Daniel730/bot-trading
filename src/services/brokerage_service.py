@@ -155,6 +155,11 @@ class BrokerageService:
         orders = await self.get_pending_orders()
         return any(o.get('ticker') == ticker for o in orders)
 
+    async def get_order(self, order_id: str) -> Dict[str, Any]:
+        if hasattr(self.provider, "get_order"):
+            return await self.provider.get_order(order_id)
+        return {}
+
     async def is_ticker_owned(self, ticker: str) -> bool:
         portfolio = await self.get_portfolio()
         return any(pos.get('ticker') == ticker for pos in portfolio)
