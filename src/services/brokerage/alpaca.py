@@ -368,6 +368,18 @@ class AlpacaProvider(AbstractBrokerageProvider):
             logger.error(f"Alpaca failed to fetch pending orders: {e}")
             return []
 
+    async def get_order(self, order_id: str) -> Dict[str, Any]:
+        """Fetch a single order snapshot including fill fields."""
+        try:
+            order = await asyncio.to_thread(self.api.get_order, order_id)
+            normalized = self._normalize_order(order)
+            normalized["filled_qty"] = float(getattr(order, "filled_qty", 0.0) or 0.0)
+            normalized["filled_avg_price"] = float(getattr(order, "filled_avg_price", 0.0) or 0.0)
+            return normalized
+        except Exception as e:
+            logger.error(f"Alpaca failed to fetch order %s: %s", order_id, e)
+            return {}
+
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
         """
         Retrieve normalized metadata for a tradable symbol from Alpaca.
@@ -446,5 +458,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
             "side": o.side.upper(),
             "status": o.status,
             "limitPrice": float(o.limit_price) if o.limit_price else None,
-            "id": o.id
+            "id": o.id,
+            "filled_qty": float(getattr(o, "filled_qty", 0.0) or 0.0),
+            "filled_avg_price": float(getattr(o, "filled_avg_price", 0.0) or 0.0),
         }
