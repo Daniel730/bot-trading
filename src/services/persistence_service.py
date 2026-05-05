@@ -19,6 +19,20 @@ class OrderSide(enum.Enum):
     SELL = "SELL"
 
 class OrderStatus(enum.Enum):
+    PENDING_SIGNAL = "PENDING_SIGNAL"
+    APPROVED = "APPROVED"
+    ORDER_SUBMITTED = "ORDER_SUBMITTED"
+    LEG_A_SUBMITTED = "LEG_A_SUBMITTED"
+    LEG_A_FILLED = "LEG_A_FILLED"
+    LEG_A_PARTIAL = "LEG_A_PARTIAL"
+    LEG_A_REJECTED = "LEG_A_REJECTED"
+    LEG_B_SUBMITTED = "LEG_B_SUBMITTED"
+    LEG_B_FILLED = "LEG_B_FILLED"
+    LEG_B_PARTIAL = "LEG_B_PARTIAL"
+    LEG_B_REJECTED = "LEG_B_REJECTED"
+    OPEN_PAIR = "OPEN_PAIR"
+    PARTIAL_EXPOSURE = "PARTIAL_EXPOSURE"
+    FAILED_REQUIRES_MANUAL_RECONCILIATION = "FAILED_REQUIRES_MANUAL_RECONCILIATION"
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
@@ -340,7 +354,13 @@ class PersistenceService:
         """Retrieves all currently OPEN positions grouped by signal_id."""
         from sqlalchemy import select
         async with self.AsyncSessionLocal() as session:
-            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.OPEN)
+            open_statuses = (
+                OrderStatus.OPEN,
+                OrderStatus.OPEN_PAIR,
+                OrderStatus.PARTIAL_EXPOSURE,
+                OrderStatus.CLOSING,
+            )
+            stmt = select(TradeLedger).where(TradeLedger.status.in_(open_statuses))
             if venue:
                 stmt = stmt.where(TradeLedger.venue == venue)
             result = await session.execute(stmt)
