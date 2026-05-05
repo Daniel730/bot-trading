@@ -754,7 +754,6 @@ class DashboardService:
             "ALPACA_API_KEY": {"type": "str", "sensitive": True},
             "ALPACA_API_SECRET": {"type": "str", "sensitive": True},
             "ALPACA_BASE_URL": {"type": "str", "sensitive": True, "masked": False},
-            "ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM": {"type": "bool", "sensitive": True},
             "SEC_USER_AGENT": {"type": "str", "sensitive": False},
             "TELEGRAM_BOT_TOKEN": {"type": "str", "sensitive": True},
             "TELEGRAM_CHAT_ID": {"type": "str", "sensitive": False},
