@@ -100,6 +100,10 @@ def _format_brokerage_ticker(ticker: str) -> str:
     return (ticker or "").strip().upper()
 
 
+def _wallet_execution_mode() -> str:
+    return "PAPER" if settings.PAPER_TRADING else brokerage_service.provider_name
+
+
 async def _brokerage_asset_active(ticker: str) -> bool:
     result = brokerage_service.is_asset_active(ticker)
     if inspect.isawaitable(result):
@@ -1222,25 +1226,27 @@ class DashboardService:
             request.delay_seconds
         )
 
+        execution_mode = _wallet_execution_mode()
         submitted = sum(1 for order in orders if order.get("status") == "ok")
         planned = len(seed_plan)
         target_tickers = [ticker for ticker, _ in seed_plan]
         await dashboard_state.add_message(
             "SYSTEM",
-            f"Wallet recommendations submitted {submitted}/{planned} BUY orders for {brokerage_service.provider_name}.",
+            f"Wallet recommendations submitted {submitted}/{planned} BUY orders for {execution_mode}.",
             metadata={
                 "type": "wallet_recommendation_buy",
                 "failures": failures,
                 "tickers": target_tickers,
                 "include_broken": request.include_broken,
-                "broker": brokerage_service.provider_name
+                "broker": brokerage_service.provider_name,
+                "execution_mode": execution_mode,
             },
         )
 
         return _scrub_non_finite(
             {
                 "status": "ok" if failures == 0 else "partial",
-                "mode": brokerage_service.provider_name,
+                "mode": execution_mode,
                 "message": f"Submitted {submitted}/{planned} recommended BUY orders.",
                 "budget": budget,
                 "target_tickers": target_tickers,
@@ -1311,6 +1317,15 @@ class DashboardService:
                 "amount": float(amount),
                 "status": "pending",
             }
+            if settings.PAPER_TRADING:
+                order.update({
+                    "status": "ok",
+                    "paper": True,
+                    "order_id": f"PAPER-{ticker}",
+                })
+                orders.append(order)
+                continue
+
             try:
                 result = await brokerage_service.place_value_order(
                     ticker,
@@ -1446,18 +1461,25 @@ class DashboardService:
         )
 
         skipped.extend(skipped_orders)
+        execution_mode = _wallet_execution_mode()
         submitted = sum(1 for order in orders if order.get("status") == "ok")
         planned = len(seed_plan)
 
         await dashboard_state.add_message(
             "SYSTEM",
-            f"Wallet sync submitted {submitted}/{planned} BUY orders for {brokerage_service.provider_name}.",
-            metadata={"type": "wallet_sync", "failures": failures, "tickers": target_tickers, "broker": brokerage_service.provider_name},
+            f"Wallet sync submitted {submitted}/{planned} BUY orders for {execution_mode}.",
+            metadata={
+                "type": "wallet_sync",
+                "failures": failures,
+                "tickers": target_tickers,
+                "broker": brokerage_service.provider_name,
+                "execution_mode": execution_mode,
+            },
         )
 
         return {
             "status": "ok" if failures == 0 else "partial",
-            "mode": brokerage_service.provider_name,
+            "mode": execution_mode,
             "message": f"Submitted {submitted}/{planned} BUY orders.",
             "coint_pairs": coint_pair_count,
             "candidate_tickers": candidate_tickers,
