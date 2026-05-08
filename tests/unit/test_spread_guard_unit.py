@@ -38,6 +38,33 @@ async def test_spread_guard_rejection():
         assert len(rej_log) == 1, "Monitor should have rejected the trade due to high spread."
 
 @pytest.mark.asyncio
+async def test_spread_guard_rejects_missing_bid_ask():
+    """
+    Missing or zero bid/ask data must fail closed before risk checks or orders.
+    """
+    with patch('src.services.brokerage_service.BrokerageService', return_value=MagicMock()):
+        monitor = ArbitrageMonitor()
+    monitor.brokerage.place_value_order = AsyncMock()
+
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch('src.services.data_service.data_service.get_bid_ask', side_effect=[(0.0, 0.0), (50.0, 50.1)]), \
+         patch('src.services.risk_service.risk_service.validate_trade', return_value={"is_acceptable": False, "rejection_reason": "test_stop"}) as mock_validate_trade, \
+         patch('src.services.notification_service.notification_service.send_message', new_callable=AsyncMock), \
+         patch('src.monitor.logger') as mock_logger:
+
+        await monitor.execute_trade(pair, "BUY", 100.0, 50.0, signal_id)
+
+        mock_validate_trade.assert_not_called()
+        monitor.brokerage.place_value_order.assert_not_called()
+        rej_log = [
+            call for call in mock_logger.warning.call_args_list
+            if "SPREAD GUARD: Missing or invalid Bid/Ask" in call[0][0]
+        ]
+        assert len(rej_log) == 1, "Monitor should have rejected the trade due to missing bid/ask."
+
+@pytest.mark.asyncio
 async def test_spread_guard_acceptance():
     """
     Test F3: Verify that the bot proceeds when the spread is within limits.

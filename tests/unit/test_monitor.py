@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from src.monitor import ArbitrageMonitor
 import uuid
 from src.config import settings
+from src.services.persistence_service import ExitReason, OrderStatus
 
 @pytest.fixture
 def monitor():
@@ -47,6 +48,206 @@ async def test_execute_trade_success(monitor):
         mock_log_journal.assert_called_once()
 
 @pytest.mark.asyncio
+async def test_execute_trade_success_marks_both_final_legs_open_pair(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 150.0},
+            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 300.0},
+        ]
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "leg-a"},
+            {"status": "success", "order_id": "leg-b"},
+        ])
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        final_rows = [
+            call.args[0]
+            for call in mock_log_trade.await_args_list
+            if call.args[0]["metadata_json"].get("fill_snapshot")
+        ]
+
+        assert len(final_rows) == 2
+        assert {row["ticker"]: row["status"] for row in final_rows} == {
+            "AAPL": OrderStatus.OPEN_PAIR,
+            "MSFT": OrderStatus.OPEN_PAIR,
+        }
+
+@pytest.mark.asyncio
+async def test_execute_trade_blocks_when_pending_orders_budget_read_fails(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": False,
+            "rejection_reason": "should not reach risk checks",
+        }
+        monitor.brokerage.get_pending_orders_value.side_effect = RuntimeError("pending read down")
+        monitor.brokerage.place_value_order = AsyncMock()
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        mock_validate_trade.assert_not_called()
+        monitor.brokerage.place_value_order.assert_not_called()
+        mock_notify.assert_awaited_once()
+        assert "pending-orders budget read failed" in mock_notify.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_await_order_fill_does_not_assume_missing_open_order_is_filled(monitor):
+    monitor.brokerage.get_pending_orders = AsyncMock(return_value=[])
+    monitor.brokerage.get_order = AsyncMock(return_value={})
+
+    with patch("src.monitor.asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await monitor._await_order_fill("order-missing", timeout=0.01)
+
+    assert result is None
+    monitor.brokerage.get_pending_orders.assert_awaited_once()
+    monitor.brokerage.get_order.assert_awaited_once_with("order-missing")
+    mock_sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_marks_manual_reconciliation_when_leg_a_submission_ambiguous(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
+         patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        monitor.brokerage.place_value_order = AsyncMock(return_value={
+            "status": "unknown",
+            "client_order_id": f"{signal_id}-A",
+            "requires_reconciliation": True,
+            "message": "submit timed out and reconciliation failed",
+        })
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        assert monitor.brokerage.place_value_order.await_count == 1
+        mock_await_fill.assert_not_awaited()
+        mock_sleep.assert_not_awaited()
+        mock_log_journal.assert_not_awaited()
+        assert mock_log_trade.await_args.args[0]["status"] == OrderStatus.NEEDS_MANUAL_RECONCILIATION
+        assert mock_log_trade.await_args.args[0]["order_id"] == f"{signal_id}-A"
+        mock_update_status.assert_awaited_once_with(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
+        mock_notify.assert_awaited_once()
+
+@pytest.mark.parametrize(
+    "leg_a_fill, expected_status",
+    [
+        (
+            {"status": "partially_filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
+            OrderStatus.PARTIAL_EXPOSURE,
+        ),
+        (
+            {"status": "rejected", "filled_qty": 0.0, "filled_avg_price": 0.0},
+            OrderStatus.LEG_A_REJECTED,
+        ),
+        (
+            {"status": "filled", "filled_qty": 0.0, "filled_avg_price": 0.0},
+            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_execute_trade_blocks_leg_b_without_confirmed_leg_a_fill(
+    monitor,
+    leg_a_fill,
+    expected_status,
+):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
+         patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_await_fill.side_effect = [
+            leg_a_fill,
+            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 300.0},
+        ]
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "leg-a"},
+            {"status": "success", "order_id": "leg-b"},
+        ])
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        assert monitor.brokerage.place_value_order.await_count == 1
+        mock_await_fill.assert_awaited_once_with("leg-a", timeout=30)
+        mock_sleep.assert_not_awaited()
+        assert mock_log_trade.await_count == 1
+        mock_log_journal.assert_not_awaited()
+        mock_update_status.assert_awaited_once_with(uuid.UUID(signal_id), expected_status)
+        mock_notify.assert_awaited_once()
+
+@pytest.mark.asyncio
 async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fails(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
@@ -78,6 +279,125 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fails(monitor):
         mock_log_trade.assert_not_called()
         mock_log_journal.assert_not_called()
 
+
+@pytest.mark.asyncio
+async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_ambiguous(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
+         patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_await_fill.return_value = {
+            "status": "filled",
+            "filled_qty": 1.0,
+            "filled_avg_price": 150.0,
+        }
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "leg-a"},
+            {"status": "error", "message": "leg b rejected"},
+            {
+                "status": "unknown",
+                "order_id": "close-a",
+                "requires_reconciliation": True,
+                "message": "emergency close submit timed out",
+            },
+        ])
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        assert monitor.brokerage.place_value_order.await_count == 3
+        mock_log_journal.assert_not_awaited()
+        mock_update_status.assert_any_await(
+            uuid.UUID(signal_id),
+            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+        )
+        orphan_rows = [
+            call.args[0]
+            for call in mock_log_trade.await_args_list
+            if call.args[0].get("metadata_json", {}).get("reason") == "emergency_close_unknown"
+        ]
+        assert len(orphan_rows) == 1
+        assert orphan_rows[0]["status"] == OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION
+        mock_notify.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_fill_unconfirmed(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
+         patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 150.0},
+            None,
+        ]
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "leg-a"},
+            {"status": "error", "message": "leg b rejected"},
+            {"status": "success", "order_id": "close-a"},
+        ])
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        assert monitor.brokerage.place_value_order.await_count == 3
+        assert mock_await_fill.await_count == 2
+        mock_await_fill.assert_any_await("close-a", timeout=30)
+        mock_log_journal.assert_not_awaited()
+        mock_update_status.assert_any_await(
+            uuid.UUID(signal_id),
+            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+        )
+        orphan_rows = [
+            call.args[0]
+            for call in mock_log_trade.await_args_list
+            if call.args[0].get("metadata_json", {}).get("reason") == "emergency_close_unconfirmed"
+        ]
+        assert len(orphan_rows) == 1
+        assert orphan_rows[0]["status"] == OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION
+        mock_notify.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_close_position_success(monitor):
     """
@@ -91,15 +411,68 @@ async def test_close_position_success(monitor):
         ]
     }
 
-    from src.services.persistence_service import ExitReason
-    with patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close, \
-         patch.object(settings, "PAPER_TRADING", False):
-        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success"})
+    with patch("src.monitor.persistence_service") as mock_persistence, \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "DEV_MODE", False):
+        mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+        mock_persistence.close_trade = AsyncMock()
+        mock_persistence.update_signal_status = AsyncMock()
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "close-a"},
+            {"status": "success", "order_id": "close-b"},
+        ])
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 160.0},
+            {"status": "filled", "filled_qty": 5.0, "filled_avg_price": 290.0},
+        ]
 
         await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
 
-        assert monitor.brokerage.place_value_order.call_count == 2
-        mock_close.assert_called_once()
+        assert monitor.brokerage.place_value_order.await_count == 2
+        assert mock_await_fill.await_count == 2
+        mock_persistence.close_trade.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_close_position_does_not_close_ledger_until_all_close_orders_fill(monitor):
+    signal_id = str(uuid.uuid4())
+    signal = {
+        "signal_id": signal_id,
+        "legs": [
+            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
+            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0},
+        ],
+        "total_cost_basis": 3000.0,
+    }
+
+    with patch("src.monitor.persistence_service") as mock_persistence, \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "DEV_MODE", False), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill:
+
+        mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+        mock_persistence.close_trade = AsyncMock()
+        mock_persistence.update_signal_status = AsyncMock()
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "close-a"},
+            {"status": "success", "order_id": "close-b"},
+        ])
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 160.0},
+            None,
+        ]
+
+        await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
+
+        assert monitor.brokerage.place_value_order.await_count == 2
+        assert mock_await_fill.await_count == 2
+        mock_persistence.close_trade.assert_not_awaited()
+        mock_persistence.update_signal_status.assert_awaited_once_with(
+            uuid.UUID(signal_id),
+            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+        )
+        mock_notify.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_close_position_skips_sell_when_broker_has_no_shares(monitor):
