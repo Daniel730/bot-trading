@@ -11,6 +11,7 @@ from src.services.dashboard_service import (
     dashboard_state,
     brokerage_service,
 )
+from src.config import settings
 
 
 @pytest.fixture
@@ -33,6 +34,7 @@ def alpaca_wallet_context(monkeypatch):
     monkeypatch.setattr(brokerage_service, "get_pending_orders_value", AsyncMock(return_value=0.0))
     place_value_order = AsyncMock(return_value={"status": "success", "order_id": "order-1"})
     monkeypatch.setattr(brokerage_service, "place_value_order", place_value_order)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
 
     monkeypatch.setattr("src.services.budget_service.budget_service.get_effective_cash", lambda venue, cash: cash)
     monkeypatch.setattr("src.services.dashboard_service.dashboard_state.add_message", AsyncMock())
@@ -72,3 +74,44 @@ async def test_wallet_recommendation_buy_uses_alpaca_orders(alpaca_wallet_contex
     assert result["mode"] == "ALPACA"
     assert result["target_tickers"] == ["AAPL"]
     alpaca_wallet_context.place_value_order.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_wallet_sync_paper_mode_does_not_place_broker_orders(alpaca_wallet_context, monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+
+    result = await dashboard_service.sync_wallet_for_coint(
+        WalletSyncRequest(budget=100.0, delay_seconds=0)
+    )
+
+    assert result["mode"] == "PAPER"
+    assert result["status"] == "ok"
+    assert result["target_tickers"] == ["AAPL", "MSFT"]
+    assert all(order["paper"] is True for order in result["orders"])
+    alpaca_wallet_context.place_value_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_wallet_recommendation_buy_paper_mode_does_not_place_broker_orders(
+    alpaca_wallet_context,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+
+    result = await dashboard_service.buy_wallet_recommendations(
+        WalletRecommendationBuyRequest(budget=100.0, tickers=["AAPL"], delay_seconds=0)
+    )
+
+    assert result["mode"] == "PAPER"
+    assert result["status"] == "ok"
+    assert result["target_tickers"] == ["AAPL"]
+    assert result["orders"] == [
+        {
+            "ticker": "AAPL",
+            "amount": 100.0,
+            "status": "ok",
+            "paper": True,
+            "order_id": "PAPER-AAPL",
+        }
+    ]
+    alpaca_wallet_context.place_value_order.assert_not_awaited()

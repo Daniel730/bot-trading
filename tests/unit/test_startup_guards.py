@@ -1,6 +1,6 @@
 import pytest
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from src.monitor import ArbitrageMonitor
 from src.config import settings
 
@@ -54,3 +54,22 @@ async def test_startup_success_with_baselines():
             monitor = ArbitrageMonitor()
             # Should not raise exception
             await monitor.verify_entropy_baselines([{'ticker_a': 'KO', 'ticker_b': 'PEP'}])
+
+@pytest.mark.asyncio
+@patch("src.monitor.notification_service")
+@patch("src.monitor.persistence_service")
+async def test_startup_blocks_when_unresolved_execution_state_exists(mock_persistence, mock_notify):
+    monitor = ArbitrageMonitor()
+    mock_persistence.mark_startup_unsafe_signals_needs_reconciliation = AsyncMock(return_value=2)
+    mock_persistence.set_system_state = AsyncMock()
+    mock_notify.send_message = AsyncMock()
+
+    should_continue = await monitor._fail_fast_on_unresolved_execution_state()
+
+    assert should_continue is False
+    mock_persistence.mark_startup_unsafe_signals_needs_reconciliation.assert_awaited_once()
+    mock_persistence.set_system_state.assert_awaited_once_with(
+        "operational_status",
+        "PAUSED_REQUIRES_MANUAL_REVIEW",
+    )
+    mock_notify.send_message.assert_awaited_once()
