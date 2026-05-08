@@ -374,23 +374,45 @@ class PersistenceService:
                 return bool(getattr(result, "rowcount", 0))
 
     async def reopen_all_closing_signals(self) -> int:
-        """Best-effort restart recovery: move CLOSING rows back to OPEN.
+        """Deprecated compatibility shim; never reopen ambiguous close state."""
+        logger.warning(
+            "reopen_all_closing_signals is deprecated; marking ambiguous close state "
+            "for manual reconciliation instead."
+        )
+        return await self.mark_startup_unsafe_signals_needs_reconciliation()
 
-        This is intentionally only for process-start recovery where prior
-        in-flight close attempts may have been interrupted by a crash/restart.
+    async def mark_startup_unsafe_signals_needs_reconciliation(self) -> int:
+        """Fail-closed startup recovery for ambiguous execution state.
+
+        CLOSING rows may represent close orders already sent to the broker before
+        a crash. Reopening them can duplicate close orders, so they are converted
+        to manual reconciliation and counted with existing unresolved states.
         """
-        from sqlalchemy import update
+        from sqlalchemy import update, select, func
 
+        unresolved_statuses = (
+            OrderStatus.CLOSING,
+            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+        )
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 stmt = (
                     update(TradeLedger)
                     .where(TradeLedger.status == OrderStatus.CLOSING)
                     .where(TradeLedger.closed_at.is_(None))
-                    .values(status=OrderStatus.OPEN)
+                    .values(status=OrderStatus.NEEDS_MANUAL_RECONCILIATION)
                 )
-                result = await session.execute(stmt)
-                return int(getattr(result, "rowcount", 0) or 0)
+                await session.execute(stmt)
+
+                count_stmt = (
+                    select(func.count())
+                    .select_from(TradeLedger)
+                    .where(TradeLedger.status.in_(unresolved_statuses))
+                    .where(TradeLedger.closed_at.is_(None))
+                )
+                result = await session.execute(count_stmt)
+                return int(result.scalar() or 0)
 
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """Retrieves all currently OPEN positions grouped by signal_id."""

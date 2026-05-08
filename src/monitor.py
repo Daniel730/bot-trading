@@ -134,7 +134,11 @@ class ArbitrageMonitor:
                         snap = await get_order(order_id)
                         if snap:
                             return snap
-                    return {"status": "filled", "id": order_id}
+                    logger.warning(
+                        "Order %s is not open, but no order snapshot confirmed its terminal state.",
+                        order_id,
+                    )
+                    return None
                 order_status = matching[0].get("status", "").lower()
                 if order_status == "filled":
                     return matching[0]
@@ -943,19 +947,32 @@ class ArbitrageMonitor:
         bid_a, ask_a = await data_service.get_bid_ask(t_a)
         bid_b, ask_b = await data_service.get_bid_ask(t_b)
 
-        if bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0:
-            spread_a = (ask_a - bid_a) / bid_a if bid_a > 0 else 0
-            spread_b = (ask_b - bid_b) / bid_b if bid_b > 0 else 0
-            # Bug L-02: Proportional spread calculation
-            total_spread = (1 + spread_a) * (1 + spread_b) - 1
-            if total_spread > settings.SPREAD_GUARD_MAX_PCT:
-                logger.warning(
-                    f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > "
-                    f"{settings.SPREAD_GUARD_MAX_PCT*100:.3f}% max threshold."
-                )
-                return
-        else:
-            logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
+        try:
+            bid_a = float(bid_a)
+            ask_a = float(ask_a)
+            bid_b = float(bid_b)
+            ask_b = float(ask_b)
+            valid_bid_ask = bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0
+        except (TypeError, ValueError):
+            valid_bid_ask = False
+
+        if not valid_bid_ask:
+            logger.warning(
+                f"SPREAD GUARD: Missing or invalid Bid/Ask for {t_a}/{t_b}. "
+                f"Rejecting trade. bid_a={bid_a} ask_a={ask_a} bid_b={bid_b} ask_b={ask_b}"
+            )
+            return
+
+        spread_a = (ask_a - bid_a) / bid_a
+        spread_b = (ask_b - bid_b) / bid_b
+        # Bug L-02: Proportional spread calculation
+        total_spread = (1 + spread_a) * (1 + spread_b) - 1
+        if total_spread > settings.SPREAD_GUARD_MAX_PCT:
+            logger.warning(
+                f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > "
+                f"{settings.SPREAD_GUARD_MAX_PCT*100:.3f}% max threshold."
+            )
+            return
 
         venue = self.brokerage.get_venue(t_a)
         crypto_pair = is_crypto_pair(t_a, t_b)
@@ -998,7 +1015,13 @@ class ArbitrageMonitor:
                     )
                     pending_value = max(0.0, float(pending_value_raw))
                 except Exception as e:
-                    logger.warning(f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}")
+                    message = (
+                        f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}. "
+                        "Execution blocked because pending exposure is unknown."
+                    )
+                    logger.critical(message)
+                    await notification_service.send_message(message)
+                    return
 
             # Use equity as the basis for sizing calculations if available
             sizing_base = total_equity if total_equity and total_equity > 0 else total_cash
@@ -1152,8 +1175,37 @@ class ArbitrageMonitor:
             price=price_a,
             client_order_id=f"{signal_id}-A",
         )
+        order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or str(uuid.uuid4())
+
+        if res_a.get("requires_reconciliation") or res_a.get("status") == "unknown":
+            await persistence_service.log_trade({
+                "order_id": order_id_a,
+                "signal_id": uuid.UUID(signal_id),
+                "ticker": t_a,
+                "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                "quantity": size_a,
+                "price": price_a,
+                "status": OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                "venue": venue,
+                "metadata_json": {
+                    "broker_order_id": order_id_a,
+                    "submitted_qty": size_a,
+                    "side": side_a,
+                    "symbol": t_a,
+                    "status": "unknown",
+                    "broker_response": res_a,
+                }
+            })
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
+            alert = (
+                f"Leg A ({exec_t_a}) submission state is UNKNOWN. Leg B NOT placed. "
+                f"Reconcile broker by client_order_id/order_id={order_id_a}. signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return
+
         status_a = OrderStatus.ORDER_SUBMITTED if res_a.get("status") != "error" else OrderStatus.LEG_A_REJECTED
-        order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
 
         if status_a == OrderStatus.LEG_A_REJECTED:
             # P-08 (2026-04-26): Surface the broker's actual rejection reason.
@@ -1207,8 +1259,22 @@ class ArbitrageMonitor:
             status_a = OrderStatus.LEG_A_PARTIAL
         elif status_raw_a in ("rejected", "canceled", "cancelled", "expired"):
             status_a = OrderStatus.LEG_A_REJECTED
-        else:
+        elif status_raw_a == "filled" and filled_qty_a > 0:
             status_a = OrderStatus.LEG_A_FILLED
+        else:
+            status_a = OrderStatus.NEEDS_MANUAL_RECONCILIATION
+
+        if status_a != OrderStatus.LEG_A_FILLED:
+            blocked_status = OrderStatus.PARTIAL_EXPOSURE if filled_qty_a > 0 else status_a
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), blocked_status)
+            alert = (
+                f"Leg A ({exec_t_a}) was not confirmed as a full fill. "
+                f"Leg B NOT placed. status={status_raw_a or 'unknown'} "
+                f"filled_qty={filled_qty_a} order_id={order_id_a} signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return
 
         # Small delay between legs to avoid broker-side burst throttling.
         await asyncio.sleep(1.0)
@@ -1221,8 +1287,37 @@ class ArbitrageMonitor:
             price=price_b,
             client_order_id=f"{signal_id}-B",
         )
+        order_id_b = res_b.get("order_id") or res_b.get("orderId") or res_b.get("client_order_id") or str(uuid.uuid4())
+
+        if res_b.get("requires_reconciliation") or res_b.get("status") == "unknown":
+            await persistence_service.log_trade({
+                "order_id": order_id_b,
+                "signal_id": uuid.UUID(signal_id),
+                "ticker": t_b,
+                "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
+                "quantity": size_b,
+                "price": price_b,
+                "status": OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                "venue": venue,
+                "metadata_json": {
+                    "broker_order_id": order_id_b,
+                    "submitted_qty": size_b,
+                    "side": side_b,
+                    "symbol": t_b,
+                    "status": "unknown",
+                    "broker_response": res_b,
+                }
+            })
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
+            alert = (
+                f"Leg B ({exec_t_b}) submission state is UNKNOWN. No retry or emergency close attempted. "
+                f"Reconcile broker by client_order_id/order_id={order_id_b}. signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return
+
         status_b = OrderStatus.LEG_B_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
-        order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
         if status_b == OrderStatus.LEG_B_REJECTED:
           await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
@@ -1264,12 +1359,15 @@ class ArbitrageMonitor:
                 price=price_a,
                 client_order_id=f"{signal_id}-A-EMERGENCY-CLOSE",
             )
-            if close_res.get("status") == "error":
+            close_status = str(close_res.get("status", "")).lower()
+            close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
+            if close_status == "error" or close_unknown:
+                close_reason = "emergency_close_unknown" if close_unknown else "emergency_close_failed"
                 orphan_msg = (
-                    f"CRITICAL - EMERGENCY CLOSE FAILED\n"
+                    f"CRITICAL - EMERGENCY CLOSE {'UNKNOWN' if close_unknown else 'FAILED'}\n"
                     f"Signal: {signal_id}\n"
                     f"Ticker: {exec_t_a} ({side_a} leg)\n"
-                    f"The position is now ORPHANED. Manual intervention required.\n"
+                    f"The position may still be ORPHANED. Manual intervention required.\n"
                     f"Broker response: {close_res}"
                 )
                 logger.critical(orphan_msg)
@@ -1287,7 +1385,7 @@ class ArbitrageMonitor:
                     "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
                     "metadata_json": {
                         "orphaned": True,
-                        "reason": "emergency_close_failed",
+                        "reason": close_reason,
                         "broker_response": close_res,
                     },
                 })
@@ -1336,7 +1434,7 @@ class ArbitrageMonitor:
             "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
             "quantity": filled_qty_a or size_a,
             "price": fill_price_a or price_a,
-            "status": status_a,
+            "status": pair_status if pair_status == OrderStatus.OPEN_PAIR else status_a,
             "venue": venue,
             "metadata_json": {
                 "broker_order_id": order_id_a,
@@ -1462,6 +1560,24 @@ class ArbitrageMonitor:
         except Exception as e:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
+    async def _fail_fast_on_unresolved_execution_state(self) -> bool:
+        unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
+        if unresolved_count <= 0:
+            return True
+
+        await persistence_service.set_system_state(
+            "operational_status",
+            "PAUSED_REQUIRES_MANUAL_REVIEW",
+        )
+        msg = (
+            f"Startup blocked: {unresolved_count} ledger rows require manual reconciliation. "
+            "CLOSING rows were not reopened because broker close state is ambiguous. "
+            "Resolve broker/ledger state before scanning resumes."
+        )
+        logger.critical(msg)
+        await notification_service.send_message(msg)
+        return False
+
     async def run(self):
         # FR-006: Pre-flight line - operator must know mode/universe/window
         # before a single log line about infra appears.
@@ -1535,19 +1651,14 @@ class ArbitrageMonitor:
         # Sprint J: Signal the user via Telegram that we are entering MISSION MODE
         await notification_service.send_message("System Health: All Checks Passed.\n\nMode: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
 
+        if not await self._fail_fast_on_unresolved_execution_state():
+            return
+
         # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
         # from a previous crashed session doesn't silently block all signals.
         await persistence_service.set_system_state("operational_status", "NORMAL")
         await persistence_service.set_system_state("consecutive_api_timeouts", "0")
         logger.info("Circuit breaker reset to NORMAL on startup.")
-        recovered = await persistence_service.reopen_all_closing_signals()
-        if recovered > 0:
-            msg = (
-                f"Startup recovery: reset {recovered} CLOSING ledger rows back to OPEN "
-                "after previous interrupted close workflow."
-            )
-            logger.warning(msg)
-            await notification_service.send_message(f"⚠️ {msg}")
 
         # Start periodic Scouting & Rotation background task
         asyncio.create_task(self._auto_scout_and_rotate_loop())
@@ -1794,15 +1905,32 @@ class ArbitrageMonitor:
                     await persistence_service.update_signal_status(sig_uuid, OrderStatus.OPEN)
                     return
 
+                confirmed_close_fills = []
                 for order in close_orders:
                     notional = float(order["quantity"] * order["price"])
+                    client_order_id = f"{sig_id_str}-CLOSE-{order['display_ticker']}"
                     res = await self.brokerage.place_value_order(
                         order["ticker"],
                         round(notional, 2),
                         order["side"],
                         price=order["price"],
-                        client_order_id=f"{sig_id_str}-CLOSE-{order['display_ticker']}",
+                        client_order_id=client_order_id,
                     )
+                    order_id = res.get("order_id") or res.get("orderId") or res.get("client_order_id") or client_order_id
+
+                    if res.get("requires_reconciliation") or res.get("status") == "unknown":
+                        msg = (
+                            f"Close order state unknown for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']}. Reconcile broker by order_id/client_order_id={order_id}. "
+                            f"Broker response: {res}"
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
 
                     if res.get("status") == "error":
                         msg = (
@@ -1811,9 +1939,46 @@ class ArbitrageMonitor:
                         )
                         logger.error(msg)
                         await notification_service.send_message(msg)
-                        # Mark as CLOSE_FAILED to prevent blocking subsequent attempts
-                        await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSE_FAILED)
+                        close_status = (
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION
+                            if confirmed_close_fills
+                            else OrderStatus.CLOSE_FAILED
+                        )
+                        await persistence_service.update_signal_status(sig_uuid, close_status)
                         return
+
+                    close_fill = await self._await_order_fill(order_id, timeout=30)
+                    if not close_fill:
+                        msg = (
+                            f"Close order not confirmed filled for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']} [order_id={order_id}]. Ledger NOT closed. "
+                            f"Manual broker reconciliation required."
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
+                    close_status_raw = str(close_fill.get("status", "")).lower()
+                    close_filled_qty = float(close_fill.get("filled_qty") or 0.0)
+                    if close_status_raw != "filled" or close_filled_qty <= 0:
+                        msg = (
+                            f"Close order ended without a full fill for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']} status={close_status_raw or 'unknown'} "
+                            f"filled_qty={close_filled_qty} [order_id={order_id}]. Ledger NOT closed."
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
+                    confirmed_close_fills.append(close_fill)
 
             # M-04: Compute realized PnL from entry vs exit price per leg
             leg_a, leg_b = signal["legs"][0], signal["legs"][1]

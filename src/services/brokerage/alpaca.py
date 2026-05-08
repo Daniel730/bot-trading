@@ -89,6 +89,71 @@ class AlpacaProvider(AbstractBrokerageProvider):
             api_version='v2'
         )
 
+    @staticmethod
+    def _order_success_result(order) -> Dict[str, Any]:
+        return {
+            "status": "success",
+            "order_id": order.id,
+            "broker": "ALPACA",
+            "client_order_id": getattr(order, "client_order_id", None),
+        }
+
+    @staticmethod
+    def _is_ambiguous_submit_exception(exc: Exception) -> bool:
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError, ConnectionError)):
+            return True
+        message = str(exc).lower()
+        return any(
+            marker in message
+            for marker in (
+                "timeout",
+                "timed out",
+                "deadline",
+                "connection aborted",
+                "connection reset",
+                "temporary failure",
+                "temporarily unavailable",
+                "read timed out",
+                "max retries",
+            )
+        )
+
+    async def _reconcile_ambiguous_submit(
+        self,
+        broker_symbol: str,
+        client_order_id: Optional[str],
+        exc: Exception,
+    ) -> Optional[Dict[str, Any]]:
+        if not client_order_id or not self._is_ambiguous_submit_exception(exc):
+            return None
+
+        get_by_client_id = getattr(self.api, "get_order_by_client_order_id", None)
+        if get_by_client_id:
+            try:
+                order = await asyncio.to_thread(get_by_client_id, client_order_id)
+                if order:
+                    logger.warning(
+                        "Alpaca submit for %s was ambiguous but reconciled by client_order_id=%s",
+                        broker_symbol,
+                        client_order_id,
+                    )
+                    return self._order_success_result(order)
+            except Exception as reconcile_exc:
+                logger.error(
+                    "Alpaca submit for %s is ambiguous and reconciliation by client_order_id=%s failed: %s",
+                    broker_symbol,
+                    client_order_id,
+                    reconcile_exc,
+                )
+
+        return {
+            "status": "unknown",
+            "message": f"Order submit ambiguous for {broker_symbol}: {exc}",
+            "broker": "ALPACA",
+            "client_order_id": client_order_id,
+            "requires_reconciliation": True,
+        }
+
     def test_connection(self) -> bool:
         """
         Check whether the configured Alpaca account can be retrieved using the current API credentials and endpoint.
@@ -169,13 +234,11 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 params['client_order_id'] = client_order_id
 
             order = await asyncio.to_thread(self.api.submit_order, **params)
-            return {
-                "status": "success",
-                "order_id": order.id,
-                "broker": "ALPACA",
-                "client_order_id": order.client_order_id
-            }
+            return self._order_success_result(order)
         except Exception as e:
+            reconciled = await self._reconcile_ambiguous_submit(broker_symbol, client_order_id, e)
+            if reconciled:
+                return reconciled
             logger.error(f"Alpaca order failed for {broker_symbol}: {e}")
             return {"status": "error", "message": str(e)}
 
@@ -226,13 +289,11 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 params['client_order_id'] = client_order_id
 
             order = await asyncio.to_thread(self.api.submit_order, **params)
-            return {
-                "status": "success",
-                "order_id": order.id,
-                "broker": "ALPACA",
-                "client_order_id": order.client_order_id
-            }
+            return self._order_success_result(order)
         except Exception as e:
+            reconciled = await self._reconcile_ambiguous_submit(broker_symbol, client_order_id, e)
+            if reconciled:
+                return reconciled
             logger.warning(f"Alpaca notional order failed for {broker_symbol}, falling back to quantity: {e}")
             # Fallback to calculating quantity if notional is not supported for this asset
             from src.services.data_service import data_service
@@ -279,14 +340,14 @@ class AlpacaProvider(AbstractBrokerageProvider):
         Retrieve the account's current portfolio as a list of normalized position records.
 
         Returns:
-            List[Dict[str, Any]]: Normalized position dictionaries for each open position. Returns an empty list if the portfolio cannot be retrieved.
+            List[Dict[str, Any]]: Normalized position dictionaries for each open position.
         """
         try:
             positions = self.api.list_positions()
             return [self._normalize_position(p) for p in positions]
         except Exception as e:
             logger.error(f"Alpaca failed to fetch portfolio: {e}")
-            return []
+            raise
 
     def get_positions(self, ticker: str = None) -> List[Dict[str, Any]]:
         """
@@ -296,7 +357,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
             ticker (str, optional): Ticker symbol to fetch. If provided, returns a single-item list with the normalized position for that ticker, or an empty list if the position is not found.
 
         Returns:
-            List[Dict[str, Any]]: A list of normalized position dictionaries. Returns an empty list if no positions are available or if an error occurs.
+            List[Dict[str, Any]]: A list of normalized position dictionaries. Returns an empty list if the requested ticker is not held.
         """
         try:
             if ticker:
@@ -304,13 +365,20 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 try:
                     p = self.api.get_position(broker_symbol)
                     return [self._normalize_position(p)]
-                except:
-                    return []
+                except Exception as e:
+                    message = str(e).lower()
+                    status_code = getattr(e, "status_code", None) or getattr(e, "code", None)
+                    if status_code == 404 or (
+                        "position" in message and ("not found" in message or "does not exist" in message)
+                    ):
+                        return []
+                    logger.error(f"Alpaca failed to fetch position for {broker_symbol}: {e}")
+                    raise
             positions = self.api.list_positions()
             return [self._normalize_position(p) for p in positions]
         except Exception as e:
             logger.error(f"Alpaca failed to fetch positions: {e}")
-            return []
+            raise
 
     def get_account_cash(self) -> float:
         """
@@ -359,14 +427,14 @@ class AlpacaProvider(AbstractBrokerageProvider):
         Fetch open orders from Alpaca and return them in normalized dictionary form.
 
         Returns:
-            List[Dict[str, Any]]: A list of normalized order dictionaries (keys include `ticker`, `quantity`, `side`, `status`, `limitPrice`, `id`). Returns an empty list if fetching orders fails.
+            List[Dict[str, Any]]: A list of normalized order dictionaries (keys include `ticker`, `quantity`, `side`, `status`, `limitPrice`, `id`).
         """
         try:
             orders = self.api.list_orders(status='open')
             return [self._normalize_order(o) for o in orders]
         except Exception as e:
             logger.error(f"Alpaca failed to fetch pending orders: {e}")
-            return []
+            raise
 
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         """Fetch a single order snapshot including fill fields."""
@@ -378,7 +446,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
             return normalized
         except Exception as e:
             logger.error(f"Alpaca failed to fetch order %s: %s", order_id, e)
-            return {}
+            raise
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
         """
