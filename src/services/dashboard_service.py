@@ -1168,10 +1168,13 @@ class DashboardService:
         budget = float(request.budget)
 
         if plan_snapshot.get("cash_limited"):
-            logger.warning(
-                "DASHBOARD: Proceeding with wallet recommendation BUY despite cash_limited=true (budget=%.2f, effective_cash=%.2f).",
-                budget,
-                float(plan_snapshot.get("effective_cash") or 0.0),
+            effective_cash = float(plan_snapshot.get("effective_cash") or 0.0)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Wallet recommendation buy blocked: requested budget {budget:.2f} "
+                    f"exceeds effective {brokerage_service.provider_name} cash {effective_cash:.2f}."
+                ),
             )
 
         recommendations = plan_snapshot.get("recommendations") or []
