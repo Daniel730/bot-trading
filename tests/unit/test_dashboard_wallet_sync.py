@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from src.services.dashboard_service import (
     WalletRecommendationBuyRequest,
@@ -74,6 +75,17 @@ async def test_wallet_recommendation_buy_uses_alpaca_orders(alpaca_wallet_contex
     assert result["mode"] == "ALPACA"
     assert result["target_tickers"] == ["AAPL"]
     alpaca_wallet_context.place_value_order.assert_awaited_once()
+
+@pytest.mark.asyncio
+async def test_wallet_buy_blocks_when_cash_limited(alpaca_wallet_context):
+    with pytest.raises(HTTPException) as excinfo:
+        await dashboard_service.buy_wallet_recommendations(
+            WalletRecommendationBuyRequest(budget=2000.0, tickers=["AAPL"])
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "cash" in excinfo.value.detail.lower()
+    alpaca_wallet_context.place_value_order.assert_not_awaited()
 
 
 @pytest.mark.asyncio
