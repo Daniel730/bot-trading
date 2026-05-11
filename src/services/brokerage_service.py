@@ -43,6 +43,9 @@ class BrokerageService:
     def get_venue(self, ticker: str) -> str:
         return self.provider_name
 
+    def _format_ticker(self, ticker: str) -> str:
+        return str(ticker or "").strip().upper()
+
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         result = await self.provider.place_market_order(ticker, quantity, side, limit_price, client_order_id)
         result["venue"] = self.provider_name
