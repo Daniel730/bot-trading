@@ -1832,7 +1832,10 @@ class DashboardService:
                 - `closed_trades` (int): Count of closed trades from persisted trade summary.
                 - `system_uptime_seconds` (int|None): Uptime in seconds from the latest health snapshot.
                 - `system_uptime_human` (str): Human-readable uptime derived from `system_uptime_seconds`.
-                - `bot_status` (str): Desired bot state from dashboard state.
+                - `bot_status` (str): Actual unsafe operational state when present, otherwise desired bot state.
+                - `desired_bot_state` (str): Operator-requested dashboard bot state.
+                - `operational_status` (str): Persisted runtime safety state.
+                - `blocked` (bool): True when operational state is not normal.
                 - `stage` (str): Current dashboard stage.
                 - `cpu_pct` (float|None): CPU usage percentage from the latest health snapshot.
                 - `memory_pct` (float|None): System memory usage percentage from the latest health snapshot.
@@ -1852,6 +1855,11 @@ class DashboardService:
                 trades_today += 1
         latest_health = self.latest_health()
         uptime_seconds = latest_health.get("uptime_seconds")
+        desired_bot_state = dashboard_state.desired_bot_state
+        operational_status = await persistence_service.get_system_state("operational_status", "NORMAL")
+        operational_status = operational_status or "NORMAL"
+        unsafe_operational_state = operational_status != "NORMAL"
+        bot_status = operational_status if unsafe_operational_state else desired_bot_state
         return _scrub_non_finite(
             {
                 "current_balance": dashboard_state.portfolio_metrics.get("available_cash"),
@@ -1864,7 +1872,10 @@ class DashboardService:
                 "closed_trades": int(trade_summary.get("closed_trades", 0)),
                 "system_uptime_seconds": uptime_seconds,
                 "system_uptime_human": str(timedelta(seconds=uptime_seconds or 0)),
-                "bot_status": dashboard_state.desired_bot_state,
+                "bot_status": bot_status,
+                "desired_bot_state": desired_bot_state,
+                "operational_status": operational_status,
+                "blocked": unsafe_operational_state,
                 "stage": dashboard_state.stage,
                 "cpu_pct": latest_health.get("cpu_pct"),
                 "memory_pct": latest_health.get("system_memory_pct"),

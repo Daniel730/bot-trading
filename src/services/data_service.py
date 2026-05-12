@@ -695,12 +695,13 @@ class DataService:
         try:
             def fetch():
                 info = yf.Ticker(ticker).info
-                bid = info.get('bid', 0.0)
-                ask = info.get('ask', 0.0)
-                # Fallback to currentPrice if bid/ask is missing (e.g. after hours)
-                if bid == 0.0 or ask == 0.0:
-                    current = info.get('currentPrice', info.get('previousClose', 1.0))
-                    return current, current
+                try:
+                    bid = float(info.get('bid') or 0.0)
+                    ask = float(info.get('ask') or 0.0)
+                except (TypeError, ValueError):
+                    return 0.0, 0.0
+                if bid <= 0.0 or ask <= 0.0:
+                    return 0.0, 0.0
                 return bid, ask
             return await self._run_sync_backend(
                 fetch,

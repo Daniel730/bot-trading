@@ -248,7 +248,7 @@ function App() {
   );
   const currentMode = data?.runtime?.mode ?? summary?.mode ?? '—';
   const currentStage = data?.stage ?? summary?.stage ?? botState ?? 'Initializing';
-  const currentBotState = data?.runtime?.desired_bot_state ?? summary?.bot_status ?? 'RUNNING';
+  const currentBotState = summary?.bot_status ?? data?.runtime?.desired_bot_state ?? 'RUNNING';
   const { startupProgress, startupReady, preWarmingProgress } = useStartupProgress({
     isAuthenticated,
     isConnected,

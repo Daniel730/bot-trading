@@ -1,6 +1,7 @@
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller
 import statsmodels.api as sm
+import hashlib
 from typing import Optional, Tuple, Dict
 from src.services.kalman_service import KalmanFilter
 from src.services.agent_log_service import agent_trace
@@ -13,28 +14,68 @@ logger = logging.getLogger(__name__)
 class ArbitrageService:
     def __init__(self):
         self.filters: Dict[str, KalmanFilter] = {}
+        self.filter_fingerprints: Dict[str, Optional[str]] = {}
+
+    @staticmethod
+    def build_state_fingerprint(pair_id: str, data: Optional[pd.DataFrame]) -> Optional[str]:
+        if data is None or data.empty:
+            return None
+        normalized = data.copy()
+        normalized.columns = [str(col) for col in normalized.columns]
+        normalized = normalized.sort_index(axis=1)
+        payload = {
+            "pair_id": pair_id,
+            "history": normalized.to_json(
+                orient="split",
+                date_format="iso",
+                double_precision=10,
+            ),
+        }
+        return "history-v1:" + hashlib.sha256(
+            repr(payload).encode("utf-8")
+        ).hexdigest()
 
     @agent_trace("ArbitrageService.get_or_create_filter")
-    async def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01, 
+    async def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01,
                              initial_state: list = None, initial_covariance: list = None,
-                             prewarm_data: Optional[pd.DataFrame] = None) -> KalmanFilter:
+                             prewarm_data: Optional[pd.DataFrame] = None,
+                             state_fingerprint: Optional[str] = None) -> KalmanFilter:
         """Retrieves or initializes a Kalman filter for a specific pair, reloading from Redis if possible."""
+        state_fingerprint = state_fingerprint or self.build_state_fingerprint(pair_id, prewarm_data)
         if pair_id in self.filters:
-            return self.filters[pair_id]
+            cached_fingerprint = self.filter_fingerprints.get(pair_id)
+            if state_fingerprint and cached_fingerprint != state_fingerprint:
+                logger.warning(
+                    "[ArbitrageService] Kalman state fingerprint changed for %s. Rebuilding filter.",
+                    pair_id,
+                )
+                self.filters.pop(pair_id, None)
+                self.filter_fingerprints.pop(pair_id, None)
+            else:
+                return self.filters[pair_id]
 
         # Attempt to reload from Redis (Warm Start)
         if initial_state is None and initial_covariance is None:
             saved_state = await redis_service.get_kalman_state(pair_id)
             if saved_state:
-                initial_state = saved_state['x']
-                initial_covariance = saved_state['P']
-                logger.info(f"[ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
-                kf = KalmanFilter(delta=delta, r=r, initial_state=initial_state, initial_covariance=initial_covariance)
-                # Restore innovation_variance so z-scores are valid immediately on first scan
-                kf.innovation_variance = saved_state.get('innovation_variance', 0.0)
-                self.filters[pair_id] = kf
-                return kf
-            else:
+                saved_fingerprint = saved_state.get('state_fingerprint')
+                if state_fingerprint and saved_fingerprint != state_fingerprint:
+                    logger.warning(
+                        "[ArbitrageService] Ignoring stale Kalman state for %s: fingerprint mismatch.",
+                        pair_id,
+                    )
+                else:
+                    initial_state = saved_state['x']
+                    initial_covariance = saved_state['P']
+                    logger.info(f"[ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
+                    kf = KalmanFilter(delta=delta, r=r, initial_state=initial_state, initial_covariance=initial_covariance)
+                    # Restore innovation_variance so z-scores are valid immediately on first scan
+                    kf.innovation_variance = saved_state.get('innovation_variance', 0.0)
+                    self.filters[pair_id] = kf
+                    self.filter_fingerprints[pair_id] = saved_fingerprint or state_fingerprint
+                    return kf
+
+            if initial_state is None and initial_covariance is None:
                 kf = KalmanFilter(delta=delta, r=r)
                 # D.1 Kalman Pre-Warming
                 try:
@@ -58,8 +99,9 @@ class ArbitrageService:
                             price_b = float(df[col_b].iloc[i])
                             if pd.isna(price_a) or pd.isna(price_b): continue
                             kf.update(price_a, price_b)
-                    
+
                     self.filters[pair_id] = kf
+                    self.filter_fingerprints[pair_id] = state_fingerprint
                     logger.info(f"[ArbitrageService] Pre-warming complete for {pair_id}. Filter matrices converged.")
                     return kf
                 except Exception as e:
@@ -68,21 +110,30 @@ class ArbitrageService:
         self.filters[pair_id] = KalmanFilter(
             delta=delta, 
             r=r, 
-            initial_state=initial_state, 
+            initial_state=initial_state,
             initial_covariance=initial_covariance
         )
+        self.filter_fingerprints[pair_id] = state_fingerprint
         return self.filters[pair_id]
 
     @agent_trace("ArbitrageService.save_filter_state")
-    async def save_filter_state(self, pair_id: str, kf: KalmanFilter, z_score: float):
+    async def save_filter_state(
+        self,
+        pair_id: str,
+        kf: KalmanFilter,
+        z_score: float,
+        state_fingerprint: Optional[str] = None,
+    ):
         """Persists the current state of a Kalman filter to Redis."""
         state_dict = kf.get_state_dict()
+        state_fingerprint = state_fingerprint or self.filter_fingerprints.get(pair_id)
         await redis_service.save_kalman_state(
             ticker_pair=pair_id,
             x=state_dict['alpha_beta'], # [alpha, beta]
             P=state_dict['p_matrix'],
             z_score=z_score,
-            innovation_variance=kf.innovation_variance
+            innovation_variance=kf.innovation_variance,
+            state_fingerprint=state_fingerprint,
         )
 
     @staticmethod

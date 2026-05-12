@@ -54,8 +54,14 @@ class BrokerageService:
     async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
         result = await self.provider.place_value_order(ticker, amount, side, price, client_order_id)
         result["venue"] = self.provider_name
-        if result.get("status") != "error" and not settings.PAPER_TRADING:
-            budget_service.update_used_budget(self.provider_name, amount)
+        status = str(result.get("status", "")).lower()
+        if status == "filled" and not result.get("requires_reconciliation") and not settings.PAPER_TRADING:
+            filled_amount = result.get("filled_notional") or result.get("filled_amount") or amount
+            try:
+                budget_amount = float(filled_amount)
+            except (TypeError, ValueError):
+                budget_amount = amount
+            budget_service.update_used_budget(self.provider_name, budget_amount)
         return result
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:

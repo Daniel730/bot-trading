@@ -200,10 +200,13 @@ class Orchestrator:
         else:
             state['whale_verdict'] = whale_results
 
+        unknown_fundamental_tickers = []
+
         # Handle Fundamental Score A (Redis)
         score_a = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
         if isinstance(score_data_a, Exception):
             logger.warning("Orchestrator Redis read failed for %s: %s", ticker_a, score_data_a)
+            unknown_fundamental_tickers.append(ticker_a)
         elif score_data_a:
             score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
         else:
@@ -212,11 +215,13 @@ class Orchestrator:
                 ticker_a, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
             )
             telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
+            unknown_fundamental_tickers.append(ticker_a)
 
         # Handle Fundamental Score B (Redis)
         score_b = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
         if isinstance(score_data_b, Exception):
             logger.warning("Orchestrator Redis read failed for %s: %s", ticker_b, score_data_b)
+            unknown_fundamental_tickers.append(ticker_b)
         elif score_data_b:
             score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
         else:
@@ -225,13 +230,41 @@ class Orchestrator:
                 ticker_b, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
             )
             telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
+            unknown_fundamental_tickers.append(ticker_b)
+
+        live_fundamental_guard_active = (
+            not settings.PAPER_TRADING
+            or bool(getattr(settings, "LIVE_CAPITAL_DANGER", False))
+        )
+        live_unknown_fundamental_state = (
+            live_fundamental_guard_active
+            and bool(unknown_fundamental_tickers)
+        )
+        low_fundamental_score = (
+            score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE
+            or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE
+        )
+        state["fundamental_verdict"] = {
+            "score_a": score_a,
+            "score_b": score_b,
+            "missing_tickers": unknown_fundamental_tickers,
+            "veto": live_unknown_fundamental_state or low_fundamental_score,
+        }
+        if live_unknown_fundamental_state:
+            state["fundamental_verdict"]["reason"] = "unknown fundamental state in live mode"
+        elif low_fundamental_score:
+            state["fundamental_verdict"]["reason"] = "low structural integrity score"
 
         telemetry_service.broadcast("thought", {
             "agent_name": "SEC_AGENT",
             "signal_id": sig_id,
-            "thought": f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}",
+            "thought": (
+                f"Unknown fundamental state for {', '.join(unknown_fundamental_tickers)}"
+                if live_unknown_fundamental_state
+                else f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}"
+            ),
             "verdict": "VETO"
-            if score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE
+            if state["fundamental_verdict"]["veto"]
             else "NEUTRAL"
         })
 
@@ -270,8 +303,15 @@ class Orchestrator:
         bull_conf = state['bull_verdict']['confidence']
         bear_conf = state['bear_verdict']['confidence']
 
-        # Absolute VETO if structural integrity score < 40 for either ticker
-        if score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE:
+        # Absolute VETO if live mode cannot prove fundamental state or integrity is too low.
+        if live_unknown_fundamental_state:
+            state["final_confidence"] = 0.0
+            missing_tickers = ", ".join(unknown_fundamental_tickers)
+            state["final_verdict"] = (
+                f"VETO: Unknown fundamental state for {missing_tickers}. "
+                "Entry blocked in live mode."
+            )
+        elif low_fundamental_score:
             state["final_confidence"] = 0.0
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason

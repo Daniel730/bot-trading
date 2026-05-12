@@ -42,7 +42,15 @@ class RedisService:
         """Publishes a message to a Redis channel."""
         await self.client.publish(channel, json.dumps(message))
 
-    async def save_kalman_state(self, ticker_pair: str, x: list, P: list, z_score: float, innovation_variance: float = 0.0):
+    async def save_kalman_state(
+        self,
+        ticker_pair: str,
+        x: list,
+        P: list,
+        z_score: float,
+        innovation_variance: float = 0.0,
+        state_fingerprint: Optional[str] = None,
+    ):
         """
         Saves the current Kalman filter state (vector x and matrix P) to a Redis Hash.
         Also stores the z_score and innovation_variance for monitoring and warm-start restoration.
@@ -54,6 +62,8 @@ class RedisService:
             "z_score": str(z_score),
             "innovation_variance": str(innovation_variance)
         }
+        if state_fingerprint:
+            state["state_fingerprint"] = state_fingerprint
         await self.client.hset(key, mapping=state)
 
     async def get_kalman_state(self, ticker_pair: str) -> Optional[dict]:
@@ -67,7 +77,8 @@ class RedisService:
             "x": json.loads(state["x"]),
             "P": json.loads(state["P"]),
             "z_score": float(state["z_score"]),
-            "innovation_variance": float(state.get("innovation_variance", 0.0))
+            "innovation_variance": float(state.get("innovation_variance", 0.0)),
+            "state_fingerprint": state.get("state_fingerprint")
         }
 
     async def check_rate_limit(self, api_name: str, limit: int, window: int = 3600) -> bool:

@@ -1093,13 +1093,22 @@ class ArbitrageMonitor:
             sizing_base = total_cash
             available_for_exec = total_cash
         else:
-            maybe_cash = self.brokerage.get_account_cash()
-            maybe_equity = self.brokerage.get_account_equity()
-            maybe_bp = self.brokerage.get_account_buying_power()
+            try:
+                maybe_cash = self.brokerage.get_account_cash()
+                maybe_equity = self.brokerage.get_account_equity()
+                maybe_bp = self.brokerage.get_account_buying_power()
 
-            total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
-            total_equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
-            buying_power = await maybe_bp if inspect.isawaitable(maybe_bp) else maybe_bp
+                total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
+                total_equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
+                buying_power = await maybe_bp if inspect.isawaitable(maybe_bp) else maybe_bp
+            except Exception as e:
+                message = (
+                    f"{venue} account balance read failed for {t_a}/{t_b}: {e}. "
+                    "Execution blocked because account state is unknown."
+                )
+                logger.critical(message)
+                await notification_service.send_message(message)
+                return
 
             asset_class = "crypto" if crypto_pair else "equity"
             budget_source = f"{venue.lower()}_{asset_class}_cash"
@@ -1352,11 +1361,13 @@ class ArbitrageMonitor:
         status_raw_a = str(fill_a.get("status", "")).lower()
         filled_qty_a = float(fill_a.get("filled_qty") or 0.0)
         fill_price_a = float(fill_a.get("filled_avg_price") or 0.0)
+        expected_qty_a = float(size_a)
+        leg_a_fully_filled = filled_qty_a + 1e-9 >= expected_qty_a
         if status_raw_a in ("partially_filled", "partial_fill"):
             status_a = OrderStatus.LEG_A_PARTIAL
         elif status_raw_a in ("rejected", "canceled", "cancelled", "expired"):
             status_a = OrderStatus.LEG_A_REJECTED
-        elif status_raw_a == "filled" and filled_qty_a > 0:
+        elif status_raw_a == "filled" and filled_qty_a > 0 and leg_a_fully_filled:
             status_a = OrderStatus.LEG_A_FILLED
         else:
             status_a = OrderStatus.NEEDS_MANUAL_RECONCILIATION
@@ -1367,7 +1378,8 @@ class ArbitrageMonitor:
             alert = (
                 f"Leg A ({exec_t_a}) was not confirmed as a full fill. "
                 f"Leg B NOT placed. status={status_raw_a or 'unknown'} "
-                f"filled_qty={filled_qty_a} order_id={order_id_a} signal_id={signal_id}"
+                f"filled_qty={filled_qty_a} expected_qty={expected_qty_a} "
+                f"order_id={order_id_a} signal_id={signal_id}"
             )
             logger.critical(alert)
             await notification_service.send_message(alert)
@@ -1440,9 +1452,8 @@ class ArbitrageMonitor:
             }
         })
 
-        if status_b == OrderStatus.LEG_B_REJECTED:
+        async def emergency_close_leg_a_after_leg_b_failure(broker_msg_b):
             await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION)
-            broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
             logger.critical(
                 f"ATOMIC FAILURE: Leg A ({exec_t_a}) succeeded but Leg B ({exec_t_b}) failed. "
                 f"Broker response: {broker_msg_b}. "
@@ -1458,6 +1469,12 @@ class ArbitrageMonitor:
             )
             close_status = str(close_res.get("status", "")).lower()
             close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
+            close_order_id = (
+                close_res.get("order_id")
+                or close_res.get("orderId")
+                or close_res.get("client_order_id")
+                or f"{signal_id}-A-EMERGENCY-CLOSE"
+            )
             if close_status == "error" or close_unknown:
                 close_reason = "emergency_close_unknown" if close_unknown else "emergency_close_failed"
                 orphan_msg = (
@@ -1468,10 +1485,7 @@ class ArbitrageMonitor:
                     f"Broker response: {close_res}"
                 )
                 logger.critical(orphan_msg)
-                # Alert operator immediately via Telegram / console
                 await notification_service.send_message(orphan_msg)
-                # Persist the orphan so it appears in the audit trail and
-                # dashboard queries don't silently miss it.
                 await persistence_service.log_trade({
                     "order_id": f"ORPHAN_{signal_id}",
                     "signal_id": uuid.UUID(signal_id),
@@ -1487,7 +1501,50 @@ class ArbitrageMonitor:
                     },
                 })
             else:
-                logger.info(f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed.")
+                close_fill = await self._await_order_fill(close_order_id, timeout=30)
+                close_status_raw = str((close_fill or {}).get("status", "")).lower()
+                close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
+                expected_close_qty = filled_qty_a if filled_qty_a > 0 else size_a
+                close_qty_short = close_filled_qty + 1e-9 < expected_close_qty
+                if close_status_raw != "filled" or close_filled_qty <= 0 or close_qty_short:
+                    orphan_msg = (
+                        f"CRITICAL - EMERGENCY CLOSE UNCONFIRMED\n"
+                        f"Signal: {signal_id}\n"
+                        f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                        f"The position may still be ORPHANED. Manual intervention required.\n"
+                        f"Close order: {close_order_id}\n"
+                        f"Close status: {close_status_raw or 'unknown'} filled_qty={close_filled_qty} "
+                        f"expected_qty={expected_close_qty}\n"
+                        f"Broker response: {close_res}"
+                    )
+                    logger.critical(orphan_msg)
+                    await notification_service.send_message(orphan_msg)
+                    await persistence_service.log_trade({
+                        "order_id": f"ORPHAN_{signal_id}",
+                        "signal_id": uuid.UUID(signal_id),
+                        "ticker": exec_t_a,
+                        "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                        "quantity": size_a,
+                        "price": price_a,
+                        "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                        "metadata_json": {
+                            "orphaned": True,
+                            "reason": "emergency_close_unconfirmed",
+                            "broker_response": close_res,
+                            "close_order_id": close_order_id,
+                            "close_fill": close_fill,
+                            "expected_qty": expected_close_qty,
+                        },
+                    })
+                else:
+                    logger.info(
+                        f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed "
+                        f"[order_id={close_order_id}]."
+                    )
+
+        if status_b == OrderStatus.LEG_B_REJECTED:
+            broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
+            await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
             return
         fill_b = await self._await_order_fill(order_id_b, timeout=30)
         if not fill_b:
@@ -1505,11 +1562,16 @@ class ArbitrageMonitor:
                 status_b = OrderStatus.LEG_B_FILLED
         filled_qty_b = float((fill_b or {}).get("filled_qty") or 0.0)
         fill_price_b = float((fill_b or {}).get("filled_avg_price") or 0.0)
+        if status_b == OrderStatus.LEG_B_REJECTED:
+            broker_msg_b = (fill_b or {}).get("message") or (fill_b or {}).get("error") or fill_b or res_b
+            await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
+            return
         pair_status = (
             OrderStatus.OPEN_PAIR
             if status_a == OrderStatus.LEG_A_FILLED and status_b == OrderStatus.LEG_B_FILLED
             else OrderStatus.PARTIAL_EXPOSURE
         )
+        visible_status = pair_status
 
         # M-05: Journal written only after both broker legs have returned successfully
         await persistence_service.log_trade_journal({
@@ -1531,7 +1593,7 @@ class ArbitrageMonitor:
             "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
             "quantity": filled_qty_a or size_a,
             "price": fill_price_a or price_a,
-            "status": pair_status if pair_status == OrderStatus.OPEN_PAIR else status_a,
+            "status": visible_status,
             "venue": venue,
             "metadata_json": {
                 "broker_order_id": order_id_a,
@@ -1553,7 +1615,7 @@ class ArbitrageMonitor:
             "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
             "quantity": filled_qty_b or size_b,
             "price": fill_price_b or price_b,
-            "status": pair_status if pair_status == OrderStatus.OPEN_PAIR else status_b,
+            "status": visible_status,
             "venue": venue,
             "metadata_json": {
                 "broker_order_id": order_id_b,
@@ -1673,6 +1735,7 @@ class ArbitrageMonitor:
         )
         logger.critical(msg)
         await notification_service.send_message(msg)
+        await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
         return False
 
     async def run(self):
@@ -1928,8 +1991,9 @@ class ArbitrageMonitor:
 
         prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
 
-        current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
         cost_basis = signal["total_cost_basis"]
+        _, directional_pnl = calculate_realized_pnl(signal, prices_by_ticker=prices_by_ticker)
+        current_value = cost_basis + directional_pnl
 
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis):
@@ -2061,11 +2125,17 @@ class ArbitrageMonitor:
 
                     close_status_raw = str(close_fill.get("status", "")).lower()
                     close_filled_qty = float(close_fill.get("filled_qty") or 0.0)
-                    if close_status_raw != "filled" or close_filled_qty <= 0:
+                    expected_close_qty = float(order["quantity"])
+                    if (
+                        close_status_raw != "filled"
+                        or close_filled_qty <= 0
+                        or close_filled_qty + 1e-9 < expected_close_qty
+                    ):
                         msg = (
                             f"Close order ended without a full fill for {sig_id_str}: {order['display_ticker']} "
                             f"{order['side']} status={close_status_raw or 'unknown'} "
-                            f"filled_qty={close_filled_qty} [order_id={order_id}]. Ledger NOT closed."
+                            f"filled_qty={close_filled_qty} expected_qty={expected_close_qty} "
+                            f"[order_id={order_id}]. Ledger NOT closed."
                         )
                         logger.critical(msg)
                         await notification_service.send_message(msg)

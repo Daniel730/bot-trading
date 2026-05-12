@@ -11,6 +11,7 @@ load_dotenv()
 # Path to user-editable pairs override file (created/edited by the dashboard).
 PAIRS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "pairs.json"
 BOT_SETTINGS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "bot_settings.json"
+ACTIVE_BROKERAGE_PROVIDER = "ALPACA"
 
 def _load_settings_override():
     try:
@@ -37,6 +38,16 @@ def _strip_wrapping_quotes(value: str) -> str:
     if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
         return stripped[1:-1].strip()
     return stripped
+
+
+def _validate_supported_brokerage_provider(value: Any) -> str:
+    provider = str(value or "").strip().upper()
+    if provider != ACTIVE_BROKERAGE_PROVIDER:
+        raise ValueError(
+            "BROKERAGE_PROVIDER only supports ALPACA in the active runtime; "
+            "T212 and WEB3 routes are legacy/disabled."
+        )
+    return ACTIVE_BROKERAGE_PROVIDER
 
 
 class _DockerEnvSettingsSource(EnvSettingsSource):
@@ -773,7 +784,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_secrets(self):
-        self.BROKERAGE_PROVIDER = "ALPACA"
+        self.BROKERAGE_PROVIDER = _validate_supported_brokerage_provider(self.BROKERAGE_PROVIDER)
         if not self.POSTGRES_PASSWORD or self.POSTGRES_PASSWORD == "bot_pass":
             raise ValueError("POSTGRES_PASSWORD must be set to a non-default secret")
         dashboard_token = self.DASHBOARD_TOKEN.strip().strip('"').strip("'")
@@ -799,4 +810,4 @@ if _settings_override:
         if hasattr(settings, _key):
             setattr(settings, _key, _value)
 
-settings.BROKERAGE_PROVIDER = "ALPACA"
+settings.BROKERAGE_PROVIDER = _validate_supported_brokerage_provider(settings.BROKERAGE_PROVIDER)
