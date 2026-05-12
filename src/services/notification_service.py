@@ -201,7 +201,6 @@ class NotificationService:
             if result.get("status") == "error":
                 await update.message.reply_text(f"❌ Failed: {result.get('message')}")
             else:
-                budget_service.update_used_budget("ALPACA", amount)
                 await update.message.reply_text(f"✅ Order placed successfully.")
             
         except Exception as e:

@@ -392,6 +392,7 @@ class PersistenceService:
 
         unresolved_statuses = (
             OrderStatus.CLOSING,
+            OrderStatus.CLOSE_FAILED,
             OrderStatus.NEEDS_MANUAL_RECONCILIATION,
             OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
         )

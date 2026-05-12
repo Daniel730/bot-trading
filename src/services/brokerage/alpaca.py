@@ -385,42 +385,51 @@ class AlpacaProvider(AbstractBrokerageProvider):
         Retrieve the account cash balance from the connected Alpaca account.
 
         Returns:
-            float: The account cash balance. Returns 0.0 if the balance cannot be fetched.
+            float: The account cash balance.
+
+        Raises:
+            Exception: Propagates Alpaca account read failures so callers can fail closed.
         """
         try:
             account = self.api.get_account()
             return float(account.cash)
         except Exception as e:
             logger.error(f"Alpaca failed to fetch account cash: {e}")
-            return 0.0
+            raise
 
     def get_account_equity(self) -> float:
         """
         Retrieve the total account equity (cash + position value) from Alpaca.
 
         Returns:
-            float: Total account equity. Returns 0.0 if the balance cannot be fetched.
+            float: Total account equity.
+
+        Raises:
+            Exception: Propagates Alpaca account read failures so callers can fail closed.
         """
         try:
             account = self.api.get_account()
             return float(account.equity)
         except Exception as e:
             logger.error(f"Alpaca failed to fetch account equity: {e}")
-            return 0.0
+            raise
 
     def get_account_buying_power(self) -> float:
         """
         Retrieve the available buying power from Alpaca.
 
         Returns:
-            float: Available buying power. Returns 0.0 if the balance cannot be fetched.
+            float: Available buying power.
+
+        Raises:
+            Exception: Propagates Alpaca account read failures so callers can fail closed.
         """
         try:
             account = self.api.get_account()
             return float(account.buying_power)
         except Exception as e:
             logger.error(f"Alpaca failed to fetch account buying power: {e}")
-            return 0.0
+            raise
 
     def get_pending_orders(self) -> List[Dict[str, Any]]:
         """
