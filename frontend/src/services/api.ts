@@ -58,7 +58,7 @@ export interface ThoughtTelemetry {
   agent_name: string;
   signal_id?: string;
   thought: string;
-  verdict: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'VETO';
+  verdict: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'VETO' | 'INACTIVE';
 }
 
 export interface RuntimeInfo {

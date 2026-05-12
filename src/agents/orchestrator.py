@@ -147,23 +147,31 @@ class Orchestrator:
             else "NEUTRAL"
         })
 
+        whale_inactive = (
+            not isinstance(whale_results, Exception)
+            and whale_results.get("status") == "inactive"
+        )
         telemetry_service.broadcast("thought", {
             "agent_name": "WHALE_WATCHER",
             "signal_id": sig_id,
             "thought": str(whale_results.get("reasoning", "Whale context read complete"))
             if not isinstance(whale_results, Exception)
             else f"Error: {whale_results}",
-            "verdict": "VETO"
-            if not isinstance(whale_results, Exception) and whale_results.get("veto")
+            "verdict": "INACTIVE"
+            if whale_inactive
             else (
-                "SUPPORT"
-                if not isinstance(whale_results, Exception)
-                and whale_results.get("confidence_delta", 0.0) > 0
+                "VETO"
+                if not isinstance(whale_results, Exception) and whale_results.get("veto")
                 else (
-                    "RISK"
+                    "SUPPORT"
                     if not isinstance(whale_results, Exception)
-                    and whale_results.get("confidence_delta", 0.0) < 0
-                    else "NEUTRAL"
+                    and whale_results.get("confidence_delta", 0.0) > 0
+                    else (
+                        "RISK"
+                        if not isinstance(whale_results, Exception)
+                        and whale_results.get("confidence_delta", 0.0) < 0
+                        else "NEUTRAL"
+                    )
                 )
             )
         })

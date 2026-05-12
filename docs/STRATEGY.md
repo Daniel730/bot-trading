@@ -75,7 +75,7 @@ The orchestrator is an async Python ensemble, not a required LangGraph runtime p
 2. Macro beacon fail-fast veto by sector.
 3. Bull and bear agent evaluation.
 4. Cached SEC/fundamental integrity scores from Redis.
-5. Whale watcher context for crypto-sensitive flows.
+5. Whale watcher status for crypto-sensitive flows. The current active implementation reports `INACTIVE` because cache-backed whale-flow analysis is legacy-disabled.
 6. Portfolio manager confidence adjustment.
 7. Historical global accuracy multiplier.
 8. Per-ticker beacon flash-crash veto.
@@ -84,7 +84,7 @@ Hard veto examples:
 
 - sector beacon is in `EXTREME_VOLATILITY`;
 - fundamental score is below `ORCH_FUNDAMENTAL_VETO_SCORE`;
-- whale watcher returns a veto;
+- active whale watcher returns a veto. Current active runtime reports whale watcher as `INACTIVE`, so no whale-flow veto is applied until the evaluator is restored;
 - operational status is `DEGRADED_MODE`.
 
 ## Risk Guards

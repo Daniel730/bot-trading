@@ -17,11 +17,11 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Strategy Logic
 
-- ISSUE-0013 - Whale watcher is documented/configured but currently always neutral.
+- None currently listed.
 
 ## Data Pipeline
 
-- ISSUE-0013 - Whale watcher freshness/inactivity is not surfaced as an active data quality state.
+- None currently listed.
 
 ## Persistence and State
 
@@ -51,6 +51,5 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Documentation / Brain Quality
 
-- ISSUE-0013 - Strategy docs imply active whale watcher protection that code does not provide.
 - ISSUE-0014 - Local setup docs do not match locked CI/Docker dependency path.
 - ISSUE-0020 - Historical brain notes need canonical issue IDs and maps.

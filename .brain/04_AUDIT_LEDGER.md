@@ -324,7 +324,7 @@ ISSUE-0016
 P2
 
 #### Notes
-Fixed 2026-05-11 in `src/services/brokerage_service.py` by adding `BrokerageService._format_ticker()`. Regression tests added in `tests/unit/test_cash_ticker_formatter.py`. Validation passed: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` with 11 passed. Remaining risk: this only normalizes symbols for current cash/sweep lookups; broader cash-command UX and sweep execution safety are not changed. Next recommended task was ISSUE-0010; after the 2026-05-12 calendar fix, continue with ISSUE-0013.
+Fixed 2026-05-11 in `src/services/brokerage_service.py` by adding `BrokerageService._format_ticker()`. Regression tests added in `tests/unit/test_cash_ticker_formatter.py`. Validation passed: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` with 11 passed. Remaining risk: this only normalizes symbols for current cash/sweep lookups; broader cash-command UX and sweep execution safety are not changed. Next recommended task was ISSUE-0010, then ISSUE-0013; after both 2026-05-12 fixes, continue with ISSUE-0014.
 
 ### ISSUE-0007 — Dashboard terminal auth smoke gate remains unresolved in readiness evidence
 
@@ -664,22 +664,22 @@ Fixed 2026-05-09 in `src/agents/orchestrator.py` by tracking unknown fundamental
 
 ### ISSUE-0013 — Whale watcher is configured and documented but currently always neutral
 
-Status: OPEN  
+Status: FIXED  
 Severity: MEDIUM  
 Area: strategy  
 Discovered in audit: 2026-05-08  
-Last checked: 2026-05-08  
-Evidence type: code  
+Last checked: 2026-05-12  
+Evidence type: code/test/doc  
 Confidence: HIGH  
 
 #### Summary
-The system describes whale-watcher context and configuration, but the active agent implementation is a dummy that always returns neutral.
+The system described whale-watcher context and configuration as active protection, but the active agent implementation was a dummy that always returned neutral. The active runtime now reports the whale watcher as inactive/legacy-neutral instead of presenting it as active neutral protection.
 
 #### Evidence
-- `src/agents/whale_watcher_agent.py::evaluate` returns `self.neutral("Whale watcher agent is in legacy mode.")`.
-- `src/config.py` contains enabled whale watcher settings and TTL/risk multiplier fields.
-- `docs/STRATEGY.md` describes whale watcher context and vetoes.
-- `docs/tofix.md` says whale watcher depends on external cache freshness and needs stale-cache telemetry.
+- Before the fix, `src/agents/whale_watcher_agent.py::evaluate` returned `self.neutral("Whale watcher agent is in legacy mode.")` without inactive status fields.
+- Before the fix, `src/config.py` defaulted `WHALE_WATCHER_ENABLED` to `True` even though no active evaluator existed.
+- Before the fix, `docs/STRATEGY.md` described whale watcher context and vetoes without saying the active implementation was inactive.
+- `tests/unit/test_whale_watcher.py` now asserts the legacy whale watcher status, agent verdict, and orchestrator telemetry all report `inactive`/`INACTIVE`.
 
 #### Trigger
 Any signal where whale/exchange-flow context is expected to adjust confidence or veto risk.
@@ -691,19 +691,19 @@ Configured whale watcher controls imply active signal protection.
 Signals proceed without the documented whale-flow veto, and operators may overestimate the amount of active risk filtering.
 
 #### Existing protection
-The dummy is neutral rather than unstable, so it does not introduce random vetoes.
+The dummy is neutral rather than unstable, so it does not introduce random vetoes. It now reports `active=False`, `status=inactive`, and `mode=legacy_neutral`; orchestrator telemetry emits the whale watcher verdict as `INACTIVE`.
 
 #### Missing protection
-No startup/status warning that whale watcher is legacy-neutral, and no test asserts documented whale veto behavior.
+No restored cache-backed whale-flow evaluator or stale-cache health checks. The current protection is disclosure, not whale-flow risk analysis.
 
 #### Smallest safe fix
-Either mark whale watcher disabled/legacy in dashboard/docs or restore a real cache-backed evaluator with freshness checks.
+Implemented: mark the whale watcher as inactive/legacy in agent status, orchestrator telemetry, config defaults, and strategy docs.
 
 #### Test required
-Assert dashboard/orchestrator status reports whale watcher as inactive when the dummy implementation is loaded, or assert a cached whale veto affects final verdict.
+Added `tests/unit/test_whale_watcher.py` coverage for inactive agent status, inactive evaluate output, and orchestrator `INACTIVE` telemetry.
 
 #### Validation command
-`python -m pytest tests/unit/test_whale_watcher_status.py::test_legacy_whale_watcher_is_reported_inactive -q`
+`python -m pytest tests/unit/test_whale_watcher.py -q`
 
 #### Related issues
 ISSUE-0012
@@ -713,6 +713,8 @@ P2
 
 #### Notes
 This is classified medium because it removes a documented protection rather than directly breaking execution.
+
+Fixed 2026-05-12 in `src/agents/whale_watcher_agent.py`, `src/agents/orchestrator.py`, `src/config.py`, `frontend/src/services/api.ts`, `frontend/src/components/ThoughtJournal.tsx`, `docs/STRATEGY.md`, and `docs/tofix.md` by making the active whale watcher explicitly inactive instead of silently neutral. Regression tests updated in `tests/unit/test_whale_watcher.py`. Validation passed: `python -m pytest tests/unit/test_whale_watcher.py -q` with 3 passed and `python -m pytest -q tests/unit/test_whale_watcher.py tests/unit/test_orchestrator_fundamentals.py tests/unit/test_orchestrator_mab.py tests/unit/test_sector_leader_regime.py::test_orchestrator_sector_veto tests/unit/test_sector_leader_regime.py::test_orchestrator_missing_sector_defaults_to_spy` with 7 passed. Full-suite validation now proceeds past whale watcher collection but remains blocked by unrelated `tests/benchmark/test_value_traps.py` importing missing `fundamental_analyst`.
 
 ### ISSUE-0014 — Local runtime dependency path differs from CI and Docker
 
