@@ -236,6 +236,10 @@ class ArbitrageMonitor:
         try:
             import holidays
 
+            current_date = now.date()
+            if calendar_code == "DE" and (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return True
+
             year = now.date().year
             if calendar_code == "NYSE":
                 market_holidays = holidays.financial_holidays("NYSE", years=[year])
