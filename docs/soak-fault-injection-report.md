@@ -28,18 +28,22 @@
   - `pytest -q tests/integration/test_brokerage_safety.py tests/integration/test_data_resilience.py tests/integration/test_terminal_bridge.py`
   - Result: `1 failed, 4 passed`
   - Failure: `test_terminal_command_integration` (missing `session_token` in `/api/auth/login` response path in test assumptions).
+- Terminal bridge rerun after auth/session test correction:
+  - `python -m pytest tests/integration/test_terminal_bridge.py::test_terminal_command_integration -q --asyncio-mode=auto`
+  - Result: `1 passed` on 2026-05-09.
 
 ## Gate Decision (Per Requested Policy)
 - Policy requested: **clean log window + recovery drill success required before production approval**.
 - Result:
   - Recovery drill: **PASS**
   - Clean log window: **PASS** for the captured window
-  - Full post-recovery smoke suite: **NOT FULLY PASSING** (terminal bridge integration failure)
+  - Terminal bridge command smoke: **PASS** after rerun on 2026-05-09
+  - Full post-recovery smoke suite: **NEEDS REFRESH** after the terminal bridge correction
 
 ## Production Approval Status
 - **NOT APPROVED YET**.
 
 ## Required Next Actions Before Approval
-1. Fix or update `tests/integration/test_terminal_bridge.py` auth/session expectation and re-run.
-2. Run a longer soak interval (target 2-4h from readiness plan) with same recovery checks.
+1. Run a longer soak interval (target 2-4h from readiness plan) with same recovery checks.
+2. Re-run the full post-recovery smoke suite after the terminal bridge correction.
 3. Confirm at least one active market scan cycle with non-zero pair processing under realistic market conditions.

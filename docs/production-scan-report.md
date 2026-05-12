@@ -50,12 +50,13 @@
   - But runtime logs show prior authentication and transport reliability issues that must be proven resolved/stable under soak conditions.
 
 ## Immediate Recommendations
-1. Add alerts for Postgres auth failures and gRPC transport error spikes.
+1. Add live alerts for Postgres auth failures and gRPC transport error spikes; the production soak gate now also fails if structured evidence records non-zero counts for these errors.
 2. Run 2-4 hour paper-mode soak with fault injections (Redis/Postgres/execution-engine restarts).
 3. Require a clean log window (no recurring critical auth failures) before go-live.
 
 ## Soak/Fault-Injection Update
 - Controlled restarts were executed for `redis`, `postgres`, and `execution-engine` with successful service recovery.
 - Post-recovery window showed stable bot heartbeats and repeated `200 OK` API responses.
-- Production gate remains **not approved** because an extended post-recovery integration smoke run reported one failing test (`test_terminal_command_integration`).
+- The previously failing terminal bridge smoke (`test_terminal_command_integration`) was rerun on 2026-05-09 and passed with the current auth/session flow.
+- Production gate remains **not approved** until the longer soak, refreshed full post-recovery smoke suite, active market scan evidence, and runtime alert gates are complete.
 - Detailed evidence is in `docs/soak-fault-injection-report.md`.

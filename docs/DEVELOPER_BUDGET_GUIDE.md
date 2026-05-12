@@ -1,28 +1,26 @@
 # Developer Guide: Venue Budgets
 
-`BudgetService` enforces optional spend caps independently for each execution venue. It exists so the strategy can make sizing decisions without hardcoding venue-specific capital rules throughout the monitor.
+`BudgetService` enforces optional spend caps for the active execution venue. It exists so the strategy can make sizing decisions without hardcoding capital rules throughout the monitor.
 
 ## Current Venues
 
 | Venue | Routed By | Budget setting | State key |
 |---|---|---|---|
-| `T212` | non-crypto tickers when `BROKERAGE_PROVIDER=T212` | `T212_BUDGET_USD` | `budget_used_T212` |
-| `ALPACA` | non-crypto tickers when `BROKERAGE_PROVIDER=ALPACA` | none yet; uncapped unless a future `ALPACA_BUDGET_USD` setting is added | `budget_used_ALPACA` |
-| `WEB3` | tickers containing `-USD` | `WEB3_BUDGET_USD` | `budget_used_WEB3` |
+| `ALPACA` | active brokerage route when `BROKERAGE_PROVIDER=ALPACA` | `ALPACA_BUDGET_USD` | `budget_used_ALPACA` |
 
-Venue resolution is centralized in `BrokerageService.get_venue(ticker)`. Do not duplicate ticker parsing in callers.
+Trading 212 and Web3 routes are legacy/disabled in the current runtime. `BROKERAGE_PROVIDER` values other than `ALPACA` fail startup.
+
+Venue resolution is centralized in `BrokerageService.get_venue(ticker)`. Do not duplicate provider assumptions in callers.
 
 ## Storage
 
 Budget usage is stored in SQLite through `PersistenceManager` system state:
 
 ```text
-budget_used_T212
 budget_used_ALPACA
-budget_used_WEB3
 ```
 
-The T212 and WEB3 values are initialized once and are not reset on restart. Alpaca usage is created lazily on the first live Alpaca value order. This lets the bot keep respecting spend caps across process restarts where a cap exists, while still preserving usage telemetry for uncapped venues.
+The Alpaca value is initialized once and is not reset on restart. This lets the bot keep respecting spend caps across process restarts where a cap exists.
 
 ## Sizing Flow
 
@@ -45,7 +43,8 @@ effective_cash = min(actual_available, budget_cap - used_budget)
 
 `BrokerageService.place_value_order()` adds to the used budget when:
 
-- the broker result is not an error;
+- the broker result is explicitly `status=filled`;
+- the result is not marked `requires_reconciliation`;
 - `PAPER_TRADING=false`.
 
 Paper trading does not consume live venue budget.
@@ -67,9 +66,7 @@ The dashboard polls budget information and displays per-venue metrics:
 Use the service method:
 
 ```python
-budget_service.reset_budget("T212")
 budget_service.reset_budget("ALPACA")
-budget_service.reset_budget("WEB3")
 ```
 
 This is intentionally not automatic. If daily reset behavior is desired, wire it through a scheduled maintenance job with an explicit audit event.

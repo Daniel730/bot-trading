@@ -4,10 +4,10 @@
 - Root cause of `bot_admin` authentication failures in Postgres logs.
 - Whether gRPC broken pipe/reset events align with order placement delays/failures.
 - Recovery behavior when Redis/Postgres restart during active scans and open position management.
-- End-to-end order idempotency under retries/timeouts across T212 and WEB3 paths.
+- End-to-end order idempotency under retries/timeouts across the active Alpaca path.
 
 ## Medium Priority
-- Long-run budget drift across venue caps (`T212_BUDGET_USD`, `WEB3_BUDGET_USD`) under mixed portfolios.
+- Long-run budget drift across the active Alpaca cap (`ALPACA_BUDGET_USD`) under mixed portfolios.
 - Distribution of risk rejection reasons by user persona and budget tier.
 - Signal veto/approval latency impact on missed opportunities under high pair counts.
 - Frontend operational UX under degraded backend states (stale telemetry, partial API failures).

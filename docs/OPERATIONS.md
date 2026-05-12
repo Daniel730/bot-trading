@@ -22,10 +22,9 @@ Optional but useful:
 
 - `POLYGON_API_KEY` for market data.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for approvals and login approval notifications.
-- `T212_API_KEY`, `T212_API_SECRET`, and `TRADING_212_MODE` for Trading 212.
-- `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL` for Alpaca.
-- `BROKERAGE_PROVIDER=T212` or `BROKERAGE_PROVIDER=ALPACA` to choose the active equity broker.
-- `WEB3_*` variables for on-chain crypto execution in live mode.
+- `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL` for the active Alpaca brokerage path.
+- `BROKERAGE_PROVIDER=ALPACA`; unsupported values such as `T212` or `WEB3` fail startup.
+- Trading 212 and Web3 settings are legacy/disabled in the current runtime.
 - `OPENAI_API_KEY` and/or `GEMINI_API_KEY` for model-backed analysis paths.
 
 ## Local Run
@@ -100,8 +99,8 @@ The dashboard removes old `token`/`session` query params from the URL. API auth 
 | Mode | Settings | Notes |
 |---|---|---|
 | Paper | `PAPER_TRADING=true` | Shadow service simulates entries/exits and persists auditable rows. |
-| Live broker/Web3 | `PAPER_TRADING=false` | Python brokerage dispatcher submits live orders. Confirm all secrets and approvals first. |
-| Broker selection | `BROKERAGE_PROVIDER=T212` or `BROKERAGE_PROVIDER=ALPACA` | Non-crypto tickers route to the selected equity broker; `*-USD` crypto tickers can route to Web3 when live. |
+| Live broker | `PAPER_TRADING=false` | Python brokerage dispatcher submits live orders through Alpaca. Confirm all secrets and approvals first. |
+| Broker selection | `BROKERAGE_PROVIDER=ALPACA` | Alpaca is the only active brokerage provider; unsupported values fail startup. |
 | Dev | `DEV_MODE=true` | Crypto test universe, 24/7 scan, equity-hour bypass. Do not use for production decisions. |
 | Java dry run | `DRY_RUN=true` | Required. The Java engine rejects live-broker mode today. |
 
@@ -146,7 +145,7 @@ Dashboard terminal handlers include:
 | SSE reconnect loop | Confirm `/stream` is reachable and both auth headers are present. |
 | WebSocket disconnects | Confirm the initial auth message includes token and session. |
 | Java engine exits | Set `DRY_RUN=true`; confirm Redis/Postgres env vars. |
-| Equity orders use the wrong broker | Check `BROKERAGE_PROVIDER`; valid values are `T212` and `ALPACA`. |
+| Equity orders use the wrong broker | Check `BROKERAGE_PROVIDER`; the only active value is `ALPACA`. Unsupported values fail startup. |
 | No equity scans | Check market hours and `DEV_MODE`; crypto pairs run 24/7, equity pairs are gated. |
 | Many pairs rejected | Review `BLOCK_CROSS_CURRENCY_PAIRS`, `BLOCK_LSE_PAIRS_FOR_SHORT_HOLD`, `PAIR_MAX_ROUND_TRIP_COST_PCT`, and `ALLOW_EU_CONTINENTAL_OVERLAP`. |
 | Live sell leg rejected before broker | The preflight inventory guard found insufficient available shares. |
