@@ -324,7 +324,7 @@ ISSUE-0016
 P2
 
 #### Notes
-Fixed 2026-05-11 in `src/services/brokerage_service.py` by adding `BrokerageService._format_ticker()`. Regression tests added in `tests/unit/test_cash_ticker_formatter.py`. Validation passed: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` with 11 passed. Remaining risk: this only normalizes symbols for current cash/sweep lookups; broader cash-command UX and sweep execution safety are not changed. Next recommended task is ISSUE-0010.
+Fixed 2026-05-11 in `src/services/brokerage_service.py` by adding `BrokerageService._format_ticker()`. Regression tests added in `tests/unit/test_cash_ticker_formatter.py`. Validation passed: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` with 11 passed. Remaining risk: this only normalizes symbols for current cash/sweep lookups; broader cash-command UX and sweep execution safety are not changed. Next recommended task was ISSUE-0010; after the 2026-05-12 calendar fix, continue with ISSUE-0013.
 
 ### ISSUE-0007 — Dashboard terminal auth smoke gate remains unresolved in readiness evidence
 
@@ -488,7 +488,7 @@ Fixed 2026-05-09 in `scripts/run_production_soak_gate.py` by requiring structure
 
 ### ISSUE-0010 — Market session handling is suffix-based and ignores real exchange calendars
 
-Status: OPEN  
+Status: FIXED  
 Severity: MEDIUM  
 Area: strategy  
 Discovered in audit: 2026-05-08  
@@ -497,7 +497,7 @@ Evidence type: code/test
 Confidence: HIGH  
 
 #### Summary
-Market-hours eligibility used ticker suffix heuristics and weekday windows rather than exchange calendars, holidays, or half days. Full-day holiday blocking has been added for the existing suffix venues, default US equities now close at 13:00 ET on common NYSE early-close dates, `.HK` symbols now use Hong Kong local trading hours plus noon early closes for common HKEX no-afternoon-session dates, `.L` symbols now close at 12:30 London time on common LSE half-days, and `.DE` symbols now block common Xetra exchange closures not present in German public-holiday calendars. Exact Euronext exchange-specific calendars remain open.
+Market-hours eligibility used ticker suffix heuristics and weekday windows rather than exchange calendars, holidays, or half days. Full-day holiday blocking has been added for the existing suffix venues, default US equities now close at 13:00 ET on common NYSE early-close dates, `.HK` symbols now use Hong Kong local trading hours plus noon early closes for common HKEX no-afternoon-session dates, `.L` symbols now close at 12:30 London time on common LSE half-days, `.DE` symbols now block common Xetra exchange closures not present in German public-holiday calendars, and `.AS`/`.PA` symbols now use local Euronext sessions plus common 14:05 CET half-day closes.
 
 #### Evidence
 - `src/monitor.py::get_market_config` maps suffixes such as `.HK`, `.DE`, `.AS`, `.PA`, and `.L` to fixed windows.
@@ -508,6 +508,7 @@ Market-hours eligibility used ticker suffix heuristics and weekday windows rathe
 - `tests/unit/test_market_calendar.py::test_hk_half_day_uses_local_session_and_blocks_afternoon` proves `.HK` symbols use the Hong Kong local morning session and block the afternoon on HKEX Christmas Eve 2026.
 - `tests/unit/test_market_calendar.py::test_lse_half_day_blocks_equity_scan_after_early_close` proves `.L` symbols are blocked after the 12:30 London Stock Exchange Christmas Eve 2026 early close.
 - `tests/unit/test_market_calendar.py::test_xetra_exchange_closure_blocks_equity_scan` proves `.DE` symbols are blocked on Xetra Christmas Eve 2026 when the fixed weekday/session window would otherwise allow trading.
+- `tests/unit/test_market_calendar.py::test_euronext_half_day_blocks_scan_after_early_close` proves `.AS` and `.PA` symbols are blocked after the common 14:05 CET Euronext cash-market half-day close.
 
 #### Trigger
 Exchange holidays, half-days, daylight-saving boundary changes, regional market closures, or cross-listed symbols with misleading suffixes.
@@ -519,16 +520,16 @@ Ticker suffix and weekday fixed windows are enough to know when data and orders 
 The bot can scan or trade on stale data outside real sessions, or skip valid trading windows, degrading signals and exits.
 
 #### Existing protection
-Crypto pairs are treated as 24/7 and equity pairs have a basic session-overlap gate. Full-day holidays now close default US equities via the NYSE financial calendar and suffix venues via country holiday calendars. Default US equities now also use a small NYSE early-close table for recurring 13:00 ET half-days. `.HK` symbols now use 09:30-16:00 HKT and a noon close for common HKEX half-days. `.L` symbols now close at 12:30 London time on common LSE half-days. `.DE` symbols now block Xetra Christmas Eve and New Year's Eve closures.
+Crypto pairs are treated as 24/7 and equity pairs have a basic session-overlap gate. Full-day holidays now close default US equities via the NYSE financial calendar and suffix venues via country holiday calendars. Default US equities now also use a small NYSE early-close table for recurring 13:00 ET half-days. `.HK` symbols now use 09:30-16:00 HKT and a noon close for common HKEX half-days. `.L` symbols now close at 12:30 London time on common LSE half-days. `.DE` symbols now block Xetra Christmas Eve and New Year's Eve closures. `.AS` and `.PA` now use local Amsterdam/Paris sessions and a 14:05 CET close on common Euronext half-days.
 
 #### Missing protection
-Exact exchange-specific calendars for Euronext venues (`.AS`, `.PA`) are still not covered. Country holiday calendars for those venues are an approximation and may differ from exchange closures or half-day schedules.
+No maintained exchange-calendar provider is used for ad-hoc future exchange notices. Current configured venue coverage is protected by focused regression tests, but operators should still watch official exchange calendars before live trading.
 
 #### Smallest safe fix
-Implemented the smallest safe mitigations for full-day holidays, default US half-days, HKEX `.HK` half-days/local session times, LSE `.L` common half-days, and Xetra `.DE` Christmas/New Year's Eve closures. Remaining safe fix is to add exchange-specific Euronext coverage without changing order behavior.
+Implemented the smallest safe mitigations for full-day holidays, default US half-days, HKEX `.HK` half-days/local session times, LSE `.L` common half-days, Xetra `.DE` Christmas/New Year's Eve closures, and Euronext `.AS`/`.PA` local session plus common half-day handling without changing order behavior.
 
 #### Test required
-Added US full-day holiday, NYSE half-day, HKEX half-day/local-session, LSE half-day, and Xetra closure regression tests. Still required: exchange-specific Euronext calendar tests should reject scans/orders when the fixed suffix window would incorrectly allow them.
+Added US full-day holiday, NYSE half-day, HKEX half-day/local-session, LSE half-day, Xetra closure, and Euronext `.AS`/`.PA` half-day regression tests.
 
 #### Validation command
 `python -m pytest tests/unit/test_market_calendar.py -q`
@@ -551,6 +552,8 @@ Partial mitigation 2026-05-12: `src/monitor.py::get_market_config` now uses Hong
 Partial mitigation 2026-05-12: `src/monitor.py::_market_early_close_time` now returns a 12:30 London close for `.L`/GB symbols on Christmas Eve and New Year's Eve. Regression test added: `tests/unit/test_market_calendar.py::test_lse_half_day_blocks_equity_scan_after_early_close`. Validation passed: `python -m pytest tests/unit/test_market_calendar.py -q` with 4 passed. Full-suite validation remains blocked by unrelated collection errors in `tests/benchmark/test_value_traps.py` and `tests/unit/test_whale_watcher.py`.
 
 Partial mitigation 2026-05-12: `src/monitor.py::_is_market_holiday` now treats `.DE`/Xetra Christmas Eve and New Year's Eve as closed exchange days before falling back to German public holidays. Regression test added: `tests/unit/test_market_calendar.py::test_xetra_exchange_closure_blocks_equity_scan`. Validation passed: `python -m pytest tests/unit/test_market_calendar.py -q` with 5 passed. Full-suite validation remains blocked by unrelated collection errors in `tests/benchmark/test_value_traps.py` and `tests/unit/test_whale_watcher.py`.
+
+Fixed 2026-05-12 for scoped configured calendar coverage: `.AS` now uses `Europe/Amsterdam`, `.PA` now uses `Europe/Paris`, both use 09:00-17:30 local sessions, and `_market_early_close_time()` applies a 14:05 local close for common Euronext Amsterdam/Paris half-days on December 24 and December 31. Regression test updated: `tests/unit/test_market_calendar.py::test_euronext_half_day_blocks_scan_after_early_close`. Validation passed: `python -m pytest tests/unit/test_market_calendar.py -q` with 6 passed. Full-suite validation remains blocked by unrelated collection errors in `tests/benchmark/test_value_traps.py` and `tests/unit/test_whale_watcher.py`.
 
 ### ISSUE-0011 — Corporate actions do not invalidate pair and Kalman state
 

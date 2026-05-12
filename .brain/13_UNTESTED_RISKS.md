@@ -12,11 +12,6 @@ Last updated: 2026-05-12
 
 ## Medium Untested Risks
 
-- ISSUE-0010
-  - missing test: Market freshness handles exchange-specific Euronext closures.
-  - expected failing scenario: Fixed suffix window treats an Euronext Amsterdam or Paris closure as fresh/open.
-  - suggested test file/name: `tests/unit/test_market_calendar.py::test_euronext_exchange_closure_blocks_equity_scan`
-
 - ISSUE-0013
   - missing test: Inactive whale watcher is surfaced as inactive, not neutral protection.
   - expected failing scenario: Missing whale data produces neutral signal without observability.

@@ -12,11 +12,6 @@ Last updated: 2026-05-12
 
 ## P2 - Must fix before public release / monetization
 
-- ISSUE-0010 - Market session rules still lack exact Euronext exchange calendars
-  - reason for priority: Full-day holiday blocking, default US early-close handling, HKEX common half-days, LSE common half-days, and Xetra holiday closures now exist, but Euronext closures can still degrade data freshness decisions.
-  - smallest safe fix: Add exchange-specific closure checks for one configured Euronext venue without changing execution behavior.
-  - required test: Exchange-calendar freshness test for `.AS` or `.PA` equities.
-
 - ISSUE-0013 - Whale watcher configured/documented but always neutral
   - reason for priority: Documentation implies a risk signal that is not active.
   - smallest safe fix: Mark inactive explicitly or remove it from readiness claims until implemented/tested.
