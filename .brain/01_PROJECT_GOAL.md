@@ -21,7 +21,7 @@ The repo contains three product surfaces:
 - React dashboard: operator console for login, telemetry, pairs, wallet sync, trades, settings, bot controls, and health.
 - Java execution engine: gRPC sidecar with Redis idempotency, L2/VWAP/slippage checks, PostgreSQL audit persistence, and kill-switch surface.
 
-The README describes Trading 212, Alpaca, Web3, paper shadow execution, and Java gRPC routing. Current code has narrowed the active Python brokerage facade to Alpaca; Trading 212 and Web3 live providers are now under `legacy/` or described historically. Treat this as an important documentation/code divergence.
+The README and operations docs now describe the current active Python brokerage facade as Alpaca-only. Trading 212 and Web3 live providers are legacy/disabled, and unsupported `BROKERAGE_PROVIDER` values fail startup.
 
 ## Current Safety Goal
 

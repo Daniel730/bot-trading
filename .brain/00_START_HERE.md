@@ -10,7 +10,7 @@ This folder is the repo-local memory for Alpha Arbitrage Bot. Use it before touc
 - Primary runtime: Python backend in `src/`, React operator console in `frontend/`, Java gRPC execution sidecar in `execution-engine/`.
 - Current production verdict: not production-approved.
 - Current safe operating posture: paper mode first; live capital remains blocked until audit and soak gates are clean.
-- Current active broker reality in code: `src/services/brokerage_service.py` hard-wires Alpaca as the active provider and treats Trading 212 / Web3 as legacy-only, while some docs still describe multiple live providers.
+- Current active broker reality in code and current docs: `src/services/brokerage_service.py` hard-wires Alpaca as the active provider; Trading 212 / Web3 are legacy-only and unsupported provider settings fail startup.
 - Current active audit theme: prove workflow safety around order submission ambiguity, partial fills, close reconciliation, startup recovery, wallet paper mode, and budget/spread guards.
 - Current worktree state when this brain was created: dirty, with active edits in execution-safety paths and new untracked audit prompts under `docs/prompts/`.
 
