@@ -10,7 +10,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.config import settings
 from src.services.data_service import data_service
 from src.services.arbitrage_service import arbitrage_service, ArbitrageService
@@ -250,6 +250,32 @@ class ArbitrageMonitor:
             )
             return True
 
+    def _market_early_close_time(self, market_config: dict, now):
+        if market_config.get("holiday_calendar") != "NYSE":
+            return None
+
+        current_date = now.date()
+        is_christmas_eve = current_date.month == 12 and current_date.day == 24
+        is_independence_day_eve = current_date.month == 7 and current_date.day == 3
+        if is_christmas_eve or is_independence_day_eve:
+            return now.replace(hour=13, minute=0, second=0, microsecond=0)
+
+        if current_date.month == 11 and current_date.weekday() == 4:
+            try:
+                import holidays
+
+                previous_day = current_date - timedelta(days=1)
+                market_holidays = holidays.financial_holidays("NYSE", years=[current_date.year])
+                if "Thanksgiving" in str(market_holidays.get(previous_day, "")):
+                    return now.replace(hour=13, minute=0, second=0, microsecond=0)
+            except Exception as exc:
+                logger.warning(
+                    "NYSE early-close calendar unavailable; treating market as closed: %s",
+                    exc,
+                )
+                return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return None
+
     def is_market_open(self, ticker: str = "SPY") -> bool:
         """
         Checks if the market for a specific ticker is currently open.
@@ -269,6 +295,9 @@ class ArbitrageMonitor:
 
         start_time = now.replace(hour=mkt["start_h"], minute=mkt["start_m"], second=0, microsecond=0)
         end_time = now.replace(hour=mkt["end_h"], minute=mkt["end_m"], second=0, microsecond=0)
+        early_close_time = self._market_early_close_time(mkt, now)
+        if early_close_time is not None:
+            end_time = min(end_time, early_close_time)
 
         return start_time <= now <= end_time
 

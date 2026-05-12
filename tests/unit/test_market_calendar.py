@@ -13,9 +13,27 @@ class _NewYearsDayDateTime:
         return tz.localize(current)
 
 
+class _DayAfterThanksgivingDateTime:
+    @classmethod
+    def now(cls, tz=None):
+        current = real_datetime(2026, 11, 27, 14, 0)
+        if tz is None:
+            return current
+        return tz.localize(current)
+
+
 def test_holiday_blocks_equity_scan_even_inside_suffix_window(monkeypatch):
     monkeypatch.setattr(settings, "DEV_MODE", False)
     monkeypatch.setattr("src.monitor.datetime", _NewYearsDayDateTime)
+
+    monitor = object.__new__(ArbitrageMonitor)
+
+    assert monitor.is_market_open("AAPL") is False
+
+
+def test_nyse_half_day_blocks_equity_scan_after_early_close(monkeypatch):
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr("src.monitor.datetime", _DayAfterThanksgivingDateTime)
 
     monitor = object.__new__(ArbitrageMonitor)
 
