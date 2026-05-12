@@ -199,7 +199,7 @@ class ArbitrageMonitor:
         # Hong Kong
         if ticker.endswith(".HK"):
             return {
-                "start_h": 1, "start_m": 30, "end_h": 8, "end_m": 0,
+                "start_h": 9, "start_m": 30, "end_h": 16, "end_m": 0,
                 "tz": "Asia/Hong_Kong",
                 "holiday_calendar": "HK",
             }
@@ -251,7 +251,29 @@ class ArbitrageMonitor:
             return True
 
     def _market_early_close_time(self, market_config: dict, now):
-        if market_config.get("holiday_calendar") != "NYSE":
+        calendar_code = market_config.get("holiday_calendar")
+        if calendar_code == "HK":
+            current_date = now.date()
+            if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return now.replace(hour=12, minute=0, second=0, microsecond=0)
+
+            if current_date.month in (1, 2):
+                try:
+                    import holidays
+
+                    next_day = current_date + timedelta(days=1)
+                    market_holidays = holidays.country_holidays("HK", years=[current_date.year, next_day.year])
+                    if "Lunar New Year" in str(market_holidays.get(next_day, "")):
+                        return now.replace(hour=12, minute=0, second=0, microsecond=0)
+                except Exception as exc:
+                    logger.warning(
+                        "HK early-close calendar unavailable; treating market as closed: %s",
+                        exc,
+                    )
+                    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return None
+
+        if calendar_code != "NYSE":
             return None
 
         current_date = now.date()
