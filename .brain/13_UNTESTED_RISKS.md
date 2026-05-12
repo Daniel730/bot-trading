@@ -12,11 +12,6 @@ Last updated: 2026-05-12
 
 ## Medium Untested Risks
 
-- ISSUE-0013
-  - missing test: Inactive whale watcher is surfaced as inactive, not neutral protection.
-  - expected failing scenario: Missing whale data produces neutral signal without observability.
-  - suggested test file/name: `tests/unit/test_strategy_filters.py::test_inactive_whale_watcher_is_explicit`
-
 - ISSUE-0014
   - missing test: Local setup uses the same dependency path as CI/Docker.
   - expected failing scenario: Local command passes while containerized startup fails from dependency mismatch.

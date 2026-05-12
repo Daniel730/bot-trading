@@ -31,14 +31,12 @@ Steps:
 
 Failure points:
 - Stale-but-present fundamental cache entries still lack a max-age check.
-- Inactive whale watcher can look like neutral protection.
 
 Known issues:
-- ISSUE-0013
+- None currently listed.
 
 Required tests:
 - Stale fundamental cache age guard test.
-- Inactive whale watcher status test.
 
 ## Workflow: Risk Approval
 

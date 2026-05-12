@@ -293,7 +293,8 @@ class Settings(BaseSettings):
     ORCH_ACCURACY_HIGH_MULTIPLIER: float = Field(default=1.1, validation_alias="ORCH_ACCURACY_HIGH_MULTIPLIER")
     GLOBAL_STRATEGY_ACCURACY_DEFAULT: float = Field(default=0.5, validation_alias="GLOBAL_STRATEGY_ACCURACY_DEFAULT")
 
-    WHALE_WATCHER_ENABLED: bool = Field(default=True, validation_alias="WHALE_WATCHER_ENABLED")
+    # The active whale-flow evaluator is legacy/disabled; keep the knobs for a future restored service.
+    WHALE_WATCHER_ENABLED: bool = Field(default=False, validation_alias="WHALE_WATCHER_ENABLED")
     WHALE_WATCHER_ROLLING_WINDOW_SECONDS: int = Field(default=1800, validation_alias="WHALE_WATCHER_ROLLING_WINDOW_SECONDS")
     WHALE_WATCHER_CACHE_TTL_SECONDS: int = Field(default=3600, validation_alias="WHALE_WATCHER_CACHE_TTL_SECONDS")
     WHALE_WATCHER_MAX_EVENTS_PER_SYMBOL: int = Field(default=250, validation_alias="WHALE_WATCHER_MAX_EVENTS_PER_SYMBOL")

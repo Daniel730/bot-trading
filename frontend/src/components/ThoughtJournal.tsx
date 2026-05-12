@@ -15,6 +15,7 @@ const ThoughtJournal: React.FC<ThoughtJournalProps> = ({ thoughts }) => {
       case 'BULLISH': return 'var(--success)';
       case 'BEARISH': return 'var(--secondary)';
       case 'VETO': return '#ff4444';
+      case 'INACTIVE': return 'var(--text-dim)';
       default: return 'var(--primary)';
     }
   };

@@ -36,7 +36,7 @@ Canonical issue details live in `.brain/04_AUDIT_LEDGER.md` under the `ISSUE-XXX
 |---|---|---|---|---|
 | ISSUE-0006 | Cash commands call a nonexistent brokerage ticker formatter | `src/services/brokerage_service.py`, `tests/unit/test_cash_ticker_formatter.py` | FIXED | P2 |
 | ISSUE-0010 | Market session handling was suffix-based and Euronext calendars remained approximate | `src/monitor.py::get_market_config`, `src/monitor.py::is_market_open`, `tests/unit/test_market_calendar.py`, `docs/tofix.md` | FIXED | P2 |
-| ISSUE-0013 | Whale watcher is configured and documented but currently always neutral | `src/agents/whale_watcher_agent.py`, `docs/STRATEGY.md` | OPEN | P2 |
+| ISSUE-0013 | Whale watcher was configured and documented but active runtime was legacy-neutral | `src/agents/whale_watcher_agent.py`, `docs/STRATEGY.md`, `tests/unit/test_whale_watcher.py` | FIXED | P2 |
 | ISSUE-0014 | Local runtime dependency path differs from CI and Docker | `README.md`, `docs/OPERATIONS.md`, `.github/workflows/deploy.yml`, `infra/Dockerfile` | OPEN | P2 |
 | ISSUE-0015 | CI gates miss broker failure contracts and long-running safety scenarios | `.github/workflows/deploy.yml`, `docs/tofix.md`, readiness docs | OPEN | P2 |
 | ISSUE-0017 | Fire-and-forget background tasks lack a watchdog | `src/monitor.py`, `src/services/persistence_service.py` | OPEN | P2 |
@@ -370,7 +370,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_cash_ticker_formatter.py::test_cash_command_uses_real_ticker_formatter` and `tests/unit/test_cash_ticker_formatter.py::test_cash_management_liquidate_uses_real_ticker_formatter`.
 - Validation command: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` passed with 11 passed.
 - Remaining risk: cash-command UX and sweep execution safety are otherwise unchanged.
-- Next recommended task was ISSUE-0010; after the 2026-05-12 calendar fix, continue with ISSUE-0013 Whale watcher configured/documented but currently always neutral.
+- Next recommended task was ISSUE-0010, then ISSUE-0013; after both 2026-05-12 fixes, continue with ISSUE-0014 Local runtime dependency path differs from CI and Docker.
 
 ### P2-002: Requirements are not fully pinned
 
@@ -400,10 +400,10 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Risk: unknown fundamentals may pass live checks unless another veto fires.
 - Required decision: stricter live-mode policy for unknown names.
 
-### P2-006: Whale watcher depends on external cache freshness
+### P2-006: Whale watcher is legacy-inactive in active runtime
 
-- Risk: stale crypto context may understate large-flow risk.
-- Required fix: stale-cache telemetry and ingestion health checks.
+- Risk: no active whale-flow risk analysis is applied.
+- Status: closed as ISSUE-0013 for disclosure/status safety; restoring cache-backed whale analysis is a future feature and should require fresh issue scope plus tests.
 
 ### P2-007: FastMCP and dashboard are separate public surfaces
 
