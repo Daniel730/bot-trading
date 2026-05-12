@@ -101,3 +101,21 @@ async def test_get_latest_price_async_chunks_large_universe():
         "XOM": 1.0,
     }
     assert set(calls) == {("AAPL", "MSFT"), ("DUK", "SO"), ("XOM",)}
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_missing_quote_does_not_fallback_to_zero_spread():
+    service = DataService()
+
+    class FakeTicker:
+        info = {
+            "bid": 0.0,
+            "ask": 0.0,
+            "currentPrice": 151.25,
+            "previousClose": 150.0,
+        }
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()):
+        bid, ask = await service.get_bid_ask("MSFT")
+
+    assert (bid, ask) == (0.0, 0.0)
