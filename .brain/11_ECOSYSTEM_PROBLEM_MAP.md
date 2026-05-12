@@ -17,12 +17,10 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Strategy Logic
 
-- ISSUE-0010 - Market session rules now block full-day holidays, default US early closes, HKEX common half-days, LSE common half-days, and Xetra Christmas/New Year closures, but Euronext exact calendars remain approximate.
 - ISSUE-0013 - Whale watcher is documented/configured but currently always neutral.
 
 ## Data Pipeline
 
-- ISSUE-0010 - Approximate Euronext calendars can still permit stale session data.
 - ISSUE-0013 - Whale watcher freshness/inactivity is not surfaced as an active data quality state.
 
 ## Persistence and State

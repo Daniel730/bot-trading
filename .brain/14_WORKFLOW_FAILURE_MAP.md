@@ -11,16 +11,14 @@ Steps:
 4. Store/cache data for strategy and risk consumers.
 
 Failure points:
-- Calendar/session freshness now blocks full-day holidays, default US early closes, HKEX common half-days, LSE common half-days, and Xetra Christmas/New Year closures, but exact Euronext exchange closures remain approximate.
+- Calendar/session freshness now blocks full-day holidays, default US early closes, HKEX common half-days, LSE common half-days, Xetra Christmas/New Year closures, and common Euronext Amsterdam/Paris half-days. Operators should still watch for ad-hoc future exchange notices.
 - Corporate-action event ingestion is not first-class, although adjusted-history changes now invalidate saved Kalman state.
 - Local dependency path can differ from container/CI behavior.
 
 Known issues:
-- ISSUE-0010
 - ISSUE-0014
 
 Required tests:
-- Euronext exchange-calendar freshness tests.
 - Local-vs-container dependency smoke test.
 
 ## Workflow: Signal Generation
@@ -34,16 +32,13 @@ Steps:
 Failure points:
 - Stale-but-present fundamental cache entries still lack a max-age check.
 - Inactive whale watcher can look like neutral protection.
-- Exchange-specific Euronext calendar mismatch can let stale signal context through.
 
 Known issues:
-- ISSUE-0010
 - ISSUE-0013
 
 Required tests:
 - Stale fundamental cache age guard test.
 - Inactive whale watcher status test.
-- Crypto/equity Euronext calendar freshness tests.
 
 ## Workflow: Risk Approval
 
@@ -111,7 +106,6 @@ Failure points:
 - Background task failures may stop monitoring silently.
 
 Known issues:
-- ISSUE-0010
 - ISSUE-0017
 
 Required tests:

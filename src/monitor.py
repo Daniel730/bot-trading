@@ -203,21 +203,52 @@ class ArbitrageMonitor:
                 "tz": "Asia/Hong_Kong",
                 "holiday_calendar": "HK",
             }
-        # Europe (London, Frankfurt, Paris, Amsterdam) - approximate window in WET/WEST
+        # Europe (London, Frankfurt, Paris, Amsterdam) - approximate venue windows.
         european_markets = {
-            ".DE": "DE",
-            ".AS": "NL",
-            ".PA": "FR",
-            ".LS": "PT",
-            ".L": "GB",
+            ".DE": {
+                "holiday_calendar": "DE",
+                "tz": "Europe/London",
+                "start_h": 8,
+                "start_m": 0,
+                "end_h": 16,
+                "end_m": 30,
+            },
+            ".AS": {
+                "holiday_calendar": "NL",
+                "tz": "Europe/Amsterdam",
+                "start_h": 9,
+                "start_m": 0,
+                "end_h": 17,
+                "end_m": 30,
+            },
+            ".PA": {
+                "holiday_calendar": "FR",
+                "tz": "Europe/Paris",
+                "start_h": 9,
+                "start_m": 0,
+                "end_h": 17,
+                "end_m": 30,
+            },
+            ".LS": {
+                "holiday_calendar": "PT",
+                "tz": "Europe/London",
+                "start_h": 8,
+                "start_m": 0,
+                "end_h": 16,
+                "end_m": 30,
+            },
+            ".L": {
+                "holiday_calendar": "GB",
+                "tz": "Europe/London",
+                "start_h": 8,
+                "start_m": 0,
+                "end_h": 16,
+                "end_m": 30,
+            },
         }
-        for suffix, holiday_calendar in european_markets.items():
+        for suffix, market_config in european_markets.items():
             if ticker.endswith(suffix):
-                return {
-                    "start_h": 8, "start_m": 0, "end_h": 16, "end_m": 30,
-                    "tz": "Europe/London",
-                    "holiday_calendar": holiday_calendar,
-                }
+                return market_config
         # Default: US (NYSE/NASDAQ)
         return {
             "start_h": settings.START_HOUR,
@@ -281,6 +312,12 @@ class ArbitrageMonitor:
             current_date = now.date()
             if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
                 return now.replace(hour=12, minute=30, second=0, microsecond=0)
+            return None
+
+        if calendar_code in ("NL", "FR"):
+            current_date = now.date()
+            if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return now.replace(hour=14, minute=5, second=0, microsecond=0)
             return None
 
         if calendar_code != "NYSE":

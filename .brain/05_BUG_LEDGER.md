@@ -35,7 +35,7 @@ Canonical issue details live in `.brain/04_AUDIT_LEDGER.md` under the `ISSUE-XXX
 | Issue | Title | Primary evidence | Status | Priority |
 |---|---|---|---|---|
 | ISSUE-0006 | Cash commands call a nonexistent brokerage ticker formatter | `src/services/brokerage_service.py`, `tests/unit/test_cash_ticker_formatter.py` | FIXED | P2 |
-| ISSUE-0010 | Market session handling is suffix-based and Euronext calendars remain approximate | `src/monitor.py::get_market_config`, `src/monitor.py::is_market_open`, `tests/unit/test_market_calendar.py`, `docs/tofix.md` | OPEN | P2 |
+| ISSUE-0010 | Market session handling was suffix-based and Euronext calendars remained approximate | `src/monitor.py::get_market_config`, `src/monitor.py::is_market_open`, `tests/unit/test_market_calendar.py`, `docs/tofix.md` | FIXED | P2 |
 | ISSUE-0013 | Whale watcher is configured and documented but currently always neutral | `src/agents/whale_watcher_agent.py`, `docs/STRATEGY.md` | OPEN | P2 |
 | ISSUE-0014 | Local runtime dependency path differs from CI and Docker | `README.md`, `docs/OPERATIONS.md`, `.github/workflows/deploy.yml`, `infra/Dockerfile` | OPEN | P2 |
 | ISSUE-0015 | CI gates miss broker failure contracts and long-running safety scenarios | `.github/workflows/deploy.yml`, `docs/tofix.md`, readiness docs | OPEN | P2 |
@@ -370,7 +370,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_cash_ticker_formatter.py::test_cash_command_uses_real_ticker_formatter` and `tests/unit/test_cash_ticker_formatter.py::test_cash_management_liquidate_uses_real_ticker_formatter`.
 - Validation command: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` passed with 11 passed.
 - Remaining risk: cash-command UX and sweep execution safety are otherwise unchanged.
-- Next recommended task: ISSUE-0010 Market session handling is suffix-based and ignores real exchange calendars.
+- Next recommended task was ISSUE-0010; after the 2026-05-12 calendar fix, continue with ISSUE-0013 Whale watcher configured/documented but currently always neutral.
 
 ### P2-002: Requirements are not fully pinned
 
@@ -378,7 +378,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Risk: reproducibility drift in Docker/local builds.
 - Required fix: generated lock/constraints file used by builds.
 
-### P2-003: Market calendar handling is approximate
+### P2-003: Market calendar handling was approximate
 
 - Location: market-hours logic in monitor/config.
 - Risk: cross-region equities may scan during wrong sessions or skip valid overlap windows.
@@ -387,7 +387,8 @@ These are closed only for the specific invariant named. Do not generalize them i
 - 2026-05-12 update: `.HK` symbols now use Hong Kong local hours and common HKEX noon early-close dates.
 - 2026-05-12 update: `.L` symbols now close at 12:30 London time on common LSE half-days.
 - 2026-05-12 update: `.DE` symbols now block Xetra Christmas Eve and New Year's Eve closures.
-- Required fix: exchange-specific Euronext closure and half-day tests.
+- 2026-05-12 update: `.AS` and `.PA` symbols now use local Amsterdam/Paris sessions and common 14:05 CET Euronext half-day closes.
+- Status: closed as ISSUE-0010 for scoped configured calendar coverage.
 
 ### P2-004: Corporate actions are not a first-class invalidation path
 
