@@ -93,11 +93,13 @@ async def test_startup_success_with_baselines():
 @pytest.mark.asyncio
 @patch("src.monitor.notification_service")
 @patch("src.monitor.persistence_service")
-async def test_startup_blocks_when_unresolved_execution_state_exists(mock_persistence, mock_notify):
+@patch("src.monitor.dashboard_service")
+async def test_startup_blocks_when_unresolved_execution_state_exists(mock_dashboard, mock_persistence, mock_notify):
     monitor = ArbitrageMonitor()
     mock_persistence.mark_startup_unsafe_signals_needs_reconciliation = AsyncMock(return_value=2)
     mock_persistence.set_system_state = AsyncMock()
     mock_notify.send_message = AsyncMock()
+    mock_dashboard.update = AsyncMock()
 
     should_continue = await monitor._fail_fast_on_unresolved_execution_state()
 
@@ -108,6 +110,9 @@ async def test_startup_blocks_when_unresolved_execution_state_exists(mock_persis
         "PAUSED_REQUIRES_MANUAL_REVIEW",
     )
     mock_notify.send_message.assert_awaited_once()
+    mock_dashboard.update.assert_awaited_once()
+    assert mock_dashboard.update.await_args.args[0] == "PAUSED_REQUIRES_MANUAL_REVIEW"
+    assert "2 ledger rows require manual reconciliation" in mock_dashboard.update.await_args.args[1]
 
 
 @pytest.mark.asyncio

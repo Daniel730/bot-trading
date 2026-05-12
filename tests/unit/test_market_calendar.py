@@ -67,6 +67,24 @@ class _XetraChristmasEveDateTime:
         return tz.localize(current)
 
 
+class _AmsterdamChristmasEveMorningDateTime:
+    @classmethod
+    def now(cls, tz=None):
+        current = real_datetime(2026, 12, 24, 11, 0)
+        if tz is None:
+            return current
+        return tz.localize(current)
+
+
+class _AmsterdamChristmasEveAfternoonDateTime:
+    @classmethod
+    def now(cls, tz=None):
+        current = real_datetime(2026, 12, 24, 15, 0)
+        if tz is None:
+            return current
+        return tz.localize(current)
+
+
 def test_holiday_blocks_equity_scan_even_inside_suffix_window(monkeypatch):
     monkeypatch.setattr(settings, "DEV_MODE", False)
     monkeypatch.setattr("src.monitor.datetime", _NewYearsDayDateTime)
@@ -114,3 +132,14 @@ def test_xetra_exchange_closure_blocks_equity_scan(monkeypatch):
     monitor = object.__new__(ArbitrageMonitor)
 
     assert monitor.is_market_open("SAP.DE") is False
+
+
+def test_euronext_amsterdam_half_day_blocks_scan_after_early_close(monkeypatch):
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monitor = object.__new__(ArbitrageMonitor)
+
+    monkeypatch.setattr("src.monitor.datetime", _AmsterdamChristmasEveMorningDateTime)
+    assert monitor.is_market_open("ASML.AS") is True
+
+    monkeypatch.setattr("src.monitor.datetime", _AmsterdamChristmasEveAfternoonDateTime)
+    assert monitor.is_market_open("ASML.AS") is False
