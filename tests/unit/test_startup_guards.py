@@ -3,6 +3,41 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.monitor import ArbitrageMonitor
 from src.config import settings
+from src.services.persistence_service import OrderStatus, persistence_service
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self._value = value
+
+    def scalar(self):
+        return self._value
+
+
+class _FakeTransaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _StartupRecoverySession:
+    def begin(self):
+        return _FakeTransaction()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    async def execute(self, statement):
+        params = statement.compile().params
+        unresolved_statuses = params.get("status_1", [])
+        if isinstance(unresolved_statuses, (list, tuple, set)) and unresolved_statuses:
+            return _ScalarResult(int(OrderStatus.CLOSE_FAILED in unresolved_statuses))
+        return _ScalarResult(0)
 
 @pytest.mark.asyncio
 async def test_startup_refusal_missing_baselines():
@@ -73,3 +108,13 @@ async def test_startup_blocks_when_unresolved_execution_state_exists(mock_persis
         "PAUSED_REQUIRES_MANUAL_REVIEW",
     )
     mock_notify.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_startup_treats_close_failed_as_unresolved_execution_state(monkeypatch):
+    fake_session = _StartupRecoverySession()
+    monkeypatch.setattr(persistence_service, "AsyncSessionLocal", lambda: fake_session)
+
+    unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
+
+    assert unresolved_count == 1

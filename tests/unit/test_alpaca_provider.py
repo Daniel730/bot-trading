@@ -363,6 +363,25 @@ def test_alpaca_get_portfolio_raises_on_read_failure(alpaca_rest):
     client.list_positions.assert_called_once_with()
 
 
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "get_account_cash",
+        "get_account_equity",
+        "get_account_buying_power",
+    ],
+)
+def test_alpaca_account_reads_raise_on_api_failure(alpaca_rest, method_name):
+    _, client = alpaca_rest
+    client.get_account.side_effect = RuntimeError("account unavailable")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with pytest.raises(RuntimeError, match="account unavailable"):
+        getattr(provider, method_name)()
+
+    client.get_account.assert_called_once_with()
+
+
 def test_alpaca_crypto_positions_are_normalized_to_bot_symbol(alpaca_rest):
     _, client = alpaca_rest
     client.list_positions.return_value = [
