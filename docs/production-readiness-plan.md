@@ -66,6 +66,7 @@ Decide whether the current bot platform is safe for production and define the ex
   - test suite green
   - no sustained Postgres auth failures
   - no sustained gRPC transport error spikes
+  - structured soak evidence includes zero `runtime_error_counts.postgres_auth_failures`, `postgres_auth_timeouts`, `grpc_broken_pipe_errors`, and `grpc_connection_reset_errors`
   - successful recovery drills
   - on-call runbook updated
 
