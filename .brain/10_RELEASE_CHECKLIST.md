@@ -15,7 +15,7 @@ The repo can be used for local development and paper-mode validation, but the ac
 - [ ] Decide expected precedence between orchestrator veto and profit guard veto.
 - [ ] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes.
 - [ ] Confirm paper-mode wallet sync tests prove no broker calls.
-- [ ] Update docs that still imply active T212/Web3 live routing, or restore routing with tests.
+- [x] Update docs that still imply active T212/Web3 live routing, or restore routing with tests.
 - [ ] Re-run the focused test gate in `08_TESTING_PROTOCOL.md`.
 
 ## Local Development Release Gate
@@ -57,6 +57,7 @@ The repo can be used for local development and paper-mode validation, but the ac
 - [ ] No sustained gRPC transport error spikes.
 - [ ] At least one active market scan cycle with non-zero pair processing.
 - [ ] No unresolved manual-reconciliation ledger state.
+- [ ] `python scripts/run_production_soak_gate.py --duration 2h --require-active-scan` passes against structured soak evidence.
 - [ ] Alerts exist for Postgres auth failures, gRPC transport spikes, API non-2xx, order reject rate, timeouts, and kill-switch activations.
 - [ ] Rollback plan tested.
 - [ ] Operator runbook updated.
