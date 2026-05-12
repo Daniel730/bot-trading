@@ -195,26 +195,60 @@ class ArbitrageMonitor:
         Returns the market window and timezone for a given ticker.
         Supported: .HK (Hong Kong), .DE/.AS/.PA/.L (Europe), Default (US).
         """
+        ticker = ticker.upper()
         # Hong Kong
         if ticker.endswith(".HK"):
             return {
                 "start_h": 1, "start_m": 30, "end_h": 8, "end_m": 0,
-                "tz": "Asia/Hong_Kong"
+                "tz": "Asia/Hong_Kong",
+                "holiday_calendar": "HK",
             }
         # Europe (London, Frankfurt, Paris, Amsterdam) - approximate window in WET/WEST
-        if any(ticker.endswith(s) for s in [".DE", ".AS", ".PA", ".L", ".LS"]):
-            return {
-                "start_h": 8, "start_m": 0, "end_h": 16, "end_m": 30,
-                "tz": "Europe/London"
-            }
+        european_markets = {
+            ".DE": "DE",
+            ".AS": "NL",
+            ".PA": "FR",
+            ".LS": "PT",
+            ".L": "GB",
+        }
+        for suffix, holiday_calendar in european_markets.items():
+            if ticker.endswith(suffix):
+                return {
+                    "start_h": 8, "start_m": 0, "end_h": 16, "end_m": 30,
+                    "tz": "Europe/London",
+                    "holiday_calendar": holiday_calendar,
+                }
         # Default: US (NYSE/NASDAQ)
         return {
             "start_h": settings.START_HOUR,
             "start_m": settings.START_MINUTE,
             "end_h": settings.END_HOUR,
             "end_m": settings.END_MINUTE,
-            "tz": settings.MARKET_TIMEZONE
+            "tz": settings.MARKET_TIMEZONE,
+            "holiday_calendar": "NYSE",
         }
+
+    def _is_market_holiday(self, market_config: dict, now) -> bool:
+        calendar_code = market_config.get("holiday_calendar")
+        if not calendar_code:
+            return False
+
+        try:
+            import holidays
+
+            year = now.date().year
+            if calendar_code == "NYSE":
+                market_holidays = holidays.financial_holidays("NYSE", years=[year])
+            else:
+                market_holidays = holidays.country_holidays(calendar_code, years=[year])
+            return now.date() in market_holidays
+        except Exception as exc:
+            logger.warning(
+                "Market holiday calendar %s unavailable; treating market as closed: %s",
+                calendar_code,
+                exc,
+            )
+            return True
 
     def is_market_open(self, ticker: str = "SPY") -> bool:
         """
@@ -229,6 +263,8 @@ class ArbitrageMonitor:
 
         # Weekend check
         if now.weekday() >= 5:
+            return False
+        if self._is_market_holiday(mkt, now):
             return False
 
         start_time = now.replace(hour=mkt["start_h"], minute=mkt["start_m"], second=0, microsecond=0)
