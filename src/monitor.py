@@ -273,6 +273,12 @@ class ArbitrageMonitor:
                     return now.replace(hour=0, minute=0, second=0, microsecond=0)
             return None
 
+        if calendar_code == "GB":
+            current_date = now.date()
+            if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return now.replace(hour=12, minute=30, second=0, microsecond=0)
+            return None
+
         if calendar_code != "NYSE":
             return None
 
