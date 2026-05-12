@@ -80,8 +80,8 @@ async def test_live_mode_safety_guard(mock_settings, notification_service, teleg
 
 @pytest.mark.asyncio
 @patch("src.services.notification_service.settings")
-@patch("src.services.notification_service.budget_service")
-@patch("src.services.notification_service.BrokerageService")
+@patch("src.services.budget_service.budget_service")
+@patch("src.services.brokerage_service.BrokerageService")
 async def test_budget_reservation_and_approval(mock_brokerage_cls, mock_budget_service, mock_settings, notification_service, telegram_update):
     update, context = telegram_update
     context.args = ["100", "of", "AAPL", "confirm"]
@@ -110,8 +110,8 @@ async def test_budget_reservation_and_approval(mock_brokerage_cls, mock_budget_s
         "/invest command: BUY $100.00 of AAPL", trade_value=100.0, force_manual=True
     )
     
-    # Check that budget was updated
-    mock_budget_service.update_used_budget.assert_called_with("ALPACA", 100.0)
+    # Submitted orders are not confirmed fills, so budget must not be mutated here.
+    mock_budget_service.update_used_budget.assert_not_called()
     
     # Check brokerage was called
     mock_brokerage.place_value_order.assert_called_with("AAPL", 100.0, "BUY")

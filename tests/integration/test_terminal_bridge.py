@@ -6,8 +6,23 @@ from src.services.dashboard_service import app, dashboard_state, dashboard_servi
 from src.config import settings
 
 @pytest.fixture
-def client():
-    return TestClient(app)
+def client(monkeypatch):
+    from src.services.notification_service import notification_service
+
+    async def send_dashboard_login_approval(challenge_id, summary):
+        return True
+
+    async def send_message(message):
+        await dashboard_state.add_message("BOT", message)
+
+    monkeypatch.setattr(
+        notification_service,
+        "send_dashboard_login_approval",
+        send_dashboard_login_approval,
+    )
+    monkeypatch.setattr(notification_service, "send_message", send_message)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 def dashboard_auth_query(client):
@@ -17,7 +32,21 @@ def dashboard_auth_query(client):
         json={"security_token": token, "actor": "test"},
     )
     assert response.status_code == 200
-    return f"token={token}&session={response.json()['session_token']}"
+    payload = response.json()
+    if "session_token" not in payload:
+        assert payload["status"] == "pending"
+        challenge_id = payload["challenge_id"]
+        from src.services.notification_service import notification_service
+
+        future = notification_service.pending_approvals[challenge_id]
+        future.get_loop().call_soon_threadsafe(future.set_result, True)
+        response = client.post(
+            "/api/auth/login/complete",
+            json={"challenge_id": challenge_id},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+    return f"token={token}&session={payload['session_token']}"
 
 
 @pytest.mark.asyncio

@@ -22,10 +22,13 @@ def test_get_venue_returns_alpaca_for_equity_and_crypto():
 
 def test_reconfigure_keeps_alpaca():
     with patch("src.services.brokerage_service.AlpacaProvider") as mock_alpaca:
+        first_provider = object()
+        second_provider = object()
+        mock_alpaca.side_effect = [first_provider, second_provider]
+
         svc = BrokerageService()
-        first_provider = svc.provider
         svc.configure_provider("WEB3")
 
     assert svc.provider_name == "ALPACA"
-    assert svc.provider is not first_provider
+    assert svc.provider is second_provider
     assert mock_alpaca.call_count == 2

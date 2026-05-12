@@ -39,18 +39,18 @@ async def test_equity_value_orders_route_to_alpaca_provider():
 
 
 @pytest.mark.asyncio
-async def test_live_success_updates_alpaca_budget():
+async def test_live_submit_success_does_not_update_budget_before_fill():
     svc = _service()
     svc.provider.place_value_order = AsyncMock(
         return_value={"status": "success", "order_id": "alpaca_order"}
     )
 
     with patch("src.services.brokerage_service.settings.PAPER_TRADING", False), \
-         patch("src.services.brokerage_service.budget_service.update_used_budget") as mock_budget:
+         patch("src.services.budget_service.budget_service.update_used_budget") as mock_budget:
         result = await svc.place_value_order("MSFT", 500.0, "BUY")
 
     assert result["venue"] == "ALPACA"
-    mock_budget.assert_called_once_with("ALPACA", 500.0)
+    mock_budget.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -61,7 +61,7 @@ async def test_live_error_does_not_update_budget():
     )
 
     with patch("src.services.brokerage_service.settings.PAPER_TRADING", False), \
-         patch("src.services.brokerage_service.budget_service.update_used_budget") as mock_budget:
+         patch("src.services.budget_service.budget_service.update_used_budget") as mock_budget:
         result = await svc.place_value_order("MSFT", 500.0, "BUY")
 
     assert result["venue"] == "ALPACA"
