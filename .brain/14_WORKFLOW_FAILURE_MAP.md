@@ -82,14 +82,12 @@ Steps:
 
 Failure points:
 - Persistence/gRPC faults still need live operator alert delivery outside the production evidence gate.
-- Close metadata can overwrite forensic entry data.
 
 Known issues:
-- ISSUE-0019
+- None currently listed.
 
 Required tests:
 - Full-close quantity verification test.
-- Close metadata preservation test.
 
 ## Workflow: Position Monitoring
 
@@ -118,15 +116,12 @@ Steps:
 
 Failure points:
 - Persistence faults can hide close failures.
-- Close metadata can overwrite entry evidence.
 
 Known issues:
 - ISSUE-0009
-- ISSUE-0019
 
 Required tests:
 - Persistence failure degrades operational state.
-- Entry metadata survives close.
 
 ## Workflow: Emergency Stop
 

@@ -12,10 +12,7 @@ Last updated: 2026-05-13
 
 ## P2 - Must fix before public release / monetization
 
-- ISSUE-0019 - `close_trade()` overwrites per-leg metadata
-  - reason for priority: Forensics and reconciliation become harder after exits.
-  - smallest safe fix: Merge close metadata without discarding entry leg metadata.
-  - required test: Persistence close metadata preservation test.
+- None currently listed.
 
 ## P3 - Can wait
 

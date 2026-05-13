@@ -930,7 +930,7 @@ ISSUE-0009, ISSUE-0016
 P2
 
 #### Notes
-Fixed 2026-05-13 in `src/services/background_task_watchdog.py`, `src/monitor.py`, `src/services/persistence_service.py`, and `src/services/dashboard_service.py`. Regression test added: `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health`. Validation passed: `python -m pytest tests/unit/test_background_task_watchdog.py -q` and adjacent dashboard/startup checks. Remaining risk: watchdog records and surfaces failures but does not restart failed tasks or persist a durable dead-letter queue. Next recommended task is ISSUE-0019.
+Fixed 2026-05-13 in `src/services/background_task_watchdog.py`, `src/monitor.py`, `src/services/persistence_service.py`, and `src/services/dashboard_service.py`. Regression test added: `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health`. Validation passed: `python -m pytest tests/unit/test_background_task_watchdog.py -q` and adjacent dashboard/startup checks. Remaining risk: watchdog records and surfaces failures but does not restart failed tasks or persist a durable dead-letter queue. ISSUE-0019 was fixed next; current recommended task is ISSUE-0020.
 
 ### ISSUE-0018 — Dashboard wallet buy proceeds despite cash-limited planning
 
@@ -986,24 +986,26 @@ Fixed 2026-05-11 in `src/services/dashboard_service.py` by rejecting wallet reco
 
 ### ISSUE-0019 — Closing trades overwrites per-leg metadata
 
-Status: OPEN  
+Status: FIXED
 Severity: MEDIUM  
 Area: persistence  
 Discovered in audit: 2026-05-08  
-Last checked: 2026-05-08  
+Last checked: 2026-05-13
 Evidence type: code  
 Confidence: HIGH  
 
 #### Summary
-`close_trade()` updates every ledger row for a signal with a new `metadata_json` containing only exit prices, pnl, and exit reason. This overwrites entry metadata such as broker order ids, client order ids, and leg execution details.
+`close_trade()` updated every ledger row for a signal with a new `metadata_json` containing only exit prices, pnl, and exit reason. This overwrote entry metadata such as broker order ids, client order ids, and leg execution details.
 
 #### Evidence
-- `src/services/persistence_service.py::close_trade` runs `update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(metadata_json={"exit_prices": ..., "pnl": ..., "exit_reason": ...})`.
+- Before the fix, `src/services/persistence_service.py::close_trade` ran `update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(metadata_json={"exit_prices": ..., "pnl": ..., "exit_reason": ...})`.
+- Fixed 2026-05-13 by selecting affected ledger rows and merging close metadata into each row's existing `metadata_json`.
+- Regression test: `tests/unit/test_persistence_service.py::test_close_trade_preserves_entry_metadata`.
 - Entry rows written by `src/monitor.py::execute_trade` include metadata such as broker order ids and execution context.
 - Later analytics read PnL from metadata, creating incentive to keep writing close metadata into the same field.
 
 #### Trigger
-Any successful close via `persistence_service.close_trade()`.
+Any successful close via `persistence_service.close_trade()` before the 2026-05-13 fix.
 
 #### Broken assumption
 Close metadata can replace entry metadata without losing audit-critical information.
@@ -1012,16 +1014,16 @@ Close metadata can replace entry metadata without losing audit-critical informat
 Post-close broker reconciliation and forensic audit lose the exact order identifiers needed to explain fills, slippage, or disputes.
 
 #### Existing protection
-The trade rows themselves retain ticker, side, quantity, price, and timestamps.
+The trade rows retain ticker, side, quantity, price, timestamps, and now preserve existing `metadata_json` keys when close metadata is written.
 
 #### Missing protection
-No metadata merge, separate close metadata field, fill-event table, or immutable event log for order lifecycle.
+No separate close metadata field, fill-event table, or immutable event log for order lifecycle.
 
 #### Smallest safe fix
-Merge close metadata into existing metadata instead of replacing it, or store close details in a dedicated field/table.
+Implemented: merge close metadata into existing metadata instead of replacing it.
 
 #### Test required
-Create a ledger row with entry broker metadata, close it, and assert entry metadata remains while close metadata is added.
+Added: create ledger rows with entry broker metadata, close them, and assert entry metadata remains while close metadata is added.
 
 #### Validation command
 `python -m pytest tests/unit/test_persistence_service.py::test_close_trade_preserves_entry_metadata -q`
@@ -1033,7 +1035,7 @@ ISSUE-0001, ISSUE-0002
 P2
 
 #### Notes
-This is especially important while investigating partial exposure and emergency-close cases.
+Fixed 2026-05-13 in `src/services/persistence_service.py` with regression coverage in `tests/unit/test_persistence_service.py`. Validation passed: `python -m pytest tests/unit/test_persistence_service.py::test_close_trade_preserves_entry_metadata -q` and the adjacent monitor close slice. Remaining risk: the ledger still has no immutable event log or dedicated fill-event table. Next recommended task is ISSUE-0020.
 
 ### ISSUE-0020 — Brain ledgers mix historical notes, closed invariants, and open production gates
 

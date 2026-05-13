@@ -12,10 +12,7 @@ Last updated: 2026-05-13
 
 ## Medium Untested Risks
 
-- ISSUE-0019
-  - missing test: Close metadata preserves entry leg metadata.
-  - expected failing scenario: Closing a trade overwrites order ids/statuses needed for later reconciliation.
-  - suggested test file/name: `tests/unit/test_persistence_service.py::test_close_trade_preserves_entry_leg_metadata`
+- None currently listed.
 
 ## Low Untested Risks
 
