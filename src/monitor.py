@@ -27,6 +27,7 @@ from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service
+from src.services.background_task_watchdog import background_task_watchdog
 from src.services.trade_math import build_pair_legs, cap_pair_notional, estimate_pair_profit
 import uuid
 import pytz
@@ -1858,7 +1859,10 @@ class ArbitrageMonitor:
         logger.info("Circuit breaker reset to NORMAL on startup.")
 
         # Start periodic Scouting & Rotation background task
-        asyncio.create_task(self._auto_scout_and_rotate_loop())
+        background_task_watchdog.create_task(
+            self._auto_scout_and_rotate_loop(),
+            name="monitor:auto_scout_and_rotate_loop",
+        )
 
         try:
             # Main Scan Loop with Rich Live UI
@@ -1955,7 +1959,11 @@ class ArbitrageMonitor:
                     today = datetime.now().date()
                     for pair in self.active_pairs:
                         if self.last_cointegration_check.get(pair['id']) != today:
-                            asyncio.create_task(self._recheck_cointegration(pair))
+                            pair_id = pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}"
+                            background_task_watchdog.create_task(
+                                self._recheck_cointegration(pair),
+                                name=f"monitor:recheck_cointegration:{pair_id}",
+                            )
                             self.last_cointegration_check[pair['id']] = today
 
                     results = []

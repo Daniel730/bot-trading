@@ -1756,10 +1756,15 @@ class DashboardService:
 
     def health_snapshot(self) -> dict:
         current = self.latest_health()
+        from src.services.background_task_watchdog import background_task_watchdog
+
+        background_tasks = background_task_watchdog.snapshot()
+        status = "degraded" if background_tasks["failed_count"] else "healthy"
         return {
-            "status": "healthy",
+            "status": status,
             "current": current,
             "history": list(self.health_history),
+            "background_tasks": background_tasks,
         }
 
     def _tail_log_file(self, path: Path, limit: int) -> List[str]:
@@ -1893,7 +1898,12 @@ class DashboardService:
         from src.agents.portfolio_manager_agent import portfolio_manager
 
         # We run it as a background task
-        asyncio.create_task(portfolio_manager.run_discovery())
+        from src.services.background_task_watchdog import background_task_watchdog
+
+        background_task_watchdog.create_task(
+            portfolio_manager.run_discovery(),
+            name=f"dashboard:pair_discovery:{actor}",
+        )
 
         await dashboard_state.add_message(
             "SYSTEM",
@@ -1914,9 +1924,11 @@ class DashboardService:
             telemetry_service.start_broadcast_loop()
             config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
             self.server = uvicorn.Server(config)
-            asyncio.create_task(self.server.serve())
-            asyncio.create_task(self._poll_metrics())
-            asyncio.create_task(self._poll_system_health())
+            from src.services.background_task_watchdog import background_task_watchdog
+
+            background_task_watchdog.create_task(self.server.serve(), name="dashboard:uvicorn_server")
+            background_task_watchdog.create_task(self._poll_metrics(), name="dashboard:metrics_poll")
+            background_task_watchdog.create_task(self._poll_system_health(), name="dashboard:system_health_poll")
             logger.info("!!! DASHBOARD SERVER STARTED ON PORT 8080 !!!")
         except Exception as exc:
             logger.error("DASHBOARD STARTUP ERROR: %s", exc)
