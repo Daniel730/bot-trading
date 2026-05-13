@@ -74,3 +74,27 @@ def test_brain_does_not_claim_monitor_fixture_isolation_is_unresolved():
         "Brain docs still describe resolved monitor fixture-isolation problems as active.\n"
         + "\n".join(offenders)
     )
+
+
+def test_brain_does_not_claim_risk_fixture_max_allowed_fiat_is_unresolved():
+    checked_files = [
+        ".brain/04_AUDIT_LEDGER.md",
+        ".brain/10_RELEASE_CHECKLIST.md",
+    ]
+    stale_phrases = [
+        "older crypto tests omit `max_allowed_fiat`",
+        "Full `tests/unit/test_monitor.py -q --asyncio-mode=auto` still fails outside this patch",
+        "- [ ] Ensure risk-service test fixtures include `max_allowed_fiat` when monitor reads it.",
+    ]
+
+    offenders = []
+    for relative_path in checked_files:
+        text = (ROOT / relative_path).read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            if phrase in text:
+                offenders.append(f"{relative_path}: {phrase}")
+
+    assert offenders == [], (
+        "Brain docs still describe resolved risk fixture max_allowed_fiat problems as active.\n"
+        + "\n".join(offenders)
+    )

@@ -1409,6 +1409,58 @@ P3
 #### Notes
 Fixed 2026-05-13 in `.brain/04_AUDIT_LEDGER.md`, `.brain/08_TESTING_PROTOCOL.md`, `.brain/10_RELEASE_CHECKLIST.md`, `.brain/05_BUG_LEDGER.md`, and `tests/unit/test_brain_ledgers.py`. This does not close other release checklist gates.
 
+### ISSUE-0027 — Brain still reports risk fixture max_allowed_fiat gate as unresolved
+
+Status: FIXED
+Severity: LOW
+Area: documentation
+Discovered in audit: 2026-05-13
+Last checked: 2026-05-13
+Evidence type: doc | test
+Confidence: HIGH
+
+#### Summary
+The local brain still described missing `max_allowed_fiat` in monitor risk-service test fixtures as an active release gate after the monitor unit file passed on 2026-05-13.
+
+#### Evidence
+- `.brain/04_AUDIT_LEDGER.md` still carried an old validation note about incomplete crypto risk metadata.
+- `.brain/10_RELEASE_CHECKLIST.md` still had the `max_allowed_fiat` fixture gate unchecked.
+- Current `tests/unit/test_monitor.py` risk fixtures include `max_allowed_fiat` for acceptable mocked trades.
+- Regression test: `tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_risk_fixture_max_allowed_fiat_is_unresolved`.
+
+#### Trigger
+Future work follows the release checklist after monitor tests already provide the field read by `src/monitor.py`.
+
+#### Broken assumption
+Historical fixture gaps can remain phrased as active blockers after the current monitor tests pass with complete risk metadata.
+
+#### Financial or workflow consequence
+Codex and the operator can spend time patching already-correct test fixtures instead of unresolved readiness gates.
+
+#### Existing protection
+`tests/unit/test_monitor.py` passes and exercises monitor paths that read `risk_res["max_allowed_fiat"]`.
+
+#### Missing protection
+No guard prevented stale `max_allowed_fiat` fixture guidance from staying in active brain/checklist text.
+
+#### Smallest safe fix
+Update the brain docs to record the current monitor result, mark the checklist item complete, and add a docs regression test for the stale `max_allowed_fiat` wording.
+
+#### Test required
+Add a test that fails while `.brain/04_AUDIT_LEDGER.md` or `.brain/10_RELEASE_CHECKLIST.md` still describe the `max_allowed_fiat` fixture issue as unresolved.
+
+#### Validation command
+`python -m pytest tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_risk_fixture_max_allowed_fiat_is_unresolved -q`
+
+#### Related issues
+ISSUE-0025, ISSUE-0026
+
+#### Fix priority
+P3
+
+#### Notes
+Fixed 2026-05-13 in `.brain/04_AUDIT_LEDGER.md`, `.brain/10_RELEASE_CHECKLIST.md`, `.brain/05_BUG_LEDGER.md`, and `tests/unit/test_brain_ledgers.py`. This does not close other release checklist gates.
+
 ## Current Audition
 
 The current audition is a workflow-safety audit, not a style or performance audit.
@@ -1501,7 +1553,7 @@ Observed validation notes:
 - Focused monitor tests for successful entry and emergency close ambiguity passed, but are slow in the current environment.
 - `tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_fill_unconfirmed` failed before the patch because only Leg A fill was polled and the emergency close submit logged success without a close fill snapshot.
 - The three-test emergency-close slice passed after the patch: close success, close unknown, and close success with unconfirmed fill.
-- Full `tests/unit/test_monitor.py -q --asyncio-mode=auto` still fails outside this patch: stale unit fixtures reach real Postgres, older crypto tests omit `max_allowed_fiat`, and `test_orchestrator_veto` now hits profit guard precedence. Do not treat the full monitor suite as green yet.
+- Superseded 2026-05-13: `tests/unit/test_monitor.py -q` now passes with 24 tests, and current acceptable risk fixtures include `max_allowed_fiat`.
 - `tests/unit/test_monitor.py::test_close_position_skips_sell_when_broker_has_no_shares` still attempted a real Postgres connection and failed on DNS/name resolution during one run; this is a test isolation problem to fix before claiming the monitor suite is green.
 - 2026-05-08 P0-002 update: `tests/unit/test_monitor.py -q --asyncio-mode=auto` now passes with 17 passed after stale monitor fixtures were updated to provide fill snapshots, full risk metadata, and persistence mocks.
 - 2026-05-08 P0-002 validation: `python -m pytest -q tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py --asyncio-mode=auto` passed with 49 passed.
