@@ -26,6 +26,9 @@ from polygon.websocket.models import Market, Feed
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 
 class DataService:
+    LATEST_PRICE_BATCH_CAP = 5
+    LATEST_PRICE_CHUNK_TIMEOUT_CAP_SECONDS = 15.0
+
     def __init__(self):
         # Increase connection pool size to handle concurrent requests
         self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY, num_pools=10)
@@ -106,6 +109,51 @@ class DataService:
             return str(tickers)
         head = ", ".join(tickers[:8])
         return f"[{head}, ...] ({len(tickers)} tickers)"
+
+    @staticmethod
+    def _alpaca_bars_to_close_frame(
+        bars: pd.DataFrame,
+        tickers: List[str],
+        *,
+        normalize_symbol: Callable[[str], str] | None = None,
+    ) -> pd.DataFrame:
+        if bars is None or bars.empty or "close" not in bars.columns:
+            return pd.DataFrame()
+
+        normalize_symbol = normalize_symbol or (lambda symbol: symbol)
+
+        if "symbol" in bars.columns:
+            frame = bars.reset_index() if "timestamp" not in bars.columns else bars.copy()
+            if "timestamp" not in frame.columns:
+                return pd.DataFrame()
+            frame["symbol"] = frame["symbol"].astype(str).map(normalize_symbol)
+            return (
+                frame.pivot_table(
+                    index="timestamp",
+                    columns="symbol",
+                    values="close",
+                    aggfunc="last",
+                )
+                .sort_index()
+            )
+
+        if "symbol" in bars.index.names:
+            frame = bars.reset_index()
+            frame["symbol"] = frame["symbol"].astype(str).map(normalize_symbol)
+            return (
+                frame.pivot_table(
+                    index="timestamp",
+                    columns="symbol",
+                    values="close",
+                    aggfunc="last",
+                )
+                .sort_index()
+            )
+
+        if len(tickers) == 1:
+            return bars[["close"]].rename(columns={"close": tickers[0]})
+
+        return pd.DataFrame()
 
     @staticmethod
     def _maybe_randomize_price(value: float) -> float:
@@ -278,11 +326,9 @@ class DataService:
                         feed="iex"
                     ).df
                     if not s_bars.empty:
-                        if "symbol" in s_bars.index.names:
-                            s_df = s_bars.reset_index().pivot(index="timestamp", columns="symbol", values="close")
-                        else:
-                            s_df = s_bars[["close"]].rename(columns={"close": alpaca_stock_tickers[0]})
-                        dfs.append(s_df)
+                        s_df = self._alpaca_bars_to_close_frame(s_bars, alpaca_stock_tickers)
+                        if not s_df.empty:
+                            dfs.append(s_df)
                 except Exception as e:
                     logger.debug(f"DataService: Alpaca stock bars failed: {e}")
             
@@ -294,14 +340,13 @@ class DataService:
                         crypto_symbols, timeframe, start=start_str, end=end_str, exchange='CBSE'
                     ).df
                     if not c_bars.empty:
-                        # Map "/" back to "-"
-                        if "symbol" in c_bars.index.names:
-                            c_bars = c_bars.reset_index()
-                            c_bars["symbol"] = c_bars["symbol"].str.replace("/", "-")
-                            c_df = c_bars.pivot(index="timestamp", columns="symbol", values="close")
-                        else:
-                            c_df = c_bars[["close"]].rename(columns={"close": alpaca_crypto_tickers[0]})
-                        dfs.append(c_df)
+                        c_df = self._alpaca_bars_to_close_frame(
+                            c_bars,
+                            alpaca_crypto_tickers,
+                            normalize_symbol=lambda symbol: symbol.replace("/", "-"),
+                        )
+                        if not c_df.empty:
+                            dfs.append(c_df)
                 except Exception as e:
                     logger.debug(f"DataService: Alpaca crypto bars failed: {e}")
             
@@ -496,7 +541,8 @@ class DataService:
         if not tickers:
             return AwaitableDict({})
 
-        batch_size = max(1, int(settings.MARKET_DATA_BATCH_SIZE))
+        configured_batch_size = max(1, int(settings.MARKET_DATA_BATCH_SIZE))
+        batch_size = min(configured_batch_size, self.LATEST_PRICE_BATCH_CAP)
         if len(tickers) <= batch_size:
             prices = await self._run_sync_backend(
                 self.get_latest_price,
@@ -533,6 +579,10 @@ class DataService:
             return AwaitableDict(latest)
 
         per_batch_timeout = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS
+        per_batch_timeout = min(
+            float(per_batch_timeout),
+            self.LATEST_PRICE_CHUNK_TIMEOUT_CAP_SECONDS,
+        )
         concurrency = max(1, int(settings.MARKET_DATA_BATCH_CONCURRENCY))
         semaphore = asyncio.Semaphore(concurrency)
 

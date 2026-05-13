@@ -958,10 +958,25 @@ class ArbitrageMonitor:
                     return diagnostic
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
+                final_confidence = float(decision_state["final_confidence"])
+                hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+
+                if final_confidence <= settings.MONITOR_MIN_AI_CONFIDENCE:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="VETOED",
+                        confidence=final_confidence,
+                        hedge_ratio=hedge_ratio,
+                    )
+                    logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {final_confidence:.3f} too low.")
+                    diagnostic["verdict"] = "VETOED"
+                    diagnostic["confidence"] = final_confidence
+                    return diagnostic
 
                 # Calculate expected profit/loss from the same gross pair
                 # notional that execution will use.
-                hedge_ratio = float(pair.get("hedge_ratio", 1.0))
                 effective_sizing_base = sizing_base if sizing_base > 0 else settings.PAPER_TRADING_STARTING_CASH
                 risk_res = risk_service.validate_trade(
                     ticker=f"{t_a}_{t_b}",
@@ -984,9 +999,11 @@ class ArbitrageMonitor:
                         t_b,
                         z_score=z_score,
                         status="VETOED_SIZE",
-                        confidence=0.0,
+                        confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
                     )
+                    diagnostic["verdict"] = "VETOED"
+                    diagnostic["confidence"] = final_confidence
                     return diagnostic
 
                 direction = "Short-Long" if z_score > 0 else "Long-Short"
@@ -1014,7 +1031,9 @@ class ArbitrageMonitor:
 
                 if preview.net_profit <= 0:
                     logger.info(f"PROFIT GUARD [{t_a}/{t_b}]: Net profit ${preview.net_profit:.2f} is non-positive. Vetoing.")
-                    await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="VETOED_UNPROFITABLE", confidence=0.0, hedge_ratio=hedge_ratio)
+                    await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="VETOED_UNPROFITABLE", confidence=final_confidence, hedge_ratio=hedge_ratio)
+                    diagnostic["verdict"] = "VETOED"
+                    diagnostic["confidence"] = final_confidence
                     return diagnostic
 
                 trade_summary = (
@@ -1029,13 +1048,13 @@ class ArbitrageMonitor:
                     f"*Sizing*: Kelly {risk_res['kelly_fraction']:.2%} of base (${float(risk_res['final_amount']):.2f} gross pair notional)."
                 )
 
-                if decision_state['final_confidence'] > settings.MONITOR_MIN_AI_CONFIDENCE:
+                if final_confidence > settings.MONITOR_MIN_AI_CONFIDENCE:
                     await self._upsert_active_signal(
                         t_a,
                         t_b,
                         z_score=z_score,
                         status="APPROVED",
-                        confidence=float(decision_state["final_confidence"]),
+                        confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
                     )
                     approved = await notification_service.request_approval(trade_summary)
@@ -1047,23 +1066,12 @@ class ArbitrageMonitor:
                             t_b,
                             z_score=z_score,
                             status="EXECUTED",
-                            confidence=float(decision_state["final_confidence"]),
+                            confidence=final_confidence,
                             hedge_ratio=hedge_ratio,
                         )
                         diagnostic["verdict"] = "EXECUTED"
-                else:
-                    await self._upsert_active_signal(
-                        t_a,
-                        t_b,
-                        z_score=z_score,
-                        status="VETOED",
-                        confidence=float(decision_state["final_confidence"]),
-                        hedge_ratio=hedge_ratio,
-                    )
-                    logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
-                    diagnostic["verdict"] = "VETOED"
 
-                diagnostic["confidence"] = decision_state['final_confidence']
+                diagnostic["confidence"] = final_confidence
             else:
                 # Cleanup inactive signals
                 await self._remove_active_signal(t_a, t_b)
@@ -1942,7 +1950,7 @@ class ArbitrageMonitor:
 
                     progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
                     latest_prices = (
-                        await data_service.get_latest_price_async(list(set(all_tickers)))
+                        await data_service.get_latest_price_async(list(dict.fromkeys(all_tickers)))
                         if all_tickers
                         else {}
                     )

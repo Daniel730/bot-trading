@@ -23,7 +23,9 @@ import {
   discoverPairs,
   type PairInfo,
   type PairConfigEntry,
+  type PairsResponse,
 } from '../services/api';
+import { useAutoDismiss } from '../hooks/useAutoDismiss';
 
 interface PairsPanelProps {
   token: string;
@@ -53,6 +55,7 @@ const formatRelative = (iso: string | null | undefined): string => {
 };
 
 const isCryptoTicker = (t: string) => /-USD$/i.test(t);
+type PairDiscoveryStatus = NonNullable<PairsResponse['discovery']>;
 
 // ─── PairRow ─────────────────────────────────────────────────────────────────
 
@@ -176,6 +179,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const [walletSyncing, setWalletSyncing] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [walletOk, setWalletOk] = useState<string | null>(null);
+  const [discoveryStatus, setDiscoveryStatus] = useState<PairDiscoveryStatus | null>(null);
+
+  useAutoDismiss(saveOk, setSaveOk);
+  useAutoDismiss(saveError, setSaveError, 10000);
+  useAutoDismiss(walletOk, setWalletOk);
+  useAutoDismiss(walletError, setWalletError, 10000);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -184,6 +193,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       setActivePairs(data.active_pairs || []);
       setConfiguredStocks(data.configured_pairs || []);
       setConfiguredCrypto(data.crypto_test_pairs || []);
+      setDiscoveryStatus(data.discovery || null);
     } catch (err) {
       console.error('Failed to fetch pairs:', err);
     } finally {
@@ -246,11 +256,30 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
 
   const [discovering, setDiscovering] = useState(false);
 
+  const discoveryMessage = useMemo(() => {
+    if (discovering || discoveryStatus?.active) {
+      return 'Pair discovery is running. This panel will update when it finishes.';
+    }
+    if (discoveryStatus?.last_status === 'completed') {
+      return `Pair discovery completed ${formatRelative(discoveryStatus.last_finished_at)}.`;
+    }
+    if (discoveryStatus?.last_status === 'failed') {
+      return `Pair discovery failed ${formatRelative(discoveryStatus.last_finished_at)}: ${discoveryStatus.last_message || 'unknown error'}`;
+    }
+    if (discoveryStatus?.last_status === 'cancelled') {
+      return `Pair discovery was cancelled ${formatRelative(discoveryStatus.last_finished_at)}.`;
+    }
+    return null;
+  }, [discovering, discoveryStatus]);
+
   const handleDiscover = async () => {
     setDiscovering(true);
+    setSaveError(null);
+    setSaveOk(null);
     try {
-      await discoverPairs(token, sessionToken);
-      setSaveOk('Global discovery cycle started in background. Check terminal for updates.');
+      const result = await discoverPairs(token, sessionToken);
+      setSaveOk(result.message || 'Pair discovery started. Completion will appear here and in the terminal feed.');
+      await refresh();
     } catch (err: any) {
       setSaveError(err.message || 'Failed to start discovery.');
     } finally {
@@ -616,16 +645,26 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
                     <CheckCircle2 size={12} /> {saveOk}
                   </div>
                 )}
+                {discoveryMessage && (
+                  <div className={`editor-msg ${discoveryStatus?.last_status === 'failed' ? 'error' : 'ok'}`}>
+                    {discoveryStatus?.last_status === 'failed' ? (
+                      <AlertTriangle size={12} />
+                    ) : (
+                      <CheckCircle2 size={12} />
+                    )}
+                    {discoveryMessage}
+                  </div>
+                )}
                 <div className="editor-footer">
                   <button
                     className="editor-discover-btn"
                     onClick={handleDiscover}
-                    disabled={discovering}
+                    disabled={discovering || Boolean(discoveryStatus?.active)}
                     title="Search for new cointegrated pairs in background"
                     style={{ marginRight: 'auto' }}
                   >
-                    <RefreshCw size={12} className={discovering ? 'spin' : ''} />
-                    {discovering ? 'Scouting...' : 'Search & Update Eligibles'}
+                    <RefreshCw size={12} className={discovering || discoveryStatus?.active ? 'spin' : ''} />
+                    {discovering || discoveryStatus?.active ? 'Scanning...' : 'Search & Update Eligibles'}
                   </button>
                   <label className="editor-apply-label">
                     <input

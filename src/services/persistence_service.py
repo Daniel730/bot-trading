@@ -230,6 +230,13 @@ class PersistenceService:
             # Runtime Migration: Add columns if they don't exist
             try:
                 from sqlalchemy import text
+                for status in OrderStatus:
+                    await conn.execute(
+                        text(
+                            "ALTER TYPE orderstatus ADD VALUE IF NOT EXISTS "
+                            f"'{status.value}'"
+                        )
+                    )
                 await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS venue VARCHAR(20) DEFAULT 'ALPACA'"))
                 await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_ledger_venue ON trade_ledger (venue)"))
                 await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE"))
