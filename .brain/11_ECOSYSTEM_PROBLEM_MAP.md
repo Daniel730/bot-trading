@@ -6,7 +6,7 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Execution Safety
 
-- ISSUE-0015 - CI lacks the broker failure contract tests that should catch execution regressions.
+- None currently listed.
 
 ## Exit Safety
 
@@ -30,7 +30,6 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Orchestration
 
-- ISSUE-0015 - Automated gates do not cover broker failure contracts and soak scenarios.
 - ISSUE-0017 - Background tasks are not centrally watched or surfaced.
 
 ## Observability
@@ -39,10 +38,10 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Testing
 
-- ISSUE-0015 - Missing broker fake-provider and Java gRPC failure contract suites.
+- None currently listed.
 ## Configuration and Deployment
 
-- ISSUE-0015 - CI quality lanes do not include all runtime safety gates.
+- None currently listed.
 
 ## Frontend / Dashboard
 

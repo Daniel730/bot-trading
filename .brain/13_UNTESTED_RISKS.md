@@ -12,11 +12,6 @@ Last updated: 2026-05-13
 
 ## Medium Untested Risks
 
-- ISSUE-0015
-  - missing test: CI includes broker failure contract tests.
-  - expected failing scenario: Broker timeout/rejection behavior regresses without CI failure.
-  - suggested test file/name: `.github/workflows/*` job running broker fake-provider tests.
-
 - ISSUE-0017
   - missing test: Background task exceptions surface to logs/status.
   - expected failing scenario: A fire-and-forget task raises and operator never sees degraded state.

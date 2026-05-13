@@ -64,13 +64,13 @@ Steps:
 5. Persist final, partial, or manual-review state.
 
 Failure points:
-- Missing broker failure contract tests let regressions pass.
+- None currently listed.
 
 Known issues:
-- ISSUE-0015
+- None currently listed.
 
 Required tests:
-- Broker fake-provider failure contract suite.
+- None currently listed.
 
 ## Workflow: Broker Reconciliation
 

@@ -771,22 +771,25 @@ Fixed 2026-05-13 in `README.md`, `docs/OPERATIONS.md`, and `tests/unit/test_docs
 
 ### ISSUE-0015 — CI gates miss broker failure contracts and long-running safety scenarios
 
-Status: OPEN  
+Status: FIXED
 Severity: MEDIUM  
 Area: testing  
 Discovered in audit: 2026-05-08  
-Last checked: 2026-05-08  
-Evidence type: config  
+Last checked: 2026-05-13
+Evidence type: config/test
 Confidence: HIGH  
 
 #### Summary
-CI runs meaningful unit/integration/Java/frontend quality checks, but the remaining highest-risk scenarios are not represented as automated gates: broker failure contracts, live-route config assertions, long soak, runtime alert thresholds, and selected data/risk contract tests.
+CI runs meaningful unit/integration/Java/frontend quality checks. Before the fix, the highest-risk broker/execution safety contracts were only implicit in the broad unit suite and were not represented as an explicit fail-fast safety gate.
 
 #### Evidence
 - `.github/workflows/deploy.yml` runs Python unit tests, Python integration tests, Java tests/build, and frontend lint/build/test when relevant paths change.
 - `docs/tofix.md` calls for live-path contract tests with fake T212/Alpaca/Web3 providers and Java gRPC health/status tests.
 - `docs/production-readiness-plan.md` and `docs/soak-fault-injection-report.md` require soak/fault-injection gates outside the current CI quality jobs.
 - ISSUE-0004 now has focused budget mutation regression tests; remaining CI gaps are broader broker failure contracts and long-running safety scenarios.
+- `tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts` failed before the workflow change and now proves the deploy workflow has an explicit broker/execution safety contract step.
+- `.github/workflows/deploy.yml` now runs focused Alpaca timeout/read-failure, monitor ambiguity/partial-fill/close, startup guard, paper wallet, production soak-gate, runtime alert, and broker-route config tests before the broad unit suite.
+- `.github/workflows/deploy.yml` now treats workflow edits as Python-quality changes so the CI guard test runs when the gate itself changes.
 
 #### Trigger
 PRs or deployments that pass existing quality lanes but change broker, execution, or runtime safety behavior.
@@ -798,19 +801,19 @@ The existing CI quality lanes are assumed to cover all safety-critical trading c
 Live-breaking execution and reconciliation gaps can pass CI and reach deployment.
 
 #### Existing protection
-CI has path-filtered Python, Java, and frontend quality jobs.
+CI has path-filtered Python, Java, and frontend quality jobs. The Python quality lane now includes an explicit broker/execution safety contract step before the broad unit suite.
 
 #### Missing protection
-No automated broker failure contract suite, no long soak gate, and no alert-threshold test gate.
+None for this scoped CI safety-contract gate after the 2026-05-13 fix. Real long soak execution remains an operator evidence gate, not a CI runtime job.
 
 #### Smallest safe fix
-Add focused tests for the P0/P1 issue contracts before broadening soak automation.
+Implemented: add a focused broker/execution safety contract step to CI and a workflow lint test that keeps it present.
 
 #### Test required
-Add broker fake-provider failure matrix tests and focused tests for remaining open data/risk contracts.
+Added `tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts`.
 
 #### Validation command
-`python -m pytest tests/unit/test_monitor.py tests/unit/test_brokerage_contracts.py -q --asyncio-mode=auto`
+`python -m pytest tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts -q`
 
 #### Related issues
 ISSUE-0001, ISSUE-0002, ISSUE-0003, ISSUE-0004, ISSUE-0008, ISSUE-0009
@@ -819,7 +822,7 @@ ISSUE-0001, ISSUE-0002, ISSUE-0003, ISSUE-0004, ISSUE-0008, ISSUE-0009
 P2
 
 #### Notes
-This issue explicitly acknowledges CI exists; the gap is the missing safety scenarios.
+Fixed 2026-05-13 in `.github/workflows/deploy.yml` and `tests/unit/test_ci_safety_gates.py`. Regression test added: `tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts`. Validation passed: `python -m pytest tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts -q` and the CI safety command with 45 passed. Remaining risk: CI still does not execute a real multi-hour soak; it only validates the soak evidence gate and alert-threshold tests. Next recommended task is ISSUE-0017.
 
 ### ISSUE-0016 — Dashboard bot status mirrors desired state instead of unsafe operational state
 
