@@ -49,6 +49,7 @@ Canonical issue details live in `.brain/04_AUDIT_LEDGER.md` under the `ISSUE-XXX
 | ISSUE-0020 | Brain ledgers mix historical notes, closed invariants, and open production gates | `.brain/04_AUDIT_LEDGER.md`, `.brain/10_RELEASE_CHECKLIST.md`, `tests/unit/test_brain_ledgers.py` | FIXED | P3 |
 | ISSUE-0025 | Brain still reports resolved focused monitor failures as active | `.brain/00_START_HERE.md`, `.brain/08_TESTING_PROTOCOL.md`, `.brain/10_RELEASE_CHECKLIST.md`, `tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_resolved_focused_monitor_failures_are_active` | FIXED | P3 |
 | ISSUE-0026 | Brain still reports monitor fixture isolation as unresolved | `.brain/04_AUDIT_LEDGER.md`, `.brain/08_TESTING_PROTOCOL.md`, `.brain/10_RELEASE_CHECKLIST.md`, `tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_monitor_fixture_isolation_is_unresolved` | FIXED | P3 |
+| ISSUE-0027 | Brain still reports risk fixture max_allowed_fiat gate as unresolved | `.brain/04_AUDIT_LEDGER.md`, `.brain/10_RELEASE_CHECKLIST.md`, `tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_risk_fixture_max_allowed_fiat_is_unresolved` | FIXED | P3 |
 
 ### Previously protected invariants retained from earlier audits
 
