@@ -1,6 +1,6 @@
 # Workflow Failure Map
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 ## Workflow: Market Data Ingestion
 
@@ -13,13 +13,12 @@ Steps:
 Failure points:
 - Calendar/session freshness now blocks full-day holidays, default US early closes, HKEX common half-days, LSE common half-days, Xetra Christmas/New Year closures, and common Euronext Amsterdam/Paris half-days. Operators should still watch for ad-hoc future exchange notices.
 - Corporate-action event ingestion is not first-class, although adjusted-history changes now invalidate saved Kalman state.
-- Local dependency path can differ from container/CI behavior.
 
 Known issues:
-- ISSUE-0014
+- None currently listed.
 
 Required tests:
-- Local-vs-container dependency smoke test.
+- None currently listed.
 
 ## Workflow: Signal Generation
 

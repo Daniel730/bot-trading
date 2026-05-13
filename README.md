@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/Daniel730/bot-trading)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Daniel730/bot-trading?style=social)](https://github.com/Daniel730/bot-trading/stargazers)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/Daniel730)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11-blue?logo=python)](https://www.python.org/)
 [![Java](https://img.shields.io/badge/java-21-orange?logo=openjdk)](https://openjdk.org/)
 [![React](https://img.shields.io/badge/react-19-61dafb?logo=react)](https://react.dev/)
 
@@ -86,12 +86,17 @@ BROKERAGE_PROVIDER=ALPACA  # Alpaca paper/live endpoint from ALPACA_BASE_URL
 
 `BROKERAGE_PROVIDER=ALPACA` uses `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL`; the template defaults Alpaca to the paper endpoint. `BROKERAGE_PROVIDER=T212` and `BROKERAGE_PROVIDER=WEB3` fail startup because those live routes are legacy/disabled.
 
-2. Install and initialize the Python backend:
+2. Install and initialize the Python backend with Python 3.11 and the locked dependency set used by CI and Docker:
 
 ```bash
-pip install -r requirements.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip uv
+uv pip install -r requirements.lock
 python scripts/init_db.py
 ```
+
+On Windows, use `py -3.11 -m venv .venv` and `.venv\Scripts\Activate.ps1` for the virtual environment steps.
 
 3. Start the monitor. This also starts the dashboard API on port `8080`:
 
@@ -217,7 +222,7 @@ You can also help by:
 It is an open-source framework for building and running **statistical arbitrage / pairs-trading** strategies across equities and crypto, with paper-trading and live-broker execution paths.
 
 **What languages and stack does it use?**
-Python 3.10+ for the monitor, signal engine, dashboard API, and agent ensemble; Java 21 for the gRPC execution engine; React 19 + Vite for the operations console; PostgreSQL and Redis for persistence and idempotency.
+Python 3.11 for the monitor, signal engine, dashboard API, and agent ensemble; Java 21 for the gRPC execution engine; React 19 + Vite for the operations console; PostgreSQL and Redis for persistence and idempotency.
 
 **Can I use it for live trading?**
 Yes, but only after extensive paper trading. The Java engine ships in `DRY_RUN` mode and intentionally refuses to boot live until a real broker implementation is wired. Read [docs/OPERATIONS.md](docs/OPERATIONS.md) and [docs/STRATEGY.md](docs/STRATEGY.md) first.

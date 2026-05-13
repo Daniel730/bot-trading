@@ -37,7 +37,7 @@ Canonical issue details live in `.brain/04_AUDIT_LEDGER.md` under the `ISSUE-XXX
 | ISSUE-0006 | Cash commands call a nonexistent brokerage ticker formatter | `src/services/brokerage_service.py`, `tests/unit/test_cash_ticker_formatter.py` | FIXED | P2 |
 | ISSUE-0010 | Market session handling was suffix-based and Euronext calendars remained approximate | `src/monitor.py::get_market_config`, `src/monitor.py::is_market_open`, `tests/unit/test_market_calendar.py`, `docs/tofix.md` | FIXED | P2 |
 | ISSUE-0013 | Whale watcher was configured and documented but active runtime was legacy-neutral | `src/agents/whale_watcher_agent.py`, `docs/STRATEGY.md`, `tests/unit/test_whale_watcher.py` | FIXED | P2 |
-| ISSUE-0014 | Local runtime dependency path differs from CI and Docker | `README.md`, `docs/OPERATIONS.md`, `.github/workflows/deploy.yml`, `infra/Dockerfile` | OPEN | P2 |
+| ISSUE-0014 | Local runtime dependency path differs from CI and Docker | `README.md`, `docs/OPERATIONS.md`, `.github/workflows/deploy.yml`, `infra/Dockerfile`, `tests/unit/test_docs_runtime_parity.py` | FIXED | P2 |
 | ISSUE-0015 | CI gates miss broker failure contracts and long-running safety scenarios | `.github/workflows/deploy.yml`, `docs/tofix.md`, readiness docs | OPEN | P2 |
 | ISSUE-0017 | Fire-and-forget background tasks lack a watchdog | `src/monitor.py`, `src/services/persistence_service.py` | OPEN | P2 |
 | ISSUE-0019 | Closing trades overwrites per-leg metadata | `src/services/persistence_service.py::close_trade` | OPEN | P2 |
@@ -370,7 +370,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_cash_ticker_formatter.py::test_cash_command_uses_real_ticker_formatter` and `tests/unit/test_cash_ticker_formatter.py::test_cash_management_liquidate_uses_real_ticker_formatter`.
 - Validation command: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` passed with 11 passed.
 - Remaining risk: cash-command UX and sweep execution safety are otherwise unchanged.
-- Next recommended task was ISSUE-0010, then ISSUE-0013; after both 2026-05-12 fixes, continue with ISSUE-0014 Local runtime dependency path differs from CI and Docker.
+- Next recommended task was ISSUE-0010, then ISSUE-0013, then ISSUE-0014; after the 2026-05-13 docs/runtime parity fix, continue with ISSUE-0015 CI gates miss broker failure contracts and long-running safety scenarios.
 
 ### P2-002: Requirements are not fully pinned
 

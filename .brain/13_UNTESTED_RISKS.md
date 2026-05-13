@@ -1,6 +1,6 @@
 # Untested Risks
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 ## Critical Untested Risks
 
@@ -11,11 +11,6 @@ Last updated: 2026-05-12
 - None currently listed.
 
 ## Medium Untested Risks
-
-- ISSUE-0014
-  - missing test: Local setup uses the same dependency path as CI/Docker.
-  - expected failing scenario: Local command passes while containerized startup fails from dependency mismatch.
-  - suggested test file/name: `tests/unit/test_backend_compose_secrets.py::test_local_dependency_path_matches_container_expectation`
 
 - ISSUE-0015
   - missing test: CI includes broker failure contract tests.
