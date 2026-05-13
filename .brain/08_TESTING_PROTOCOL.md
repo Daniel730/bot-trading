@@ -2,20 +2,23 @@
 
 ## Current Test Posture
 
-The current focused execution-safety slice is not green.
+The project is still not production-approved. Passing focused slices proves only the named invariant, not readiness.
 
-Fresh result from 2026-05-07:
+Historical result from 2026-05-07:
 
 ```bash
 python -m pytest -q tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py
 ```
 
-Result:
+That broad focused slice was red at the time. The named monitor failures from that snapshot were rechecked on 2026-05-13:
 
-- 42 passed.
-- 6 failed.
+```bash
+python -m pytest -q tests/unit/test_monitor.py::test_execute_trade_success tests/unit/test_monitor.py::test_execute_trade_emergency_closes_leg_a_when_leg_b_fails tests/unit/test_monitor.py::test_close_position_skips_sell_when_broker_has_no_shares tests/unit/test_monitor.py::test_execute_trade_crypto_live_uses_broker tests/unit/test_monitor.py::test_execute_trade_crypto_budget_cap_applied tests/unit/test_monitor.py::test_orchestrator_veto
+```
 
-Do not claim this branch is execution-safe until those failures are resolved.
+Result: 6 passed.
+
+Do not claim this branch is execution-safe until the current release gates pass.
 
 ## 2026-05-08 Targeted Safety Regression Evidence
 

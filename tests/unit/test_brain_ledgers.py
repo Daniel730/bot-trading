@@ -23,3 +23,28 @@ def test_release_checklist_does_not_keep_verified_postgres_secret_gate_open():
     checklist = (ROOT / ".brain/10_RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
 
     assert "- [ ] Restore no-default PostgreSQL password behavior" not in checklist
+
+
+def test_brain_does_not_claim_resolved_focused_monitor_failures_are_active():
+    checked_files = [
+        ".brain/00_START_HERE.md",
+        ".brain/08_TESTING_PROTOCOL.md",
+        ".brain/10_RELEASE_CHECKLIST.md",
+    ]
+    stale_phrases = [
+        "6 failed",
+        "six focused unit test failures",
+        "active execution-safety branch has failing focused tests",
+    ]
+
+    offenders = []
+    for relative_path in checked_files:
+        text = (ROOT / relative_path).read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            if phrase in text:
+                offenders.append(f"{relative_path}: {phrase}")
+
+    assert offenders == [], (
+        "Brain docs still describe the old 2026-05-07 focused monitor failures as active.\n"
+        + "\n".join(offenders)
+    )
