@@ -4,12 +4,12 @@
 
 Status: not production-approved.
 
-The repo can be used for local development and paper-mode validation, but the active execution-safety branch has failing focused tests and unresolved readiness gates.
+The repo can be used for local development and paper-mode validation, but unresolved readiness gates remain.
 
 ## Before Merging Current Execution-Safety Work
 
 - [x] Verify no-default PostgreSQL password behavior in `infra/docker-compose.backend.yml`.
-- [ ] Resolve the six focused unit test failures from the 2026-05-07 run.
+- [x] Resolve the historical 2026-05-07 six-test monitor failure list.
 - [ ] Ensure monitor tests mock fill polling and persistence boundaries correctly.
 - [ ] Ensure risk-service test fixtures include `max_allowed_fiat` when monitor reads it.
 - [ ] Decide expected precedence between orchestrator veto and profit guard veto.

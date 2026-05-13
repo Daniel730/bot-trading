@@ -28,19 +28,23 @@ Read these in order:
 
 ## Fresh Verification Snapshot
 
-Command run during brain creation:
+Historical command from 2026-05-07:
 
 ```bash
 python -m pytest -q tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py
 ```
 
+That broad focused slice was red at the time. The named monitor failures from that snapshot were rechecked on 2026-05-13 with:
+
+```bash
+python -m pytest -q tests/unit/test_monitor.py::test_execute_trade_success tests/unit/test_monitor.py::test_execute_trade_emergency_closes_leg_a_when_leg_b_fails tests/unit/test_monitor.py::test_close_position_skips_sell_when_broker_has_no_shares tests/unit/test_monitor.py::test_execute_trade_crypto_live_uses_broker tests/unit/test_monitor.py::test_execute_trade_crypto_budget_cap_applied tests/unit/test_monitor.py::test_orchestrator_veto
+```
+
 Result:
 
-- 42 passed.
-- 6 failed.
-- Runtime: about 2 minutes 13 seconds.
+- 6 passed.
 
-Failures:
+Rechecked tests:
 
 - `tests/unit/test_monitor.py::test_execute_trade_success`
 - `tests/unit/test_monitor.py::test_execute_trade_emergency_closes_leg_a_when_leg_b_fails`
@@ -51,10 +55,9 @@ Failures:
 
 Interpretation:
 
-- The new safety direction is correct, but the test slice is not green.
-- Several tests still assume optimistic broker success, missing fill polling mocks, or incomplete `risk_res` metadata such as `max_allowed_fiat`.
-- At least one test expectation now conflicts with profit-guard behavior: an orchestrator veto path was superseded by a net-profit guard veto returning `IGNORED`.
-- Do not use this branch as proof of live execution readiness.
+- The named historical monitor failures are no longer active.
+- This is not proof of live execution readiness.
+- Remaining release gates still live in `10_RELEASE_CHECKLIST.md`.
 
 ## Brain File Map
 

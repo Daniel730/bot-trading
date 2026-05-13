@@ -1305,6 +1305,58 @@ This is a confirmed calculation-shape issue from code inspection. Exact live mag
 
 Fixed 2026-05-08 in `src/monitor.py::_evaluate_exit_conditions` by calculating directional pair PnL from stored leg side, entry price, current price, and quantity, then feeding `cost_basis + directional_pnl` into the existing financial kill-switch check. Regression test added: `tests/unit/test_monitor.py::test_financial_kill_switch_uses_directional_pair_pnl`. Validation passed: `python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py tests/unit/test_startup_guards.py --asyncio-mode=auto`.
 
+### ISSUE-0025 — Brain still reports resolved focused monitor failures as active
+
+Status: FIXED
+Severity: LOW
+Area: documentation
+Discovered in audit: 2026-05-13
+Last checked: 2026-05-13
+Evidence type: doc | test
+Confidence: HIGH
+
+#### Summary
+The local brain still described the historical 2026-05-07 monitor failures as active even after the six named tests passed on 2026-05-13.
+
+#### Evidence
+- `.brain/00_START_HERE.md` still listed the old failed result.
+- `.brain/08_TESTING_PROTOCOL.md` still said the focused execution-safety slice was not green based on the old snapshot.
+- `.brain/10_RELEASE_CHECKLIST.md` still had the old monitor failure list as an unchecked release blocker.
+- Regression test: `tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_resolved_focused_monitor_failures_are_active`.
+
+#### Trigger
+Future work uses `.brain/` to pick the next fix after the named monitor tests have already been rechecked.
+
+#### Broken assumption
+Historical test snapshots can remain phrased as current blockers after the underlying tests are revalidated.
+
+#### Financial or workflow consequence
+Codex and the operator can waste cycles re-fixing already-passing tests instead of moving to the next real readiness gate.
+
+#### Existing protection
+`.brain/12_FIX_PRIORITY_QUEUE.md` is now canonical for active issue ordering.
+
+#### Missing protection
+No regression guard ensured resolved historical focused-test failures were not still described as active in the brain.
+
+#### Smallest safe fix
+Update the brain snapshot and release checklist to record the 2026-05-13 recheck result, and add a docs regression test for the stale wording.
+
+#### Test required
+Add a test that fails when `.brain/00_START_HERE.md`, `.brain/08_TESTING_PROTOCOL.md`, or `.brain/10_RELEASE_CHECKLIST.md` still claim the old focused monitor failures are active.
+
+#### Validation command
+`python -m pytest tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_resolved_focused_monitor_failures_are_active -q`
+
+#### Related issues
+ISSUE-0020
+
+#### Fix priority
+P3
+
+#### Notes
+Fixed 2026-05-13 in `.brain/00_START_HERE.md`, `.brain/08_TESTING_PROTOCOL.md`, `.brain/10_RELEASE_CHECKLIST.md`, `.brain/04_AUDIT_LEDGER.md`, `.brain/05_BUG_LEDGER.md`, and `tests/unit/test_brain_ledgers.py`. The release checklist still blocks readiness on other gates.
+
 ## Current Audition
 
 The current audition is a workflow-safety audit, not a style or performance audit.
