@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 import uuid
 from src.config import settings
+from src.services.background_task_watchdog import background_task_watchdog
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +334,10 @@ class PersistenceService:
 
         # Trigger reflection in the background
         from src.agents.reflection_agent import reflection_agent
-        asyncio.create_task(reflection_agent.reflect_on_trade(str(signal_id)))
+        background_task_watchdog.create_task(
+            reflection_agent.reflect_on_trade(str(signal_id)),
+            name=f"persistence:reflect_on_trade:{signal_id}",
+        )
 
     async def get_signal_status(self, signal_id: uuid.UUID) -> Optional[OrderStatus]:
         from sqlalchemy import select

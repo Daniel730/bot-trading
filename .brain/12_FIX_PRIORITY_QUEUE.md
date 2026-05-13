@@ -12,11 +12,6 @@ Last updated: 2026-05-13
 
 ## P2 - Must fix before public release / monetization
 
-- ISSUE-0017 - Fire-and-forget background tasks lack watchdog
-  - reason for priority: Failures can disappear and degrade operations.
-  - smallest safe fix: Track background task handles and log/alert exceptions.
-  - required test: Background task failure surfacing test.
-
 - ISSUE-0019 - `close_trade()` overwrites per-leg metadata
   - reason for priority: Forensics and reconciliation become harder after exits.
   - smallest safe fix: Merge close metadata without discarding entry leg metadata.

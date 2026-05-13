@@ -100,14 +100,13 @@ Steps:
 4. Trigger exits or manual-review state.
 
 Failure points:
-- Background task failures may stop monitoring silently.
+- None currently listed.
 
 Known issues:
-- ISSUE-0017
+- None currently listed.
 
 Required tests:
 - Exit evaluation rejects invalid bid/ask.
-- Background task exception is observed.
 
 ## Workflow: Exit Execution
 
@@ -123,7 +122,6 @@ Failure points:
 
 Known issues:
 - ISSUE-0009
-- ISSUE-0017
 - ISSUE-0019
 
 Required tests:
@@ -139,13 +137,13 @@ Steps:
 4. Surface stopped/degraded state to operator.
 
 Failure points:
-- Background tasks lack central watchdog.
+- None currently listed.
 
 Known issues:
-- ISSUE-0017
+- None currently listed.
 
 Required tests:
-- Background task watchdog test.
+- None currently listed.
 
 ## Workflow: Restart Recovery
 

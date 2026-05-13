@@ -30,11 +30,11 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Orchestration
 
-- ISSUE-0017 - Background tasks are not centrally watched or surfaced.
+- None currently listed.
 
 ## Observability
 
-- ISSUE-0017 - Fire-and-forget task failures can disappear into logs.
+- None currently listed.
 
 ## Testing
 

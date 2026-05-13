@@ -880,21 +880,24 @@ Fixed 2026-05-11 in `src/services/dashboard_service.py`, `src/monitor.py`, and `
 
 ### ISSUE-0017 — Fire-and-forget background tasks lack a watchdog
 
-Status: OPEN  
+Status: FIXED
 Severity: MEDIUM  
 Area: orchestration  
 Discovered in audit: 2026-05-08  
-Last checked: 2026-05-08  
-Evidence type: code  
+Last checked: 2026-05-13
+Evidence type: code/test
 Confidence: HIGH  
 
 #### Summary
-Several background workflows are launched with `asyncio.create_task()` without retained task handles, restart policy, or a central dead-letter/health surface.
+Several background workflows were launched with `asyncio.create_task()` without retained task handles, restart policy, or a central dead-letter/health surface.
 
 #### Evidence
 - `src/monitor.py::run` starts `_auto_scout_and_rotate_loop()` with `asyncio.create_task()`.
 - `src/monitor.py::run` starts `_recheck_cointegration(pair)` tasks during scanning.
 - `src/services/persistence_service.py::close_trade` triggers reflection in the background after ledger closure.
+- `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health` failed before the fix because no watchdog module or health surface existed.
+- `src/services/background_task_watchdog.py` now records active task handles, completions, and exceptions.
+- `src/services/dashboard_service.py::health_snapshot` now exposes `background_tasks` and reports `status=degraded` when a tracked background task fails.
 
 #### Trigger
 Unhandled exception, cancellation, event-loop shutdown, or dependency failure inside a background task.
@@ -906,16 +909,16 @@ Background tasks either never fail or log enough for operators to notice.
 Scouting, cointegration refresh, or reflection can stop silently, degrading decisions and recovery evidence.
 
 #### Existing protection
-Some task bodies catch/log local exceptions.
+Some task bodies catch/log local exceptions. Background tasks created by monitor, dashboard, and close-reflection paths are now tracked by `background_task_watchdog`.
 
 #### Missing protection
-No task registry, watchdog, health metric, restart policy, or dead-letter queue.
+None for this scoped exception-surfacing issue after the 2026-05-13 fix. Automatic restart and durable dead-letter queues remain out of scope.
 
 #### Smallest safe fix
-Wrap background task creation in a small tracked-task helper that records completion/exceptions and exposes health.
+Implemented: wrap background task creation in a small tracked-task helper that records completion/exceptions and exposes health.
 
 #### Test required
-Force a background task exception and assert the dashboard/health state records the failure.
+Added `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health`.
 
 #### Validation command
 `python -m pytest tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health -q`
@@ -927,7 +930,7 @@ ISSUE-0009, ISSUE-0016
 P2
 
 #### Notes
-Not a direct order-loss path, but it hides degraded automation.
+Fixed 2026-05-13 in `src/services/background_task_watchdog.py`, `src/monitor.py`, `src/services/persistence_service.py`, and `src/services/dashboard_service.py`. Regression test added: `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health`. Validation passed: `python -m pytest tests/unit/test_background_task_watchdog.py -q` and adjacent dashboard/startup checks. Remaining risk: watchdog records and surfaces failures but does not restart failed tasks or persist a durable dead-letter queue. Next recommended task is ISSUE-0019.
 
 ### ISSUE-0018 — Dashboard wallet buy proceeds despite cash-limited planning
 
