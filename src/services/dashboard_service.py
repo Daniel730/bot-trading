@@ -55,6 +55,32 @@ def _safe_float(val) -> Optional[float]:
     return f
 
 
+def _pair_discovery_status() -> dict:
+    from src.services.background_task_watchdog import background_task_watchdog
+
+    snapshot = background_task_watchdog.snapshot()
+    active = [
+        task
+        for task in snapshot.get("active", [])
+        if str(task.get("name", "")).startswith("dashboard:pair_discovery:")
+    ]
+    last_event = next(
+        (
+            event
+            for event in reversed(snapshot.get("recent_events", []))
+            if str(event.get("name", "")).startswith("dashboard:pair_discovery:")
+        ),
+        None,
+    )
+    return {
+        "active": bool(active),
+        "active_count": len(active),
+        "last_status": last_event.get("status") if last_event else None,
+        "last_finished_at": last_event.get("finished_at") if last_event else None,
+        "last_message": last_event.get("message") if last_event else None,
+    }
+
+
 def _scrub_non_finite(obj):
     if isinstance(obj, float):
         return None if (math.isnan(obj) or math.isinf(obj)) else obj
@@ -1900,17 +1926,40 @@ class DashboardService:
         # We run it as a background task
         from src.services.background_task_watchdog import background_task_watchdog
 
+        async def _run_discovery_with_dashboard_messages():
+            try:
+                await portfolio_manager.run_discovery()
+            except asyncio.CancelledError:
+                await dashboard_state.add_message(
+                    "SYSTEM",
+                    f"Pair discovery cancelled for {actor}.",
+                    metadata={"type": "pair_discovery", "actor": actor, "status": "cancelled"},
+                )
+                raise
+            except Exception as exc:
+                await dashboard_state.add_message(
+                    "SYSTEM",
+                    f"Pair discovery failed for {actor}: {exc}",
+                    metadata={"type": "pair_discovery", "actor": actor, "status": "failed"},
+                )
+                raise
+            await dashboard_state.add_message(
+                "SYSTEM",
+                f"Pair discovery completed for {actor}.",
+                metadata={"type": "pair_discovery", "actor": actor, "status": "completed"},
+            )
+
         background_task_watchdog.create_task(
-            portfolio_manager.run_discovery(),
+            _run_discovery_with_dashboard_messages(),
             name=f"dashboard:pair_discovery:{actor}",
         )
 
         await dashboard_state.add_message(
             "SYSTEM",
-            f"Global pair discovery triggered by {actor}.",
-            metadata={"type": "pair_discovery", "actor": actor}
+            f"Global pair discovery triggered by {actor}. Completion will be reported when the scan finishes.",
+            metadata={"type": "pair_discovery", "actor": actor, "status": "started"}
         )
-        return {"status": "accepted", "message": "Discovery cycle started in background."}
+        return {"status": "accepted", "message": "Discovery cycle started. Completion will be reported in the terminal feed."}
 
     async def start(self):
         """
@@ -2394,6 +2443,7 @@ async def list_pairs(token: str = Query(None), session: str = Query(None)):
             "configured_pairs": settings.ARBITRAGE_PAIRS,
             "crypto_test_pairs": settings.CRYPTO_TEST_PAIRS,
             "dev_mode": settings.DEV_MODE,
+            "discovery": _pair_discovery_status(),
         }
     )
 

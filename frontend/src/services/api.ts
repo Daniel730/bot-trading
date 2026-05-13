@@ -118,6 +118,13 @@ export interface PairsResponse {
   configured_pairs: PairConfigEntry[];
   crypto_test_pairs: PairConfigEntry[];
   dev_mode: boolean;
+  discovery?: {
+    active: boolean;
+    active_count: number;
+    last_status?: 'completed' | 'failed' | 'cancelled' | null;
+    last_finished_at?: string | null;
+    last_message?: string | null;
+  };
 }
 
 export interface WalletSyncOrder {

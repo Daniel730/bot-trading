@@ -15,6 +15,7 @@ import {
   type WalletRecommendationResponse,
   type WalletRecommendationBuyResponse,
 } from '../services/api';
+import { useAutoDismiss } from '../hooks/useAutoDismiss';
 
 interface WalletPanelProps {
   token: string;
@@ -68,6 +69,9 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
   const [ordersPage, setOrdersPage] = useState(1);
 
   const budgetValue = Number(budget);
+
+  useAutoDismiss(ok, setOk);
+  useAutoDismiss(error, setError, 10000);
 
   const refresh = useCallback(async () => {
     setError(null);

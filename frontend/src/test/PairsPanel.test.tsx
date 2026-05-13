@@ -15,13 +15,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../services/api', () => ({
   fetchPairs: vi.fn(),
   syncWallet: vi.fn(),
+  discoverPairs: vi.fn(),
+  updatePairs: vi.fn(),
 }));
 
-import { fetchPairs, syncWallet } from '../services/api';
+import { discoverPairs, fetchPairs, syncWallet } from '../services/api';
 import PairsPanel from '../components/PairsPanel';
 
 const mockFetchPairs = fetchPairs as ReturnType<typeof vi.fn>;
 const mockSyncWallet = syncWallet as ReturnType<typeof vi.fn>;
+const mockDiscoverPairs = discoverPairs as ReturnType<typeof vi.fn>;
 
 const TOKEN = 'test-token';
 const SESSION = 'test-session';
@@ -48,6 +51,13 @@ function makePairsResponse(extraPairs = []) {
     configured_pairs: [{ ticker_a: 'AAPL', ticker_b: 'MSFT' }],
     crypto_test_pairs: [],
     dev_mode: false,
+    discovery: {
+      active: false,
+      active_count: 0,
+      last_status: null,
+      last_finished_at: null,
+      last_message: null,
+    },
   };
 }
 
@@ -76,6 +86,63 @@ describe('PairsPanel Broker Wallet label', () => {
     await waitFor(() => {
       expect(screen.queryByText('T212 Wallet')).not.toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pair discovery status
+// ---------------------------------------------------------------------------
+
+describe('PairsPanel pair discovery status', () => {
+  beforeEach(() => {
+    mockFetchPairs.mockResolvedValue(makePairsResponse());
+    mockDiscoverPairs.mockResolvedValue({
+      status: 'accepted',
+      message: 'Discovery cycle started. Completion will be reported in the terminal feed.',
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the API acknowledgement when pair discovery starts', async () => {
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Edit pairs')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTitle('Edit pairs'));
+    fireEvent.click(screen.getByTitle('Search for new cointegrated pairs in background'));
+
+    await waitFor(() => {
+      expect(mockDiscoverPairs).toHaveBeenCalledOnce();
+      expect(screen.getByText(/Discovery cycle started/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows the last completed discovery result from the pairs endpoint', async () => {
+    mockFetchPairs.mockResolvedValue({
+      ...makePairsResponse(),
+      discovery: {
+        active: false,
+        active_count: 0,
+        last_status: 'completed',
+        last_finished_at: new Date().toISOString(),
+        last_message: null,
+      },
+    });
+
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Edit pairs')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTitle('Edit pairs'));
+
+    expect(screen.getByText(/Pair discovery completed/)).toBeInTheDocument();
   });
 });
 
