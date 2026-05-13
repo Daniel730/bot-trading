@@ -68,7 +68,7 @@ The active safety work is moving the bot away from optimistic `OPEN`/`COMPLETED`
 - Docs and runtime now present the active broker route as Alpaca-only. Current `BrokerageService` forces Alpaca and logs that legacy providers moved to `legacy/`.
 - `src/config.py` validates `BROKERAGE_PROVIDER` and fails startup for unsupported values instead of silently coercing them.
 - The Java execution engine intentionally refuses `DRY_RUN=false`; live Java brokerage is not available.
-- `infra/docker-compose.backend.yml` currently has a dirty change that introduces a fallback PostgreSQL password. This conflicts with the documented non-default-secret requirement and should be treated as a P0 security regression until resolved.
+- `infra/docker-compose.backend.yml` keeps `POSTGRES_PASSWORD` required with no default; this is protected by `tests/unit/test_backend_compose_secrets.py`.
 
 ## External Interfaces
 

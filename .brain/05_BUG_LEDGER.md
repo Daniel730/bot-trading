@@ -46,7 +46,7 @@ Canonical issue details live in `.brain/04_AUDIT_LEDGER.md` under the `ISSUE-XXX
 
 | Issue | Title | Primary evidence | Status | Priority |
 |---|---|---|---|---|
-| ISSUE-0020 | Brain ledgers mix historical notes, closed invariants, and open production gates | `.brain/04_AUDIT_LEDGER.md`, `.brain/05_BUG_LEDGER.md` | OPEN | P3 |
+| ISSUE-0020 | Brain ledgers mix historical notes, closed invariants, and open production gates | `.brain/04_AUDIT_LEDGER.md`, `.brain/10_RELEASE_CHECKLIST.md`, `tests/unit/test_brain_ledgers.py` | FIXED | P3 |
 
 ### Previously protected invariants retained from earlier audits
 
@@ -180,7 +180,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_backend_compose_secrets.py::test_backend_compose_requires_postgres_password_without_default`.
 - Validation command: `python -m pytest -q tests/unit/test_backend_compose_secrets.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` passed with 53 passed.
 - Remaining risk: this removes the backend Compose fallback only; production sign-off still needs P0-003, P0-004, and clean runtime/soak evidence.
-- Next recommended task: verify and close P0-004 startup unresolved-state blocking evidence, or fix any gap found there.
+- Historical follow-up: verify and close P0-004 startup unresolved-state blocking evidence, or fix any gap found there.
 
 ### P0-002: Focused execution-safety test slice
 
@@ -191,7 +191,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests updated: `test_execute_trade_success`, `test_close_position_skips_sell_when_broker_has_no_shares`, `test_execute_trade_crypto_live_uses_broker`, `test_execute_trade_crypto_budget_cap_applied`, and `test_orchestrator_veto`.
 - Validation commands: `python -m pytest tests/unit/test_monitor.py -q --asyncio-mode=auto` passed with 17 passed; `python -m pytest -q tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py --asyncio-mode=auto` passed with 49 passed.
 - Remaining risk: this closes the focused unit slice only; production sign-off still needs P0-001, P0-003, P0-004, and clean runtime/soak evidence.
-- Next recommended task: verify and close P0-004 startup unresolved-state blocking evidence, or fix any gap found there.
+- Historical follow-up: verify and close P0-004 startup unresolved-state blocking evidence, or fix any gap found there.
 
 ### P0-003: Production remains not approved
 
@@ -202,7 +202,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_production_soak_gate.py`.
 - Validation command: `python -m pytest -q tests/unit/test_production_soak_gate.py tests/unit/test_validate_deploy_env.py tests/unit/test_backend_compose_secrets.py`.
 - Remaining risk: no real `docs/production-soak-evidence.json` exists yet, so the gate correctly blocks production approval.
-- Next recommended task: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
+- Historical follow-up: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
 
 ### P0-004: Unresolved execution state must block startup
 
@@ -214,7 +214,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_startup_guards.py::test_startup_treats_close_failed_as_unresolved_execution_state`.
 - Validation command: `python -m pytest -q tests/unit/test_backend_compose_secrets.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` passed with 54 passed.
 - Remaining risk: production sign-off still needs P0-003 runtime/soak evidence and no unresolved manual-reconciliation rows before actual runs.
-- Next recommended task: add end-to-end partial-fill contract coverage for P1-002, starting with Leg B/close partial fills.
+- Historical follow-up: add end-to-end partial-fill contract coverage for P1-002, starting with Leg B/close partial fills.
 
 ## P1: High Financial Or Workflow Risk
 
@@ -234,7 +234,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests added: `tests/unit/test_monitor.py::test_close_position_does_not_close_ledger_on_short_close_fill_quantity`.
 - Validation command: `python -m pytest -q tests/unit/test_backend_compose_secrets.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` passed with 59 passed.
 - Remaining risk: broader partial-fill lifecycle coverage remains open, but ISSUE-0001 now protects monitor visibility for Leg B non-terminal exposure.
-- Next recommended task: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
+- Historical follow-up: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
 
 ### P1-003: Close workflow can create ledger/broker divergence if not fully confirmed
 
@@ -254,7 +254,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_alpaca_provider.py::test_alpaca_account_reads_raise_on_api_failure` and `tests/unit/test_monitor.py::test_execute_trade_blocks_when_account_balance_read_fails`.
 - Validation command: `python -m pytest -q tests/unit/test_backend_compose_secrets.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` passed with 58 passed.
 - Remaining risk: `_get_sizing_base()` still falls back for signal-preview sizing if equity reads fail; this patch closes the live execution entry gate only.
-- Next recommended task: add end-to-end partial-fill contract coverage for P1-002, starting with Leg B/close partial fills.
+- Historical follow-up: add end-to-end partial-fill contract coverage for P1-002, starting with Leg B/close partial fills.
 
 ### P1-008: Emergency close success fill confirmation
 
@@ -266,7 +266,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: updated/protected `tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_fill_unconfirmed`; updated `tests/unit/test_monitor.py::test_execute_trade_emergency_closes_leg_a_when_leg_b_fails`; added `tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_partial_fill` to prove success requires close-fill quantity completeness.
 - Validation command: `python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py tests/unit/test_startup_guards.py --asyncio-mode=auto`.
 - Remaining risk: broader execution safety still depends on real soak evidence passing the gate added under ISSUE-0008.
-- Next recommended task: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
+- Historical follow-up: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
 
 ### P1-004: Documentation and implementation disagree on live venues
 
@@ -275,7 +275,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Current code: `Settings` rejects unsupported `BROKERAGE_PROVIDER` values; `BrokerageService` still forces Alpaca.
 - Tests: added `tests/unit/test_config_broker_routes.py::test_unsupported_broker_provider_fails_closed`.
 - Remaining risk: legacy provider code still exists and may need later cleanup or stronger public-surface guards.
-- Next recommended task: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
+- Historical follow-up: verify and close ISSUE-0007 terminal command auth smoke evidence, or fix any gap found there.
 
 ### P1-005: Terminal bridge/auth-session smoke failure remains in readiness docs
 
@@ -286,7 +286,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: `tests/integration/test_terminal_bridge.py::test_terminal_command_integration` and `tests/integration/test_terminal_bridge.py::test_terminal_approval_integration`.
 - Validation command: `python -m pytest tests/integration/test_terminal_bridge.py::test_terminal_command_integration tests/integration/test_terminal_bridge.py::test_terminal_approval_integration -q --asyncio-mode=auto` passed with 2 passed.
 - Remaining risk: production approval still needs ISSUE-0009 and full soak/active-market evidence; `test_audit_logging` still depends on real Postgres through `/exposure`.
-- Next recommended task: ISSUE-0009 runtime Postgres and gRPC transport faults lack an alert gate.
+- Historical follow-up: ISSUE-0009 runtime Postgres and gRPC transport faults lack an alert gate.
 
 ### P1-006: Historical Postgres auth failures and gRPC transport noise
 
@@ -297,7 +297,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_runtime_alert_rules.py::test_postgres_and_grpc_error_spikes_fail_soak_gate`; updated `tests/unit/test_production_soak_gate.py` complete evidence fixtures.
 - Validation command: `python -m pytest -q tests/unit/test_runtime_alert_rules.py tests/unit/test_production_soak_gate.py tests/unit/test_validate_deploy_env.py tests/unit/test_backend_compose_secrets.py` passed with 7 passed.
 - Remaining risk: this is a production evidence gate, not live alert delivery; broader alerting for API non-2xx, order rejects, timeouts, and kill-switch activations remains in the release checklist.
-- Next recommended task: ISSUE-0011 corporate actions do not invalidate pair/Kalman state.
+- Historical follow-up: ISSUE-0011 corporate actions do not invalidate pair/Kalman state.
 
 ### P1-007: Corporate-action adjusted history invalidates Kalman state
 
@@ -308,7 +308,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_arbitrage_state_invalidation.py::test_kalman_state_invalidates_on_corporate_action`.
 - Validation command: `python -m pytest -q tests/unit/test_arbitrage_state_invalidation.py tests/unit/test_arbitrage_math.py tests/unit/test_kalman.py tests/unit/test_kalman_q_inflation.py tests/unit/test_rolling_cointegration.py` passed with 20 passed.
 - Remaining risk: this covers adjusted-history fingerprint changes during prewarm/reload, not a full corporate-action event ingestion pipeline.
-- Next recommended task: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
+- Historical follow-up: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
 
 ### P1-008: SEC/fundamental cache misses default neutral in live path
 
@@ -320,7 +320,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_orchestrator_fundamentals.py::test_live_mode_vetoes_missing_fundamental_score`.
 - Validation command: `python -m pytest -q tests/unit/test_orchestrator_fundamentals.py tests/unit/test_orchestrator_mab.py tests/unit/test_sector_leader_regime.py::test_orchestrator_sector_veto tests/unit/test_sector_leader_regime.py::test_orchestrator_missing_sector_defaults_to_spy` passed with 4 passed.
 - Remaining risk: stale-but-present fundamental cache entries still lack a max-age/freshness guard.
-- Next recommended task: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
+- Historical follow-up: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
 
 ### P1-009: Dashboard status mirrors desired state instead of unsafe operational state
 
@@ -332,7 +332,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_dashboard_status.py::test_summary_reports_manual_review_after_startup_fail_fast`; updated `tests/unit/test_startup_guards.py::test_startup_blocks_when_unresolved_execution_state_exists`.
 - Validation command: `python -m pytest -q tests/unit/test_dashboard_status.py tests/unit/test_dashboard_config.py tests/unit/test_dashboard_sessions.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_startup_guards.py` passed with 19 passed; `node node_modules/typescript/bin/tsc -b` passed from `frontend/`.
 - Remaining risk: frontend lint still has pre-existing unrelated failures in `LoginView.test.tsx` and `useStartupProgress.ts`.
-- Next recommended task: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
+- Historical follow-up: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
 
 ### P1-010: Dashboard wallet buy proceeds despite cash-limited planning
 
@@ -344,7 +344,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_dashboard_wallet_sync.py::test_wallet_buy_blocks_when_cash_limited`.
 - Validation command: `python -m pytest -q tests/unit/test_dashboard_wallet_sync.py tests/unit/test_dashboard_wallet_new_methods.py tests/unit/test_dashboard_config.py tests/unit/test_dashboard_status.py` passed with 12 passed.
 - Remaining risk: no explicit operator override/cap-to-cash workflow exists; cash-limited wallet buys now fail closed.
-- Next recommended task: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
+- Historical follow-up: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
 
 ### P1-011: FastMCP trade tool bypasses dashboard safety and logs invalid ledger payload
 
@@ -356,7 +356,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_mcp_execute_trade_safety.py::test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload`.
 - Validation command: `python -m pytest -q tests/unit/test_mcp_execute_trade_safety.py::test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload --asyncio-mode=auto` passed.
 - Remaining risk: no safe monitor-routed FastMCP execution path exists; adjacent idempotency tests require the unavailable `mocker` fixture locally.
-- Next recommended task: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
+- Historical follow-up: ISSUE-0006 Cash commands call nonexistent `_format_ticker`.
 
 ## P2: Medium Reliability And Data Quality Risks
 
@@ -370,7 +370,7 @@ These are closed only for the specific invariant named. Do not generalize them i
 - Tests: added `tests/unit/test_cash_ticker_formatter.py::test_cash_command_uses_real_ticker_formatter` and `tests/unit/test_cash_ticker_formatter.py::test_cash_management_liquidate_uses_real_ticker_formatter`.
 - Validation command: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` passed with 11 passed.
 - Remaining risk: cash-command UX and sweep execution safety are otherwise unchanged.
-- Next recommended task was ISSUE-0010, then ISSUE-0013, then ISSUE-0014, then ISSUE-0015, then ISSUE-0017, then ISSUE-0019; after the 2026-05-13 close metadata preservation fix, continue with ISSUE-0020 brain-ledger cleanup.
+- Historical follow-up was ISSUE-0010, then ISSUE-0013, then ISSUE-0014, then ISSUE-0015, then ISSUE-0017, then ISSUE-0019, then ISSUE-0020.
 
 ### P2-002: Requirements are not fully pinned
 

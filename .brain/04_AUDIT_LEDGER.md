@@ -216,7 +216,7 @@ ISSUE-0001, ISSUE-0018
 P1
 
 #### Notes
-Fixed 2026-05-08 in `src/services/brokerage_service.py` and `src/services/notification_service.py`. Tests added/updated in `tests/unit/test_brokerage_service_budget.py`, `tests/unit/test_brokerage_dispatcher.py`, and `tests/test_telegram_commands.py`. Broad focused validation passed: `python -m pytest -q tests/unit/test_brokerage_service_budget.py tests/unit/test_brokerage_dispatcher.py tests/test_telegram_commands.py tests/unit/test_backend_compose_secrets.py tests/unit/test_production_soak_gate.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` with 80 passed. Remaining risk: budget fill accounting is still not durable/idempotent across replay; next recommended task is ISSUE-0007 after ISSUE-0005 was fixed.
+Fixed 2026-05-08 in `src/services/brokerage_service.py` and `src/services/notification_service.py`. Tests added/updated in `tests/unit/test_brokerage_service_budget.py`, `tests/unit/test_brokerage_dispatcher.py`, and `tests/test_telegram_commands.py`. Broad focused validation passed: `python -m pytest -q tests/unit/test_brokerage_service_budget.py tests/unit/test_brokerage_dispatcher.py tests/test_telegram_commands.py tests/unit/test_backend_compose_secrets.py tests/unit/test_production_soak_gate.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` with 80 passed. Remaining risk: budget fill accounting is still not durable/idempotent across replay; Historical follow-up is ISSUE-0007 after ISSUE-0005 was fixed.
 
 ### ISSUE-0005 — Broker and Web3 documentation conflicts with forced Alpaca routing
 
@@ -271,7 +271,7 @@ ISSUE-0014, ISSUE-0015
 P1
 
 #### Notes
-Fixed 2026-05-09 in `src/config.py` by rejecting unsupported active broker providers instead of silently coercing them to Alpaca. Regression test added: `tests/unit/test_config_broker_routes.py::test_unsupported_broker_provider_fails_closed`. Docs updated: `README.md`, `docs/ARCHITECTURE.md`, `docs/OPERATIONS.md`, `docs/STRATEGY.md`, `docs/DEVELOPER_BUDGET_GUIDE.md`, and `docs/needs-to-analyse.md`. Validation passed: `python -m pytest -q tests/unit/test_config_broker_routes.py tests/unit/test_config_env_parsing.py tests/unit/test_dashboard_config.py tests/unit/test_brokerage_service_provider.py tests/unit/test_brokerage_service_budget.py tests/unit/test_brokerage_dispatcher.py tests/test_telegram_commands.py tests/unit/test_backend_compose_secrets.py tests/unit/test_production_soak_gate.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` with 91 passed. Remaining risk: legacy T212/Web3 code still exists in the repo and may need cleanup or stronger public-surface guards later; next recommended task is ISSUE-0007.
+Fixed 2026-05-09 in `src/config.py` by rejecting unsupported active broker providers instead of silently coercing them to Alpaca. Regression test added: `tests/unit/test_config_broker_routes.py::test_unsupported_broker_provider_fails_closed`. Docs updated: `README.md`, `docs/ARCHITECTURE.md`, `docs/OPERATIONS.md`, `docs/STRATEGY.md`, `docs/DEVELOPER_BUDGET_GUIDE.md`, and `docs/needs-to-analyse.md`. Validation passed: `python -m pytest -q tests/unit/test_config_broker_routes.py tests/unit/test_config_env_parsing.py tests/unit/test_dashboard_config.py tests/unit/test_brokerage_service_provider.py tests/unit/test_brokerage_service_budget.py tests/unit/test_brokerage_dispatcher.py tests/test_telegram_commands.py tests/unit/test_backend_compose_secrets.py tests/unit/test_production_soak_gate.py tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py tests/unit/test_validate_deploy_env.py --asyncio-mode=auto` with 91 passed. Remaining risk: legacy T212/Web3 code still exists in the repo and may need cleanup or stronger public-surface guards later; Historical follow-up is ISSUE-0007.
 
 ### ISSUE-0006 — Cash commands call a nonexistent brokerage ticker formatter
 
@@ -324,7 +324,7 @@ ISSUE-0016
 P2
 
 #### Notes
-Fixed 2026-05-11 in `src/services/brokerage_service.py` by adding `BrokerageService._format_ticker()`. Regression tests added in `tests/unit/test_cash_ticker_formatter.py`. Validation passed: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` with 11 passed. Remaining risk: this only normalizes symbols for current cash/sweep lookups; broader cash-command UX and sweep execution safety are not changed. Next recommended task was ISSUE-0010, then ISSUE-0013; after both 2026-05-12 fixes, continue with ISSUE-0014.
+Fixed 2026-05-11 in `src/services/brokerage_service.py` by adding `BrokerageService._format_ticker()`. Regression tests added in `tests/unit/test_cash_ticker_formatter.py`. Validation passed: `python -m pytest -q tests/unit/test_cash_ticker_formatter.py tests/test_telegram_commands.py tests/unit/test_brokerage_service_provider.py --asyncio-mode=auto` with 11 passed. Remaining risk: this only normalizes symbols for current cash/sweep lookups; broader cash-command UX and sweep execution safety are not changed. Historical follow-up was ISSUE-0010, then ISSUE-0013; after both 2026-05-12 fixes, continue with ISSUE-0014.
 
 ### ISSUE-0007 — Dashboard terminal auth smoke gate remains unresolved in readiness evidence
 
@@ -377,7 +377,7 @@ ISSUE-0008, ISSUE-0016
 P1
 
 #### Notes
-Fixed 2026-05-09 in `tests/integration/test_terminal_bridge.py` by keeping `TestClient` alive across the login/complete workflow, stubbing external notification/message sends, and completing `/api/auth/login/complete` before using `session_token`. Readiness docs updated in `docs/soak-fault-injection-report.md` and `docs/production-scan-report.md`. Validation passed: `python -m pytest tests/integration/test_terminal_bridge.py::test_terminal_command_integration tests/integration/test_terminal_bridge.py::test_terminal_approval_integration -q --asyncio-mode=auto`. Remaining risk: production approval is still blocked by ISSUE-0009 and the longer soak/active-market evidence gate; `tests/integration/test_terminal_bridge.py::test_audit_logging` still reaches real Postgres through `/exposure` and is not closed by this patch. Next recommended task is ISSUE-0009.
+Fixed 2026-05-09 in `tests/integration/test_terminal_bridge.py` by keeping `TestClient` alive across the login/complete workflow, stubbing external notification/message sends, and completing `/api/auth/login/complete` before using `session_token`. Readiness docs updated in `docs/soak-fault-injection-report.md` and `docs/production-scan-report.md`. Validation passed: `python -m pytest tests/integration/test_terminal_bridge.py::test_terminal_command_integration tests/integration/test_terminal_bridge.py::test_terminal_approval_integration -q --asyncio-mode=auto`. Remaining risk: production approval is still blocked by ISSUE-0009 and the longer soak/active-market evidence gate; `tests/integration/test_terminal_bridge.py::test_audit_logging` still reaches real Postgres through `/exposure` and is not closed by this patch. Historical follow-up is ISSUE-0009.
 
 ### ISSUE-0008 — Production approval lacks extended soak and active market evidence
 
@@ -484,7 +484,7 @@ ISSUE-0008, ISSUE-0015
 P1
 
 #### Notes
-Fixed 2026-05-09 in `scripts/run_production_soak_gate.py` by requiring structured zero counts for `postgres_auth_failures`, `postgres_auth_timeouts`, `grpc_broken_pipe_errors`, and `grpc_connection_reset_errors`. Regression test added: `tests/unit/test_runtime_alert_rules.py::test_postgres_and_grpc_error_spikes_fail_soak_gate`; existing soak-gate tests updated to include clean runtime counts. Validation passed: `python -m pytest -q tests/unit/test_runtime_alert_rules.py tests/unit/test_production_soak_gate.py tests/unit/test_validate_deploy_env.py tests/unit/test_backend_compose_secrets.py` with 7 passed. Remaining risk: this is a production evidence gate, not live alert delivery; broader API non-2xx/order reject/timeout/kill-switch alerting remains in the release checklist. Next recommended task is ISSUE-0011.
+Fixed 2026-05-09 in `scripts/run_production_soak_gate.py` by requiring structured zero counts for `postgres_auth_failures`, `postgres_auth_timeouts`, `grpc_broken_pipe_errors`, and `grpc_connection_reset_errors`. Regression test added: `tests/unit/test_runtime_alert_rules.py::test_postgres_and_grpc_error_spikes_fail_soak_gate`; existing soak-gate tests updated to include clean runtime counts. Validation passed: `python -m pytest -q tests/unit/test_runtime_alert_rules.py tests/unit/test_production_soak_gate.py tests/unit/test_validate_deploy_env.py tests/unit/test_backend_compose_secrets.py` with 7 passed. Remaining risk: this is a production evidence gate, not live alert delivery; broader API non-2xx/order reject/timeout/kill-switch alerting remains in the release checklist. Historical follow-up is ISSUE-0011.
 
 ### ISSUE-0010 — Market session handling is suffix-based and ignores real exchange calendars
 
@@ -607,7 +607,7 @@ ISSUE-0010, ISSUE-0012
 P1
 
 #### Notes
-Fixed 2026-05-09 in `src/services/arbitrage_service.py` and `src/services/redis_service.py` by storing a `history-v1` state fingerprint and ignoring saved Redis Kalman state when current prewarm history produces a different fingerprint. Regression test added: `tests/unit/test_arbitrage_state_invalidation.py::test_kalman_state_invalidates_on_corporate_action`. Validation passed: `python -m pytest -q tests/unit/test_arbitrage_state_invalidation.py tests/unit/test_arbitrage_math.py tests/unit/test_kalman.py tests/unit/test_kalman_q_inflation.py tests/unit/test_rolling_cointegration.py` with 20 passed. Remaining risk: this detects adjusted-history changes seen during prewarm/reload; it does not add a full corporate-action event provider. Next recommended task is ISSUE-0018.
+Fixed 2026-05-09 in `src/services/arbitrage_service.py` and `src/services/redis_service.py` by storing a `history-v1` state fingerprint and ignoring saved Redis Kalman state when current prewarm history produces a different fingerprint. Regression test added: `tests/unit/test_arbitrage_state_invalidation.py::test_kalman_state_invalidates_on_corporate_action`. Validation passed: `python -m pytest -q tests/unit/test_arbitrage_state_invalidation.py tests/unit/test_arbitrage_math.py tests/unit/test_kalman.py tests/unit/test_kalman_q_inflation.py tests/unit/test_rolling_cointegration.py` with 20 passed. Remaining risk: this detects adjusted-history changes seen during prewarm/reload; it does not add a full corporate-action event provider. Historical follow-up is ISSUE-0018.
 
 ### ISSUE-0012 — SEC/fundamental cache misses default to neutral in live signal path
 
@@ -660,7 +660,7 @@ ISSUE-0011, ISSUE-0013
 P1
 
 #### Notes
-Fixed 2026-05-09 in `src/agents/orchestrator.py` by tracking unknown fundamental tickers and vetoing live or `LIVE_CAPITAL_DANGER` entries before portfolio weighting. Regression test added: `tests/unit/test_orchestrator_fundamentals.py::test_live_mode_vetoes_missing_fundamental_score`. Validation passed: `python -m pytest -q tests/unit/test_orchestrator_fundamentals.py tests/unit/test_orchestrator_mab.py tests/unit/test_sector_leader_regime.py::test_orchestrator_sector_veto tests/unit/test_sector_leader_regime.py::test_orchestrator_missing_sector_defaults_to_spy` with 4 passed. Remaining risk: stale-but-present fundamental cache entries still need an age/freshness guard. Next recommended task is ISSUE-0018.
+Fixed 2026-05-09 in `src/agents/orchestrator.py` by tracking unknown fundamental tickers and vetoing live or `LIVE_CAPITAL_DANGER` entries before portfolio weighting. Regression test added: `tests/unit/test_orchestrator_fundamentals.py::test_live_mode_vetoes_missing_fundamental_score`. Validation passed: `python -m pytest -q tests/unit/test_orchestrator_fundamentals.py tests/unit/test_orchestrator_mab.py tests/unit/test_sector_leader_regime.py::test_orchestrator_sector_veto tests/unit/test_sector_leader_regime.py::test_orchestrator_missing_sector_defaults_to_spy` with 4 passed. Remaining risk: stale-but-present fundamental cache entries still need an age/freshness guard. Historical follow-up is ISSUE-0018.
 
 ### ISSUE-0013 — Whale watcher is configured and documented but currently always neutral
 
@@ -767,7 +767,7 @@ ISSUE-0005, ISSUE-0015
 P2
 
 #### Notes
-Fixed 2026-05-13 in `README.md`, `docs/OPERATIONS.md`, and `tests/unit/test_docs_runtime_parity.py`. Validation passed: `python -m pytest tests/unit/test_docs_runtime_parity.py::test_local_setup_uses_locked_requirements -q`. Remaining risk: this patch proves docs/runtime parity only; broader CI coverage gaps remain ISSUE-0015. Next recommended task is ISSUE-0015.
+Fixed 2026-05-13 in `README.md`, `docs/OPERATIONS.md`, and `tests/unit/test_docs_runtime_parity.py`. Validation passed: `python -m pytest tests/unit/test_docs_runtime_parity.py::test_local_setup_uses_locked_requirements -q`. Remaining risk: this patch proves docs/runtime parity only; broader CI coverage gaps remain ISSUE-0015. Historical follow-up is ISSUE-0015.
 
 ### ISSUE-0015 — CI gates miss broker failure contracts and long-running safety scenarios
 
@@ -822,7 +822,7 @@ ISSUE-0001, ISSUE-0002, ISSUE-0003, ISSUE-0004, ISSUE-0008, ISSUE-0009
 P2
 
 #### Notes
-Fixed 2026-05-13 in `.github/workflows/deploy.yml` and `tests/unit/test_ci_safety_gates.py`. Regression test added: `tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts`. Validation passed: `python -m pytest tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts -q` and the CI safety command with 45 passed. Remaining risk: CI still does not execute a real multi-hour soak; it only validates the soak evidence gate and alert-threshold tests. Next recommended task is ISSUE-0017.
+Fixed 2026-05-13 in `.github/workflows/deploy.yml` and `tests/unit/test_ci_safety_gates.py`. Regression test added: `tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts`. Validation passed: `python -m pytest tests/unit/test_ci_safety_gates.py::test_deploy_workflow_runs_broker_execution_safety_contracts -q` and the CI safety command with 45 passed. Remaining risk: CI still does not execute a real multi-hour soak; it only validates the soak evidence gate and alert-threshold tests. Historical follow-up is ISSUE-0017.
 
 ### ISSUE-0016 — Dashboard bot status mirrors desired state instead of unsafe operational state
 
@@ -876,7 +876,7 @@ ISSUE-0001, ISSUE-0007
 P1
 
 #### Notes
-Fixed 2026-05-11 in `src/services/dashboard_service.py`, `src/monitor.py`, and `frontend/src/App.tsx`. Regression tests added/updated: `tests/unit/test_dashboard_status.py::test_summary_reports_manual_review_after_startup_fail_fast` and `tests/unit/test_startup_guards.py::test_startup_blocks_when_unresolved_execution_state_exists`. Validation passed: `python -m pytest -q tests/unit/test_dashboard_status.py tests/unit/test_dashboard_config.py tests/unit/test_dashboard_sessions.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_startup_guards.py` with 19 passed, and `node node_modules/typescript/bin/tsc -b` from `frontend/`. Remaining risk: frontend lint still has pre-existing unrelated failures in `LoginView.test.tsx` and `useStartupProgress.ts`. Next recommended task is ISSUE-0018.
+Fixed 2026-05-11 in `src/services/dashboard_service.py`, `src/monitor.py`, and `frontend/src/App.tsx`. Regression tests added/updated: `tests/unit/test_dashboard_status.py::test_summary_reports_manual_review_after_startup_fail_fast` and `tests/unit/test_startup_guards.py::test_startup_blocks_when_unresolved_execution_state_exists`. Validation passed: `python -m pytest -q tests/unit/test_dashboard_status.py tests/unit/test_dashboard_config.py tests/unit/test_dashboard_sessions.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_startup_guards.py` with 19 passed, and `node node_modules/typescript/bin/tsc -b` from `frontend/`. Remaining risk: frontend lint still has pre-existing unrelated failures in `LoginView.test.tsx` and `useStartupProgress.ts`. Historical follow-up is ISSUE-0018.
 
 ### ISSUE-0017 — Fire-and-forget background tasks lack a watchdog
 
@@ -930,7 +930,7 @@ ISSUE-0009, ISSUE-0016
 P2
 
 #### Notes
-Fixed 2026-05-13 in `src/services/background_task_watchdog.py`, `src/monitor.py`, `src/services/persistence_service.py`, and `src/services/dashboard_service.py`. Regression test added: `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health`. Validation passed: `python -m pytest tests/unit/test_background_task_watchdog.py -q` and adjacent dashboard/startup checks. Remaining risk: watchdog records and surfaces failures but does not restart failed tasks or persist a durable dead-letter queue. ISSUE-0019 was fixed next; current recommended task is ISSUE-0020.
+Fixed 2026-05-13 in `src/services/background_task_watchdog.py`, `src/monitor.py`, `src/services/persistence_service.py`, and `src/services/dashboard_service.py`. Regression test added: `tests/unit/test_background_task_watchdog.py::test_background_task_failure_surfaces_in_health`. Validation passed: `python -m pytest tests/unit/test_background_task_watchdog.py -q` and adjacent dashboard/startup checks. Remaining risk: watchdog records and surfaces failures but does not restart failed tasks or persist a durable dead-letter queue. ISSUE-0019 and ISSUE-0020 were fixed afterward.
 
 ### ISSUE-0018 — Dashboard wallet buy proceeds despite cash-limited planning
 
@@ -982,7 +982,7 @@ ISSUE-0004, ISSUE-0016
 P1
 
 #### Notes
-Fixed 2026-05-11 in `src/services/dashboard_service.py` by rejecting wallet recommendation buys when requested budget exceeds effective broker cash. Regression test added: `tests/unit/test_dashboard_wallet_sync.py::test_wallet_buy_blocks_when_cash_limited`. Validation passed: `python -m pytest -q tests/unit/test_dashboard_wallet_sync.py tests/unit/test_dashboard_wallet_new_methods.py tests/unit/test_dashboard_config.py tests/unit/test_dashboard_status.py` with 12 passed. Remaining risk: no explicit operator override/cap flow exists; cash-limited buys now fail closed. Next recommended task is ISSUE-0006 after ISSUE-0023 was fixed.
+Fixed 2026-05-11 in `src/services/dashboard_service.py` by rejecting wallet recommendation buys when requested budget exceeds effective broker cash. Regression test added: `tests/unit/test_dashboard_wallet_sync.py::test_wallet_buy_blocks_when_cash_limited`. Validation passed: `python -m pytest -q tests/unit/test_dashboard_wallet_sync.py tests/unit/test_dashboard_wallet_new_methods.py tests/unit/test_dashboard_config.py tests/unit/test_dashboard_status.py` with 12 passed. Remaining risk: no explicit operator override/cap flow exists; cash-limited buys now fail closed. Historical follow-up is ISSUE-0006 after ISSUE-0023 was fixed.
 
 ### ISSUE-0019 — Closing trades overwrites per-leg metadata
 
@@ -1035,25 +1035,27 @@ ISSUE-0001, ISSUE-0002
 P2
 
 #### Notes
-Fixed 2026-05-13 in `src/services/persistence_service.py` with regression coverage in `tests/unit/test_persistence_service.py`. Validation passed: `python -m pytest tests/unit/test_persistence_service.py::test_close_trade_preserves_entry_metadata -q` and the adjacent monitor close slice. Remaining risk: the ledger still has no immutable event log or dedicated fill-event table. Next recommended task is ISSUE-0020.
+Fixed 2026-05-13 in `src/services/persistence_service.py` with regression coverage in `tests/unit/test_persistence_service.py`. Validation passed: `python -m pytest tests/unit/test_persistence_service.py::test_close_trade_preserves_entry_metadata -q` and the adjacent monitor close slice. Remaining risk: the ledger still has no immutable event log or dedicated fill-event table. Historical follow-up is ISSUE-0020.
 
 ### ISSUE-0020 — Brain ledgers mix historical notes, closed invariants, and open production gates
 
-Status: OPEN  
+Status: FIXED
 Severity: LOW  
 Area: documentation  
 Discovered in audit: 2026-05-08  
-Last checked: 2026-05-08  
-Evidence type: doc  
+Last checked: 2026-05-13
+Evidence type: doc | test
 Confidence: HIGH  
 
 #### Summary
-The existing brain contains valuable audit notes, but issues were spread across historical prose, old P0 labels, closed invariant notes, and production-readiness summaries without a single canonical `ISSUE-XXXX` register.
+The existing brain contains valuable audit notes, but issues were spread across historical prose, old P0 labels, closed invariant notes, and production-readiness summaries. This made historical follow-up notes look like active next-fix instructions alongside the canonical `ISSUE-XXXX` register.
 
 #### Evidence
-- `.brain/04_AUDIT_LEDGER.md` contains current audition context, historical dirty-worktree notes, and fixed invariant tables.
+- `.brain/04_AUDIT_LEDGER.md` contained current audit context, historical dirty-worktree notes, fixed invariant tables, and active-looking follow-up prose.
 - `.brain/05_BUG_LEDGER.md` mixes closed/protected items, old `P0-XXX`/`P1-XXX` IDs, and open production gates.
 - Several known risks in docs were not in the exact issue format requested by the current audit.
+- Fixed 2026-05-13 by converting historical task guidance to historical follow-up notes, making `.brain/12_FIX_PRIORITY_QUEUE.md` the only active pending-fix source, and clearing the stale Postgres secret release gate after its guard test passed.
+- Regression test: `tests/unit/test_brain_ledgers.py::test_brain_ledgers_do_not_publish_historical_next_recommendations`.
 
 #### Trigger
 Future audits search for known risks and encounter multiple naming schemes or closed/open state mixed together.
@@ -1068,16 +1070,16 @@ The team can waste audit time rediscovering known issues or accidentally treat h
 The brain folder exists and contains useful release, testing, and workflow context.
 
 #### Missing protection
-Canonical open issue IDs, subsystem problem map, priority queue, untested-risk list, and workflow failure map.
+An automated guard to keep historical notes from publishing active-looking next-task guidance.
 
 #### Smallest safe fix
-Maintain the canonical `ISSUE-XXXX` register and generated maps added by this audit; move future findings into those IDs.
+Implemented: keep `.brain/12_FIX_PRIORITY_QUEUE.md` as the canonical pending-fix source and block stale active-task wording in historical ledgers.
 
 #### Test required
-Documentation review: every open issue in priority/problem maps must point to one canonical issue entry.
+Added: documentation regression tests that fail if historical ledgers publish active-looking next-task guidance or if the release checklist leaves the verified Postgres secret gate open.
 
 #### Validation command
-`python scripts/validate_brain_issue_links.py`
+`python -m pytest tests/unit/test_brain_ledgers.py tests/unit/test_backend_compose_secrets.py -q`
 
 #### Related issues
 None
@@ -1086,7 +1088,7 @@ None
 P3
 
 #### Notes
-This audit starts the canonical structure but does not delete historical notes.
+Fixed 2026-05-13 in `.brain/02_ARCHITECTURE_MAP.md`, `.brain/04_AUDIT_LEDGER.md`, `.brain/05_BUG_LEDGER.md`, `.brain/10_RELEASE_CHECKLIST.md`, `.brain/11_ECOSYSTEM_PROBLEM_MAP.md`, `.brain/12_FIX_PRIORITY_QUEUE.md`, `.brain/13_UNTESTED_RISKS.md`, and `tests/unit/test_brain_ledgers.py`. Remaining risk: future release checklist gates still need their own issue IDs if they are promoted into the active fix queue.
 
 ### ISSUE-0021 — Leg A full-fill gate accepts short `status=filled` quantity
 
@@ -1247,7 +1249,7 @@ ISSUE-0005, ISSUE-0007, ISSUE-0016
 P1
 
 #### Notes
-Fixed 2026-05-11 in `src/mcp_server.py` by rejecting FastMCP manual trade execution before it can call `execution_client.execute_trade()` or `persistence_service.log_trade()`. Regression test added: `tests/unit/test_mcp_execute_trade_safety.py::test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload`. Validation passed: `python -m pytest -q tests/unit/test_mcp_execute_trade_safety.py::test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload --asyncio-mode=auto`. Remaining risk: there is still no safe monitor-routed FastMCP execution path, and adjacent execution idempotency tests need a `mocker` fixture before they can run locally. Next recommended task is ISSUE-0006.
+Fixed 2026-05-11 in `src/mcp_server.py` by rejecting FastMCP manual trade execution before it can call `execution_client.execute_trade()` or `persistence_service.log_trade()`. Regression test added: `tests/unit/test_mcp_execute_trade_safety.py::test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload`. Validation passed: `python -m pytest -q tests/unit/test_mcp_execute_trade_safety.py::test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload --asyncio-mode=auto`. Remaining risk: there is still no safe monitor-routed FastMCP execution path, and adjacent execution idempotency tests need a `mocker` fixture before they can run locally. Historical follow-up is ISSUE-0006.
 
 ### ISSUE-0024 — Financial kill switch uses gross market value for hedged and short positions
 

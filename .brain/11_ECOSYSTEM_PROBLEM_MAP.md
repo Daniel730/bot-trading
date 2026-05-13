@@ -25,7 +25,7 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Persistence and State
 
-- ISSUE-0020 - Brain state previously lacked one canonical issue register.
+- None currently listed.
 
 ## Orchestration
 
@@ -48,4 +48,4 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Documentation / Brain Quality
 
-- ISSUE-0020 - Historical brain notes need canonical issue IDs and maps.
+- None currently listed.

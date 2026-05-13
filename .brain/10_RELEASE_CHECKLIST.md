@@ -8,7 +8,7 @@ The repo can be used for local development and paper-mode validation, but the ac
 
 ## Before Merging Current Execution-Safety Work
 
-- [ ] Restore no-default PostgreSQL password behavior in `infra/docker-compose.backend.yml`.
+- [x] Verify no-default PostgreSQL password behavior in `infra/docker-compose.backend.yml`.
 - [ ] Resolve the six focused unit test failures from the 2026-05-07 run.
 - [ ] Ensure monitor tests mock fill polling and persistence boundaries correctly.
 - [ ] Ensure risk-service test fixtures include `max_allowed_fiat` when monitor reads it.
