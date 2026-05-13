@@ -10,7 +10,7 @@ The repo can be used for local development and paper-mode validation, but unreso
 
 - [x] Verify no-default PostgreSQL password behavior in `infra/docker-compose.backend.yml`.
 - [x] Resolve the historical 2026-05-07 six-test monitor failure list.
-- [ ] Ensure monitor tests mock fill polling and persistence boundaries correctly.
+- [x] Ensure monitor tests mock fill polling and persistence boundaries correctly.
 - [ ] Ensure risk-service test fixtures include `max_allowed_fiat` when monitor reads it.
 - [ ] Decide expected precedence between orchestrator veto and profit guard veto.
 - [ ] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes.

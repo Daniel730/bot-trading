@@ -1357,6 +1357,58 @@ P3
 #### Notes
 Fixed 2026-05-13 in `.brain/00_START_HERE.md`, `.brain/08_TESTING_PROTOCOL.md`, `.brain/10_RELEASE_CHECKLIST.md`, `.brain/04_AUDIT_LEDGER.md`, `.brain/05_BUG_LEDGER.md`, and `tests/unit/test_brain_ledgers.py`. The release checklist still blocks readiness on other gates.
 
+### ISSUE-0026 — Brain still reports monitor fixture isolation as unresolved
+
+Status: FIXED
+Severity: LOW
+Area: documentation
+Discovered in audit: 2026-05-13
+Last checked: 2026-05-13
+Evidence type: doc | test
+Confidence: HIGH
+
+#### Summary
+The local brain still described monitor unit tests as having unresolved fill-polling and persistence-boundary isolation problems after `tests/unit/test_monitor.py` passed on 2026-05-13.
+
+#### Evidence
+- `.brain/04_AUDIT_LEDGER.md` still carried the old failed-test table describing stale monitor fixture problems.
+- `.brain/08_TESTING_PROTOCOL.md` still warned that a monitor close-position test reached real Postgres.
+- `.brain/10_RELEASE_CHECKLIST.md` still had monitor fixture isolation as an unchecked merge gate.
+- Regression test: `tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_monitor_fixture_isolation_is_unresolved`.
+
+#### Trigger
+Future work follows the release checklist after the monitor test file is already isolated and green.
+
+#### Broken assumption
+Historical monitor fixture warnings can remain phrased as active readiness blockers after the whole monitor unit file passes.
+
+#### Financial or workflow consequence
+Codex and the operator can spend cycles re-auditing already-isolated tests instead of moving to unresolved readiness gates.
+
+#### Existing protection
+The current monitor unit command passes, and `ISSUE-0025` already prevents the old six-test failure list from being treated as active.
+
+#### Missing protection
+No guard prevented the specific fill-polling/Postgres-leak fixture warning from remaining in current brain docs.
+
+#### Smallest safe fix
+Update the brain docs to record the current monitor-unit result, mark the checklist item complete, and add a docs regression test for the stale isolation wording.
+
+#### Test required
+Add a test that fails when `.brain/04_AUDIT_LEDGER.md`, `.brain/08_TESTING_PROTOCOL.md`, or `.brain/10_RELEASE_CHECKLIST.md` still describe the monitor fixture-isolation issue as unresolved.
+
+#### Validation command
+`python -m pytest tests/unit/test_brain_ledgers.py::test_brain_does_not_claim_monitor_fixture_isolation_is_unresolved -q`
+
+#### Related issues
+ISSUE-0025
+
+#### Fix priority
+P3
+
+#### Notes
+Fixed 2026-05-13 in `.brain/04_AUDIT_LEDGER.md`, `.brain/08_TESTING_PROTOCOL.md`, `.brain/10_RELEASE_CHECKLIST.md`, `.brain/05_BUG_LEDGER.md`, and `tests/unit/test_brain_ledgers.py`. This does not close other release checklist gates.
+
 ## Current Audition
 
 The current audition is a workflow-safety audit, not a style or performance audit.
@@ -1392,32 +1444,26 @@ Active code areas under audition:
 
 ## Fresh Test Evidence
 
-Command:
+Historical command:
 
 ```bash
 python -m pytest -q tests/unit/test_startup_guards.py tests/unit/test_alpaca_provider.py tests/unit/test_dashboard_wallet_sync.py tests/unit/test_monitor.py tests/unit/test_spread_guard_unit.py
 ```
 
+That 2026-05-07 broad focused slice was red at the time. The monitor fixture-isolation concern was rechecked on 2026-05-13 with:
+
+```bash
+python -m pytest tests/unit/test_monitor.py -q
+```
+
 Result:
 
-- 42 passed.
-- 6 failed.
-- Superseded 2026-05-08: the same focused execution-safety slice now passes with 49 passed after monitor unit fixtures were updated to match the current fill/reconciliation contract.
-
-Failed tests:
-
-| Test | Observed problem |
-|---|---|
-| `test_execute_trade_success` | Test did not mock fill polling correctly; execution tried to update real Postgres after unconfirmed fill path. |
-| `test_execute_trade_emergency_closes_leg_a_when_leg_b_fails` | Test risk response lacks `max_allowed_fiat`, causing `KeyError`. |
-| `test_close_position_skips_sell_when_broker_has_no_shares` | Failed in the active monitor close-workflow slice. Re-check exact assertion before fixing. |
-| `test_execute_trade_crypto_live_uses_broker` | Failed in the active monitor live-execution slice. Re-check after adding fill polling mocks and full risk metadata. |
-| `test_execute_trade_crypto_budget_cap_applied` | Test risk response lacks `max_allowed_fiat`, causing `KeyError`. |
-| `test_orchestrator_veto` | Expected `VETOED`, but current profit guard returns `IGNORED` after net-profit veto. Decide expected precedence. |
+- 24 passed.
 
 Audit interpretation:
 
-- Superseded 2026-05-08: the monitor unit suite is now green and isolated from real Postgres for this slice.
+- The monitor unit suite is currently green for this slice.
+- This does not prove production or paper-mode readiness; it only clears the stale monitor fixture-isolation note.
 
 ## 2026-05-08 Incremental Execution-Safety Audit Update
 
