@@ -12,11 +12,6 @@ Last updated: 2026-05-13
 
 ## P2 - Must fix before public release / monetization
 
-- ISSUE-0015 - CI misses broker failure contracts and soak scenarios
-  - reason for priority: Important execution regressions can pass local and CI tests.
-  - smallest safe fix: Add narrow fake-provider failure contracts to CI before broader soak.
-  - required test: Broker failure contract suite in CI.
-
 - ISSUE-0017 - Fire-and-forget background tasks lack watchdog
   - reason for priority: Failures can disappear and degrade operations.
   - smallest safe fix: Track background task handles and log/alert exceptions.
