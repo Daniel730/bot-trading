@@ -48,3 +48,29 @@ def test_brain_does_not_claim_resolved_focused_monitor_failures_are_active():
         "Brain docs still describe the old 2026-05-07 focused monitor failures as active.\n"
         + "\n".join(offenders)
     )
+
+
+def test_brain_does_not_claim_monitor_fixture_isolation_is_unresolved():
+    checked_files = [
+        ".brain/04_AUDIT_LEDGER.md",
+        ".brain/08_TESTING_PROTOCOL.md",
+        ".brain/10_RELEASE_CHECKLIST.md",
+    ]
+    stale_phrases = [
+        "Test did not mock fill polling correctly",
+        "execution tried to update real Postgres",
+        "Fix test isolation before using the whole monitor unit file",
+        "- [ ] Ensure monitor tests mock fill polling and persistence boundaries correctly.",
+    ]
+
+    offenders = []
+    for relative_path in checked_files:
+        text = (ROOT / relative_path).read_text(encoding="utf-8")
+        for phrase in stale_phrases:
+            if phrase in text:
+                offenders.append(f"{relative_path}: {phrase}")
+
+    assert offenders == [], (
+        "Brain docs still describe resolved monitor fixture-isolation problems as active.\n"
+        + "\n".join(offenders)
+    )

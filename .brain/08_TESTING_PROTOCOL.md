@@ -80,9 +80,9 @@ Protects:
 - paper-mode dashboard wallet sync avoids broker order placement;
 - invalid bid/ask blocks before risk and broker calls.
 
-Known testing caveat:
+Resolved testing caveat:
 
-- `tests/unit/test_monitor.py::test_close_position_skips_sell_when_broker_has_no_shares` reached real Postgres during a targeted run. Fix test isolation before using the whole monitor unit file as a readiness gate.
+- `tests/unit/test_monitor.py` passed on 2026-05-13 with 24 tests. The old monitor fixture-isolation warning is superseded for this slice.
 
 ## Minimum Local Gate Before Committing Execution Logic
 
