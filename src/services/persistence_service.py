@@ -315,15 +315,27 @@ class PersistenceService:
 
     async def close_trade(self, signal_id: uuid.UUID, exit_prices: dict, pnl: float, exit_reason: Optional[ExitReason] = None):
         """Marks trades with a specific signal_id as CLOSED and records PnL."""
-        from sqlalchemy import update
+        from sqlalchemy import select, update
+        close_metadata = {
+            "exit_prices": exit_prices,
+            "pnl": pnl,
+            "exit_reason": exit_reason.value if exit_reason else None,
+        }
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
-                stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(
-                    status=OrderStatus.CLOSED,
-                    closed_at=func.now(),
-                    metadata_json={"exit_prices": exit_prices, "pnl": pnl, "exit_reason": exit_reason.value if exit_reason else None}
-                )
-                await session.execute(stmt)
+                existing_rows = (
+                    await session.execute(
+                        select(TradeLedger.id, TradeLedger.metadata_json).where(TradeLedger.signal_id == signal_id)
+                    )
+                ).all()
+                for row in existing_rows:
+                    existing_metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+                    stmt = update(TradeLedger).where(TradeLedger.id == row.id).values(
+                        status=OrderStatus.CLOSED,
+                        closed_at=func.now(),
+                        metadata_json={**existing_metadata, **close_metadata},
+                    )
+                    await session.execute(stmt)
 
                 # Update TradeJournal if it exists
                 if exit_reason:

@@ -10,7 +10,7 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Exit Safety
 
-- ISSUE-0019 - Close persistence can overwrite order metadata needed for forensic reconciliation.
+- None currently listed.
 ## Risk Management
 
 - None currently listed.
@@ -25,7 +25,6 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Persistence and State
 
-- ISSUE-0019 - `close_trade()` replaces entry metadata with close metadata.
 - ISSUE-0020 - Brain state previously lacked one canonical issue register.
 
 ## Orchestration
