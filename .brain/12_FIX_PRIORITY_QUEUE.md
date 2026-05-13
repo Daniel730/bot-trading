@@ -1,6 +1,6 @@
 # Fix Priority Queue
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 ## P0 - Must fix before broker-connected testing
 
@@ -11,11 +11,6 @@ Last updated: 2026-05-12
 - None currently listed.
 
 ## P2 - Must fix before public release / monetization
-
-- ISSUE-0014 - Local dependency path differs from CI/Docker
-  - reason for priority: Local smoke can pass while deployment fails.
-  - smallest safe fix: Align local script dependency resolution with Docker/CI lockfiles.
-  - required test: Setup smoke script check.
 
 - ISSUE-0015 - CI misses broker failure contracts and soak scenarios
   - reason for priority: Important execution regressions can pass local and CI tests.

@@ -1,6 +1,6 @@
 # Ecosystem Problem Map
 
-Last updated: 2026-05-12
+Last updated: 2026-05-13
 
 Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
@@ -42,7 +42,6 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 - ISSUE-0015 - Missing broker fake-provider and Java gRPC failure contract suites.
 ## Configuration and Deployment
 
-- ISSUE-0014 - Local setup uses different dependency path than CI/Docker.
 - ISSUE-0015 - CI quality lanes do not include all runtime safety gates.
 
 ## Frontend / Dashboard
@@ -51,5 +50,4 @@ Canonical issue details are in `.brain/04_AUDIT_LEDGER.md`.
 
 ## Documentation / Brain Quality
 
-- ISSUE-0014 - Local setup docs do not match locked CI/Docker dependency path.
 - ISSUE-0020 - Historical brain notes need canonical issue IDs and maps.

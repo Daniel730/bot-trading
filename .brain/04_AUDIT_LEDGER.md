@@ -718,22 +718,23 @@ Fixed 2026-05-12 in `src/agents/whale_watcher_agent.py`, `src/agents/orchestrato
 
 ### ISSUE-0014 — Local runtime dependency path differs from CI and Docker
 
-Status: OPEN  
+Status: FIXED
 Severity: MEDIUM  
 Area: deployment  
 Discovered in audit: 2026-05-08  
-Last checked: 2026-05-08  
-Evidence type: config  
+Last checked: 2026-05-13
+Evidence type: config/doc/test
 Confidence: HIGH  
 
 #### Summary
-Local setup docs install from `requirements.txt`, while CI and Docker install from `requirements.lock` on Python 3.11. This can make local tests pass or fail against a different dependency graph than deployed services.
+Local setup docs previously installed from `requirements.txt`, while CI and Docker install from `requirements.lock` on Python 3.11. This could make local tests pass or fail against a different dependency graph than deployed services.
 
 #### Evidence
-- `README.md` and `docs/OPERATIONS.md` instruct `pip install -r requirements.txt`.
+- Before the fix, `README.md` and `docs/OPERATIONS.md` instructed `pip install -r requirements.txt`.
 - `.github/workflows/deploy.yml` installs `requirements.lock` with `uv`.
 - `infra/Dockerfile` installs `requirements.lock` on `python:3.11-slim`.
-- README describes Python `3.10+`.
+- Before the fix, README described Python `3.10+`.
+- `tests/unit/test_docs_runtime_parity.py::test_local_setup_uses_locked_requirements` failed before the docs change and now verifies README/operations docs use `uv pip install -r requirements.lock` and Python 3.11.
 
 #### Trigger
 Developer installs locally from loose requirements, dependency resolver selects newer packages, or a Python version differs from the Docker/CI runtime.
@@ -745,16 +746,16 @@ Any Python 3.10+ environment with `requirements.txt` is equivalent to the deploy
 Tests can pass locally while deployment breaks, or local audit evidence can fail to reproduce production behavior.
 
 #### Existing protection
-CI and Docker use `requirements.lock`.
+CI and Docker use `requirements.lock`. README and `docs/OPERATIONS.md` now steer local setup to Python 3.11 and `uv pip install -r requirements.lock`.
 
 #### Missing protection
-Docs do not steer local auditing to the locked dependency path and exact Python version.
+None for this scoped docs-parity issue after the 2026-05-13 fix.
 
 #### Smallest safe fix
-Update local setup/testing docs to use the lockfile and Python 3.11, or document which paths are intentionally loose.
+Implemented: update local setup docs to use the lockfile and Python 3.11.
 
 #### Test required
-A docs/deploy lint that verifies setup commands reference the lockfile used by CI and Docker.
+Added `tests/unit/test_docs_runtime_parity.py::test_local_setup_uses_locked_requirements`.
 
 #### Validation command
 `python -m pytest tests/unit/test_docs_runtime_parity.py::test_local_setup_uses_locked_requirements -q`
@@ -766,7 +767,7 @@ ISSUE-0005, ISSUE-0015
 P2
 
 #### Notes
-This is not a trading bug, but it can invalidate audit evidence.
+Fixed 2026-05-13 in `README.md`, `docs/OPERATIONS.md`, and `tests/unit/test_docs_runtime_parity.py`. Validation passed: `python -m pytest tests/unit/test_docs_runtime_parity.py::test_local_setup_uses_locked_requirements -q`. Remaining risk: this patch proves docs/runtime parity only; broader CI coverage gaps remain ISSUE-0015. Next recommended task is ISSUE-0015.
 
 ### ISSUE-0015 — CI gates miss broker failure contracts and long-running safety scenarios
 

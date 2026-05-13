@@ -32,10 +32,15 @@ Optional but useful:
 Backend:
 
 ```bash
-pip install -r requirements.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip uv
+uv pip install -r requirements.lock
 python scripts/init_db.py
 python src/monitor.py
 ```
+
+On Windows, use `py -3.11 -m venv .venv` and `.venv\Scripts\Activate.ps1` for the virtual environment steps. Local runs should use `requirements.lock` so they match CI and Docker.
 
 Frontend:
 
