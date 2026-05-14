@@ -1789,6 +1789,18 @@ class ArbitrageMonitor:
             broker_msg_b = (fill_b or {}).get("message") or (fill_b or {}).get("error") or fill_b or res_b
             await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
             return execution_result(False, "leg_b_rejected_after_submit")
+        leg_b_partial_fill = status_b == OrderStatus.LEG_B_PARTIAL
+        if leg_b_partial_fill:
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
+            alert = (
+                f"Leg B ({exec_t_b}) partially filled. "
+                f"Signal remains PARTIAL_EXPOSURE and requires manual reconciliation. "
+                f"status={str((fill_b or {}).get('status', '')).lower() or 'unknown'} "
+                f"filled_qty={filled_qty_b} expected_qty={float(size_b)} "
+                f"order_id={order_id_b} signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
         pair_status = (
             OrderStatus.OPEN_PAIR
             if status_a == OrderStatus.LEG_A_FILLED and status_b == OrderStatus.LEG_B_FILLED
@@ -1797,16 +1809,17 @@ class ArbitrageMonitor:
         visible_status = pair_status
 
         # M-05: Journal written only after both broker legs have returned successfully
-        await persistence_service.log_trade_journal({
-            "signal_id": uuid.UUID(signal_id),
-            "entry_regime": regime_info["regime"],
-            "metrics_at_entry": {
-                "z_score": risk_res.get("z_score", 0.0),
-                "win_prob": settings.DEFAULT_WIN_PROBABILITY,
-                "regime_confidence": regime_info["confidence"],
-                "features": regime_info["features"]
-            }
-        })
+        if not leg_b_partial_fill:
+            await persistence_service.log_trade_journal({
+                "signal_id": uuid.UUID(signal_id),
+                "entry_regime": regime_info["regime"],
+                "metrics_at_entry": {
+                    "z_score": risk_res.get("z_score", 0.0),
+                    "win_prob": settings.DEFAULT_WIN_PROBABILITY,
+                    "regime_confidence": regime_info["confidence"],
+                    "features": regime_info["features"]
+                }
+            })
 
         # Log Leg A
         await persistence_service.log_trade({
