@@ -1123,16 +1123,27 @@ class ArbitrageMonitor:
                     approved = await notification_service.request_approval(trade_summary)
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
-                        await self.execute_trade(pair, direction, price_a, price_b, signal_id)
-                        await self._upsert_active_signal(
-                            t_a,
-                            t_b,
-                            z_score=z_score,
-                            status="EXECUTED",
-                            confidence=final_confidence,
-                            hedge_ratio=hedge_ratio,
-                        )
-                        diagnostic["verdict"] = "EXECUTED"
+                        execution_result = await self.execute_trade(pair, direction, price_a, price_b, signal_id)
+                        if execution_result and execution_result.get("executed"):
+                            await self._upsert_active_signal(
+                                t_a,
+                                t_b,
+                                z_score=z_score,
+                                status="EXECUTED",
+                                confidence=final_confidence,
+                                hedge_ratio=hedge_ratio,
+                            )
+                            diagnostic["verdict"] = "EXECUTED"
+                        else:
+                            await self._upsert_active_signal(
+                                t_a,
+                                t_b,
+                                z_score=z_score,
+                                status="EXECUTION_BLOCKED",
+                                confidence=final_confidence,
+                                hedge_ratio=hedge_ratio,
+                            )
+                            diagnostic["verdict"] = "EXECUTION_BLOCKED"
 
                 diagnostic["confidence"] = final_confidence
             else:
@@ -1147,9 +1158,12 @@ class ArbitrageMonitor:
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id):
         """Executes a trade and logs to PostgreSQL."""
+        def execution_result(executed: bool, reason: str) -> dict:
+            return {"executed": executed, "reason": reason}
+
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         if await self._has_active_pair_or_pending_order(t_a, t_b):
-            return
+            return execution_result(False, "active_pair_or_pending_order")
 
         # Sprint D.2: Bid-Ask Slippage Protection
         bid_a, ask_a = await data_service.get_bid_ask(t_a)
@@ -1169,7 +1183,7 @@ class ArbitrageMonitor:
                 f"SPREAD GUARD: Missing or invalid Bid/Ask for {t_a}/{t_b}. "
                 f"Rejecting trade. bid_a={bid_a} ask_a={ask_a} bid_b={bid_b} ask_b={ask_b}"
             )
-            return
+            return execution_result(False, "invalid_bid_ask")
 
         spread_a = (ask_a - bid_a) / bid_a
         spread_b = (ask_b - bid_b) / bid_b
@@ -1180,7 +1194,7 @@ class ArbitrageMonitor:
                 f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > "
                 f"{settings.SPREAD_GUARD_MAX_PCT*100:.3f}% max threshold."
             )
-            return
+            return execution_result(False, "spread_guard")
 
         venue = self.brokerage.get_venue(t_a)
         crypto_pair = is_crypto_pair(t_a, t_b)
@@ -1219,7 +1233,7 @@ class ArbitrageMonitor:
                 )
                 logger.critical(message)
                 await notification_service.send_message(message)
-                return
+                return execution_result(False, "account_state_unknown")
 
             asset_class = "crypto" if crypto_pair else "equity"
             budget_source = f"{venue.lower()}_{asset_class}_cash"
@@ -1238,7 +1252,7 @@ class ArbitrageMonitor:
                     )
                     logger.critical(message)
                     await notification_service.send_message(message)
-                    return
+                    return execution_result(False, "pending_exposure_unknown")
 
             # Use equity as the basis for sizing calculations if available
             sizing_base = total_equity if total_equity and total_equity > 0 else total_cash
@@ -1275,7 +1289,7 @@ class ArbitrageMonitor:
                 venue, t_a, t_b, budget_source, float(total_cash), pending_value,
                 budget_info["used"], budget_info["total"]
             )
-            return
+            return execution_result(False, "budget_exhausted")
 
         # Risk sizing is applied inside RiskService (Kelly + allocation cap).
         # Pass the sizing_base (equity) so sizing is calculated according to total wallet.
@@ -1293,7 +1307,7 @@ class ArbitrageMonitor:
             await notification_service.send_message(
                 f"Execution rejected before broker for {t_a}/{t_b}: {reason}"
             )
-            return
+            return execution_result(False, "risk_rejected")
 
         desired_notional = cap_pair_notional(
             float(risk_res["final_amount"]),
@@ -1305,7 +1319,7 @@ class ArbitrageMonitor:
 
         if desired_notional <= 0:
             logger.info("Sized pair notional is below MIN_TRADE_VALUE. Skipping trade.")
-            return
+            return execution_result(False, "below_min_trade_value")
 
         hedge_ratio = float(pair.get("hedge_ratio", 1.0))
         legs = build_pair_legs(
@@ -1348,7 +1362,7 @@ class ArbitrageMonitor:
                 f"'{pair_sector}' exposure to {projected_exposure:.1%} (base: ${denominador:.2f}), "
                 f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
             )
-            return
+            return execution_result(False, "sector_exposure_guard")
 
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
@@ -1379,7 +1393,7 @@ class ArbitrageMonitor:
                 pair['id'], direction, size_a, size_b, price_a, price_b,
                 signal_id=signal_id,
             )
-            return
+            return execution_result(True, "paper_shadow_executed")
 
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
 
@@ -1420,7 +1434,7 @@ class ArbitrageMonitor:
             )
             logger.critical(alert)
             await notification_service.send_message(alert)
-            return
+            return execution_result(False, "leg_a_unknown")
 
         status_a = OrderStatus.ORDER_SUBMITTED if res_a.get("status") != "error" else OrderStatus.LEG_A_REJECTED
 
@@ -1434,7 +1448,7 @@ class ArbitrageMonitor:
             await notification_service.send_message(
                 f"Execution aborted: Leg A failed for {exec_t_a}. Broker response: {broker_msg}"
             )
-            return
+            return execution_result(False, "leg_a_rejected")
         await persistence_service.log_trade({
             "order_id": order_id_a,
             "signal_id": uuid.UUID(signal_id),
@@ -1468,7 +1482,7 @@ class ArbitrageMonitor:
             )
             logger.critical(alert)
             await notification_service.send_message(alert)
-            return
+            return execution_result(False, "leg_a_fill_timeout")
         status_raw_a = str(fill_a.get("status", "")).lower()
         filled_qty_a = float(fill_a.get("filled_qty") or 0.0)
         fill_price_a = float(fill_a.get("filled_avg_price") or 0.0)
@@ -1507,7 +1521,7 @@ class ArbitrageMonitor:
             )
             logger.critical(alert)
             await notification_service.send_message(alert)
-            return
+            return execution_result(False, "leg_a_not_fully_filled")
 
         # Small delay between legs to avoid broker-side burst throttling.
         await asyncio.sleep(1.0)
@@ -1548,7 +1562,7 @@ class ArbitrageMonitor:
             )
             logger.critical(alert)
             await notification_service.send_message(alert)
-            return
+            return execution_result(False, "leg_b_unknown")
 
         status_b = OrderStatus.LEG_B_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
 
@@ -1669,7 +1683,7 @@ class ArbitrageMonitor:
         if status_b == OrderStatus.LEG_B_REJECTED:
             broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
             await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
-            return
+            return execution_result(False, "leg_b_rejected")
         fill_b = await self._await_order_fill(order_id_b, timeout=30)
         if not fill_b:
             status_b = OrderStatus.LEG_B_SUBMITTED
@@ -1689,7 +1703,7 @@ class ArbitrageMonitor:
         if status_b == OrderStatus.LEG_B_REJECTED:
             broker_msg_b = (fill_b or {}).get("message") or (fill_b or {}).get("error") or fill_b or res_b
             await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
-            return
+            return execution_result(False, "leg_b_rejected_after_submit")
         pair_status = (
             OrderStatus.OPEN_PAIR
             if status_a == OrderStatus.LEG_A_FILLED and status_b == OrderStatus.LEG_B_FILLED
@@ -1754,6 +1768,7 @@ class ArbitrageMonitor:
         })
 
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}")
+        return execution_result(pair_status == OrderStatus.OPEN_PAIR, pair_status.value)
 
     async def _recheck_cointegration(self, pair: dict):
         """
