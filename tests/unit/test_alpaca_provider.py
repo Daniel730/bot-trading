@@ -10,6 +10,21 @@ def _order(order_id="ord-1", client_order_id="client-1"):
     return SimpleNamespace(id=order_id, client_order_id=client_order_id)
 
 
+def _position(symbol="BTCUSD", qty="0.25"):
+    return SimpleNamespace(
+        symbol=symbol,
+        qty=qty,
+        qty_available=qty,
+        avg_entry_price="50000",
+        current_price="51000",
+        market_value="12750",
+    )
+
+
+class _NotFoundError(Exception):
+    status_code = 404
+
+
 @pytest.fixture
 def alpaca_rest():
     with patch("src.services.brokerage.alpaca.tradeapi.REST") as rest_cls:
@@ -54,8 +69,29 @@ def test_alpaca_connection_uses_account_probe(alpaca_rest):
 def test_alpaca_crypto_symbol_helpers():
     assert AlpacaProvider.normalize_symbol("BTC-USD") == "BTC/USD"
     assert AlpacaProvider.to_bot_symbol("ETH/USD") == "ETH-USD"
+    assert AlpacaProvider.to_bot_symbol("BTCUSD") == "BTC-USD"
     assert AlpacaProvider.is_supported_symbol("BTC-USD") is True
     assert AlpacaProvider.order_time_in_force("BTC-USD") == "gtc"
+
+
+def test_get_positions_crypto_dash_falls_back_to_compact_broker_symbol(alpaca_rest):
+    _, client = alpaca_rest
+    client.get_position.side_effect = [_NotFoundError("position not found"), _position("BTCUSD", "0.25")]
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    positions = provider.get_positions("BTC-USD")
+
+    assert positions == [
+        {
+            "ticker": "BTC-USD",
+            "quantity": 0.25,
+            "quantityAvailableForTrading": 0.25,
+            "averagePrice": 50000.0,
+            "currentPrice": 51000.0,
+            "marketValue": 12750.0,
+        }
+    ]
+    assert client.get_position.call_args_list == [call("BTC/USD"), call("BTCUSD")]
 
 
 @pytest.mark.asyncio

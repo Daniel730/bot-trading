@@ -12,6 +12,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
     _US_SYMBOL_PATTERN = re.compile(r"^[A-Z]{1,5}([.-][A-Z])?$")
     _CRYPTO_PAIR_PATTERN = re.compile(r"^[A-Z0-9]{2,15}/[A-Z]{3,4}$")
     _CRYPTO_DASH_PAIR_PATTERN = re.compile(r"^[A-Z0-9]{2,15}-[A-Z]{3,4}$")
+    _CRYPTO_COMPACT_USD_PAIR_PATTERN = re.compile(r"^([A-Z0-9]{2,15})USD$")
     _active_symbols_cache: Optional[set] = None
     _active_symbols_last_fetch: float = 0
 
@@ -57,6 +58,9 @@ class AlpacaProvider(AbstractBrokerageProvider):
 
     @classmethod
     def to_bot_symbol(cls, symbol: str) -> str:
+        compact_crypto = cls._CRYPTO_COMPACT_USD_PAIR_PATTERN.fullmatch((symbol or "").strip().upper())
+        if compact_crypto:
+            return f"{compact_crypto.group(1)}-USD"
         normalized = cls.normalize_symbol(symbol)
         if cls._CRYPTO_PAIR_PATTERN.fullmatch(normalized):
             return normalized.replace("/", "-")
@@ -371,6 +375,23 @@ class AlpacaProvider(AbstractBrokerageProvider):
                     if status_code == 404 or (
                         "position" in message and ("not found" in message or "does not exist" in message)
                     ):
+                        if "/" in broker_symbol:
+                            compact_symbol = broker_symbol.replace("/", "")
+                            try:
+                                p = self.api.get_position(compact_symbol)
+                                return [self._normalize_position(p)]
+                            except Exception as compact_exc:
+                                compact_message = str(compact_exc).lower()
+                                compact_status = getattr(compact_exc, "status_code", None) or getattr(compact_exc, "code", None)
+                                if not (
+                                    compact_status == 404
+                                    or (
+                                        "position" in compact_message
+                                        and ("not found" in compact_message or "does not exist" in compact_message)
+                                    )
+                                ):
+                                    logger.error(f"Alpaca failed to fetch position for {compact_symbol}: {compact_exc}")
+                                    raise
                         return []
                     logger.error(f"Alpaca failed to fetch position for {broker_symbol}: {e}")
                     raise
