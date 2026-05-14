@@ -191,6 +191,69 @@ class ArbitrageMonitor:
                 if not (s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b)
             ]
 
+    async def _has_active_pair_or_pending_order(self, ticker_a: str, ticker_b: str) -> bool:
+        pair_symbols = {
+            self._canonical_position_symbol(ticker_a),
+            self._canonical_position_symbol(ticker_b),
+        }
+        try:
+            open_signals = await persistence_service.get_open_signals()
+        except Exception as exc:
+            msg = (
+                f"Execution blocked for {ticker_a}/{ticker_b}: could not verify "
+                f"open ledger positions ({exc})."
+            )
+            logger.critical(msg)
+            await notification_service.send_message(msg)
+            return True
+
+        for signal in open_signals or []:
+            leg_symbols = {
+                self._canonical_position_symbol(leg.get("ticker"))
+                for leg in signal.get("legs", [])
+                if leg.get("ticker")
+            }
+            if pair_symbols.issubset(leg_symbols):
+                msg = (
+                    f"Duplicate entry blocked for {ticker_a}/{ticker_b}: "
+                    f"active ledger signal {signal.get('signal_id')} already covers this pair."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return True
+
+        if settings.PAPER_TRADING:
+            return False
+
+        try:
+            pending_orders = await self.brokerage.get_pending_orders()
+        except Exception as exc:
+            msg = (
+                f"Execution blocked for {ticker_a}/{ticker_b}: could not verify "
+                f"pending broker orders ({exc})."
+            )
+            logger.critical(msg)
+            await notification_service.send_message(msg)
+            return True
+
+        for order in pending_orders or []:
+            raw_symbol = (
+                order.get("ticker")
+                or order.get("symbol")
+                or order.get("instrumentTicker")
+                or order.get("instrument")
+            )
+            if self._canonical_position_symbol(raw_symbol) in pair_symbols:
+                msg = (
+                    f"Duplicate entry blocked for {ticker_a}/{ticker_b}: "
+                    f"pending broker order exists for {raw_symbol}."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return True
+
+        return False
+
     def get_market_config(self, ticker: str) -> dict:
         """
         Returns the market window and timezone for a given ticker.
@@ -1085,6 +1148,8 @@ class ArbitrageMonitor:
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id):
         """Executes a trade and logs to PostgreSQL."""
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
+        if await self._has_active_pair_or_pending_order(t_a, t_b):
+            return
 
         # Sprint D.2: Bid-Ask Slippage Protection
         bid_a, ask_a = await data_service.get_bid_ask(t_a)
