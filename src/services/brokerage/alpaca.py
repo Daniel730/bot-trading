@@ -550,7 +550,7 @@ class AlpacaProvider(AbstractBrokerageProvider):
                 - limitPrice (float | None): Limit price as a float, or None if not set.
                 - id (str): Broker order identifier.
         """
-        return {
+        normalized = {
             "ticker": self.to_bot_symbol(o.symbol),
             "quantity": float(o.qty) if o.qty else 0.0,
             "side": o.side.upper(),
@@ -560,3 +560,10 @@ class AlpacaProvider(AbstractBrokerageProvider):
             "filled_qty": float(getattr(o, "filled_qty", 0.0) or 0.0),
             "filled_avg_price": float(getattr(o, "filled_avg_price", 0.0) or 0.0),
         }
+        notional = getattr(o, "notional", None)
+        if notional not in (None, ""):
+            try:
+                normalized["notional"] = float(notional)
+            except (TypeError, ValueError):
+                pass
+        return normalized

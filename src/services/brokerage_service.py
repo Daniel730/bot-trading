@@ -194,6 +194,13 @@ class BrokerageService:
         tickers_to_fetch = []
         for order in orders:
             try:
+                notional = float(order.get('notional') or 0.0)
+            except (TypeError, ValueError):
+                notional = 0.0
+            if notional > 0.0:
+                continue
+
+            try:
                 price = float(order.get('limitPrice') or order.get('price') or 0.0)
             except (TypeError, ValueError):
                 price = 0.0
@@ -212,6 +219,14 @@ class BrokerageService:
         # Second pass: calculate total value using batched prices where needed
         total_value = 0.0
         for order in orders:
+            try:
+                notional = float(order.get('notional') or 0.0)
+            except (TypeError, ValueError):
+                notional = 0.0
+            if notional > 0.0:
+                total_value += notional
+                continue
+
             try:
                 qty = float(order.get('quantity', 0.0) or 0.0)
             except (TypeError, ValueError):

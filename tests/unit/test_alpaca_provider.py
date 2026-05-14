@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, call, patch
 import pytest
 
 from src.services.brokerage.alpaca import AlpacaProvider
+from src.services.brokerage_service import BrokerageService
 
 
 def _order(order_id="ord-1", client_order_id="client-1"):
@@ -473,6 +474,29 @@ def test_alpaca_pending_orders_are_normalized(alpaca_rest):
         }
     ]
     client.list_orders.assert_called_once_with(status="open")
+
+
+@pytest.mark.asyncio
+async def test_alpaca_pending_notional_orders_count_toward_pending_value(alpaca_rest):
+    _, client = alpaca_rest
+    client.list_orders.return_value = [
+        SimpleNamespace(
+            symbol="MSFT",
+            qty=None,
+            side="buy",
+            status="accepted",
+            limit_price=None,
+            notional="250.00",
+            id="ord-notional-open",
+        )
+    ]
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+    service = BrokerageService.__new__(BrokerageService)
+    service.provider = provider
+
+    pending_value = await service.get_pending_orders_value()
+
+    assert float(pending_value) == 250.0
 
 
 def test_alpaca_pending_orders_raise_on_fetch_failure(alpaca_rest):
