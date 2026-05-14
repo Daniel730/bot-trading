@@ -23,6 +23,9 @@ class _FakeTransaction:
 
 
 class _StartupRecoverySession:
+    def __init__(self, statuses_to_count=None):
+        self.statuses_to_count = set(statuses_to_count or {OrderStatus.CLOSE_FAILED})
+
     def begin(self):
         return _FakeTransaction()
 
@@ -36,7 +39,9 @@ class _StartupRecoverySession:
         params = statement.compile().params
         unresolved_statuses = params.get("status_1", [])
         if isinstance(unresolved_statuses, (list, tuple, set)) and unresolved_statuses:
-            return _ScalarResult(int(OrderStatus.CLOSE_FAILED in unresolved_statuses))
+            return _ScalarResult(
+                sum(1 for status in self.statuses_to_count if status in unresolved_statuses)
+            )
         return _ScalarResult(0)
 
 @pytest.mark.asyncio
@@ -123,6 +128,25 @@ async def test_startup_treats_close_failed_as_unresolved_execution_state(monkeyp
     unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
 
     assert unresolved_count == 1
+
+
+@pytest.mark.asyncio
+async def test_startup_treats_failed_submitted_and_partial_states_as_unresolved(monkeypatch):
+    unsafe_statuses = {
+        OrderStatus.FAILED,
+        OrderStatus.ORDER_SUBMITTED,
+        OrderStatus.LEG_A_SUBMITTED,
+        OrderStatus.LEG_B_SUBMITTED,
+        OrderStatus.LEG_A_PARTIAL,
+        OrderStatus.LEG_B_PARTIAL,
+        OrderStatus.PARTIAL_EXPOSURE,
+    }
+    fake_session = _StartupRecoverySession(unsafe_statuses)
+    monkeypatch.setattr(persistence_service, "AsyncSessionLocal", lambda: fake_session)
+
+    unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
+
+    assert unresolved_count == len(unsafe_statuses)
 
 
 @pytest.mark.asyncio

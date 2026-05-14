@@ -414,9 +414,16 @@ class PersistenceService:
         from sqlalchemy import update, select, func
 
         unresolved_statuses = (
+            OrderStatus.ORDER_SUBMITTED,
+            OrderStatus.LEG_A_SUBMITTED,
+            OrderStatus.LEG_A_PARTIAL,
+            OrderStatus.LEG_B_SUBMITTED,
+            OrderStatus.LEG_B_PARTIAL,
+            OrderStatus.PARTIAL_EXPOSURE,
             OrderStatus.CLOSING,
             OrderStatus.CLOSE_FAILED,
             OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+            OrderStatus.FAILED,
             OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
         )
         async with self.AsyncSessionLocal() as session:
