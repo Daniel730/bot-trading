@@ -123,3 +123,37 @@ async def test_startup_treats_close_failed_as_unresolved_execution_state(monkeyp
     unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
 
     assert unresolved_count == 1
+
+
+@pytest.mark.asyncio
+@patch("src.monitor.notification_service")
+@patch("src.monitor.persistence_service")
+@patch("src.monitor.dashboard_service")
+async def test_startup_blocks_when_broker_has_unmanaged_position(mock_dashboard, mock_persistence, mock_notify):
+    monitor = ArbitrageMonitor()
+    monitor.brokerage.get_portfolio = AsyncMock(
+        return_value=[
+            {
+                "ticker": "BTCUSD",
+                "quantity": 0.03,
+                "quantityAvailableForTrading": 0.03,
+            }
+        ]
+    )
+    mock_persistence.get_open_signals = AsyncMock(return_value=[])
+    mock_persistence.set_system_state = AsyncMock()
+    mock_notify.send_message = AsyncMock()
+    mock_dashboard.update = AsyncMock()
+
+    with patch.object(settings, "PAPER_TRADING", False):
+        should_continue = await monitor._fail_fast_on_broker_ledger_mismatch()
+
+    assert should_continue is False
+    mock_persistence.set_system_state.assert_awaited_once_with(
+        "operational_status",
+        "PAUSED_REQUIRES_MANUAL_REVIEW",
+    )
+    mock_notify.send_message.assert_awaited_once()
+    mock_dashboard.update.assert_awaited_once()
+    assert "broker/ledger mismatch" in mock_dashboard.update.await_args.args[1]
+    assert "BTCUSD" in mock_dashboard.update.await_args.args[1]
