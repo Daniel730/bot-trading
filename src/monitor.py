@@ -1784,6 +1784,81 @@ class ArbitrageMonitor:
         await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
         return False
 
+    @staticmethod
+    def _canonical_position_symbol(symbol: str) -> str:
+        return str(symbol or "").upper().replace("/", "").replace("-", "")
+
+    @staticmethod
+    def _broker_position_quantity(position: dict) -> float:
+        for key in ("quantity", "qty", "quantityAvailableForTrading"):
+            value = position.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    async def _fail_fast_on_broker_ledger_mismatch(self) -> bool:
+        if settings.PAPER_TRADING:
+            return True
+
+        try:
+            broker_positions = await self.brokerage.get_portfolio()
+            open_signals = await persistence_service.get_open_signals()
+        except Exception as exc:
+            msg = (
+                "Startup blocked: broker/ledger reconciliation failed. "
+                f"Resolve account and ledger state before scanning resumes. Error: {exc}"
+            )
+            logger.critical(msg)
+            await persistence_service.set_system_state(
+                "operational_status",
+                "PAUSED_REQUIRES_MANUAL_REVIEW",
+            )
+            await notification_service.send_message(msg)
+            await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
+            return False
+
+        ledger_symbols = {
+            self._canonical_position_symbol(leg.get("ticker"))
+            for signal in open_signals
+            for leg in signal.get("legs", [])
+            if leg.get("ticker")
+        }
+        unmanaged_symbols = []
+        for position in broker_positions or []:
+            quantity = self._broker_position_quantity(position)
+            if abs(quantity) <= 1e-12:
+                continue
+            raw_symbol = (
+                position.get("ticker")
+                or position.get("symbol")
+                or position.get("instrumentTicker")
+                or position.get("instrument")
+            )
+            canonical_symbol = self._canonical_position_symbol(raw_symbol)
+            if canonical_symbol and canonical_symbol not in ledger_symbols:
+                unmanaged_symbols.append(str(raw_symbol))
+
+        if not unmanaged_symbols:
+            return True
+
+        await persistence_service.set_system_state(
+            "operational_status",
+            "PAUSED_REQUIRES_MANUAL_REVIEW",
+        )
+        msg = (
+            "Startup blocked: broker/ledger mismatch. Broker has unmanaged "
+            f"position(s): {', '.join(sorted(unmanaged_symbols))}. "
+            "Resolve broker and ledger state before scanning resumes."
+        )
+        logger.critical(msg)
+        await notification_service.send_message(msg)
+        await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
+        return False
+
     async def run(self):
         # FR-006: Pre-flight line - operator must know mode/universe/window
         # before a single log line about infra appears.
@@ -1858,6 +1933,8 @@ class ArbitrageMonitor:
         await notification_service.send_message("System Health: All Checks Passed.\n\nMode: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
 
         if not await self._fail_fast_on_unresolved_execution_state():
+            return
+        if not await self._fail_fast_on_broker_ledger_mismatch():
             return
 
         # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
