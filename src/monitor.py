@@ -1512,6 +1512,91 @@ class ArbitrageMonitor:
                         "fill_snapshot": fill_a,
                     },
                 )
+                close_side_a = "BUY" if side_a == "SELL" else "SELL"
+                close_price_a = fill_price_a if fill_price_a > 0 else price_a
+                close_notional_a = round(filled_qty_a * close_price_a, 2)
+                if close_notional_a > 0:
+                    blocked_status = OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION
+                    logger.critical(
+                        f"PARTIAL EXPOSURE: Leg A ({exec_t_a}) filled {filled_qty_a} "
+                        f"of {expected_qty_a}. Placing emergency close before returning."
+                    )
+                    close_res = await self.brokerage.place_value_order(
+                        exec_t_a,
+                        close_notional_a,
+                        close_side_a,
+                        price=close_price_a,
+                        client_order_id=f"{signal_id}-A-PARTIAL-CLOSE",
+                    )
+                    close_status = str(close_res.get("status", "")).lower()
+                    close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
+                    close_order_id = (
+                        close_res.get("order_id")
+                        or close_res.get("orderId")
+                        or close_res.get("client_order_id")
+                        or f"{signal_id}-A-PARTIAL-CLOSE"
+                    )
+                    if close_status == "error" or close_unknown:
+                        close_reason = "partial_leg_a_close_unknown" if close_unknown else "partial_leg_a_close_failed"
+                        orphan_msg = (
+                            f"CRITICAL - PARTIAL LEG A CLOSE {'UNKNOWN' if close_unknown else 'FAILED'}\n"
+                            f"Signal: {signal_id}\n"
+                            f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                            f"Filled quantity may still be ORPHANED. Manual intervention required.\n"
+                            f"Broker response: {close_res}"
+                        )
+                        logger.critical(orphan_msg)
+                        await notification_service.send_message(orphan_msg)
+                        await persistence_service.log_trade({
+                            "order_id": f"ORPHAN_{signal_id}",
+                            "signal_id": uuid.UUID(signal_id),
+                            "ticker": exec_t_a,
+                            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                            "quantity": filled_qty_a,
+                            "price": close_price_a,
+                            "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                            "metadata_json": {
+                                "orphaned": True,
+                                "reason": close_reason,
+                                "broker_response": close_res,
+                                "expected_qty": filled_qty_a,
+                            },
+                        })
+                    else:
+                        close_fill = await self._await_order_fill(close_order_id, timeout=30)
+                        close_status_raw = str((close_fill or {}).get("status", "")).lower()
+                        close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
+                        close_qty_short = close_filled_qty + 1e-9 < filled_qty_a
+                        if close_status_raw != "filled" or close_filled_qty <= 0 or close_qty_short:
+                            orphan_msg = (
+                                f"CRITICAL - PARTIAL LEG A CLOSE UNCONFIRMED\n"
+                                f"Signal: {signal_id}\n"
+                                f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                                f"Filled quantity may still be ORPHANED. Manual intervention required.\n"
+                                f"Close order: {close_order_id}\n"
+                                f"Close status: {close_status_raw or 'unknown'} filled_qty={close_filled_qty} "
+                                f"expected_qty={filled_qty_a}\n"
+                                f"Broker response: {close_res}"
+                            )
+                            logger.critical(orphan_msg)
+                            await notification_service.send_message(orphan_msg)
+                            await persistence_service.log_trade({
+                                "order_id": f"ORPHAN_{signal_id}",
+                                "signal_id": uuid.UUID(signal_id),
+                                "ticker": exec_t_a,
+                                "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                                "quantity": filled_qty_a,
+                                "price": close_price_a,
+                                "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                                "metadata_json": {
+                                    "orphaned": True,
+                                    "reason": "partial_leg_a_close_unconfirmed",
+                                    "broker_response": close_res,
+                                    "close_order_id": close_order_id,
+                                    "close_fill": close_fill,
+                                    "expected_qty": filled_qty_a,
+                                },
+                            })
             await persistence_service.update_signal_status(uuid.UUID(signal_id), blocked_status)
             alert = (
                 f"Leg A ({exec_t_a}) was not confirmed as a full fill. "

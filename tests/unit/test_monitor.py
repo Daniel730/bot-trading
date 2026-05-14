@@ -387,10 +387,6 @@ async def test_execute_trade_marks_manual_reconciliation_when_leg_a_submission_a
     "leg_a_fill, expected_status",
     [
         (
-            {"status": "partially_filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
-            OrderStatus.PARTIAL_EXPOSURE,
-        ),
-        (
             {"status": "rejected", "filled_qty": 0.0, "filled_avg_price": 0.0},
             OrderStatus.LEG_A_REJECTED,
         ),
@@ -481,17 +477,23 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
         mock_await_fill.side_effect = [
             {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
-            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 300.0},
+            {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
         ]
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
             {"status": "success", "order_id": "leg-a"},
-            {"status": "success", "order_id": "leg-b"},
+            {"status": "success", "order_id": "close-a"},
         ])
 
         await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
-        assert monitor.brokerage.place_value_order.await_count == 1
-        mock_await_fill.assert_awaited_once_with("leg-a", timeout=30)
+        assert monitor.brokerage.place_value_order.await_count == 2
+        close_call = monitor.brokerage.place_value_order.await_args_list[1]
+        assert close_call.args[0] == "AAPL"
+        assert close_call.args[1] == pytest.approx(75.0)
+        assert close_call.args[2] == "BUY"
+        assert close_call.kwargs["client_order_id"] == f"{signal_id}-A-PARTIAL-CLOSE"
+        mock_await_fill.assert_any_await("leg-a", timeout=30)
+        mock_await_fill.assert_any_await("close-a", timeout=30)
         mock_sleep.assert_not_awaited()
         assert mock_log_trade.await_count == 1
         mock_log_journal.assert_not_awaited()
@@ -507,7 +509,10 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
                 "fill_snapshot": {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
             },
         )
-        mock_update_status.assert_awaited_once_with(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
+        mock_update_status.assert_any_await(
+            uuid.UUID(signal_id),
+            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+        )
         mock_notify.assert_awaited_once()
         assert "filled_qty=0.5" in mock_notify.await_args.args[0]
         assert "expected_qty=" in mock_notify.await_args.args[0]
