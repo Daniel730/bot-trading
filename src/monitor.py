@@ -1485,6 +1485,19 @@ class ArbitrageMonitor:
 
         if status_a != OrderStatus.LEG_A_FILLED:
             blocked_status = OrderStatus.PARTIAL_EXPOSURE if filled_qty_a > 0 else status_a
+            if filled_qty_a > 0:
+                await persistence_service.update_trade_fill(
+                    uuid.UUID(signal_id),
+                    order_id_a,
+                    filled_quantity=filled_qty_a,
+                    fill_price=fill_price_a,
+                    metadata_updates={
+                        "filled_qty": filled_qty_a,
+                        "filled_avg_price": fill_price_a,
+                        "order_status": blocked_status.value,
+                        "fill_snapshot": fill_a,
+                    },
+                )
             await persistence_service.update_signal_status(uuid.UUID(signal_id), blocked_status)
             alert = (
                 f"Leg A ({exec_t_a}) was not confirmed as a full fill. "

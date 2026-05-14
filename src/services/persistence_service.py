@@ -373,6 +373,42 @@ class PersistenceService:
                 stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(status=status)
                 await session.execute(stmt)
 
+    async def update_trade_fill(
+        self,
+        signal_id: uuid.UUID,
+        order_id: str,
+        *,
+        filled_quantity: float,
+        fill_price: Optional[float] = None,
+        metadata_updates: Optional[dict] = None,
+    ):
+        from sqlalchemy import select, update
+
+        values = {"quantity": filled_quantity}
+        if fill_price and fill_price > 0:
+            values["price"] = fill_price
+
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                existing_rows = (
+                    await session.execute(
+                        select(TradeLedger.id, TradeLedger.metadata_json)
+                        .where(TradeLedger.signal_id == signal_id)
+                        .where(TradeLedger.order_id == order_id)
+                    )
+                ).all()
+                for row in existing_rows:
+                    existing_metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+                    stmt = (
+                        update(TradeLedger)
+                        .where(TradeLedger.id == row.id)
+                        .values(
+                            **values,
+                            metadata_json={**existing_metadata, **(metadata_updates or {})},
+                        )
+                    )
+                    await session.execute(stmt)
+
     async def mark_signal_closing_if_open(self, signal_id: uuid.UUID) -> bool:
         """Atomically transition OPEN-ish signals to CLOSING.
 

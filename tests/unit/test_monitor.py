@@ -20,6 +20,7 @@ def monitor(monkeypatch):
         m.brokerage.get_account_cash.return_value = 10000.0
         m.brokerage.get_account_equity.return_value = 10000.0
         m.brokerage.get_account_buying_power.return_value = 10000.0
+        monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
         return m
 
 @pytest.mark.asyncio
@@ -459,6 +460,7 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock, create=True) as mock_update_fill, \
          patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
@@ -493,6 +495,18 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
         mock_sleep.assert_not_awaited()
         assert mock_log_trade.await_count == 1
         mock_log_journal.assert_not_awaited()
+        mock_update_fill.assert_awaited_once_with(
+            uuid.UUID(signal_id),
+            "leg-a",
+            filled_quantity=0.5,
+            fill_price=150.0,
+            metadata_updates={
+                "filled_qty": 0.5,
+                "filled_avg_price": 150.0,
+                "order_status": OrderStatus.PARTIAL_EXPOSURE.value,
+                "fill_snapshot": {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
+            },
+        )
         mock_update_status.assert_awaited_once_with(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
         mock_notify.assert_awaited_once()
         assert "filled_qty=0.5" in mock_notify.await_args.args[0]
