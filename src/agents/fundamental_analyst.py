@@ -1,5 +1,5 @@
 import os
-import google.generativeai as genai
+import warnings
 from pydantic import BaseModel, Field
 
 from src.services.sec_service import SECService
@@ -19,10 +19,24 @@ class FundamentalAnalyst:
         self.sec_service = sec_service or SECService()
         self.log_service = log_service or AgentLogService()
         self.notification = NotificationService()
-        
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+        self.model = self._build_gemini_model(os.getenv("GEMINI_API_KEY"))
+
+    def _build_gemini_model(self, api_key: str | None):
+        if not api_key:
+            return None
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r"\n\nAll support for the `google\.generativeai` package has ended\..*",
+                category=FutureWarning,
+            )
+            import google.generativeai as genai
+
+        genai.configure(api_key=api_key)
         # Using flash for faster adversarial debate (P95 Target < 30s)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        return genai.GenerativeModel('gemini-1.5-flash')
 
     async def prosecutor_analyze(self, ticker: str, sections: dict) -> dict:
         findings = []
@@ -166,6 +180,8 @@ class FundamentalAnalyst:
         """
 
         try:
+            if self.model is None:
+                raise RuntimeError("Gemini model is not initialized.")
             response = self.model.generate_content(prompt)
             data = extract_json(response.text)
             return StructuralIntegrityResult(**data)
