@@ -60,7 +60,7 @@ class FundamentalAnalyst:
                     })
         return {"findings": findings, "resilience_score": min(100, len(findings) * 25)}
 
-    async def analyze_structural_integrity(self, ticker: str, sections: dict) -> dict:
+    async def analyze_structural_integrity(self, ticker: str, sections: dict, metadata: dict | None = None) -> dict:
         if not sections:
             return {
                 "integrity_score": 50,
@@ -187,3 +187,6 @@ class FundamentalAnalyst:
             defender_argument="N/A - No SEC filings found.",
             final_reasoning="Fallback to default (50) due to missing SEC data."
         )
+
+
+fundamental_analyst = FundamentalAnalyst()
