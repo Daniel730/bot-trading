@@ -38,31 +38,36 @@ async def test_drawdown_risk_scaling():
     Test User Story 1 Acceptance 2: Sharpe ratio < 0.5 => Kelly fraction capped at 0.1.
     """
     ticker = "ETH-USD"
-    
-    # Mock 10% Drawdown and 1.2 Sharpe
-    with patch.object(performance_service, 'get_portfolio_metrics', return_value={
-        "sharpe_ratio": 1.2,
-        "max_drawdown": 0.10
-    }):
-        params = await risk_service.get_execution_params(ticker)
-        # 1.0 - (0.10 / 0.15) = 1.0 - 0.666 = 0.333
-        assert 0.33 < params["risk_multiplier"] < 0.34
-        
-    # Mock 16% Drawdown (Absolute Stop)
-    with patch.object(performance_service, 'get_portfolio_metrics', return_value={
-        "sharpe_ratio": 1.2,
-        "max_drawdown": 0.16
-    }):
-        params = await risk_service.get_execution_params(ticker)
-        assert params["risk_multiplier"] == 0.0
 
-    # Mock low Sharpe ratio (< 0.5)
-    with patch.object(performance_service, 'get_portfolio_metrics', return_value={
-        "sharpe_ratio": 0.4,
-        "max_drawdown": 0.02
-    }):
-        params = await risk_service.get_execution_params(ticker)
-        assert params["risk_multiplier"] == 0.1 # Capped
+    with patch.object(redis_service, 'get_json', side_effect=AssertionError("drawdown scaling test must not read Redis")) as mock_redis_get_json, \
+         patch.object(volatility_service, 'get_volatility_status', return_value="NORMAL"), \
+         patch.object(volatility_service, 'get_l2_entropy', return_value=0.0):
+        # Mock 10% Drawdown and 1.2 Sharpe
+        with patch.object(performance_service, 'get_portfolio_metrics', return_value={
+            "sharpe_ratio": 1.2,
+            "max_drawdown": 0.10
+        }):
+            params = await risk_service.get_execution_params(ticker)
+            # 1.0 - (0.10 / 0.15) = 1.0 - 0.666 = 0.333
+            assert 0.33 < params["risk_multiplier"] < 0.34
+            
+        # Mock 16% Drawdown (Absolute Stop)
+        with patch.object(performance_service, 'get_portfolio_metrics', return_value={
+            "sharpe_ratio": 1.2,
+            "max_drawdown": 0.16
+        }):
+            params = await risk_service.get_execution_params(ticker)
+            assert params["risk_multiplier"] == 0.0
+
+        # Mock low Sharpe ratio (< 0.5)
+        with patch.object(performance_service, 'get_portfolio_metrics', return_value={
+            "sharpe_ratio": 0.4,
+            "max_drawdown": 0.02
+        }):
+            params = await risk_service.get_execution_params(ticker)
+            assert params["risk_multiplier"] == 0.1 # Capped
+
+        mock_redis_get_json.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_execution_client_dynamic_params():
