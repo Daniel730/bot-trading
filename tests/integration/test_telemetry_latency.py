@@ -2,10 +2,11 @@ import pytest
 import asyncio
 import time
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from src.services.telemetry_service import telemetry_service
 from src.services.execution_service_client import execution_client
 from src.services.dashboard_service import connection_manager
+from src.generated import execution_pb2
 
 @pytest.mark.asyncio
 async def test_telemetry_fire_and_forget_latency():
@@ -80,20 +81,33 @@ async def test_full_execution_hotpath_latency():
     """
     from src.services.risk_service import risk_service
     from src.services.redis_service import redis_service
-    
+    from src.services.performance_service import performance_service
+
     signal_id = str(uuid.uuid4())
     legs = [{"ticker": "KO", "side": "BUY", "quantity": 100, "target_price": 60.0}]
+
+    async def mock_get_json(key):
+        if key == f"execution_attempt:{signal_id}":
+            return None
+        if key == "l2:snapshot:KO":
+            return {"bids": [[60, 100]], "asks": [[60.1, 100]]}
+        return None
     
     # Mock everything except the telemetry call
-    with patch.object(redis_service, 'set_nx', return_value=True), \
-         patch.object(execution_client, 'get_stub') as mock_stub_factory, \
-         patch.object(redis_service, 'get_json', return_value={"bids": [[60, 100]], "asks": [[60.1, 100]]}):
+    with patch.object(redis_service, 'get_json', new=AsyncMock(side_effect=mock_get_json)) as mock_get_json_call, \
+         patch.object(redis_service, 'set_json', new=AsyncMock()) as mock_set_json, \
+         patch.object(performance_service, 'get_portfolio_metrics', new=AsyncMock(return_value={
+             "sharpe_ratio": 1.0,
+             "max_drawdown": 0.0,
+         })), \
+         patch.object(execution_client, 'get_stub', new=AsyncMock()) as mock_stub_factory:
         
         mock_stub = MagicMock()
-        mock_execute = MagicMock()
-        future = asyncio.Future()
-        future.set_result(MagicMock(status=1))
-        mock_execute.return_value = future
+        mock_execute = AsyncMock(return_value=execution_pb2.ExecutionResponse(
+            signal_id=signal_id,
+            status=execution_pb2.STATUS_SUCCESS,
+            message="accepted",
+        ))
         mock_stub.ExecuteTrade = mock_execute
         mock_stub_factory.return_value = mock_stub
         
@@ -104,6 +118,10 @@ async def test_full_execution_hotpath_latency():
         
         # This call now includes RiskService.get_execution_params -> telemetry_service.broadcast
         await execution_client.execute_trade(signal_id, "KO_PEP", legs)
+        mock_get_json_call.assert_any_await(f"execution_attempt:{signal_id}")
+        mock_get_json_call.assert_any_await("l2:snapshot:KO")
+        assert mock_set_json.await_count == 2
+        mock_execute.assert_awaited_once()
         
         end_time = time.perf_counter_ns()
         
