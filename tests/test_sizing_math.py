@@ -36,10 +36,9 @@ def test_validate_trade_sizing(risk_service):
 
 def test_validate_trade_allocation_cap(risk_service):
     # Override settings for this test to ensure 15%
-    with patch('src.services.risk_service.settings') as mock_settings:
-        mock_settings.MAX_ALLOCATION_PERCENTAGE = 15.0
-        mock_settings.KELLY_FRACTION = 0.25
-        mock_settings.MIN_TRADE_VALUE = 1.0
+    with patch.object(settings, "MAX_ALLOCATION_PERCENTAGE", 15.0), \
+         patch.object(settings, "KELLY_FRACTION", 0.25), \
+         patch.object(settings, "MIN_TRADE_VALUE", 1.0):
 
         # Kelly = (0.7*1 - 0.3)/1 = 0.4
         # Fractional Kelly = 1.0 (override calculator)
@@ -113,5 +112,5 @@ def test_expected_profit_uses_spread_capture_and_full_pair_friction():
     )
 
     assert preview.gross_profit == pytest.approx(0.833333, rel=1e-5)
-    assert preview.friction_usd == pytest.approx(1.0)
+    assert preview.friction_usd == pytest.approx(legs.gross_notional * 0.001)
     assert preview.net_profit < 0
