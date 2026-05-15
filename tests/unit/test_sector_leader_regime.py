@@ -11,6 +11,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from src.agents.macro_economic_agent import macro_economic_agent
 from src.agents.orchestrator import orchestrator
 
+
+@pytest.fixture(autouse=True)
+def clear_macro_regime_cache():
+    macro_economic_agent._regime_cache.clear()
+    yield
+    macro_economic_agent._regime_cache.clear()
+
+
 @pytest.mark.asyncio
 async def test_regime_bullish_sma():
     """Test H4: BULLISH regime (SMA20 > SMA50)"""
