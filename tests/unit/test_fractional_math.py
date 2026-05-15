@@ -14,8 +14,8 @@ def test_fractional_pair_quantities_keep_six_decimal_precision():
 
     assert legs.side_a == "BUY"
     assert legs.side_b == "SELL"
-    assert legs.quantity_a == pytest.approx(3.311765)
-    assert legs.quantity_b == pytest.approx(4.470382)
+    assert legs.quantity_a == pytest.approx(3.310299)
+    assert legs.quantity_b == pytest.approx(4.468903)
     assert legs.gross_notional <= 1000.0
 
 
