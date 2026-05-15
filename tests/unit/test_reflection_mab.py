@@ -31,11 +31,17 @@ async def test_reflection_reward_logic_success():
         # session_context.execute() returns result
         # result.all() returns trades
         
-        mock_result = AsyncMock()
-        mock_result.all.return_value = [(mock_trade,)]
-        
-        mock_session_context = AsyncMock()
-        mock_session_context.execute.return_value = mock_result
+        mock_scalar_result = MagicMock()
+        mock_scalar_result.all.return_value = [mock_trade]
+        mock_ledger_result = MagicMock()
+        mock_ledger_result.scalars.return_value = mock_scalar_result
+        mock_journal_result = MagicMock()
+        mock_journal_result.scalar_one_or_none.return_value = None
+
+        mock_session_context = MagicMock()
+        mock_session_context.execute = AsyncMock(
+            side_effect=[mock_ledger_result, mock_journal_result]
+        )
         
         mock_session_factory.return_value.__aenter__.return_value = mock_session_context
         
@@ -60,11 +66,17 @@ async def test_reflection_reward_logic_failure():
     with patch('src.services.persistence_service.persistence_service.update_agent_metrics', new_callable=AsyncMock) as mock_update, \
          patch('src.services.persistence_service.persistence_service.AsyncSessionLocal') as mock_session_factory:
         
-        mock_result = AsyncMock()
-        mock_result.all.return_value = [(mock_trade,)]
-        
-        mock_session_context = AsyncMock()
-        mock_session_context.execute.return_value = mock_result
+        mock_scalar_result = MagicMock()
+        mock_scalar_result.all.return_value = [mock_trade]
+        mock_ledger_result = MagicMock()
+        mock_ledger_result.scalars.return_value = mock_scalar_result
+        mock_journal_result = MagicMock()
+        mock_journal_result.scalar_one_or_none.return_value = None
+
+        mock_session_context = MagicMock()
+        mock_session_context.execute = AsyncMock(
+            side_effect=[mock_ledger_result, mock_journal_result]
+        )
         
         mock_session_factory.return_value.__aenter__.return_value = mock_session_context
         
