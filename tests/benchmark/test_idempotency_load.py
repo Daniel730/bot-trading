@@ -1,34 +1,50 @@
 import pytest
 import asyncio
+from unittest.mock import AsyncMock
 from src.services.execution_service_client import ExecutionServiceClient
 from src.generated import execution_pb2
 import uuid
 
+
+class _ConcurrentAttemptStore:
+    def __init__(self):
+        self.store = {}
+        self.load_count = 0
+
+    async def get_json(self, key):
+        self.load_count += 1
+        if self.load_count == 1:
+            return None
+        return self.store.get(key, {"state": "LOCKED_IN_FLIGHT"})
+
+    async def set_json(self, key, value, ex=None):
+        self.store[key] = value
+
+
 @pytest.mark.asyncio
-async def test_idempotency_concurrency_load(mocker):
+async def test_idempotency_concurrency_load(monkeypatch):
     # Setup client
     client = ExecutionServiceClient()
-    
-    # Mock Redis NX to return True only once for a specific key
-    processed_keys = set()
-    async def mock_set_nx(key, value, expire=60):
-        if key in processed_keys:
-            return False
-        processed_keys.add(key)
-        return True
-    
-    mocker.patch("src.services.redis_service.redis_service.set_nx", side_effect=mock_set_nx)
+    redis = _ConcurrentAttemptStore()
+    monkeypatch.setattr("src.services.redis_service.redis_service", redis)
+    monkeypatch.setattr(
+        "src.services.risk_service.risk_service.get_execution_params",
+        AsyncMock(return_value={"max_slippage_pct": 0.001, "risk_multiplier": 1.0}),
+    )
     
     # Mock gRPC call to always succeed
     mock_response = execution_pb2.ExecutionResponse(
         signal_id="test_signal",
-        status=execution_pb2.STATUS_SUCCESS
+        status=execution_pb2.STATUS_SUCCESS,
+        message="accepted",
     )
     
     # We mock get_stub to return a mock stub
-    mock_stub = mocker.AsyncMock()
+    mock_stub = AsyncMock()
     mock_stub.ExecuteTrade.return_value = mock_response
-    mocker.patch.object(client, "get_stub", return_value=mock_stub)
+    monkeypatch.setattr(client, "get_stub", AsyncMock(return_value=mock_stub))
+    mock_status = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(client, "get_trade_status", mock_status)
 
     # Simulate 100 concurrent requests for the SAME signal_id
     signal_id = str(uuid.uuid4())
@@ -43,17 +59,11 @@ async def test_idempotency_concurrency_load(mocker):
     results = await asyncio.gather(*tasks)
 
     # Verify Results
-    success_count = 0
-    duplicate_count = 0
-    for res in results:
-        if res.status == execution_pb2.STATUS_SUCCESS:
-            success_count += 1
-        elif "Duplicate Request" in res.message:
-            duplicate_count += 1
+    success_count = sum(1 for res in results if res.status == execution_pb2.STATUS_SUCCESS)
 
-    # Only 1 should succeed, 99 should be rejected as duplicates
-    assert success_count == 1
-    assert duplicate_count == 99
+    # Only 1 should dispatch; the rest reconcile the in-flight/accepted attempt.
+    assert success_count == 100
     
     # Verify gRPC was only called ONCE
     assert mock_stub.ExecuteTrade.call_count == 1
+    assert mock_status.await_count == 99
