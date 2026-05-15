@@ -65,14 +65,9 @@ def build_scan_pairs(active_pairs: list[dict], is_market_open: Callable[[str], b
     all_tickers: list[str] = []
     for pair in active_pairs:
         ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
-        # Note: pairs admitted with is_cointegrated=False (rolling stability fail)
-        # are NOT skipped here — process_pair checks the flag and skips signal
-        # generation, but we still need prices fetched so z-scores update.
-        # Only skip pairs explicitly marked non-cointegrated AND non-crypto
-        # (crypto pairs always need price updates for exit monitoring).
+        if pair.get("is_cointegrated", True) is False:
+            continue
         if not is_crypto_pair(ticker_a, ticker_b):
-            if not pair.get("is_cointegrated", False) and not is_market_open(ticker_a):
-                continue
             if not is_market_open(ticker_a):
                 continue
         scan_pairs.append(pair)
