@@ -1,6 +1,7 @@
 import pytest
 import asyncio
 import json
+from unittest.mock import AsyncMock, patch
 from fastapi.testclient import TestClient
 from src.services.dashboard_service import app, dashboard_state, dashboard_service
 from src.config import settings
@@ -108,11 +109,18 @@ async def test_audit_logging(client):
     """Verify that commands are logged to the database (Principle III)."""
     auth_query = dashboard_auth_query(client)
     
-    # Send a command
-    client.post(
-        f"/api/terminal/command?{auth_query}",
-        json={"command": "/exposure"}
-    )
+    with patch('src.services.notification_service.settings.PAPER_TRADING', True), \
+         patch(
+             'src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors',
+             new=AsyncMock(side_effect=AssertionError("paper-mode audit test must not query Postgres")),
+         ) as mock_shadow_portfolio:
+        # Send a command
+        response = client.post(
+            f"/api/terminal/command?{auth_query}",
+            json={"command": "/exposure"}
+        )
+        assert response.status_code == 200
+        mock_shadow_portfolio.assert_not_awaited()
     
     # Check SQLite logs — query specifically for the /exposure command log entry
     with dashboard_service.persistence._get_connection() as conn:
