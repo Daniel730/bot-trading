@@ -10,8 +10,10 @@ from src.services.persistence_service import OrderStatus, ExitReason
 def monitor():
     m = ArbitrageMonitor(mode="test")
     m.brokerage = AsyncMock()
+    m.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "close-order"})
     # Mock preflight check to always pass
     m._preflight_live_sell_inventory = AsyncMock(return_value=True)
+    m._await_order_fill = AsyncMock(return_value={"status": "filled", "filled_qty": 999})
     return m
 
 @pytest.fixture
@@ -33,9 +35,18 @@ async def test_duplicate_close_call(mock_notif, mock_settings, mock_persistence,
     """Test that a sequential duplicate call is blocked."""
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
+    mock_notif.send_message = AsyncMock()
     
-    mock_persistence.mark_signal_closing_if_open.side_effect = [True, False]
-    mock_persistence.get_signal_status.return_value = OrderStatus.CLOSED
+    mock_persistence.mark_signal_closing_if_open = AsyncMock(side_effect=[True, False])
+    mock_persistence.get_signal_status = AsyncMock(return_value=OrderStatus.CLOSED)
+    mock_persistence.close_trade = AsyncMock()
+    mock_persistence.update_signal_status = AsyncMock()
+
+    async def slow_close_order(*args, **kwargs):
+        await asyncio.sleep(0.01)
+        return {"status": "success", "order_id": "close-order"}
+
+    monitor.brokerage.place_value_order = AsyncMock(side_effect=slow_close_order)
     
     # First call
     await monitor._close_position(signal, 155.0, 295.0, ExitReason.TAKE_PROFIT)
@@ -55,8 +66,16 @@ async def test_concurrent_duplicate_close(mock_settings, mock_persistence, monit
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
     
-    mock_persistence.mark_signal_closing_if_open.return_value = True
-    mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
+    mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+    mock_persistence.get_signal_status = AsyncMock(return_value=OrderStatus.OPEN)
+    mock_persistence.close_trade = AsyncMock()
+    mock_persistence.update_signal_status = AsyncMock()
+
+    async def slow_close_order(*args, **kwargs):
+        await asyncio.sleep(0.01)
+        return {"status": "success", "order_id": "close-order"}
+
+    monitor.brokerage.place_value_order = AsyncMock(side_effect=slow_close_order)
     
     # Gather two concurrent close calls
     await asyncio.gather(
@@ -76,9 +95,12 @@ async def test_first_leg_closes_second_leg_fails(mock_notif, mock_settings, mock
     """Test when brokerage returns an error on the second leg."""
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
+    mock_notif.send_message = AsyncMock()
     
-    mock_persistence.mark_signal_closing_if_open.return_value = True
-    mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
+    mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+    mock_persistence.get_signal_status = AsyncMock(return_value=OrderStatus.OPEN)
+    mock_persistence.close_trade = AsyncMock()
+    mock_persistence.update_signal_status = AsyncMock()
     
     # First place_value_order succeeds, second fails
     monitor.brokerage.place_value_order.side_effect = [
@@ -105,9 +127,12 @@ async def test_close_function_raises_exception(mock_notif, mock_settings, mock_p
     """Test when the close path raises an unhandled exception."""
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
+    mock_notif.send_message = AsyncMock()
     
-    mock_persistence.mark_signal_closing_if_open.return_value = True
-    mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
+    mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+    mock_persistence.get_signal_status = AsyncMock(return_value=OrderStatus.OPEN)
+    mock_persistence.close_trade = AsyncMock()
+    mock_persistence.update_signal_status = AsyncMock()
     
     # Brokerage raises an exception
     monitor.brokerage.place_value_order.side_effect = Exception("API Down")
@@ -130,9 +155,12 @@ async def test_kill_switch_close_failure(mock_notif, mock_settings, mock_persist
     """Test kill-switch close raising an exception correctly alerts."""
     mock_settings.PAPER_TRADING = False
     mock_settings.DEV_MODE = False
+    mock_notif.send_message = AsyncMock()
     
-    mock_persistence.mark_signal_closing_if_open.return_value = True
-    mock_persistence.get_signal_status.return_value = OrderStatus.OPEN
+    mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+    mock_persistence.get_signal_status = AsyncMock(return_value=OrderStatus.OPEN)
+    mock_persistence.close_trade = AsyncMock()
+    mock_persistence.update_signal_status = AsyncMock()
     
     # Force exception
     monitor.brokerage.place_value_order.side_effect = RuntimeError("Broker Error")
@@ -152,8 +180,9 @@ async def test_kill_switch_close_failure(mock_notif, mock_settings, mock_persist
 @patch("src.monitor.persistence_service")
 async def test_bot_restart_while_closing_is_blocked(mock_persistence, monitor, signal):
     """CLOSING rows are treated as already in-flight and are never re-closed by this worker."""
-    mock_persistence.mark_signal_closing_if_open.return_value = False
-    mock_persistence.get_signal_status.return_value = OrderStatus.CLOSING
+    mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=False)
+    mock_persistence.get_signal_status = AsyncMock(return_value=OrderStatus.CLOSING)
+    mock_persistence.update_signal_status = AsyncMock()
 
     await monitor._close_position(signal, 155.0, 295.0, ExitReason.TAKE_PROFIT)
 
