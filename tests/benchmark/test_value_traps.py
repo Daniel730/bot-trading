@@ -18,6 +18,9 @@ class ValueTrapBenchmark(unittest.IsolatedAsyncioTestCase):
     """
 
     async def asyncSetUp(self):
+        if os.getenv("RUN_LIVE_BENCHMARKS") != "1":
+            self.skipTest("Set RUN_LIVE_BENCHMARKS=1 to run live SEC/Gemini benchmarks.")
+
         # Ensure we have a valid API key for Gemini and the model is initialized
         if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "mock" or not fundamental_analyst.model:
             self.skipTest("GEMINI_API_KEY not set, is mock, or model not initialized. Cannot run benchmark.")
