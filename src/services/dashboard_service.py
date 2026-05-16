@@ -166,7 +166,9 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, accept: bool = True) -> bool:
         if len(self.active_connections) >= self.max_connections:
-            logger.warning("WebSocket: Max connections reached. Rejecting client without accept.")
+            logger.warning("WebSocket: Max connections reached. Rejecting client.")
+            if accept:
+                await websocket.accept()
             await websocket.close(code=1008)
             return False
         if accept:
@@ -1971,7 +1973,11 @@ class DashboardService:
             from src.services.telemetry_service import telemetry_service
 
             telemetry_service.start_broadcast_loop()
-            config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
+            # lifespan="off": the FastAPI app has no startup/shutdown handlers, and
+            # uvicorn is embedded as a background asyncio task (no OS signal handlers).
+            # Without this, uvicorn's lifespan receive_queue.get() is hard-cancelled when
+            # the task is cancelled on shutdown, producing a spurious CancelledError ERROR log.
+            config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info", lifespan="off")
             self.server = uvicorn.Server(config)
             from src.services.background_task_watchdog import background_task_watchdog
 
@@ -2202,6 +2208,7 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None), ses
         try:
             verify_token(token, session)
         except HTTPException:
+            await websocket.accept()
             await websocket.close(code=4003)
             return
         if not await connection_manager.connect(websocket):
