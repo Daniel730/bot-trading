@@ -28,50 +28,19 @@ async def get_market_data(tickers: List[str], source: str = "yfinance", lookback
 @mcp.tool()
 async def execute_trade(ticker: str, side: str, quantity: float, mode: str = "SHADOW", pair_id: str = "MANUAL") -> str:
     """
-    Executes a trade via gRPC to the Java Engine and logs to persistence.
+    Rejects direct FastMCP trade execution until it can share the main bot safety path.
     """
-    import uuid
-    from src.generated.execution_pb2 import STATUS_SUCCESS
-    
-    signal_id = str(uuid.uuid4())
-    
-    # Define legs (for a single trade tool, we create one leg)
-    legs = [{
+    return json.dumps({
+        "status": "rejected",
+        "reason": (
+            "FastMCP execute_trade is disabled; use the dashboard/monitor "
+            "execution workflow so paper/live, risk, and reconciliation gates run."
+        ),
+        "mode": mode,
+        "pair_id": pair_id,
         "ticker": ticker,
         "side": side,
         "quantity": quantity,
-        "target_price": 0.0 # Will be calculated by Engine if 0
-    }]
-    
-    # Execute via gRPC
-    response = await execution_client.execute_trade(
-        signal_id=signal_id,
-        pair_id=pair_id,
-        legs=legs
-    )
-    
-    status = "error"
-    if response:
-        status = "success" if response.status == STATUS_SUCCESS else "rejected"
-    
-    # Log to PostgreSQL (backward compatibility)
-    await persistence_service.log_trade({
-        "order_id": signal_id,
-        "ticker": ticker,
-        "side": OrderSide.BUY if side.upper() == "BUY" else OrderSide.SELL,
-        "quantity": quantity,
-        "price": response.actual_vwap if response else 0.0,
-        "metadata": {
-            "mode": mode,
-            "grpc_status": str(response.status) if response else "failed",
-            "message": response.message if response else "No response"
-        }
-    })
-    
-    return json.dumps({
-        "status": status,
-        "signal_id": signal_id,
-        "response_message": response.message if response else "No response from Engine"
     })
 
 @mcp.tool()

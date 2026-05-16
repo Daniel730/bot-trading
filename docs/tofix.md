@@ -43,8 +43,8 @@ This is the current human-readable backlog. Older audit files are preserved for 
 11. SEC/fundamental cache misses default to neutral.
     This keeps the hot path alive, but it can let structurally unknown names pass through unless other agents veto. Consider stricter policy for live mode.
 
-12. Whale watcher depends on external cache freshness.
-    Provider ingestion should refresh Redis summaries outside the orchestrator hot path. Add stale-cache telemetry.
+12. Whale watcher is legacy-inactive in the active runtime.
+    The orchestrator now reports this as `INACTIVE` rather than neutral protection. Restoring cache-backed whale analysis is a future feature and needs fresh tests for ingestion freshness, summaries, vetoes, and telemetry.
 
 ## Testing Gaps
 

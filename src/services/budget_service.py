@@ -13,10 +13,8 @@ class BudgetService:
     def _init_budgets(self):
         """Initializes budget tracking in system_state if not present."""
         # We don't overwrite existing used budgets on restart
-        if self.persistence.get_system_state("budget_used_T212") is None:
-            self.persistence.set_system_state("budget_used_T212", 0.0)
-        if self.persistence.get_system_state("budget_used_WEB3") is None:
-            self.persistence.set_system_state("budget_used_WEB3", 0.0)
+        if self.persistence.get_system_state("budget_used_ALPACA") is None:
+            self.persistence.set_system_state("budget_used_ALPACA", 0.0)
 
     def get_venue_budget_info(self, venue: str) -> Dict[str, float]:
         """
@@ -24,10 +22,11 @@ class BudgetService:
         """
         total = getattr(settings, f"{venue}_BUDGET_USD", 0.0)
         used = float(self.persistence.get_system_state(f"budget_used_{venue}", 0.0))
-        
-        # If total is 0, it means no cap is set, but we might still track usage
-        remaining = max(0.0, total - used) if total > 0 else 999999.0 # Effectively unlimited if cap is 0
-        
+
+        # If total is 0, no cap is set. Effective cash then comes directly
+        # from the broker balance instead of a fake large constant.
+        remaining = max(0.0, total - used) if total > 0 else 0.0
+
         return {
             "total": total,
             "used": used,
@@ -53,7 +52,7 @@ class BudgetService:
         info = self.get_venue_budget_info(venue)
         if info["total"] <= 0:
             return actual_cash
-            
+
         return min(actual_cash, info["remaining"])
 
 budget_service = BudgetService()

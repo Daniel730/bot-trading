@@ -8,8 +8,9 @@ from rich.table import Table
 from rich.live import Live
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 import pandas as pd
+import numpy as np
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.config import settings
 from src.services.data_service import data_service
 from src.services.arbitrage_service import arbitrage_service, ArbitrageService
@@ -26,11 +27,14 @@ from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service
+from src.services.background_task_watchdog import background_task_watchdog
+from src.services.trade_math import build_pair_legs, cap_pair_notional, estimate_pair_profit
 import uuid
 import pytz
 import inspect
 from src.monitor_helpers import is_crypto_pair, resolve_pair_sector, compute_entry_zscore
 from src.monitor_scan_helpers import (
+    build_candidate_pairs,
     build_scan_pairs,
     summarize_scan_iteration,
     build_close_orders,
@@ -61,9 +65,9 @@ def setup_logging():
     # Remove existing handlers
     """
     Configure the root Python logger to use Rich for formatted console output and reduce noise from common third-party libraries.
-    
+
     This function clears any existing root logger handlers, installs a RichHandler that displays message-only output with timestamps and paths, sets the root logger level to INFO, and lowers verbosity for `urllib3` and `yfinance`.
-    
+
     Returns:
         logging.Logger: A logger scoped to this module's __name__.
     """
@@ -82,11 +86,11 @@ def setup_logging():
     rich_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger.addHandler(rich_handler)
     root_logger.setLevel(logging.INFO)
-    
+
     # Silence some noisy loggers
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("yfinance").setLevel(logging.ERROR)
-    
+
     return logging.getLogger(__name__)
 
 logger = setup_logging()
@@ -97,7 +101,9 @@ class ArbitrageMonitor:
         self.mode = mode
         self.active_pairs = []
         self.active_signals = []
-        self._signals_lock = asyncio.Lock()
+        # PATCH 3b: Initialize eagerly — reload_pairs acquires this before any
+        # signal is processed, so lazy init causes AttributeError on first restart.
+        self._signals_lock: asyncio.Lock = asyncio.Lock()
         self.last_dev_warning = datetime.min
         self.current_day = None
         self.daily_start_cash = 0.0
@@ -107,6 +113,45 @@ class ArbitrageMonitor:
         self.last_cointegration_check: dict = {}
         # Tracks which pairs have had their Kalman uncertainty bumped today.
         self.bumped_pairs_today: dict = {}
+        # In-memory lock set for closing positions to prevent duplicate broker orders
+        self._closing_signals: set = set()
+
+    async def _await_order_fill(self, order_id: str, timeout: float = 30) -> dict | None:
+        """PATCH 5: Poll Alpaca until order_id is filled or timeout elapses.
+
+        Returns normalized order snapshot when terminal (filled/partial/rejected),
+        else None on timeout/error.
+        """
+        import time
+        deadline = time.monotonic() + timeout
+        poll_interval = 2.0
+        while time.monotonic() < deadline:
+            try:
+                orders = await self.brokerage.get_pending_orders()
+                matching = [o for o in orders if str(o.get("id")) == str(order_id)]
+                if not matching:
+                    get_order = getattr(self.brokerage, "get_order", None)
+                    if get_order:
+                        snap = await get_order(order_id)
+                        if snap:
+                            return snap
+                    logger.warning(
+                        "Order %s is not open, but no order snapshot confirmed its terminal state.",
+                        order_id,
+                    )
+                    return None
+                order_status = matching[0].get("status", "").lower()
+                if order_status == "filled":
+                    return matching[0]
+                if order_status in ("partially_filled", "partial_fill"):
+                    return matching[0]
+                if order_status in ("cancelled", "canceled", "expired", "rejected"):
+                    logger.error("Order %s ended in non-fill status: %s", order_id, order_status)
+                    return matching[0]
+            except Exception as exc:
+                logger.warning("_await_order_fill poll error for %s: %s", order_id, exc)
+            await asyncio.sleep(poll_interval)
+        return None  # timeout
 
     async def _upsert_active_signal(
         self,
@@ -116,8 +161,11 @@ class ArbitrageMonitor:
         z_score: float,
         status: str,
         confidence: float | None = None,
+        hedge_ratio: float | None = None,
     ) -> None:
         """Keep dashboard-facing signal state live for z-score and confidence."""
+        if self._signals_lock is None:
+            self._signals_lock = asyncio.Lock()
         async with self._signals_lock:
             signal_entry = next(
                 (s for s in self.active_signals if s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b),
@@ -130,8 +178,12 @@ class ArbitrageMonitor:
             signal_entry["status"] = status
             if confidence is not None:
                 signal_entry["confidence"] = confidence
+            if hedge_ratio is not None:
+                signal_entry["hedge_ratio"] = hedge_ratio
 
     async def _remove_active_signal(self, ticker_a: str, ticker_b: str) -> None:
+        if self._signals_lock is None:
+            self._signals_lock = asyncio.Lock()
         async with self._signals_lock:
             self.active_signals = [
                 s
@@ -139,31 +191,223 @@ class ArbitrageMonitor:
                 if not (s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b)
             ]
 
+    async def _has_active_pair_or_pending_order(self, ticker_a: str, ticker_b: str) -> bool:
+        pair_symbols = {
+            self._canonical_position_symbol(ticker_a),
+            self._canonical_position_symbol(ticker_b),
+        }
+        try:
+            open_signals = await persistence_service.get_open_signals()
+        except Exception as exc:
+            msg = (
+                f"Execution blocked for {ticker_a}/{ticker_b}: could not verify "
+                f"open ledger positions ({exc})."
+            )
+            logger.critical(msg)
+            await notification_service.send_message(msg)
+            return True
+
+        for signal in open_signals or []:
+            leg_symbols = {
+                self._canonical_position_symbol(leg.get("ticker"))
+                for leg in signal.get("legs", [])
+                if leg.get("ticker")
+            }
+            if pair_symbols.issubset(leg_symbols):
+                msg = (
+                    f"Duplicate entry blocked for {ticker_a}/{ticker_b}: "
+                    f"active ledger signal {signal.get('signal_id')} already covers this pair."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return True
+
+        if settings.PAPER_TRADING:
+            return False
+
+        try:
+            pending_orders = await self.brokerage.get_pending_orders()
+        except Exception as exc:
+            msg = (
+                f"Execution blocked for {ticker_a}/{ticker_b}: could not verify "
+                f"pending broker orders ({exc})."
+            )
+            logger.critical(msg)
+            await notification_service.send_message(msg)
+            return True
+
+        for order in pending_orders or []:
+            raw_symbol = (
+                order.get("ticker")
+                or order.get("symbol")
+                or order.get("instrumentTicker")
+                or order.get("instrument")
+            )
+            if self._canonical_position_symbol(raw_symbol) in pair_symbols:
+                msg = (
+                    f"Duplicate entry blocked for {ticker_a}/{ticker_b}: "
+                    f"pending broker order exists for {raw_symbol}."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return True
+
+        return False
+
     def get_market_config(self, ticker: str) -> dict:
         """
         Returns the market window and timezone for a given ticker.
         Supported: .HK (Hong Kong), .DE/.AS/.PA/.L (Europe), Default (US).
         """
+        ticker = ticker.upper()
         # Hong Kong
         if ticker.endswith(".HK"):
             return {
-                "start_h": 1, "start_m": 30, "end_h": 8, "end_m": 0,
-                "tz": "Asia/Hong_Kong"
+                "start_h": 9, "start_m": 30, "end_h": 16, "end_m": 0,
+                "tz": "Asia/Hong_Kong",
+                "holiday_calendar": "HK",
             }
-        # Europe (London, Frankfurt, Paris, Amsterdam) - approximate window in WET/WEST
-        if any(ticker.endswith(s) for s in [".DE", ".AS", ".PA", ".L", ".LS"]):
-            return {
-                "start_h": 8, "start_m": 0, "end_h": 16, "end_m": 30,
-                "tz": "Europe/London"
-            }
+        # Europe (London, Frankfurt, Paris, Amsterdam) - approximate venue windows.
+        european_markets = {
+            ".DE": {
+                "holiday_calendar": "DE",
+                "tz": "Europe/London",
+                "start_h": 8,
+                "start_m": 0,
+                "end_h": 16,
+                "end_m": 30,
+            },
+            ".AS": {
+                "holiday_calendar": "NL",
+                "tz": "Europe/Amsterdam",
+                "start_h": 9,
+                "start_m": 0,
+                "end_h": 17,
+                "end_m": 30,
+            },
+            ".PA": {
+                "holiday_calendar": "FR",
+                "tz": "Europe/Paris",
+                "start_h": 9,
+                "start_m": 0,
+                "end_h": 17,
+                "end_m": 30,
+            },
+            ".LS": {
+                "holiday_calendar": "PT",
+                "tz": "Europe/London",
+                "start_h": 8,
+                "start_m": 0,
+                "end_h": 16,
+                "end_m": 30,
+            },
+            ".L": {
+                "holiday_calendar": "GB",
+                "tz": "Europe/London",
+                "start_h": 8,
+                "start_m": 0,
+                "end_h": 16,
+                "end_m": 30,
+            },
+        }
+        for suffix, market_config in european_markets.items():
+            if ticker.endswith(suffix):
+                return market_config
         # Default: US (NYSE/NASDAQ)
         return {
             "start_h": settings.START_HOUR,
             "start_m": settings.START_MINUTE,
             "end_h": settings.END_HOUR,
             "end_m": settings.END_MINUTE,
-            "tz": settings.MARKET_TIMEZONE
+            "tz": settings.MARKET_TIMEZONE,
+            "holiday_calendar": "NYSE",
         }
+
+    def _is_market_holiday(self, market_config: dict, now) -> bool:
+        calendar_code = market_config.get("holiday_calendar")
+        if not calendar_code:
+            return False
+
+        try:
+            import holidays
+
+            current_date = now.date()
+            if calendar_code == "DE" and (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return True
+
+            year = now.date().year
+            if calendar_code == "NYSE":
+                market_holidays = holidays.financial_holidays("NYSE", years=[year])
+            else:
+                market_holidays = holidays.country_holidays(calendar_code, years=[year])
+            return now.date() in market_holidays
+        except Exception as exc:
+            logger.warning(
+                "Market holiday calendar %s unavailable; treating market as closed: %s",
+                calendar_code,
+                exc,
+            )
+            return True
+
+    def _market_early_close_time(self, market_config: dict, now):
+        calendar_code = market_config.get("holiday_calendar")
+        if calendar_code == "HK":
+            current_date = now.date()
+            if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return now.replace(hour=12, minute=0, second=0, microsecond=0)
+
+            if current_date.month in (1, 2):
+                try:
+                    import holidays
+
+                    next_day = current_date + timedelta(days=1)
+                    market_holidays = holidays.country_holidays("HK", years=[current_date.year, next_day.year])
+                    if "Lunar New Year" in str(market_holidays.get(next_day, "")):
+                        return now.replace(hour=12, minute=0, second=0, microsecond=0)
+                except Exception as exc:
+                    logger.warning(
+                        "HK early-close calendar unavailable; treating market as closed: %s",
+                        exc,
+                    )
+                    return now.replace(hour=0, minute=0, second=0, microsecond=0)
+            return None
+
+        if calendar_code == "GB":
+            current_date = now.date()
+            if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return now.replace(hour=12, minute=30, second=0, microsecond=0)
+            return None
+
+        if calendar_code in ("NL", "FR"):
+            current_date = now.date()
+            if (current_date.month, current_date.day) in ((12, 24), (12, 31)):
+                return now.replace(hour=14, minute=5, second=0, microsecond=0)
+            return None
+
+        if calendar_code != "NYSE":
+            return None
+
+        current_date = now.date()
+        is_christmas_eve = current_date.month == 12 and current_date.day == 24
+        is_independence_day_eve = current_date.month == 7 and current_date.day == 3
+        if is_christmas_eve or is_independence_day_eve:
+            return now.replace(hour=13, minute=0, second=0, microsecond=0)
+
+        if current_date.month == 11 and current_date.weekday() == 4:
+            try:
+                import holidays
+
+                previous_day = current_date - timedelta(days=1)
+                market_holidays = holidays.financial_holidays("NYSE", years=[current_date.year])
+                if "Thanksgiving" in str(market_holidays.get(previous_day, "")):
+                    return now.replace(hour=13, minute=0, second=0, microsecond=0)
+            except Exception as exc:
+                logger.warning(
+                    "NYSE early-close calendar unavailable; treating market as closed: %s",
+                    exc,
+                )
+                return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return None
 
     def is_market_open(self, ticker: str = "SPY") -> bool:
         """
@@ -179,9 +423,14 @@ class ArbitrageMonitor:
         # Weekend check
         if now.weekday() >= 5:
             return False
+        if self._is_market_holiday(mkt, now):
+            return False
 
         start_time = now.replace(hour=mkt["start_h"], minute=mkt["start_m"], second=0, microsecond=0)
         end_time = now.replace(hour=mkt["end_h"], minute=mkt["end_m"], second=0, microsecond=0)
+        early_close_time = self._market_early_close_time(mkt, now)
+        if early_close_time is not None:
+            end_time = min(end_time, early_close_time)
 
         return start_time <= now <= end_time
 
@@ -213,11 +462,11 @@ class ArbitrageMonitor:
         """
         mode = "PAPER" if settings.PAPER_TRADING else "LIVE"
         next_open = self.next_market_open()
-        
+
         table = Table(title="Bot Pre-flight Configuration", show_header=False, box=None)
         table.add_row("Mode", f"[bold cyan]{mode}[/]")
         table.add_row("Dev Mode", f"{'[green]Enabled[/]' if settings.DEV_MODE else '[yellow]Disabled[/]'}")
-        
+
         if settings.DEV_MODE:
             pair_count = len(settings.CRYPTO_TEST_PAIRS)
             table.add_row("Pair Universe", f"{pair_count} crypto pairs")
@@ -231,12 +480,19 @@ class ArbitrageMonitor:
         console.print(Panel(table, title="[bold blue]Arbitrage Elite Engine[/]", border_style="blue"))
 
     async def _preflight_live_sell_inventory(self, legs: list[dict]) -> bool:
-        """Fail closed if a live T212 sell leg tries to sell more than owned."""
+        """Fail closed if a live sell leg tries to sell more than owned."""
         for leg in legs:
             if leg["side"].upper() != "SELL":
                 continue
 
             ticker = leg["ticker"]
+            if "-USD" in str(ticker).upper():
+                logger.debug(
+                    "Skipping T212 inventory preflight for crypto ticker %s; "
+                    "availability must be validated by the execution venue.",
+                    ticker,
+                )
+                continue
             required = float(leg["quantity"])
             try:
                 maybe_available = self.brokerage.get_available_quantity(ticker)
@@ -254,7 +510,7 @@ class ArbitrageMonitor:
             if available + 1e-9 < required:
                 msg = (
                     f"Execution skipped before broker for {leg['display_ticker']}: "
-                    f"SELL leg requires {required:.6f} shares, but Trading212 reports "
+                    f"SELL leg requires {required:.6f} shares, but the broker reports "
                     f"{available:.6f} available. This prevents 'selling more than owned'."
                 )
                 logger.warning(msg)
@@ -269,13 +525,13 @@ class ArbitrageMonitor:
         Refuses to boot if baselines are missing for any active pair when LIVE_CAPITAL_DANGER=True.
         """
         logger.info(f"VALIDATING L2 ENTROPY BASELINES FOR {len(pairs)} PAIRS (LIVE_CAPITAL_DANGER=True)...")
-        
+
         # Extract unique tickers to minimize Redis calls
         unique_tickers = set()
         for p in pairs:
             unique_tickers.add(p['ticker_a'])
             unique_tickers.add(p['ticker_b'])
-            
+
         missing_baselines = []
         for ticker in unique_tickers:
             # Entropy service stores baselines as 'entropy_baseline:{ticker}'
@@ -295,30 +551,33 @@ class ArbitrageMonitor:
     async def initialize_pairs(self):
         """
         Initialize the monitor's active pair universe and prepare cointegration and Kalman filter state for each eligible pair.
-        
+
         Selects candidate pairs (from persisted active pairs or config), applies eligibility gates, validates cointegration (optionally with rolling-window stability), sanitizes hedge ratios, warms or restores Kalman filter state, computes spread metrics, and registers prepared pair records in self.active_pairs. Updates dashboard pre-warming progress and records last_cointegration_check dates; may persist a bootstrapped active-pair list when the database is empty.
         """
         db_pairs = await persistence_service.get_active_trading_pairs()
         if not db_pairs:
             logger.info("No active pairs in database. Initializing from config.")
-            if settings.DEV_MODE:
-                candidate_pairs = settings.CRYPTO_TEST_PAIRS
-            else:
-                candidate_pairs = list(settings.ARBITRAGE_PAIRS) + list(settings.CRYPTO_TEST_PAIRS)
-            candidate_pairs = candidate_pairs[:settings.MAX_ACTIVE_PAIRS]
+            candidate_pairs = build_candidate_pairs(
+                settings.CRYPTO_TEST_PAIRS if settings.DEV_MODE else settings.ARBITRAGE_PAIRS,
+                settings.CRYPTO_TEST_PAIRS,
+                settings.MAX_ACTIVE_PAIRS,
+                dev_mode=settings.DEV_MODE,
+            )
             await persistence_service.save_trading_pairs(candidate_pairs)
         else:
             logger.info(f"Loaded {len(db_pairs)} active pairs from database.")
-            if settings.DEV_MODE:
-                candidate_pairs = [p for p in db_pairs if "-USD" in p["ticker_a"] or "-USD" in p["ticker_b"]]
-            else:
-                candidate_pairs = db_pairs
+            candidate_pairs = build_candidate_pairs(
+                db_pairs,
+                settings.CRYPTO_TEST_PAIRS,
+                settings.MAX_ACTIVE_PAIRS,
+                dev_mode=settings.DEV_MODE,
+            )
 
         # Spec 037: pair-eligibility gate. Reject cross-currency, cross-session,
         # LSE-stamp-duty and cost-above-ceiling pairs *before* allocating
         # Kalman state for them. This avoids spending compute and Redis state
         # on pairs that the strategy can never profitably trade.
-        pairs_to_init, rejected = filter_pair_universe(
+        pairs_to_init, rejected = await filter_pair_universe(
             candidate_pairs,
             account_currency=settings.ACCOUNT_CURRENCY,
             max_round_trip_cost_pct=settings.PAIR_MAX_ROUND_TRIP_COST_PCT,
@@ -363,15 +622,43 @@ class ArbitrageMonitor:
                     logger.warning(f"SKIP {ticker_a}/{ticker_b}: No historical data returned.")
                     continue
 
-                col_a = next((c for c in hist_data.columns if ticker_a in str(c)), None)
-                col_b = next((c for c in hist_data.columns if ticker_b in str(c)), None)
+                # Normalise: if yfinance returned a MultiIndex DataFrame, flatten to
+                # a simple ticker→price DataFrame so column matching is consistent.
+                if isinstance(hist_data.columns, pd.MultiIndex):
+                    # Level 0 is the price field (Close/Open/…), level 1 is ticker.
+                    # Drop down to just the Close slice if available.
+                    if "Close" in hist_data.columns.get_level_values(0):
+                        hist_data = hist_data["Close"]
+                    else:
+                        # Keep the last level (tickers) as column names.
+                        hist_data.columns = hist_data.columns.get_level_values(-1)
+
+                # Case-insensitive substring match so 'BTC-USD' matches 'BTC-USD' column.
+                col_a = next(
+                    (c for c in hist_data.columns
+                     if ticker_a.upper() in str(c).upper()),
+                    None,
+                )
+                col_b = next(
+                    (c for c in hist_data.columns
+                     if ticker_b.upper() in str(c).upper()),
+                    None,
+                )
 
                 if not col_a or not col_b:
-                    logger.warning(f"SKIP {ticker_a}/{ticker_b}: Columns not found in data. Found: {hist_data.columns.tolist()}")
+                    logger.warning(
+                        f"SKIP {ticker_a}/{ticker_b}: Columns not found in data. "
+                        f"Found: {hist_data.columns.tolist()}"
+                    )
                     continue
 
-                is_coint, p_val, hedge = arbitrage_service.check_cointegration(hist_data[col_a], hist_data[col_b])
-                logger.info(f"DEBUG {ticker_a}/{ticker_b}: Coint={is_coint}, p={p_val:.4f}, hedge={hedge:.4f}")
+                is_crypto = is_crypto_pair(ticker_a, ticker_b)
+                p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+                pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
+
+                is_coint, p_val, hedge = arbitrage_service.check_cointegration(
+                    hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
+                )
 
                 # Spec 037: rolling-window stability check on top of the
                 # static ADF. A pair that flunked stability across rolling
@@ -384,7 +671,8 @@ class ArbitrageMonitor:
                         hist_data[col_b],
                         window=settings.COINTEGRATION_ROLLING_WINDOW,
                         step=settings.COINTEGRATION_ROLLING_STEP,
-                        min_pass_rate=settings.COINTEGRATION_ROLLING_PASS_RATE,
+                        min_pass_rate=pass_thresh,
+                        pvalue_threshold=p_thresh,
                     )
                     if not stability["stable"]:
                         is_coint = False
@@ -399,7 +687,6 @@ class ArbitrageMonitor:
                         )
 
                 # Bug L-01: Guard against NaN/Inf hedge ratio
-                import numpy as np
                 if pd.isna(hedge) or np.isinf(hedge):
                     logger.warning(f"Invalid hedge ratio for {ticker_a}/{ticker_b}: {hedge}. Using 1.0.")
                     hedge = 1.0
@@ -418,7 +705,8 @@ class ArbitrageMonitor:
                 kf = await arbitrage_service.get_or_create_filter(
                     pair_id,
                     delta=settings.KALMAN_DELTA,
-                    r=settings.KALMAN_R
+                    r=settings.KALMAN_R,
+                    prewarm_data=hist_data
                 )
 
                 metrics = arbitrage_service.get_spread_metrics(hist_data[col_a], hist_data[col_b], hedge)
@@ -435,9 +723,12 @@ class ArbitrageMonitor:
                 # in the scan loop doesn't immediately fire again 15 s after boot.
                 self.last_cointegration_check[pair_id] = datetime.now().date()
                 logger.info(f"SUCCESS: Pair {ticker_a}/{ticker_b} initialized.")
+
+                # Pacing: Avoid blasting the data API (Yahoo/Polygon) during boot
+                await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"FATAL ERROR initializing {ticker_a}/{ticker_b}: {e}")
-        
+
         logger.info(f"Initialization Summary: {len(self.active_pairs)}/{total_pairs} pairs successfully loaded.")
         if total_pairs > 0:
             await dashboard_service.update(
@@ -451,11 +742,11 @@ class ArbitrageMonitor:
         Swaps the worst performing active pairs with the best candidates.
         """
         logger.info("ELITE SQUAD: Checking for potential pair rotation...")
-        
+
         # 1. Get current active pairs
         active_pairs = await persistence_service.get_active_trading_pairs()
         if not active_pairs: return
-        
+
         # 2. Get top candidates from scouting
         top_candidates = await persistence_service.get_top_candidates(limit=10)
         if not top_candidates:
@@ -465,29 +756,29 @@ class ArbitrageMonitor:
         # 3. Find worst performing or broken active pair
         # Simple heuristic: prioritize pairs that are no longer cointegrated.
         worst_active = sorted(active_pairs, key=lambda p: p.get('is_cointegrated', True))[0]
-        
+
         # Get the best candidate that isn't already active
         active_ids = {p['id'] for p in active_pairs}
         eligible_candidates = [c for c in top_candidates if c['pair_id'] not in active_ids]
-        
+
         if not eligible_candidates:
             logger.info("ELITE SQUAD: All top candidates are already active.")
             return
-            
+
         best_candidate = eligible_candidates[0]
-        
+
         # 4. Rotation Logic: Rotate if active is broken OR candidate Sortino is significantly high
         should_rotate = (
             not worst_active.get("is_cointegrated")
             or best_candidate["sortino"] > settings.ELITE_ROTATION_SORTINO_THRESHOLD
         )
-        
+
         if should_rotate:
             logger.info(f"ELITE SQUAD: Rotating {worst_active['id']} out for {best_candidate['pair_id']}.")
-            
+
             # Update DB
             await persistence_service.update_pair_status(worst_active['id'], "Benched")
-            
+
             # Promote candidate to Active
             ticker_a, ticker_b = best_candidate['pair_id'].split('_')
             await persistence_service.save_trading_pairs([{
@@ -496,7 +787,7 @@ class ArbitrageMonitor:
                 "status": "Active",
                 "is_cointegrated": True
             }])
-            
+
             # Reload in-memory state
             await self.reload_pairs()
         else:
@@ -507,20 +798,29 @@ class ArbitrageMonitor:
         Background task that periodically runs the discovery engine (Scouting)
         and promotes the best pairs (Rotation).
         """
-        # Wait a bit after startup to avoid initial load spike
-        await asyncio.sleep(60)
-        
+        # Wait 20 minutes after startup before the first scout cycle.
+        # The 60s original value caused run_discovery() to saturate yfinance
+        # immediately after boot, rate-limiting the first reload and dropping
+        # all active pairs to 0.  20 min gives the scan loop time to warm up
+        # Kalman filters before any heavy portfolio_manager downloads begin.
+        initial_delay = max(1200, settings.SCOUT_INTERVAL_HOURS * 1800)
+        logger.info(
+            "AUTO-SCOUT: first cycle in %.0f minutes.",
+            initial_delay / 60,
+        )
+        await asyncio.sleep(initial_delay)
+
         while True:
             try:
                 logger.info("AUTO-UPDATE: Starting periodic Scouting & Rotation cycle...")
-                
+
                 # 1. Scouting: Find new candidates
                 from src.agents.portfolio_manager_agent import portfolio_manager
                 await portfolio_manager.run_discovery()
-                
+
                 # 2. Rotation: Promote best candidates
                 await self._rotate_elite_pairs()
-                
+
                 logger.info(f"AUTO-UPDATE: Cycle complete. Next run in {settings.SCOUT_INTERVAL_HOURS} hours.")
                 await asyncio.sleep(settings.SCOUT_INTERVAL_HOURS * 3600)
             except Exception as e:
@@ -532,19 +832,37 @@ class ArbitrageMonitor:
     async def reload_pairs(self):
         """
         Reload the active pair universe from settings and update in-memory state.
-        
+
         Builds a new list of active pairs by calling initialize_pairs() while holding the signals lock;
         replaces the existing active_pairs and resets last_cointegration_check. After reloading,
         removes any in-memory Kalman filters that correspond to pairs no longer active to prevent
         memory growth and logs a summary of added/removed pairs.
         """
         async with self._signals_lock:
-            old_ids = {p['id'] for p in self.active_pairs}
+            old_pairs = list(self.active_pairs)
+            old_ids = {p['id'] for p in old_pairs}
+
             # Reset and rebuild via the existing initializer.
             self.active_pairs = []
             self.last_cointegration_check = {}
             await self.initialize_pairs()
             new_ids = {p['id'] for p in self.active_pairs}
+
+            # Safety net: if the reload produced ZERO pairs (e.g. Yahoo rate-limited
+            # during run_discovery), restore the previous set so the scan loop is
+            # never left with 0/0 pairs.
+            if not self.active_pairs and old_pairs:
+                logger.warning(
+                    "reload_pairs: new initialization returned 0 pairs — "
+                    "keeping existing %d pairs to avoid scan blackout.",
+                    len(old_pairs),
+                )
+                self.active_pairs = old_pairs
+                self.last_cointegration_check = {
+                    p['id']: __import__('datetime').date.today()
+                    for p in old_pairs
+                }
+                return
 
             # Forget Kalman filters for pairs that were removed so memory
             # doesn't accumulate across reloads.
@@ -559,7 +877,21 @@ class ArbitrageMonitor:
                 f"(+{len(new_ids - old_ids)} new, -{len(removed)} removed)"
             )
 
-    async def process_pair(self, pair: dict, latest_prices: dict) -> dict:
+    async def _get_sizing_base(self) -> float:
+        """Helper to fetch the current account equity/cash for sizing calculations."""
+        if settings.PAPER_TRADING:
+            venue_budget_cap = settings.ALPACA_BUDGET_USD
+            return venue_budget_cap if venue_budget_cap > 0 else settings.PAPER_TRADING_STARTING_CASH
+
+        try:
+            maybe_equity = self.brokerage.get_account_equity()
+            equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
+            return float(equity or 0.0)
+        except Exception as e:
+            logger.warning(f"Failed to fetch sizing base from brokerage: {e}. Falling back to default.")
+            return settings.PAPER_TRADING_STARTING_CASH
+
+    async def process_pair(self, pair: dict, latest_prices: dict, sizing_base: float = 0.0) -> dict:
         """Processes a single pair for signals and validation."""
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
         try:
@@ -585,7 +917,7 @@ class ArbitrageMonitor:
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
                 return diagnostic
-            
+
             # Spec 037: Session-boundary Q/P adjustment applied BEFORE this
             # tick's update so the inflated noise is in effect for the very
             # first bar after market open. inflate_q() then decays Q linearly
@@ -641,7 +973,12 @@ class ArbitrageMonitor:
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
                 # Update Active Signals for Dashboard
-                await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="Analyzing")
+                await self._upsert_active_signal(
+                    t_a, t_b,
+                    z_score=z_score,
+                    status="Analyzing",
+                    hedge_ratio=float(pair.get("hedge_ratio", 1.0))
+                )
 
                 # AI Validation
                 # Look up this pair's sector so the orchestrator uses the right beacon asset.
@@ -672,6 +1009,7 @@ class ArbitrageMonitor:
                         z_score=z_score,
                         status="VETOED_TIMEOUT",
                         confidence=0.0,
+                        hedge_ratio=float(pair.get("hedge_ratio", 1.0))
                     )
                     logger.warning(
                         "ORCHESTRATOR [%s/%s] timed out after %.1f s. "
@@ -683,39 +1021,131 @@ class ArbitrageMonitor:
                     return diagnostic
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
+                final_confidence = float(decision_state["final_confidence"])
+                hedge_ratio = float(pair.get("hedge_ratio", 1.0))
 
-                if decision_state['final_confidence'] > settings.MONITOR_MIN_AI_CONFIDENCE:
-                    await self._upsert_active_signal(
-                        t_a,
-                        t_b,
-                        z_score=z_score,
-                        status="APPROVED",
-                        confidence=float(decision_state["final_confidence"]),
-                    )
-                    approved = await notification_service.request_approval(f"Opportunity in {t_a}/{t_b}. Z:{z_score:.2f}")
-                    if approved:
-                        direction = "Short-Long" if z_score > 0 else "Long-Short"
-                        await self.execute_trade(pair, direction, price_a, price_b, signal_id)
-                        await self._upsert_active_signal(
-                            t_a,
-                            t_b,
-                            z_score=z_score,
-                            status="EXECUTED",
-                            confidence=float(decision_state["final_confidence"]),
-                        )
-                        diagnostic["verdict"] = "EXECUTED"
-                else:
+                if final_confidence <= settings.MONITOR_MIN_AI_CONFIDENCE:
                     await self._upsert_active_signal(
                         t_a,
                         t_b,
                         z_score=z_score,
                         status="VETOED",
-                        confidence=float(decision_state["final_confidence"]),
+                        confidence=final_confidence,
+                        hedge_ratio=hedge_ratio,
                     )
-                    logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {decision_state['final_confidence']:.3f} too low.")
+                    logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {final_confidence:.3f} too low.")
                     diagnostic["verdict"] = "VETOED"
+                    diagnostic["confidence"] = final_confidence
+                    return diagnostic
 
-                diagnostic["confidence"] = decision_state['final_confidence']
+                # Calculate expected profit/loss from the same gross pair
+                # notional that execution will use.
+                effective_sizing_base = sizing_base if sizing_base > 0 else settings.PAPER_TRADING_STARTING_CASH
+                risk_res = risk_service.validate_trade(
+                    ticker=f"{t_a}_{t_b}",
+                    total_portfolio_cash=effective_sizing_base,
+                    amount_fiat=effective_sizing_base,
+                    win_prob=settings.DEFAULT_WIN_PROBABILITY,
+                    win_loss_ratio=settings.DEFAULT_WIN_LOSS_RATIO
+                )
+                desired_notional = cap_pair_notional(
+                    float(risk_res["final_amount"]),
+                    effective_sizing_base,
+                    min_trade_value=settings.MIN_TRADE_VALUE,
+                )
+                if settings.TARGET_CASH_PER_LEG > 0:
+                    desired_notional = min(desired_notional, settings.TARGET_CASH_PER_LEG * 2.0)
+
+                if desired_notional <= 0:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="VETOED_SIZE",
+                        confidence=final_confidence,
+                        hedge_ratio=hedge_ratio,
+                    )
+                    diagnostic["verdict"] = "VETOED"
+                    diagnostic["confidence"] = final_confidence
+                    return diagnostic
+
+                direction = "Short-Long" if z_score > 0 else "Long-Short"
+                legs = build_pair_legs(
+                    price_a=price_a,
+                    price_b=price_b,
+                    hedge_ratio=hedge_ratio,
+                    gross_notional=desired_notional,
+                    direction=direction,
+                )
+                est_friction_pct = max(
+                    float(risk_res["fee_status"].get("total_friction_percent", 0.0)),
+                    float(pair.get("estimated_cost_pct") or 0.0),
+                )
+                preview = estimate_pair_profit(
+                    quantity_a=legs.quantity_a,
+                    gross_notional=legs.gross_notional,
+                    spread=spread,
+                    z_score=z_score,
+                    innovation_variance=innovation_var,
+                    friction_pct=est_friction_pct,
+                    take_profit_zscore=settings.TAKE_PROFIT_ZSCORE,
+                    stop_loss_zscore=settings.STOP_LOSS_ZSCORE,
+                )
+
+                if preview.net_profit <= 0:
+                    logger.info(f"PROFIT GUARD [{t_a}/{t_b}]: Net profit ${preview.net_profit:.2f} is non-positive. Vetoing.")
+                    await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="VETOED_UNPROFITABLE", confidence=final_confidence, hedge_ratio=hedge_ratio)
+                    diagnostic["verdict"] = "VETOED"
+                    diagnostic["confidence"] = final_confidence
+                    return diagnostic
+
+                trade_summary = (
+                    f"*Opportunity Found: {t_a} / {t_b}*\n\n"
+                    f"*Gross Pair Notional*: ${legs.gross_notional:.2f} "
+                    f"(${legs.notional_a:.2f} {legs.side_a} {t_a} / ${legs.notional_b:.2f} {legs.side_b} {t_b})\n"
+                    f"*Expected Net Profit*: ${preview.net_profit:.2f} ({preview.profit_margin_pct:.2f}%) "
+                    f"[Gross: ${preview.gross_profit:.2f}]\n"
+                    f"*Max Loss Risk*: ${preview.expected_loss:.2f} ({preview.loss_margin_pct:.2f}%)\n"
+                    f"*Est. Friction*: ${preview.friction_usd:.2f} ({est_friction_pct:.2%})\n\n"
+                    f"*Stats*: Z-Score {z_score:.2f} | Hedge {hedge_ratio:.3f} | Conf {decision_state['final_confidence']:.1%}\n"
+                    f"*Sizing*: Kelly {risk_res['kelly_fraction']:.2%} of base (${float(risk_res['final_amount']):.2f} gross pair notional)."
+                )
+
+                if final_confidence > settings.MONITOR_MIN_AI_CONFIDENCE:
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="APPROVED",
+                        confidence=final_confidence,
+                        hedge_ratio=hedge_ratio,
+                    )
+                    approved = await notification_service.request_approval(trade_summary)
+                    if approved:
+                        direction = "Short-Long" if z_score > 0 else "Long-Short"
+                        execution_result = await self.execute_trade(pair, direction, price_a, price_b, signal_id)
+                        if execution_result and execution_result.get("executed"):
+                            await self._upsert_active_signal(
+                                t_a,
+                                t_b,
+                                z_score=z_score,
+                                status="EXECUTED",
+                                confidence=final_confidence,
+                                hedge_ratio=hedge_ratio,
+                            )
+                            diagnostic["verdict"] = "EXECUTED"
+                        else:
+                            await self._upsert_active_signal(
+                                t_a,
+                                t_b,
+                                z_score=z_score,
+                                status="EXECUTION_BLOCKED",
+                                confidence=final_confidence,
+                                hedge_ratio=hedge_ratio,
+                            )
+                            diagnostic["verdict"] = "EXECUTION_BLOCKED"
+
+                diagnostic["confidence"] = final_confidence
             else:
                 # Cleanup inactive signals
                 await self._remove_active_signal(t_a, t_b)
@@ -728,39 +1158,56 @@ class ArbitrageMonitor:
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id):
         """Executes a trade and logs to PostgreSQL."""
+        def execution_result(executed: bool, reason: str) -> dict:
+            return {"executed": executed, "reason": reason}
+
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
+        if await self._has_active_pair_or_pending_order(t_a, t_b):
+            return execution_result(False, "active_pair_or_pending_order")
 
         # Sprint D.2: Bid-Ask Slippage Protection
         bid_a, ask_a = await data_service.get_bid_ask(t_a)
         bid_b, ask_b = await data_service.get_bid_ask(t_b)
 
-        if bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0:
-            spread_a = (ask_a - bid_a) / bid_a if bid_a > 0 else 0
-            spread_b = (ask_b - bid_b) / bid_b if bid_b > 0 else 0
-            # Bug L-02: Proportional spread calculation
-            total_spread = (1 + spread_a) * (1 + spread_b) - 1
-            if total_spread > settings.SPREAD_GUARD_MAX_PCT:
-                logger.warning(
-                    f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > "
-                    f"{settings.SPREAD_GUARD_MAX_PCT*100:.3f}% max threshold."
-                )
-                return
-        else:
-            logger.warning(f"SPREAD GUARD: Could not fetch valid Bid/Ask for {t_a}/{t_b}. Proceeding with caution or paper logic.")
+        try:
+            bid_a = float(bid_a)
+            ask_a = float(ask_a)
+            bid_b = float(bid_b)
+            ask_b = float(ask_b)
+            valid_bid_ask = bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0
+        except (TypeError, ValueError):
+            valid_bid_ask = False
 
-        # Feature 037.B & BudgetService: Use isolated budget caps per venue
+        if not valid_bid_ask:
+            logger.warning(
+                f"SPREAD GUARD: Missing or invalid Bid/Ask for {t_a}/{t_b}. "
+                f"Rejecting trade. bid_a={bid_a} ask_a={ask_a} bid_b={bid_b} ask_b={ask_b}"
+            )
+            return execution_result(False, "invalid_bid_ask")
+
+        spread_a = (ask_a - bid_a) / bid_a
+        spread_b = (ask_b - bid_b) / bid_b
+        # Bug L-02: Proportional spread calculation
+        total_spread = (1 + spread_a) * (1 + spread_b) - 1
+        if total_spread > settings.SPREAD_GUARD_MAX_PCT:
+            logger.warning(
+                f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > "
+                f"{settings.SPREAD_GUARD_MAX_PCT*100:.3f}% max threshold."
+            )
+            return execution_result(False, "spread_guard")
+
         venue = self.brokerage.get_venue(t_a)
         crypto_pair = is_crypto_pair(t_a, t_b)
-        venue_budget_cap = getattr(settings, f"{venue}_BUDGET_USD", 0.0)
-        
+        venue_budget_cap = settings.ALPACA_BUDGET_USD
+
         total_cash = None
+        total_equity = None
+        buying_power = None
+        sizing_base = 0.0
+        available_for_exec = 0.0
         pending_value = 0.0
         budget_source = "unknown"
 
-        # Feature 037.C: Keep venue budgeting logic consistent. Web3 wallet
-        # configuration is intentionally separate from crypto execution: crypto
-        # pairs keep 24/7 scanning, while live orders are sized from the selected
-        # broker venue, typically Alpaca.
         if settings.PAPER_TRADING:
             total_cash = (
                 venue_budget_cap
@@ -768,23 +1215,29 @@ class ArbitrageMonitor:
                 else settings.PAPER_TRADING_STARTING_CASH
             )
             budget_source = "paper_starting_cash"
-        elif venue == "WEB3":
-            try:
-                maybe_cash = self.brokerage.get_web3_account_cash()
-                total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
-                if not isinstance(total_cash, (int, float)):
-                    snapshot = self.brokerage.web3.get_budget_snapshot()
-                    snapshot = await snapshot if inspect.isawaitable(snapshot) else snapshot
-                    total_cash = float(snapshot.get("balance_usd", snapshot.get("available_usd", 0.0)))
-                budget_source = "web3_wallet_usd"
-            except Exception as e:
-                logger.warning(f"WEB3 account cash fetch failed for {t_a}/{t_b}: {e}")
-                total_cash = None
+            sizing_base = total_cash
+            available_for_exec = total_cash
         else:
-            maybe_cash = self.brokerage.get_account_cash()
-            total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
+            try:
+                maybe_cash = self.brokerage.get_account_cash()
+                maybe_equity = self.brokerage.get_account_equity()
+                maybe_bp = self.brokerage.get_account_buying_power()
+
+                total_cash = await maybe_cash if inspect.isawaitable(maybe_cash) else maybe_cash
+                total_equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
+                buying_power = await maybe_bp if inspect.isawaitable(maybe_bp) else maybe_bp
+            except Exception as e:
+                message = (
+                    f"{venue} account balance read failed for {t_a}/{t_b}: {e}. "
+                    "Execution blocked because account state is unknown."
+                )
+                logger.critical(message)
+                await notification_service.send_message(message)
+                return execution_result(False, "account_state_unknown")
+
             asset_class = "crypto" if crypto_pair else "equity"
             budget_source = f"{venue.lower()}_{asset_class}_cash"
+
             if total_cash is not None:
                 try:
                     maybe_pending = self.brokerage.get_pending_orders_value()
@@ -793,35 +1246,57 @@ class ArbitrageMonitor:
                     )
                     pending_value = max(0.0, float(pending_value_raw))
                 except Exception as e:
-                    logger.warning(f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}")
+                    message = (
+                        f"{venue} pending-orders budget read failed for {t_a}/{t_b}: {e}. "
+                        "Execution blocked because pending exposure is unknown."
+                    )
+                    logger.critical(message)
+                    await notification_service.send_message(message)
+                    return execution_result(False, "pending_exposure_unknown")
+
+            # Use equity as the basis for sizing calculations if available
+            sizing_base = total_equity if total_equity and total_equity > 0 else total_cash
+            # Use buying power as the hard limit for execution
+            available_for_exec = buying_power if buying_power is not None else total_cash
+
+            # Feature 038: For crypto pairs, leverage is not available on Alpaca.
+            # Hard-cap the available amount to actual cash to prevent "Insufficient Balance" errors
+            # when buying power (which includes stock leverage) exceeds cash.
+            if crypto_pair and available_for_exec is not None and total_cash is not None:
+                available_for_exec = min(available_for_exec, total_cash)
 
         # If balance probes are unavailable, allow operator-defined cap-only mode.
         if total_cash is None:
             venue_budget_info = budget_service.get_venue_budget_info(venue)
             total_cash = venue_budget_info["total"] if venue_budget_info["total"] > 0 else 0.0
+            sizing_base = total_cash
+            available_for_exec = total_cash
             budget_source = "venue_cap_only" if total_cash > 0 else "unavailable"
 
         # Integrate BudgetService for tracking across sessions
-        actual_available = max(0.0, float(total_cash) - pending_value)
+        actual_available = max(0.0, float(available_for_exec) - pending_value)
         effective_cash = budget_service.get_effective_cash(venue, actual_available)
         budget_info = budget_service.get_venue_budget_info(venue)
+
+        # Sizing base also needs to be adjusted by pending value to be conservative
+        sizing_base = max(0.0, float(sizing_base) - pending_value)
 
         if effective_cash <= 0:
             logger.warning(
                 "Venue budget exhausted/unavailable for %s (%s/%s). "
                 "source=%s total=%.2f pending=%.2f used=%.2f/%.2f. "
                 "Replenish budget or account balance.",
-                venue, t_a, t_b, budget_source, float(total_cash), pending_value, 
+                venue, t_a, t_b, budget_source, float(total_cash), pending_value,
                 budget_info["used"], budget_info["total"]
             )
-            return
+            return execution_result(False, "budget_exhausted")
 
         # Risk sizing is applied inside RiskService (Kelly + allocation cap).
-        # Pass the full effective cash base so we do not double-apply 5% caps.
+        # Pass the sizing_base (equity) so sizing is calculated according to total wallet.
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
-            total_portfolio_cash=effective_cash,
-            amount_fiat=effective_cash,
+            total_portfolio_cash=sizing_base,
+            amount_fiat=sizing_base,
             win_prob=settings.DEFAULT_WIN_PROBABILITY,
             win_loss_ratio=settings.DEFAULT_WIN_LOSS_RATIO
         )
@@ -832,16 +1307,37 @@ class ArbitrageMonitor:
             await notification_service.send_message(
                 f"Execution rejected before broker for {t_a}/{t_b}: {reason}"
             )
-            return
+            return execution_result(False, "risk_rejected")
 
-        target_cash = min(float(risk_res["final_amount"]), effective_cash)
-        logger.info(
-            "RISK APPROVED SIZE: %.2f per leg for %s/%s (Kelly: %.4f, venue=%s, cash=%.2f, cap=%.2f)",
-            target_cash, t_a, t_b, risk_res["kelly_fraction"], venue, effective_cash, float(venue_budget_cap)
+        desired_notional = cap_pair_notional(
+            float(risk_res["final_amount"]),
+            effective_cash,
+            min_trade_value=settings.MIN_TRADE_VALUE,
         )
+        if settings.TARGET_CASH_PER_LEG > 0:
+            desired_notional = min(desired_notional, settings.TARGET_CASH_PER_LEG * 2.0)
 
-        size_a = round(target_cash / price_a, 6)
-        size_b = round(target_cash / price_b, 6)
+        if desired_notional <= 0:
+            logger.info("Sized pair notional is below MIN_TRADE_VALUE. Skipping trade.")
+            return execution_result(False, "below_min_trade_value")
+
+        hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+        legs = build_pair_legs(
+            price_a=price_a,
+            price_b=price_b,
+            hedge_ratio=hedge_ratio,
+            gross_notional=desired_notional,
+            direction=direction,
+        )
+        size_a = legs.quantity_a
+        size_b = legs.quantity_b
+        target_cash_a = legs.notional_a
+        target_cash_b = legs.notional_b
+
+        logger.info(
+            "RISK APPROVED SIZE: Gross=$%.2f, LegA=$%.2f, LegB=$%.2f for %s/%s (Hedge: %.4f, Kelly: %.4f, Base: $%.2f, MaxCap: $%.2f)",
+            legs.gross_notional, target_cash_a, target_cash_b, t_a, t_b, hedge_ratio, risk_res["kelly_fraction"], sizing_base, risk_res["max_allowed_fiat"]
+        )
 
         # Feature 008 - Sector Cluster Guard (prospective, race-condition-safe).
         # Both legs are counted as new exposure (target_cash each) so the check
@@ -850,18 +1346,23 @@ class ArbitrageMonitor:
         # and then together pushing the sector to 60 %.
         pair_sector = resolve_pair_sector(pair["id"], t_a, t_b, settings.PAIR_SECTORS)
         current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
-        if current_portfolio:
-            total_size = sum(p['size'] for p in current_portfolio)
-            sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
-            new_trade_size = target_cash * 2  # two legs of equal value
-            projected_exposure = (sector_size + new_trade_size) / (total_size + new_trade_size)
-            if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
-                logger.warning(
-                    f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
-                    f"'{pair_sector}' exposure to {projected_exposure:.1%}, "
-                    f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
-                )
-                return
+        total_size = sum(p['size'] for p in current_portfolio)
+        sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
+        new_trade_size = target_cash_a + target_cash_b  # sum of both legs
+
+        # Feature 008 Fix: prevent "Empty Portfolio Trap" where the first trade
+        # is always 100% exposure. We use the larger of actual total size or
+        # a theoretical 'full portfolio' base (e.g. 5x target leg cash).
+        denominador = max(total_size + new_trade_size, sizing_base)
+        projected_exposure = (sector_size + new_trade_size) / denominador
+
+        if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
+            logger.warning(
+                f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
+                f"'{pair_sector}' exposure to {projected_exposure:.1%} (base: ${denominador:.2f}), "
+                f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
+            )
+            return execution_result(False, "sector_exposure_guard")
 
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
@@ -873,9 +1374,8 @@ class ArbitrageMonitor:
                 "features": {},
             }
 
-        # Determina a direcao (Side) para cada perna
-        side_a = "SELL" if direction == "Short-Long" else "BUY"
-        side_b = "BUY" if direction == "Short-Long" else "SELL"
+        side_a = legs.side_a
+        side_b = legs.side_b
         exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
 
@@ -893,26 +1393,7 @@ class ArbitrageMonitor:
                 pair['id'], direction, size_a, size_b, price_a, price_b,
                 signal_id=signal_id,
             )
-            return
-
-        # Chamada ao broker (T212 via Fractional Engine)
-        if venue == "T212":
-            can_execute = await self._preflight_live_sell_inventory([
-                {
-                    "ticker": exec_t_a,
-                    "display_ticker": t_a,
-                    "side": side_a,
-                    "quantity": size_a,
-                },
-                {
-                    "ticker": exec_t_b,
-                    "display_ticker": t_b,
-                    "side": side_b,
-                    "quantity": size_b,
-                },
-            ])
-            if not can_execute:
-                return
+            return execution_result(True, "paper_shadow_executed")
 
         logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
 
@@ -920,19 +1401,45 @@ class ArbitrageMonitor:
         # Leg A
         res_a = await self.brokerage.place_value_order(
             exec_t_a,
-            target_cash,
+            target_cash_a,
             side_a,
             price=price_a,
             client_order_id=f"{signal_id}-A",
         )
-        status_a = OrderStatus.OPEN if res_a.get("status") != "error" else OrderStatus.FAILED
-        order_id_a = res_a.get("order_id") or res_a.get("orderId") or str(uuid.uuid4())
+        order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or str(uuid.uuid4())
 
-        if status_a == OrderStatus.FAILED:
+        if res_a.get("requires_reconciliation") or res_a.get("status") == "unknown":
+            await persistence_service.log_trade({
+                "order_id": order_id_a,
+                "signal_id": uuid.UUID(signal_id),
+                "ticker": t_a,
+                "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                "quantity": size_a,
+                "price": price_a,
+                "status": OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                "venue": venue,
+                "metadata_json": {
+                    "broker_order_id": order_id_a,
+                    "submitted_qty": size_a,
+                    "side": side_a,
+                    "symbol": t_a,
+                    "status": "unknown",
+                    "broker_response": res_a,
+                }
+            })
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
+            alert = (
+                f"Leg A ({exec_t_a}) submission state is UNKNOWN. Leg B NOT placed. "
+                f"Reconcile broker by client_order_id/order_id={order_id_a}. signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return execution_result(False, "leg_a_unknown")
+
+        status_a = OrderStatus.ORDER_SUBMITTED if res_a.get("status") != "error" else OrderStatus.LEG_A_REJECTED
+
+        if status_a == OrderStatus.LEG_A_REJECTED:
             # P-08 (2026-04-26): Surface the broker's actual rejection reason.
-            # Previously the log discarded res_a entirely so every abort looked
-            # identical and we couldn't tell auth failures from bad-symbol
-            # rejections from insufficient-funds.
             broker_msg = res_a.get("message") or res_a.get("error") or res_a
             logger.error(
                 f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. "
@@ -941,75 +1448,7 @@ class ArbitrageMonitor:
             await notification_service.send_message(
                 f"Execution aborted: Leg A failed for {exec_t_a}. Broker response: {broker_msg}"
             )
-            return
-
-        # Delay between legs to respect T212 Rate Limits
-        await asyncio.sleep(1.0)
-
-        # Leg B
-        res_b = await self.brokerage.place_value_order(
-            exec_t_b,
-            target_cash,
-            side_b,
-            price=price_b,
-            client_order_id=f"{signal_id}-B",
-        )
-        status_b = OrderStatus.OPEN if res_b.get("status") != "error" else OrderStatus.FAILED
-        order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
-
-        if status_b == OrderStatus.FAILED:
-            broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
-            logger.critical(
-                f"ATOMIC FAILURE: Leg A ({exec_t_a}) succeeded but Leg B ({exec_t_b}) failed. "
-                f"Broker response: {broker_msg_b}. "
-                f"Placing emergency close on Leg A to prevent orphaned directional exposure."
-            )
-            close_side_a = "BUY" if side_a == "SELL" else "SELL"
-            close_res = await self.brokerage.place_value_order(exec_t_a, target_cash, close_side_a)
-            if close_res.get("status") == "error":
-                orphan_msg = (
-                    f"CRITICAL - EMERGENCY CLOSE FAILED\n"
-                    f"Signal: {signal_id}\n"
-                    f"Ticker: {exec_t_a} ({side_a} leg)\n"
-                    f"The position is now ORPHANED. Manual intervention required.\n"
-                    f"Broker response: {close_res}"
-                )
-                logger.critical(orphan_msg)
-                # Alert operator immediately via Telegram / console
-                await notification_service.send_message(orphan_msg)
-                # Persist the orphan so it appears in the audit trail and
-                # dashboard queries don't silently miss it.
-                await persistence_service.log_trade({
-                    "order_id": f"ORPHAN_{signal_id}",
-                    "signal_id": uuid.UUID(signal_id),
-                    "ticker": exec_t_a,
-                    "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-                    "quantity": size_a,
-                    "price": price_a,
-                    "status": OrderStatus.FAILED,
-                    "metadata": {
-                        "orphaned": True,
-                        "reason": "emergency_close_failed",
-                        "broker_response": close_res,
-                    },
-                })
-            else:
-                logger.info(f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed.")
-            return
-
-        # M-05: Journal written only after both broker legs have returned successfully
-        await persistence_service.log_trade_journal({
-            "signal_id": uuid.UUID(signal_id),
-            "entry_regime": regime_info["regime"],
-            "metrics_at_entry": {
-                "z_score": risk_res.get("z_score", 0.0),
-                "win_prob": settings.DEFAULT_WIN_PROBABILITY,
-                "regime_confidence": regime_info["confidence"],
-                "features": regime_info["features"]
-            }
-        })
-
-        # Log Leg A
+            return execution_result(False, "leg_a_rejected")
         await persistence_service.log_trade({
             "order_id": order_id_a,
             "signal_id": uuid.UUID(signal_id),
@@ -1017,9 +1456,391 @@ class ArbitrageMonitor:
             "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
             "quantity": size_a,
             "price": price_a,
-            "status": status_a,
+            "status": OrderStatus.LEG_A_SUBMITTED,
             "venue": venue,
-            "metadata_json": {"broker_response": res_a}
+            "metadata_json": {
+                "broker_order_id": order_id_a,
+                "submitted_qty": size_a,
+                "side": side_a,
+                "symbol": t_a,
+                "status": "submitted",
+                "broker_response": res_a,
+            }
+        })
+
+        # PATCH 5: Confirm Leg A is filled before placing Leg B.
+        # Alpaca submit_order returns 'success' when order is QUEUED, not FILLED.
+        # Writing to DB before fill confirmation risks a ghost position (order accepted
+        # but then rejected at fill time). Poll up to 30s; treat unfilled as PENDING.
+        fill_a = await self._await_order_fill(order_id_a, timeout=30)
+        if not fill_a:
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
+            alert = (
+                f"Leg A ({exec_t_a}) submitted but NOT confirmed filled within 30s "
+                f"[order_id={order_id_a}]. Leg B NOT placed. "
+                f"Check broker manually. signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return execution_result(False, "leg_a_fill_timeout")
+        status_raw_a = str(fill_a.get("status", "")).lower()
+        filled_qty_a = float(fill_a.get("filled_qty") or 0.0)
+        fill_price_a = float(fill_a.get("filled_avg_price") or 0.0)
+        expected_qty_a = float(size_a)
+        leg_a_fully_filled = filled_qty_a + 1e-9 >= expected_qty_a
+        if status_raw_a in ("partially_filled", "partial_fill"):
+            status_a = OrderStatus.LEG_A_PARTIAL
+        elif status_raw_a in ("rejected", "canceled", "cancelled", "expired"):
+            status_a = OrderStatus.LEG_A_REJECTED
+        elif status_raw_a == "filled" and filled_qty_a > 0 and leg_a_fully_filled:
+            status_a = OrderStatus.LEG_A_FILLED
+        else:
+            status_a = OrderStatus.NEEDS_MANUAL_RECONCILIATION
+
+        if status_a != OrderStatus.LEG_A_FILLED:
+            blocked_status = OrderStatus.PARTIAL_EXPOSURE if filled_qty_a > 0 else status_a
+            if filled_qty_a > 0:
+                await persistence_service.update_trade_fill(
+                    uuid.UUID(signal_id),
+                    order_id_a,
+                    filled_quantity=filled_qty_a,
+                    fill_price=fill_price_a,
+                    metadata_updates={
+                        "filled_qty": filled_qty_a,
+                        "filled_avg_price": fill_price_a,
+                        "order_status": blocked_status.value,
+                        "fill_snapshot": fill_a,
+                    },
+                )
+                close_side_a = "BUY" if side_a == "SELL" else "SELL"
+                close_price_a = fill_price_a if fill_price_a > 0 else price_a
+                close_notional_a = round(filled_qty_a * close_price_a, 2)
+                if close_notional_a > 0:
+                    blocked_status = OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION
+                    logger.critical(
+                        f"PARTIAL EXPOSURE: Leg A ({exec_t_a}) filled {filled_qty_a} "
+                        f"of {expected_qty_a}. Placing emergency close before returning."
+                    )
+                    close_res = await self.brokerage.place_value_order(
+                        exec_t_a,
+                        close_notional_a,
+                        close_side_a,
+                        price=close_price_a,
+                        client_order_id=f"{signal_id}-A-PARTIAL-CLOSE",
+                    )
+                    close_status = str(close_res.get("status", "")).lower()
+                    close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
+                    close_order_id = (
+                        close_res.get("order_id")
+                        or close_res.get("orderId")
+                        or close_res.get("client_order_id")
+                        or f"{signal_id}-A-PARTIAL-CLOSE"
+                    )
+                    if close_status == "error" or close_unknown:
+                        close_reason = "partial_leg_a_close_unknown" if close_unknown else "partial_leg_a_close_failed"
+                        orphan_msg = (
+                            f"CRITICAL - PARTIAL LEG A CLOSE {'UNKNOWN' if close_unknown else 'FAILED'}\n"
+                            f"Signal: {signal_id}\n"
+                            f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                            f"Filled quantity may still be ORPHANED. Manual intervention required.\n"
+                            f"Broker response: {close_res}"
+                        )
+                        logger.critical(orphan_msg)
+                        await notification_service.send_message(orphan_msg)
+                        await persistence_service.log_trade({
+                            "order_id": f"ORPHAN_{signal_id}",
+                            "signal_id": uuid.UUID(signal_id),
+                            "ticker": exec_t_a,
+                            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                            "quantity": filled_qty_a,
+                            "price": close_price_a,
+                            "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                            "metadata_json": {
+                                "orphaned": True,
+                                "reason": close_reason,
+                                "broker_response": close_res,
+                                "expected_qty": filled_qty_a,
+                            },
+                        })
+                    else:
+                        close_fill = await self._await_order_fill(close_order_id, timeout=30)
+                        close_status_raw = str((close_fill or {}).get("status", "")).lower()
+                        close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
+                        close_qty_short = close_filled_qty + 1e-9 < filled_qty_a
+                        if close_status_raw != "filled" or close_filled_qty <= 0 or close_qty_short:
+                            orphan_msg = (
+                                f"CRITICAL - PARTIAL LEG A CLOSE UNCONFIRMED\n"
+                                f"Signal: {signal_id}\n"
+                                f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                                f"Filled quantity may still be ORPHANED. Manual intervention required.\n"
+                                f"Close order: {close_order_id}\n"
+                                f"Close status: {close_status_raw or 'unknown'} filled_qty={close_filled_qty} "
+                                f"expected_qty={filled_qty_a}\n"
+                                f"Broker response: {close_res}"
+                            )
+                            logger.critical(orphan_msg)
+                            await notification_service.send_message(orphan_msg)
+                            await persistence_service.log_trade({
+                                "order_id": f"ORPHAN_{signal_id}",
+                                "signal_id": uuid.UUID(signal_id),
+                                "ticker": exec_t_a,
+                                "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                                "quantity": filled_qty_a,
+                                "price": close_price_a,
+                                "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                                "metadata_json": {
+                                    "orphaned": True,
+                                    "reason": "partial_leg_a_close_unconfirmed",
+                                    "broker_response": close_res,
+                                    "close_order_id": close_order_id,
+                                    "close_fill": close_fill,
+                                    "expected_qty": filled_qty_a,
+                                },
+                            })
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), blocked_status)
+            alert = (
+                f"Leg A ({exec_t_a}) was not confirmed as a full fill. "
+                f"Leg B NOT placed. status={status_raw_a or 'unknown'} "
+                f"filled_qty={filled_qty_a} expected_qty={expected_qty_a} "
+                f"order_id={order_id_a} signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return execution_result(False, "leg_a_not_fully_filled")
+
+        # Small delay between legs to avoid broker-side burst throttling.
+        await asyncio.sleep(1.0)
+
+        # Leg B
+        res_b = await self.brokerage.place_value_order(
+            exec_t_b,
+            target_cash_b,
+            side_b,
+            price=price_b,
+            client_order_id=f"{signal_id}-B",
+        )
+        order_id_b = res_b.get("order_id") or res_b.get("orderId") or res_b.get("client_order_id") or str(uuid.uuid4())
+
+        if res_b.get("requires_reconciliation") or res_b.get("status") == "unknown":
+            await persistence_service.log_trade({
+                "order_id": order_id_b,
+                "signal_id": uuid.UUID(signal_id),
+                "ticker": t_b,
+                "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
+                "quantity": size_b,
+                "price": price_b,
+                "status": OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                "venue": venue,
+                "metadata_json": {
+                    "broker_order_id": order_id_b,
+                    "submitted_qty": size_b,
+                    "side": side_b,
+                    "symbol": t_b,
+                    "status": "unknown",
+                    "broker_response": res_b,
+                }
+            })
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
+            alert = (
+                f"Leg B ({exec_t_b}) submission state is UNKNOWN. No retry or emergency close attempted. "
+                f"Reconcile broker by client_order_id/order_id={order_id_b}. signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return execution_result(False, "leg_b_unknown")
+
+        status_b = OrderStatus.LEG_B_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
+
+        if status_b == OrderStatus.LEG_B_REJECTED:
+          await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
+          status_b = OrderStatus.ORDER_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
+          order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
+
+        await persistence_service.log_trade({
+            "order_id": order_id_b,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_b,
+            "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
+            "quantity": size_b,
+            "price": price_b,
+            "status": OrderStatus.LEG_B_SUBMITTED,
+            "venue": venue,
+            "metadata_json": {
+                "broker_order_id": order_id_b,
+                "submitted_qty": size_b,
+                "side": side_b,
+                "symbol": t_b,
+                "status": "submitted",
+                "broker_response": res_b,
+            }
+        })
+
+        async def emergency_close_leg_a_after_leg_b_failure(broker_msg_b):
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION)
+            logger.critical(
+                f"ATOMIC FAILURE: Leg A ({exec_t_a}) succeeded but Leg B ({exec_t_b}) failed. "
+                f"Broker response: {broker_msg_b}. "
+                f"Placing emergency close on Leg A to prevent orphaned directional exposure."
+            )
+            close_side_a = "BUY" if side_a == "SELL" else "SELL"
+            close_res = await self.brokerage.place_value_order(
+                exec_t_a,
+                target_cash_a,
+                close_side_a,
+                price=price_a,
+                client_order_id=f"{signal_id}-A-EMERGENCY-CLOSE",
+            )
+            close_status = str(close_res.get("status", "")).lower()
+            close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
+            close_order_id = (
+                close_res.get("order_id")
+                or close_res.get("orderId")
+                or close_res.get("client_order_id")
+                or f"{signal_id}-A-EMERGENCY-CLOSE"
+            )
+            if close_status == "error" or close_unknown:
+                close_reason = "emergency_close_unknown" if close_unknown else "emergency_close_failed"
+                orphan_msg = (
+                    f"CRITICAL - EMERGENCY CLOSE {'UNKNOWN' if close_unknown else 'FAILED'}\n"
+                    f"Signal: {signal_id}\n"
+                    f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                    f"The position may still be ORPHANED. Manual intervention required.\n"
+                    f"Broker response: {close_res}"
+                )
+                logger.critical(orphan_msg)
+                await notification_service.send_message(orphan_msg)
+                await persistence_service.log_trade({
+                    "order_id": f"ORPHAN_{signal_id}",
+                    "signal_id": uuid.UUID(signal_id),
+                    "ticker": exec_t_a,
+                    "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                    "quantity": size_a,
+                    "price": price_a,
+                    "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                    "metadata_json": {
+                        "orphaned": True,
+                        "reason": close_reason,
+                        "broker_response": close_res,
+                    },
+                })
+            else:
+                close_fill = await self._await_order_fill(close_order_id, timeout=30)
+                close_status_raw = str((close_fill or {}).get("status", "")).lower()
+                close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
+                expected_close_qty = filled_qty_a if filled_qty_a > 0 else size_a
+                close_qty_short = close_filled_qty + 1e-9 < expected_close_qty
+                if close_status_raw != "filled" or close_filled_qty <= 0 or close_qty_short:
+                    orphan_msg = (
+                        f"CRITICAL - EMERGENCY CLOSE UNCONFIRMED\n"
+                        f"Signal: {signal_id}\n"
+                        f"Ticker: {exec_t_a} ({side_a} leg)\n"
+                        f"The position may still be ORPHANED. Manual intervention required.\n"
+                        f"Close order: {close_order_id}\n"
+                        f"Close status: {close_status_raw or 'unknown'} filled_qty={close_filled_qty} "
+                        f"expected_qty={expected_close_qty}\n"
+                        f"Broker response: {close_res}"
+                    )
+                    logger.critical(orphan_msg)
+                    await notification_service.send_message(orphan_msg)
+                    await persistence_service.log_trade({
+                        "order_id": f"ORPHAN_{signal_id}",
+                        "signal_id": uuid.UUID(signal_id),
+                        "ticker": exec_t_a,
+                        "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+                        "quantity": size_a,
+                        "price": price_a,
+                        "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                        "metadata_json": {
+                            "orphaned": True,
+                            "reason": "emergency_close_unconfirmed",
+                            "broker_response": close_res,
+                            "close_order_id": close_order_id,
+                            "close_fill": close_fill,
+                            "expected_qty": expected_close_qty,
+                        },
+                    })
+                else:
+                    logger.info(
+                        f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed "
+                        f"[order_id={close_order_id}]."
+                    )
+
+        if status_b == OrderStatus.LEG_B_REJECTED:
+            broker_msg_b = res_b.get("message") or res_b.get("error") or res_b
+            await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
+            return execution_result(False, "leg_b_rejected")
+        fill_b = await self._await_order_fill(order_id_b, timeout=30)
+        if not fill_b:
+            status_b = OrderStatus.LEG_B_SUBMITTED
+            await notification_service.send_message(
+                f"Leg B ({exec_t_b}) not terminal within 30s; signal {signal_id} requires follow-up."
+            )
+        else:
+            status_raw_b = str(fill_b.get('status', '')).lower()
+            if status_raw_b in ("partially_filled", "partial_fill"):
+                status_b = OrderStatus.LEG_B_PARTIAL
+            elif status_raw_b in ("rejected", "canceled", "cancelled", "expired"):
+                status_b = OrderStatus.LEG_B_REJECTED
+            else:
+                status_b = OrderStatus.LEG_B_FILLED
+        filled_qty_b = float((fill_b or {}).get("filled_qty") or 0.0)
+        fill_price_b = float((fill_b or {}).get("filled_avg_price") or 0.0)
+        if status_b == OrderStatus.LEG_B_REJECTED:
+            broker_msg_b = (fill_b or {}).get("message") or (fill_b or {}).get("error") or fill_b or res_b
+            await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
+            return execution_result(False, "leg_b_rejected_after_submit")
+        leg_b_partial_fill = status_b == OrderStatus.LEG_B_PARTIAL
+        if leg_b_partial_fill:
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
+            alert = (
+                f"Leg B ({exec_t_b}) partially filled. "
+                f"Signal remains PARTIAL_EXPOSURE and requires manual reconciliation. "
+                f"status={str((fill_b or {}).get('status', '')).lower() or 'unknown'} "
+                f"filled_qty={filled_qty_b} expected_qty={float(size_b)} "
+                f"order_id={order_id_b} signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+        pair_status = (
+            OrderStatus.OPEN_PAIR
+            if status_a == OrderStatus.LEG_A_FILLED and status_b == OrderStatus.LEG_B_FILLED
+            else OrderStatus.PARTIAL_EXPOSURE
+        )
+        visible_status = pair_status
+
+        # M-05: Journal written only after both broker legs have returned successfully
+        if not leg_b_partial_fill:
+            await persistence_service.log_trade_journal({
+                "signal_id": uuid.UUID(signal_id),
+                "entry_regime": regime_info["regime"],
+                "metrics_at_entry": {
+                    "z_score": risk_res.get("z_score", 0.0),
+                    "win_prob": settings.DEFAULT_WIN_PROBABILITY,
+                    "regime_confidence": regime_info["confidence"],
+                    "features": regime_info["features"]
+                }
+            })
+
+        # Log Leg A
+        await persistence_service.log_trade({
+            "order_id": order_id_a,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_a,
+            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+            "quantity": filled_qty_a or size_a,
+            "price": fill_price_a or price_a,
+            "status": visible_status,
+            "venue": venue,
+            "metadata_json": {
+                "broker_order_id": order_id_a,
+                "submitted_qty": size_a,
+                "side": side_a,
+                "symbol": exec_t_a,
+                "order_status": status_a.value,
+                "pair_status": pair_status.value,
+                "broker_response": res_a,
+                "fill_snapshot": fill_a,
+            }
         })
 
         # Log Leg B
@@ -1028,14 +1849,24 @@ class ArbitrageMonitor:
             "signal_id": uuid.UUID(signal_id),
             "ticker": t_b,
             "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
-            "quantity": size_b,
-            "price": price_b,
-            "status": status_b,
+            "quantity": filled_qty_b or size_b,
+            "price": fill_price_b or price_b,
+            "status": visible_status,
             "venue": venue,
-            "metadata_json": {"broker_response": res_b}
+            "metadata_json": {
+                "broker_order_id": order_id_b,
+                "submitted_qty": size_b,
+                "side": side_b,
+                "symbol": exec_t_b,
+                "order_status": status_b.value,
+                "pair_status": pair_status.value,
+                "broker_response": res_b,
+                "fill_snapshot": fill_b,
+            }
         })
 
-        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={status_a.value}, B={status_b.value}")
+        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}")
+        return execution_result(pair_status == OrderStatus.OPEN_PAIR, pair_status.value)
 
     async def _recheck_cointegration(self, pair: dict):
         """
@@ -1048,9 +1879,7 @@ class ArbitrageMonitor:
         """
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         try:
-            hist_data = await asyncio.to_thread(
-                data_service.get_historical_data, [t_a, t_b]
-            )
+            hist_data = await data_service.get_historical_data_async([t_a, t_b], "30d", "1h")
             if hist_data is None or hist_data.empty:
                 return
 
@@ -1059,8 +1888,12 @@ class ArbitrageMonitor:
             if not col_a or not col_b:
                 return
 
+            is_crypto = is_crypto_pair(t_a, t_b)
+            p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+            pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
+
             is_coint, p_val, _ = arbitrage_service.check_cointegration(
-                hist_data[col_a], hist_data[col_b]
+                hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
             )
 
             # Spec 037: rolling-window stability. If the pair was statically
@@ -1073,7 +1906,8 @@ class ArbitrageMonitor:
                     hist_data[col_b],
                     window=settings.COINTEGRATION_ROLLING_WINDOW,
                     step=settings.COINTEGRATION_ROLLING_STEP,
-                    min_pass_rate=settings.COINTEGRATION_ROLLING_PASS_RATE,
+                    min_pass_rate=pass_thresh,
+                    pvalue_threshold=p_thresh,
                 )
                 pair["coint_stability"] = stability
                 if not stability["stable"]:
@@ -1122,12 +1956,106 @@ class ArbitrageMonitor:
         except Exception as e:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
+    async def _fail_fast_on_unresolved_execution_state(self) -> bool:
+        unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
+        if unresolved_count <= 0:
+            return True
+
+        await persistence_service.set_system_state(
+            "operational_status",
+            "PAUSED_REQUIRES_MANUAL_REVIEW",
+        )
+        msg = (
+            f"Startup blocked: {unresolved_count} ledger rows require manual reconciliation. "
+            "CLOSING rows were not reopened because broker close state is ambiguous. "
+            "Resolve broker/ledger state before scanning resumes."
+        )
+        logger.critical(msg)
+        await notification_service.send_message(msg)
+        await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
+        return False
+
+    @staticmethod
+    def _canonical_position_symbol(symbol: str) -> str:
+        return str(symbol or "").upper().replace("/", "").replace("-", "")
+
+    @staticmethod
+    def _broker_position_quantity(position: dict) -> float:
+        for key in ("quantity", "qty", "quantityAvailableForTrading"):
+            value = position.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    async def _fail_fast_on_broker_ledger_mismatch(self) -> bool:
+        if settings.PAPER_TRADING:
+            return True
+
+        try:
+            broker_positions = await self.brokerage.get_portfolio()
+            open_signals = await persistence_service.get_open_signals()
+        except Exception as exc:
+            msg = (
+                "Startup blocked: broker/ledger reconciliation failed. "
+                f"Resolve account and ledger state before scanning resumes. Error: {exc}"
+            )
+            logger.critical(msg)
+            await persistence_service.set_system_state(
+                "operational_status",
+                "PAUSED_REQUIRES_MANUAL_REVIEW",
+            )
+            await notification_service.send_message(msg)
+            await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
+            return False
+
+        ledger_symbols = {
+            self._canonical_position_symbol(leg.get("ticker"))
+            for signal in open_signals
+            for leg in signal.get("legs", [])
+            if leg.get("ticker")
+        }
+        unmanaged_symbols = []
+        for position in broker_positions or []:
+            quantity = self._broker_position_quantity(position)
+            if abs(quantity) <= 1e-12:
+                continue
+            raw_symbol = (
+                position.get("ticker")
+                or position.get("symbol")
+                or position.get("instrumentTicker")
+                or position.get("instrument")
+            )
+            canonical_symbol = self._canonical_position_symbol(raw_symbol)
+            if canonical_symbol and canonical_symbol not in ledger_symbols:
+                unmanaged_symbols.append(str(raw_symbol))
+
+        if not unmanaged_symbols:
+            return True
+
+        await persistence_service.set_system_state(
+            "operational_status",
+            "PAUSED_REQUIRES_MANUAL_REVIEW",
+        )
+        msg = (
+            "Startup blocked: broker/ledger mismatch. Broker has unmanaged "
+            f"position(s): {', '.join(sorted(unmanaged_symbols))}. "
+            "Resolve broker and ledger state before scanning resumes."
+        )
+        logger.critical(msg)
+        await notification_service.send_message(msg)
+        await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
+        return False
+
     async def run(self):
         # FR-006: Pre-flight line - operator must know mode/universe/window
         # before a single log line about infra appears.
         """
         Start and run the continuous monitoring loop that initializes services, performs startup health checks, and continuously scans active arbitrage pairs.
-        
+
         This method performs startup routines (preflight display, database and pair initialization, dashboard and notification listeners), runs health checks for PostgreSQL, Redis, and the brokerage API, resets circuit-breaker state, launches background scouting/rotation, and enters the main Rich Live scan loop. While running it:
         - updates dashboard metrics and progress,
         - evaluates open-position exit conditions,
@@ -1141,10 +2069,11 @@ class ArbitrageMonitor:
 
         # Initial Setup
         logger.info("Initializing Databases...")
-        await asyncio.gather(
-            persistence_service.init_db(),
-            self.initialize_pairs()
-        )
+        await persistence_service.init_db()
+        await self.initialize_pairs()
+        if not self.active_pairs:
+            logger.warning("Startup loaded zero active pairs. Retrying pair initialization once before entering the scan loop.")
+            await self.reload_pairs()
         # Make this monitor instance discoverable by dashboard endpoints
         # (so /api/pairs can hot-reload, etc).
         dashboard_service.attach_monitor(self)
@@ -1175,24 +2104,29 @@ class ArbitrageMonitor:
             await notification_service.send_alert(msg)
             return
 
-        # 3. Trading 212 API Check (if not exclusively paper/mocked)
+        # 3. Alpaca API check (if not exclusively paper/mocked)
         if not settings.PAPER_TRADING:
             await asyncio.sleep(1)  # Rate limit safety delay
             try:
                 # Await async brokerage call
                 test_ping = await self.brokerage.get_portfolio()
                 if isinstance(test_ping, dict) and test_ping.get("status") == "error":
-                    raise Exception(f"T212 error: {test_ping.get('message')}")
+                    raise Exception(f"Alpaca error: {test_ping.get('message')}")
             except Exception as e:
-                msg = f"CRITICAL INIT ERROR: Trading 212 API connection failed! {e}"
+                msg = f"CRITICAL INIT ERROR: Alpaca API connection failed! {e}"
                 logger.error(msg)
                 await notification_service.send_alert(msg)
                 return
 
-        logger.info("All Health Checks Passed (Postgres, Redis, T212). Bot is active.")
+        logger.info("All Health Checks Passed (Postgres, Redis, Alpaca). Bot is active.")
 
         # Sprint J: Signal the user via Telegram that we are entering MISSION MODE
         await notification_service.send_message("System Health: All Checks Passed.\n\nMode: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
+
+        if not await self._fail_fast_on_unresolved_execution_state():
+            return
+        if not await self._fail_fast_on_broker_ledger_mismatch():
+            return
 
         # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
         # from a previous crashed session doesn't silently block all signals.
@@ -1201,7 +2135,10 @@ class ArbitrageMonitor:
         logger.info("Circuit breaker reset to NORMAL on startup.")
 
         # Start periodic Scouting & Rotation background task
-        asyncio.create_task(self._auto_scout_and_rotate_loop())
+        background_task_watchdog.create_task(
+            self._auto_scout_and_rotate_loop(),
+            name="monitor:auto_scout_and_rotate_loop",
+        )
 
         try:
             # Main Scan Loop with Rich Live UI
@@ -1212,9 +2149,9 @@ class ArbitrageMonitor:
                 TaskProgressColumn(),
                 expand=True
             )
-            
+
             scan_task = progress.add_task("Monitoring...", total=len(self.active_pairs))
-            
+
             with Live(progress, console=console, refresh_per_second=4, vertical_overflow="visible"):
                 while True:
                     try:
@@ -1225,7 +2162,7 @@ class ArbitrageMonitor:
                             await dashboard_service.update("PAUSED", "Bot is stopped via dashboard.")
                             await asyncio.sleep(5)
                             continue
-                        
+
                         if desired == "RESTARTING":
                             await dashboard_service.update("RESTARTING", "Reloading pairs and resetting state...")
                             await self.reload_pairs()
@@ -1241,12 +2178,13 @@ class ArbitrageMonitor:
                         await dashboard_service.update(
                             stage="Monitoring",
                             details=f"Scanning {len(self.active_pairs)} pairs...",
-                            pnl=pnl
+                            pnl=pnl,
+                            active_signals=self.active_signals
                         )
                     except Exception as e:
                         logger.error(f"Error pushing metrics to dashboard: {e}")
                         await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
-                    
+
                     # Exit Strategy Loop - M-06: run all exit evaluations concurrently
                     open_signals = []
                     try:
@@ -1260,6 +2198,19 @@ class ArbitrageMonitor:
                     except Exception as e:
                         logger.error(f"Error evaluating open signals for exits: {e}")
 
+                    if not self.active_pairs:
+                        logger.warning("No active pairs loaded; attempting pair reload before scanning.")
+                        await self.reload_pairs()
+                        progress.update(scan_task, total=len(self.active_pairs), completed=0)
+                        if not self.active_pairs:
+                            await dashboard_service.update(
+                                "NO_ACTIVE_PAIRS",
+                                "No active pairs are loaded. Check pair initialization logs and configured crypto pairs.",
+                            )
+                            logger.warning("No active pairs available after reload; sleeping before next retry.")
+                            await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
+                            continue
+
                     scan_pairs, all_tickers = build_scan_pairs(
                         self.active_pairs,
                         is_market_open=self.is_market_open,
@@ -1267,7 +2218,7 @@ class ArbitrageMonitor:
 
                     progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
                     latest_prices = (
-                        await data_service.get_latest_price_async(list(set(all_tickers)))
+                        await data_service.get_latest_price_async(list(dict.fromkeys(all_tickers)))
                         if all_tickers
                         else {}
                     )
@@ -1284,20 +2235,27 @@ class ArbitrageMonitor:
                     today = datetime.now().date()
                     for pair in self.active_pairs:
                         if self.last_cointegration_check.get(pair['id']) != today:
-                            asyncio.create_task(self._recheck_cointegration(pair))
+                            pair_id = pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}"
+                            background_task_watchdog.create_task(
+                                self._recheck_cointegration(pair),
+                                name=f"monitor:recheck_cointegration:{pair_id}",
+                            )
                             self.last_cointegration_check[pair['id']] = today
 
                     results = []
+                    # Fetch sizing base once per iteration to avoid API spam in process_pair
+                    current_sizing_base = await self._get_sizing_base()
+
                     for i, pair in enumerate(scan_pairs):
                         progress.update(scan_task, description=f"Scanning [magenta]{pair['ticker_a']}/{pair['ticker_b']}[/]", completed=i)
-                        res = await self.process_pair(pair, latest_prices)
+                        res = await self.process_pair(pair, latest_prices, sizing_base=current_sizing_base)
                         results.append(res)
                         # Small delay between pairs to spread out API load
                         if i < len(scan_pairs) - 1:
                             # Use a sub-task for the delay so it's visible? Or just update description.
                             progress.update(scan_task, description=f"Waiting 2s... ([dim]{pair['ticker_a']}/{pair['ticker_b']} done[/])")
                             await asyncio.sleep(2.0)
-                    
+
                     progress.update(scan_task, completed=len(scan_pairs), description="Scan iteration complete")
 
                     # L-14: Enriched heartbeat
@@ -1305,7 +2263,7 @@ class ArbitrageMonitor:
                         results,
                         settings.MONITOR_MIN_AI_CONFIDENCE,
                     )
-                    
+
                     summary_msg = (
                         f"[bold green]Iteration Complete[/] | "
                         f"Scanned: {len(scan_pairs)}/{len(self.active_pairs)} | "
@@ -1320,6 +2278,15 @@ class ArbitrageMonitor:
         except asyncio.CancelledError:
             logger.info("Shutdown signal received. Closing connections...")
         finally:
+            # Signal uvicorn to shut down cleanly before the event loop cancels
+            # the dashboard:uvicorn_server task.  Without this, uvicorn's lifespan
+            # handler is hard-cancelled while blocked on receive_queue.get(), which
+            # produces a spurious "CancelledError" ERROR log from starlette/uvicorn.
+            if dashboard_service.server is not None:
+                try:
+                    await dashboard_service.server.shutdown()
+                except Exception as exc:
+                    logger.warning("Dashboard server shutdown warning: %s", exc)
             # Graceful shutdown of database pools
             await persistence_service.engine.dispose()
             await redis_service.client.aclose()
@@ -1340,13 +2307,28 @@ class ArbitrageMonitor:
 
         p_a, p_b = prices[t_a], prices[t_b]
 
-        current_value = (leg_a["quantity"] * p_a) + (leg_b["quantity"] * p_b)
+        # PATCH 4: Stale/zero price guard — a price of 0 fed into the kill-switch check
+        # produces current_value=0 which always triggers a kill-switch close.
+        # If either price is missing or non-positive, skip this cycle rather than
+        # make a trade decision on bad data.
+        if not (p_a > 0 and p_b > 0):
+            logger.warning(
+                "Skipping exit evaluation for %s/%s — invalid prices (p_a=%.4f p_b=%.4f). "
+                "Will retry next scan cycle.",
+                t_a, t_b, p_a, p_b,
+            )
+            return
+
+        prices_by_ticker = {t_a: float(p_a), t_b: float(p_b)}
+
         cost_basis = signal["total_cost_basis"]
+        _, directional_pnl = calculate_realized_pnl(signal, prices_by_ticker=prices_by_ticker)
+        current_value = cost_basis + directional_pnl
 
         # 1. Financial Kill Switch Check
         if risk_service.check_financial_kill_switch(current_value, cost_basis):
             logger.warning(f"FINANCIAL KILL SWITCH TRIGGERED for {t_a}/{t_b}. Closing position.")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.KILL_SWITCH, prices_by_ticker=prices_by_ticker)
             return
 
         # 2. Statistical Stop Loss / Take profit
@@ -1360,91 +2342,188 @@ class ArbitrageMonitor:
         # Statistical Take Profit (Mean Reversion complete)
         if abs(z_score) <= settings.TAKE_PROFIT_ZSCORE:
             logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= settings.STOP_LOSS_ZSCORE:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS)
+            await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
 
-    async def _close_position(self, signal: dict, price_a: float, price_b: float, reason: ExitReason):
-        sig_id = signal["signal_id"]
-        logger.info(f"Closing position {sig_id} Reason: {reason.value}")
+    async def _close_position(
+        self,
+        signal: dict,
+        price_a: float,
+        price_b: float,
+        reason: ExitReason,
+        prices_by_ticker: dict[str, float] | None = None,
+    ):
+        sig_id_str = str(signal["signal_id"])
+        sig_uuid = uuid.UUID(sig_id_str) if isinstance(signal["signal_id"], str) else signal["signal_id"]
+        
+        async with self._signals_lock:
+            if sig_id_str in getattr(self, '_closing_signals', set()):
+                logger.info(f"Duplicate close blocked in memory for signal {sig_id_str}.")
+                return
+            if not hasattr(self, '_closing_signals'):
+                self._closing_signals = set()
+            self._closing_signals.add(sig_id_str)
 
-        close_orders = build_close_orders(
-            signal,
-            price_a=price_a,
-            price_b=price_b,
-            dev_mode=settings.DEV_MODE,
-            dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
-        )
-
-        if not settings.PAPER_TRADING:
-            t212_sell_orders = [
-                order for order in close_orders
-                if self.brokerage.get_venue(order["ticker"]) == "T212" and order["side"] == "SELL"
-            ]
-            if t212_sell_orders and not await self._preflight_live_sell_inventory(t212_sell_orders):
+        try:
+            # Idempotency guard in DB (cross-process): only one worker may transition OPEN->CLOSING.
+            transitioned = await persistence_service.mark_signal_closing_if_open(sig_uuid)
+            if not transitioned:
+                db_status = await persistence_service.get_signal_status(sig_uuid)
+                logger.info(f"Duplicate close blocked for signal {sig_id_str}. DB status is {db_status}.")
                 return
 
-            for order in close_orders:
-                if self.brokerage.get_venue(order["ticker"]) == "T212":
-                    slip = settings.T212_LIMIT_SLIPPAGE_PCT
-                    limit_price = (
-                        order["price"] * (1 + slip)
-                        if order["side"] == "BUY"
-                        else order["price"] * (1 - slip)
-                    )
-                    res = await self.brokerage.place_market_order(
-                        order["ticker"],
-                        order["quantity"],
-                        order["side"],
-                        limit_price=limit_price,
-                        client_order_id=f"{sig_id}-CLOSE-{order['display_ticker']}",
-                    )
-                else:
-                    res = await self.brokerage.place_value_order(
-                        order["ticker"],
-                        float(order["quantity"] * order["price"]),
-                        order["side"],
-                    )
-
-                if res.get("status") == "error":
-                    msg = (
-                        f"Close aborted for {sig_id}: {order['display_ticker']} "
-                        f"{order['side']} failed. Broker response: {res}"
-                    )
-                    logger.error(msg)
-                    await notification_service.send_message(msg)
-                    return
-
-        # M-04: Compute realized PnL from entry vs exit price per leg
-        leg_a, leg_b = signal["legs"][0], signal["legs"][1]
-        exit_prices, pnl = calculate_realized_pnl(
-            signal,
-            price_a=price_a,
-            price_b=price_b,
-        )
-
-        # N2 fix: in paper mode, route through shadow_service so the shadow ledger
-        # gets a proper close log with directional PnL breakdown.
-        # shadow_service.close_simulated_trade does NOT call persistence - we handle
-        # DB writes once here for both live and paper paths to preserve exit_reason.
-        if settings.PAPER_TRADING:
-            direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
-            await shadow_service.close_simulated_trade(
-                pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
-                signal_id=uuid.UUID(sig_id) if isinstance(sig_id, str) else sig_id,
-                direction=direction,
-                size_a=leg_a["quantity"],
-                size_b=leg_b["quantity"],
-                entry_price_a=leg_a["price"],
-                entry_price_b=leg_b["price"],
-                exit_price_a=price_a,
-                exit_price_b=price_b,
+            logger.info(f"Closing position {sig_id_str} Reason: {reason.value}")
+            # PATCH 6: Any unhandled exception in the close path must alert the operator
+            # immediately. Silently swallowing close failures leaves positions open and losing.
+            close_orders = build_close_orders(
+                signal,
+                prices_by_ticker=prices_by_ticker or {
+                    signal["legs"][0]["ticker"]: float(price_a),
+                    signal["legs"][1]["ticker"]: float(price_b),
+                },
+                dev_mode=settings.DEV_MODE,
+                dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
             )
 
-        await persistence_service.close_trade(uuid.UUID(sig_id), exit_prices, pnl, exit_reason=reason)
+            if not settings.PAPER_TRADING:
+                sell_orders = [order for order in close_orders if order["side"] == "SELL"]
+                if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
+                    # Restore to OPEN so subsequent close attempts are not blocked
+                    await persistence_service.update_signal_status(sig_uuid, OrderStatus.OPEN)
+                    return
+
+                confirmed_close_fills = []
+                for order in close_orders:
+                    notional = float(order["quantity"] * order["price"])
+                    client_order_id = f"{sig_id_str}-CLOSE-{order['display_ticker']}"
+                    res = await self.brokerage.place_value_order(
+                        order["ticker"],
+                        round(notional, 2),
+                        order["side"],
+                        price=order["price"],
+                        client_order_id=client_order_id,
+                    )
+                    order_id = res.get("order_id") or res.get("orderId") or res.get("client_order_id") or client_order_id
+
+                    if res.get("requires_reconciliation") or res.get("status") == "unknown":
+                        msg = (
+                            f"Close order state unknown for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']}. Reconcile broker by order_id/client_order_id={order_id}. "
+                            f"Broker response: {res}"
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
+                    if res.get("status") == "error":
+                        msg = (
+                            f"Close aborted for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']} failed. Broker response: {res}"
+                        )
+                        logger.error(msg)
+                        await notification_service.send_message(msg)
+                        close_status = (
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION
+                            if confirmed_close_fills
+                            else OrderStatus.CLOSE_FAILED
+                        )
+                        await persistence_service.update_signal_status(sig_uuid, close_status)
+                        return
+
+                    close_fill = await self._await_order_fill(order_id, timeout=30)
+                    if not close_fill:
+                        msg = (
+                            f"Close order not confirmed filled for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']} [order_id={order_id}]. Ledger NOT closed. "
+                            f"Manual broker reconciliation required."
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
+                    close_status_raw = str(close_fill.get("status", "")).lower()
+                    close_filled_qty = float(close_fill.get("filled_qty") or 0.0)
+                    expected_close_qty = float(order["quantity"])
+                    if (
+                        close_status_raw != "filled"
+                        or close_filled_qty <= 0
+                        or close_filled_qty + 1e-9 < expected_close_qty
+                    ):
+                        msg = (
+                            f"Close order ended without a full fill for {sig_id_str}: {order['display_ticker']} "
+                            f"{order['side']} status={close_status_raw or 'unknown'} "
+                            f"filled_qty={close_filled_qty} expected_qty={expected_close_qty} "
+                            f"[order_id={order_id}]. Ledger NOT closed."
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
+                    confirmed_close_fills.append(close_fill)
+
+            # M-04: Compute realized PnL from entry vs exit price per leg
+            leg_a, leg_b = signal["legs"][0], signal["legs"][1]
+            exit_prices, pnl = calculate_realized_pnl(
+                signal,
+                prices_by_ticker=prices_by_ticker or {
+                    leg_a["ticker"]: float(price_a),
+                    leg_b["ticker"]: float(price_b),
+                },
+            )
+
+            # N2 fix: in paper mode, route through shadow_service so the shadow ledger
+            # gets a proper close log with directional PnL breakdown.
+            # shadow_service.close_simulated_trade does NOT call persistence - we handle
+            # DB writes once here for both live and paper paths to preserve exit_reason.
+            if settings.PAPER_TRADING:
+                direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
+                await shadow_service.close_simulated_trade(
+                    pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
+                    signal_id=sig_uuid,
+                    direction=direction,
+                    size_a=leg_a["quantity"],
+                    size_b=leg_b["quantity"],
+                    entry_price_a=leg_a["price"],
+                    entry_price_b=leg_b["price"],
+                    exit_price_a=price_a,
+                    exit_price_b=price_b,
+                )
+
+            await persistence_service.close_trade(sig_uuid, exit_prices, pnl, exit_reason=reason)
+
+        except Exception as exc:
+            # Mark as CLOSE_FAILED to avoid looping
+            await persistence_service.update_signal_status(sig_uuid, OrderStatus.CLOSE_FAILED)
+            # PATCH 6: Close machinery failure — alert operator, never swallow.
+            alert = (
+                f"CRITICAL — _close_position FAILED\n"
+                f"signal_id={sig_id_str} reason={reason.value}\n"
+                f"Position may still be OPEN at broker. Manual intervention required.\n"
+                f"Error: {exc}"
+            )
+            logger.critical(alert, exc_info=True)
+            await notification_service.send_message(alert)
+            raise  # re-raise so the caller's gather sees the failure
+        finally:
+            async with self._signals_lock:
+                if hasattr(self, '_closing_signals'):
+                    self._closing_signals.discard(sig_id_str)
 
 
 if __name__ == "__main__":

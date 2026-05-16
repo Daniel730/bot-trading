@@ -23,6 +23,11 @@ BEACON_ASSETS = {
     "Consumer": "KO"        # Sector Leader for Consumer Staples/Growth
 }
 
+
+def _is_crypto_symbol(ticker: str) -> bool:
+    return "-USD" in str(ticker or "").upper()
+
+
 class AgentState(TypedDict):
     signal_context: dict
     bull_verdict: dict
@@ -88,6 +93,7 @@ class Orchestrator:
         ticker_a = state['signal_context']['ticker_a']
         ticker_b = state['signal_context']['ticker_b']
         pair_id = f"{ticker_a}_{ticker_b}"
+        crypto_pair = _is_crypto_symbol(ticker_a) and _is_crypto_symbol(ticker_b)
 
         # --- PHASE 0: MACRO REGIME CHECK (FAIL-FAST) ---
         # If the Sector Leader is in a panic state, we abort before firing up the LLM Agents
@@ -113,11 +119,13 @@ class Orchestrator:
         # --- PHASE 1: AGENT SWARM ---
         # Evaluate bull/bear themes and fetch fundamental health scores
 
+        score_task_a = asyncio.sleep(0, result=None) if crypto_pair else redis_service.get_fundamental_score(ticker_a)
+        score_task_b = asyncio.sleep(0, result=None) if crypto_pair else redis_service.get_fundamental_score(ticker_b)
         results = await asyncio.gather(
             bull_agent.evaluate(state['signal_context']),
             bear_agent.evaluate(state['signal_context']),
-            redis_service.get_fundamental_score(ticker_a),
-            redis_service.get_fundamental_score(ticker_b),
+            score_task_a,
+            score_task_b,
             whale_watcher_agent.evaluate(state['signal_context']),
             return_exceptions=True
         )
@@ -147,23 +155,31 @@ class Orchestrator:
             else "NEUTRAL"
         })
 
+        whale_inactive = (
+            not isinstance(whale_results, Exception)
+            and whale_results.get("status") == "inactive"
+        )
         telemetry_service.broadcast("thought", {
             "agent_name": "WHALE_WATCHER",
             "signal_id": sig_id,
             "thought": str(whale_results.get("reasoning", "Whale context read complete"))
             if not isinstance(whale_results, Exception)
             else f"Error: {whale_results}",
-            "verdict": "VETO"
-            if not isinstance(whale_results, Exception) and whale_results.get("veto")
+            "verdict": "INACTIVE"
+            if whale_inactive
             else (
-                "SUPPORT"
-                if not isinstance(whale_results, Exception)
-                and whale_results.get("confidence_delta", 0.0) > 0
+                "VETO"
+                if not isinstance(whale_results, Exception) and whale_results.get("veto")
                 else (
-                    "RISK"
+                    "SUPPORT"
                     if not isinstance(whale_results, Exception)
-                    and whale_results.get("confidence_delta", 0.0) < 0
-                    else "NEUTRAL"
+                    and whale_results.get("confidence_delta", 0.0) > 0
+                    else (
+                        "RISK"
+                        if not isinstance(whale_results, Exception)
+                        and whale_results.get("confidence_delta", 0.0) < 0
+                        else "NEUTRAL"
+                    )
                 )
             )
         })
@@ -200,38 +216,81 @@ class Orchestrator:
         else:
             state['whale_verdict'] = whale_results
 
+        unknown_fundamental_tickers = []
+
         # Handle Fundamental Score A (Redis)
         score_a = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
-        if isinstance(score_data_a, Exception):
-            logger.warning("Orchestrator Redis read failed for %s: %s", ticker_a, score_data_a)
-        elif score_data_a:
-            score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
-        else:
-            logger.warning(
-                "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
-                ticker_a, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
-            )
-            telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
+        if not crypto_pair:
+            if isinstance(score_data_a, Exception):
+                logger.warning("Orchestrator Redis read failed for %s: %s", ticker_a, score_data_a)
+                unknown_fundamental_tickers.append(ticker_a)
+            elif score_data_a:
+                score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
+            else:
+                logger.warning(
+                    "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                    ticker_a, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+                )
+                telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
+                unknown_fundamental_tickers.append(ticker_a)
 
         # Handle Fundamental Score B (Redis)
         score_b = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
-        if isinstance(score_data_b, Exception):
-            logger.warning("Orchestrator Redis read failed for %s: %s", ticker_b, score_data_b)
-        elif score_data_b:
-            score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
-        else:
-            logger.warning(
-                "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
-                ticker_b, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+        if not crypto_pair:
+            if isinstance(score_data_b, Exception):
+                logger.warning("Orchestrator Redis read failed for %s: %s", ticker_b, score_data_b)
+                unknown_fundamental_tickers.append(ticker_b)
+            elif score_data_b:
+                score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
+            else:
+                logger.warning(
+                    "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                    ticker_b, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+                )
+                telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
+                unknown_fundamental_tickers.append(ticker_b)
+
+        live_fundamental_guard_active = (
+            not settings.PAPER_TRADING
+            or bool(getattr(settings, "LIVE_CAPITAL_DANGER", False))
+        )
+        live_unknown_fundamental_state = (
+            not crypto_pair
+            and
+            live_fundamental_guard_active
+            and bool(unknown_fundamental_tickers)
+        )
+        low_fundamental_score = (
+            not crypto_pair
+            and (
+            score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE
+            or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE
             )
-            telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
+        )
+        state["fundamental_verdict"] = {
+            "applicable": not crypto_pair,
+            "score_a": score_a,
+            "score_b": score_b,
+            "missing_tickers": unknown_fundamental_tickers,
+            "veto": live_unknown_fundamental_state or low_fundamental_score,
+        }
+        if live_unknown_fundamental_state:
+            state["fundamental_verdict"]["reason"] = "unknown fundamental state in live mode"
+        elif low_fundamental_score:
+            state["fundamental_verdict"]["reason"] = "low structural integrity score"
 
         telemetry_service.broadcast("thought", {
             "agent_name": "SEC_AGENT",
             "signal_id": sig_id,
-            "thought": f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}",
+            "thought": (
+                "SEC/fundamental filing score not applicable for crypto pair."
+                if crypto_pair
+                else f"Unknown fundamental state for {', '.join(unknown_fundamental_tickers)}"
+                if live_unknown_fundamental_state
+                else f"Structural Integrity Scores: {ticker_a}={score_a}, {ticker_b}={score_b}"
+            ),
             "verdict": "VETO"
-            if score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE
+            if state["fundamental_verdict"]["veto"]
             else "NEUTRAL"
         })
 
@@ -270,8 +329,15 @@ class Orchestrator:
         bull_conf = state['bull_verdict']['confidence']
         bear_conf = state['bear_verdict']['confidence']
 
-        # Absolute VETO if structural integrity score < 40 for either ticker
-        if score_a < settings.ORCH_FUNDAMENTAL_VETO_SCORE or score_b < settings.ORCH_FUNDAMENTAL_VETO_SCORE:
+        # Absolute VETO if live mode cannot prove fundamental state or integrity is too low.
+        if live_unknown_fundamental_state:
+            state["final_confidence"] = 0.0
+            missing_tickers = ", ".join(unknown_fundamental_tickers)
+            state["final_verdict"] = (
+                f"VETO: Unknown fundamental state for {missing_tickers}. "
+                "Entry blocked in live mode."
+            )
+        elif low_fundamental_score:
             state["final_confidence"] = 0.0
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason
@@ -290,21 +356,21 @@ class Orchestrator:
             bull_weight = np.random.beta(max(1, bull_s), max(1, bull_f))
             bear_weight = np.random.beta(max(1, bear_s), max(1, bear_f))
             sec_weight = np.random.beta(max(1, sec_s), max(1, sec_f))
-            total_w = bull_weight + bear_weight + sec_weight
+            total_w = bull_weight + bear_weight if crypto_pair else bull_weight + bear_weight + sec_weight
 
             w_bull = bull_weight / total_w
             w_bear = bear_weight / total_w
-            w_sec = sec_weight / total_w
+            w_sec = 0.0 if crypto_pair else sec_weight / total_w
 
             logger.info(
-                "[ORCHESTRATOR] %s - MAB adaptive weights: Bull=%.2f, Bear=%.2f, SEC=%.2f",
+                "[ORCHESTRATOR] %s - MAB adaptive weights: Bull=%.2f, Bear=%.2f, SEC=%s",
                 pair_id,
                 w_bull,
                 w_bear,
-                w_sec,
+                "N/A" if crypto_pair else f"{w_sec:.2f}",
             )
 
-            avg_integrity = (score_a + score_b) / 200.0
+            avg_integrity = 0.0 if crypto_pair else (score_a + score_b) / 200.0
 
             # --- PHASE 3: PORTFOLIO SORTINO OPTIMIZATION ---
             p_advice_a = await portfolio_manager_agent.get_optimization_advice(ticker_a)
@@ -312,13 +378,18 @@ class Orchestrator:
 
             base_conf = (bull_conf * w_bull) + ((1 - bear_conf) * w_bear) + (avg_integrity * w_sec)
             final_conf = base_conf * performance_multiplier
+            sec_weight_label = "N/A" if crypto_pair else f"{w_sec:.2f}"
+            portfolio_warning = not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]
 
-            if not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]:
+            if portfolio_warning and not crypto_pair:
                 final_conf *= 0.8
-                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({w_sec:.2f}) | SORTINO WARNING: Non-Optimal (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
+                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO WARNING: Non-Optimal (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Penalty Applied: Potential Sortino degradation.", pair_id)
+            elif portfolio_warning:
+                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO WARNING: Crypto pair-spread; no long-only confidence penalty (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
+                logger.info("[ORCHESTRATOR] %s - Portfolio warning informational for crypto pair spread.", pair_id)
             else:
-                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({w_sec:.2f}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
+                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
 
             whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))

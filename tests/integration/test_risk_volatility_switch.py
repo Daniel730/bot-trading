@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 import uuid
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from src.services.risk_service import risk_service
 from src.services.volatility_service import volatility_service
 from src.services.performance_service import performance_service
@@ -38,31 +38,36 @@ async def test_drawdown_risk_scaling():
     Test User Story 1 Acceptance 2: Sharpe ratio < 0.5 => Kelly fraction capped at 0.1.
     """
     ticker = "ETH-USD"
-    
-    # Mock 10% Drawdown and 1.2 Sharpe
-    with patch.object(performance_service, 'get_portfolio_metrics', return_value={
-        "sharpe_ratio": 1.2,
-        "max_drawdown": 0.10
-    }):
-        params = await risk_service.get_execution_params(ticker)
-        # 1.0 - (0.10 / 0.15) = 1.0 - 0.666 = 0.333
-        assert 0.33 < params["risk_multiplier"] < 0.34
-        
-    # Mock 16% Drawdown (Absolute Stop)
-    with patch.object(performance_service, 'get_portfolio_metrics', return_value={
-        "sharpe_ratio": 1.2,
-        "max_drawdown": 0.16
-    }):
-        params = await risk_service.get_execution_params(ticker)
-        assert params["risk_multiplier"] == 0.0
 
-    # Mock low Sharpe ratio (< 0.5)
-    with patch.object(performance_service, 'get_portfolio_metrics', return_value={
-        "sharpe_ratio": 0.4,
-        "max_drawdown": 0.02
-    }):
-        params = await risk_service.get_execution_params(ticker)
-        assert params["risk_multiplier"] == 0.1 # Capped
+    with patch.object(redis_service, 'get_json', side_effect=AssertionError("drawdown scaling test must not read Redis")) as mock_redis_get_json, \
+         patch.object(volatility_service, 'get_volatility_status', return_value="NORMAL"), \
+         patch.object(volatility_service, 'get_l2_entropy', return_value=0.0):
+        # Mock 10% Drawdown and 1.2 Sharpe
+        with patch.object(performance_service, 'get_portfolio_metrics', return_value={
+            "sharpe_ratio": 1.2,
+            "max_drawdown": 0.10
+        }):
+            params = await risk_service.get_execution_params(ticker)
+            # 1.0 - (0.10 / 0.15) = 1.0 - 0.666 = 0.333
+            assert 0.33 < params["risk_multiplier"] < 0.34
+            
+        # Mock 16% Drawdown (Absolute Stop)
+        with patch.object(performance_service, 'get_portfolio_metrics', return_value={
+            "sharpe_ratio": 1.2,
+            "max_drawdown": 0.16
+        }):
+            params = await risk_service.get_execution_params(ticker)
+            assert params["risk_multiplier"] == 0.0
+
+        # Mock low Sharpe ratio (< 0.5)
+        with patch.object(performance_service, 'get_portfolio_metrics', return_value={
+            "sharpe_ratio": 0.4,
+            "max_drawdown": 0.02
+        }):
+            params = await risk_service.get_execution_params(ticker)
+            assert params["risk_multiplier"] == 0.1 # Capped
+
+        mock_redis_get_json.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_execution_client_dynamic_params():
@@ -72,14 +77,16 @@ async def test_execution_client_dynamic_params():
     signal_id = str(uuid.uuid4())
     legs = [{"ticker": "KO", "side": "BUY", "quantity": 100, "target_price": 60.0}]
     
-    # Mock RiskService and Redis lock
+    # Mock RiskService, Redis attempt state, and gRPC stub
     mock_params = {
         "risk_multiplier": 0.5,
         "max_slippage_pct": 0.0005,
         "volatility_status": "HIGH_VOLATILITY"
     }
     
-    with patch.object(redis_service, 'set_nx', return_value=True), \
+    with patch.object(redis_service, 'get_json', new=AsyncMock(return_value=None)) as mock_get_json, \
+         patch.object(redis_service, 'set_json', new=AsyncMock()) as mock_set_json, \
+         patch.object(redis_service, 'set_nx', return_value=True), \
          patch.object(risk_service, 'get_execution_params', return_value=mock_params), \
          patch.object(execution_client, 'get_stub') as mock_stub_factory:
         
@@ -100,3 +107,5 @@ async def test_execution_client_dynamic_params():
         request = call_args[0][0]
         assert float(request.risk_multiplier) == 0.5
         assert float(request.max_slippage_pct) == 0.0005
+        mock_get_json.assert_awaited_once_with(f"execution_attempt:{signal_id}")
+        assert mock_set_json.await_count == 2

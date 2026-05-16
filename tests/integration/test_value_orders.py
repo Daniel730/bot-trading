@@ -1,31 +1,32 @@
 import pytest
-from src.services.brokerage_service import BrokerageService
 from src.services.risk_service import risk_service
-from unittest.mock import patch, AsyncMock
+from src.services.brokerage.alpaca import AlpacaProvider
+from types import SimpleNamespace
+from unittest.mock import patch
 
 @pytest.mark.asyncio
-async def test_value_order_flow_success():
-    brokerage = BrokerageService("T212")
-    
-    with patch('src.services.data_service.data_service.get_latest_price_async', new_callable=AsyncMock) as mock_price:
-        mock_price.return_value = {"AAPL": 150.0}
-        with patch('src.services.risk_service.risk_service.calculate_friction') as mock_friction:
-            mock_friction.return_value = {"is_acceptable": True, "friction_pct": 0.001}
-            with patch.object(brokerage.provider, 'place_market_order', new_callable=AsyncMock) as mock_market:
-                mock_market.return_value = {"status": "success", "orderId": "12345"}
-            
-                # $15 of AAPL @ $150 = 0.1 shares
-                result = await brokerage.place_value_order("AAPL", 15.0, "BUY")
-            
-                assert result['status'] == "success"
-                mock_market.assert_called_once()
-                args, kwargs = mock_market.call_args
-                assert args[:3] == ("AAPL", 0.1, "BUY")
+async def test_value_order_flow_success_uses_alpaca_notional_buy():
+    with patch("src.services.brokerage.alpaca.tradeapi.REST") as rest_cls:
+        client = rest_cls.return_value
+        client.list_assets.return_value = [SimpleNamespace(symbol="AAPL")]
+        client.submit_order.return_value = SimpleNamespace(id="12345", client_order_id=None)
+        provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+        result = await provider.place_value_order("AAPL", 15.0, "BUY")
+
+    assert result["status"] == "success"
+    client.submit_order.assert_called_once_with(
+        symbol="AAPL",
+        notional=15.0,
+        side="buy",
+        type="market",
+        time_in_force="day",
+    )
 
 def test_value_order_fee_rejection():
     # We test the logic in monitor.py integration via risk_service
     # If $0.50 trade is attempted, it should be rejected by risk_service
-    
+
     amount = 0.50
     check = risk_service.is_trade_allowed(amount, 0.01) # 1% friction
     assert check['allowed'] == False

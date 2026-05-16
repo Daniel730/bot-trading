@@ -1,170 +1,80 @@
 import asyncio
 import logging
-import inspect
 from typing import List, Dict, Any, Optional
 from src.config import settings
-from src.services.web3_service import web3_service
 from src.services.budget_service import budget_service
-from src.services.brokerage.t212 import T212Provider, AwaitableList, AwaitableFloat
 from src.services.brokerage.alpaca import AlpacaProvider
 
 logger = logging.getLogger(__name__)
 
+class AwaitableList(list):
+    def __await__(self):
+        async def _coro():
+            return self
+        return _coro().__await__()
+
+class AwaitableFloat(float):
+    def __await__(self):
+        async def _coro():
+            return float(self)
+        return _coro().__await__()
+
 class BrokerageService:
+    """
+    BrokerageService facade, now simplified to focus on Alpaca as the primary provider.
+    Legacy providers (T212, Web3) have been moved to legacy/.
+    """
     def __init__(self, provider_name: str = None):
-        """
-        Initialize the BrokerageService with a selected brokerage provider and the web3 service.
-        
-        Parameters:
-            provider_name (str, optional): The brokerage provider identifier to use. If omitted, the provider is taken from settings.BROKERAGE_PROVIDER. The selected provider is instantiated and assigned to `self.provider`; `self.provider_name` and `self.web3` are also set.
-        """
-        self.web3 = web3_service
         self.configure_provider(provider_name)
 
     def configure_provider(self, provider_name: str = None):
         """
-        Selects and instantiates the active brokerage provider using an explicit override or runtime configuration.
-        
-        Parameters:
-            provider_name (str, optional): Explicit provider override. If omitted, the value of
-                `settings.BROKERAGE_PROVIDER` is used; if that is not set, a default of "T212" is applied.
-                The value is normalized before selection. Unsupported or unrecognized values fall back to T212.
+        Always initializes with AlpacaProvider as requested by the user.
         """
-        selected_provider = (provider_name or settings.BROKERAGE_PROVIDER or "T212").strip().upper()
-        self.provider_name = selected_provider
-
-        if selected_provider == "ALPACA":
-            self.provider = AlpacaProvider()
-            logger.info("BrokerageService: Initialized with ALPACA provider.")
-        else:
-            self.provider_name = "T212"
-            self.provider = T212Provider()
-            logger.info("BrokerageService: Initialized with T212 provider.")
-
-    def get_web3_account_cash(self) -> AwaitableFloat:
-        """
-        Retrieve the WEB3 account cash balance.
-        
-        Returns:
-            AwaitableFloat: The WEB3 account cash balance wrapped in an AwaitableFloat for backward compatibility.
-        """
-        return self.web3.get_account_cash()
+        if provider_name and provider_name.strip().upper() != "ALPACA":
+            logger.warning("BrokerageService: %s is legacy-only; using ALPACA.", provider_name)
+        self.provider_name = "ALPACA"
+        self.provider = AlpacaProvider()
+        logger.info("BrokerageService: Initialized with ALPACA provider (Legacy providers moved to legacy/).")
 
     def test_connection(self) -> bool:
-        """
-        Check whether the active brokerage provider can be contacted and authenticated.
-        
-        Returns:
-            `True` if the provider is reachable and credentials are valid, `False` otherwise.
-        """
         return self.provider.test_connection()
 
     def get_venue(self, ticker: str) -> str:
-        """
-        Determines which brokerage venue should execute a ticker.
-        
-        Parameters:
-            ticker (str): The instrument symbol.
-        
-        Returns:
-            str: The active provider name. Crypto symbols such as ``BTC-USD`` are
-            still crypto for scanning/market-hour purposes, but they no longer
-            imply Web3 execution.
-        """
         return self.provider_name
 
+    def _format_ticker(self, ticker: str) -> str:
+        return str(ticker or "").strip().upper()
+
     async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
-        """
-        Places a market order using the active brokerage provider.
-        
-        Parameters:
-            ticker (str): Instrument symbol to trade.
-            quantity (float): Quantity to buy or sell.
-            side (str): Order side, e.g., "buy" or "sell".
-            limit_price (float, optional): Optional execution cap price if supported by the provider.
-            client_order_id (str, optional): Optional client-specified identifier for the order.
-        
-        Returns:
-            dict: Response from the provider containing order details or an error description.
-        """
-        venue = self.get_venue(ticker)
         result = await self.provider.place_market_order(ticker, quantity, side, limit_price, client_order_id)
-        result["venue"] = venue
+        result["venue"] = self.provider_name
         return result
 
     async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
-        """
-        Place a fiat-value order for a ticker through the appropriate venue.
-        
-        Routes the request to the configured brokerage provider. Web3 wallet
-        configuration is intentionally separate from crypto execution; crypto
-        symbols such as ``BTC-USD`` are sent to the active broker, typically
-        Alpaca. On successful execution (result["status"] != "error") and when
-        not in paper trading mode, updates the used budget for the chosen venue.
-        
-        Parameters:
-            ticker (str): Asset identifier to buy or sell.
-            amount (float): Fiat amount to spend for a `buy` or to receive for a `sell`.
-            side (str): Order side, e.g., "buy" or "sell".
-            price (float, optional): Optional price to include for provider-side value orders when supported.
-            client_order_id (str, optional): Optional client-supplied identifier forwarded to the provider.
-        
-        Returns:
-            Dict[str, Any]: The provider response dictionary augmented with a
-            "venue" key indicating where the order was placed. On failure
-            `result["status"]` is expected to be `"error"`.
-        """
-        venue = self.get_venue(ticker)
-        from src.services.agent_log_service import agent_logger
-        
         result = await self.provider.place_value_order(ticker, amount, side, price, client_order_id)
-
-        if result.get("status") != "error" and not settings.PAPER_TRADING:
-            budget_service.update_used_budget(venue, amount)
-            # Log fractional trade for the active broker path
-            if venue != "WEB3":
-                # We need quantity and price for logging if not provided in result
-                # This is simplified; ideally providers return these.
-                pass 
-
-        result["venue"] = venue
+        result["venue"] = self.provider_name
+        status = str(result.get("status", "")).lower()
+        if status == "filled" and not result.get("requires_reconciliation") and not settings.PAPER_TRADING:
+            filled_amount = result.get("filled_notional") or result.get("filled_amount") or amount
+            try:
+                budget_amount = float(filled_amount)
+            except (TypeError, ValueError):
+                budget_amount = amount
+            budget_service.update_used_budget(self.provider_name, budget_amount)
         return result
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
-        """
-        Retrieve metadata for a trading symbol.
-        
-        Parameters:
-            ticker (str): The ticker symbol to look up.
-        
-        Returns:
-            Dict[str, Any]: A dictionary containing metadata for the symbol (for example: name, exchange, trading increments, and other provider-specific fields).
-        """
         return self.provider.get_symbol_metadata(ticker)
 
+    async def is_asset_active(self, ticker: str) -> bool:
+        return await self.provider.is_asset_active(ticker)
+
     async def get_portfolio(self) -> List[Dict[str, Any]]:
-        # Maintaining AwaitableList behavior for backward compatibility
-        """
-        Return the account portfolio from the active provider as an awaitable list for backward compatibility.
-        
-        Each item in the returned list is a provider-specific position dictionary.
-        
-        Returns:
-            AwaitableList: A list-like wrapper around portfolio position dictionaries for asynchronous consumption.
-        """
         data = await asyncio.to_thread(self.provider.get_portfolio)
         return AwaitableList(data)
 
     async def get_positions(self, ticker: str = None) -> List[Dict[str, Any]]:
-        """
-        Retrieve current positions, optionally filtered by a ticker symbol.
-        
-        Parameters:
-            ticker (str, optional): Ticker symbol to filter returned positions. If omitted, returns all positions.
-        
-        Returns:
-            List[Dict[str, Any]]: A list-like container of position dictionaries, each representing a current holding. Fields are provider-specific.
-        """
         data = await asyncio.to_thread(self.provider.get_positions, ticker)
         return AwaitableList(data)
 
@@ -180,90 +90,160 @@ class BrokerageService:
         Returns:
             float: Available quantity for trading for the matched ticker, or 0.0 if none.
         """
+        def _matches_symbol(position_symbol: str, requested: str) -> bool:
+            sym = str(position_symbol or "").upper()
+            req = str(requested or "").upper()
+            if not sym or not req:
+                return False
+            if sym == req:
+                return True
+            # Handle broker-formatted tickers such as "AAPL_US_EQ",
+            # "NASDAQ:AAPL", or provider payloads with suffixes.
+            compact = sym.replace("NASDAQ:", "").replace("NYSE:", "")
+            if compact == req or compact.startswith(f"{req}_") or compact.startswith(f"{req}."):
+                return True
+            return sym.startswith(req)
+
+        def _matches_symbol(position_symbol: str, requested: str) -> bool:
+            sym = str(position_symbol or "").upper()
+            req = str(requested or "").upper()
+            if not sym or not req:
+                return False
+            if sym == req:
+                return True
+            # Handle broker-formatted tickers such as "AAPL_US_EQ",
+            # "NASDAQ:AAPL", or provider payloads with suffixes.
+            compact = sym.replace("NASDAQ:", "").replace("NYSE:", "")
+            if compact == req or compact.startswith(f"{req}_") or compact.startswith(f"{req}."):
+                return True
+            return sym.startswith(req)
+
         positions = await self.get_positions(ticker)
         for pos in positions:
-            pos_ticker = pos.get("ticker", "")
-            # Match on the canonical ticker; providers are responsible for
-            # returning the normalised (non-broker-formatted) ticker key.
-            if pos_ticker == ticker or pos_ticker.startswith(ticker):
-                return float(pos.get("quantityAvailableForTrading", pos.get("quantity", 0.0)) or 0.0)
+            pos_ticker = (
+                pos.get("ticker")
+                or pos.get("symbol")
+                or pos.get("instrumentTicker")
+                or pos.get("instrument")
+                or ""
+            )
+            if _matches_symbol(pos_ticker, ticker):
+                qty = (
+                    pos.get("quantityAvailableForTrading")
+                    or pos.get("availableQuantity")
+                    or pos.get("tradableQuantity")
+                    or pos.get("quantity")
+                    or pos.get("qty")
+                    or 0.0
+                )
+                return float(qty or 0.0)
+            pos_ticker = (
+                pos.get("ticker")
+                or pos.get("symbol")
+                or pos.get("instrumentTicker")
+                or pos.get("instrument")
+                or ""
+            )
+            if _matches_symbol(pos_ticker, ticker):
+                qty = (
+                    pos.get("quantityAvailableForTrading")
+                    or pos.get("availableQuantity")
+                    or pos.get("tradableQuantity")
+                    or pos.get("quantity")
+                    or pos.get("qty")
+                    or 0.0
+                )
+                return float(qty or 0.0)
         return 0.0
 
     async def get_pending_orders(self) -> List[Dict[str, Any]]:
-        """
-        Get pending orders from the active brokerage provider.
-        
-        Wraps the provider's pending orders list in an AwaitableList for use in async contexts.
-        
-        Returns:
-            AwaitableList: A list-like AwaitableList containing pending order dictionaries as returned by the provider.
-        """
         data = await asyncio.to_thread(self.provider.get_pending_orders)
         return AwaitableList(data)
 
     async def has_pending_order(self, ticker: str) -> bool:
-        """
-        Check whether there is a pending order for the given ticker.
-        
-        Returns:
-            `true` if a pending order exists for `ticker`, `false` otherwise.
-        """
         orders = await self.get_pending_orders()
         return any(o.get('ticker') == ticker for o in orders)
 
+    async def get_order(self, order_id: str) -> Dict[str, Any]:
+        if hasattr(self.provider, "get_order"):
+            return await self.provider.get_order(order_id)
+        return {}
+
     async def is_ticker_owned(self, ticker: str) -> bool:
-        """
-        Return whether the account holds a position for the given ticker.
-        
-        Returns:
-            `true` if a position with `ticker` exists in the portfolio, `false` otherwise.
-        """
         portfolio = await self.get_portfolio()
         return any(pos.get('ticker') == ticker for pos in portfolio)
 
     async def get_account_cash(self) -> float:
-        # Maintaining AwaitableFloat behavior for backward compatibility
-        """
-        Get the account cash balance.
-        
-        Returns:
-            AwaitableFloat: The account cash balance as a float wrapped in an AwaitableFloat for backward compatibility.
-        """
         val = await asyncio.to_thread(self.provider.get_account_cash)
         return AwaitableFloat(val)
 
+    async def get_account_equity(self) -> float:
+        val = await asyncio.to_thread(self.provider.get_account_equity)
+        return AwaitableFloat(val)
+
+    async def get_account_buying_power(self) -> float:
+        val = await asyncio.to_thread(self.provider.get_account_buying_power)
+        return AwaitableFloat(val)
+
     async def get_pending_orders_value(self) -> float:
-        """
-        Compute the total fiat value of pending orders.
-        
-        Each pending order contributes quantity * price. When the broker reports
-        a zero/missing order price, fall back to the latest market price for the
-        order ticker so budget checks do not undercount pending commitments.
-        
-        Returns:
-            total_value (float): Sum of quantity * (limitPrice or price) for all pending orders with quantity > 0.
-        """
         orders = await self.get_pending_orders()
+        if not orders:
+            return AwaitableFloat(0.0)
+
+        # First pass: identify orders missing a limit price and collect their tickers
+        tickers_to_fetch = []
+        for order in orders:
+            try:
+                notional = float(order.get('notional') or 0.0)
+            except (TypeError, ValueError):
+                notional = 0.0
+            if notional > 0.0:
+                continue
+
+            try:
+                price = float(order.get('limitPrice') or order.get('price') or 0.0)
+            except (TypeError, ValueError):
+                price = 0.0
+            
+            if price <= 0.0:
+                ticker = order.get('ticker')
+                if ticker:
+                    tickers_to_fetch.append(ticker)
+
+        # Batch fetch all missing prices in one call
+        fetched_prices = {}
+        if tickers_to_fetch:
+            from src.services.data_service import data_service
+            fetched_prices = await data_service.get_latest_price_async(tickers_to_fetch)
+
+        # Second pass: calculate total value using batched prices where needed
         total_value = 0.0
         for order in orders:
+            try:
+                notional = float(order.get('notional') or 0.0)
+            except (TypeError, ValueError):
+                notional = 0.0
+            if notional > 0.0:
+                total_value += notional
+                continue
+
             try:
                 qty = float(order.get('quantity', 0.0) or 0.0)
             except (TypeError, ValueError):
                 qty = 0.0
+            
             if qty > 0:
                 try:
                     price = float(order.get('limitPrice') or order.get('price') or 0.0)
                 except (TypeError, ValueError):
                     price = 0.0
+                
                 if price <= 0.0:
-                    from src.services.data_service import data_service
                     ticker = order.get('ticker')
-                    prices = await data_service.get_latest_price_async([ticker])
-                    try:
-                        price = float(prices.get(ticker, 0.0) or 0.0)
-                    except (TypeError, ValueError):
-                        price = 0.0
+                    price = float(fetched_prices.get(ticker, 0.0) or 0.0)
+                
                 total_value += (qty * price)
+        
         return AwaitableFloat(total_value)
 
 brokerage_service = BrokerageService()

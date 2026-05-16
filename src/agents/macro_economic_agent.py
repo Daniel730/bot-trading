@@ -19,6 +19,8 @@ class MacroEconomicAgent:
         self.inflation_threshold = inflation_threshold
         self.data_service = DataService()
         self.logger = logging.getLogger(__name__)
+        self._regime_cache = {} # ticker -> (regime, timestamp)
+        self._cache_ttl = 900   # 15 minutes
 
     @staticmethod
     def _extract_series(df: pd.DataFrame, ticker: str) -> pd.Series:
@@ -83,6 +85,14 @@ class MacroEconomicAgent:
         Returns:
             str: One of `"BULLISH"`, `"BEARISH"`, or `"EXTREME_VOLATILITY"`.
         """
+        # 0. Check Cache
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).timestamp()
+        if ticker in self._regime_cache:
+            cached_regime, ts = self._regime_cache[ticker]
+            if now - ts < self._cache_ttl:
+                return cached_regime
+
         try:
             # Fetch 60d to ensure we have enough for SMA 50
             df = await self.data_service.get_historical_data_async([ticker], "60d", "1d")
@@ -110,6 +120,9 @@ class MacroEconomicAgent:
 
             regime = "BULLISH" if sma20 > sma50 else "BEARISH"
             self.logger.info(f"Regime for {ticker}: {regime} (SMA20: {sma20:.2f}, SMA50: {sma50:.2f})")
+            
+            # Update Cache
+            self._regime_cache[ticker] = (regime, now)
             return regime
         except Exception as e:
             self.logger.error(f"Error calculating regime for {ticker}: {e}")

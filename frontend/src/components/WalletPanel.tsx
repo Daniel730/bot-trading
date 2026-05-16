@@ -15,6 +15,7 @@ import {
   type WalletRecommendationResponse,
   type WalletRecommendationBuyResponse,
 } from '../services/api';
+import { useAutoDismiss } from '../hooks/useAutoDismiss';
 
 interface WalletPanelProps {
   token: string;
@@ -68,6 +69,9 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
   const [ordersPage, setOrdersPage] = useState(1);
 
   const budgetValue = Number(budget);
+
+  useAutoDismiss(ok, setOk);
+  useAutoDismiss(error, setError, 10000);
 
   const refresh = useCallback(async () => {
     setError(null);
@@ -204,7 +208,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
           <div className="wallet-title">
             <Wallet size={18} />
             <div>
-              <strong>Today&apos;s Stock Plan</strong>
+              <strong>Today&apos;s Trading Plan</strong>
               <span>{plan ? `${plan.recommended_tickers.length} recommended / ${plan.skipped.length} skipped` : 'Waiting for wallet state'}</span>
             </div>
           </div>
@@ -352,7 +356,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
                     </td>
                     <td>
                       <strong>{item.ticker}</strong>
-                      <div className="muted">{item.broker_ticker || item.t212_ticker || item.ticker}</div>
+                      <div className="muted">{item.broker_ticker || item.ticker}</div>
                     </td>
                     <td>
                       <span className={`badge ${item.category === 'coint' ? 'badge-green' : 'badge-blue'}`}>

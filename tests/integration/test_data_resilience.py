@@ -26,7 +26,8 @@ def test_exponential_backoff_logic():
         with patch('src.services.redis_service.redis_service.set_price'):
             with patch('src.services.data_service.settings') as mock_settings:
                 mock_settings.DEV_MODE = False
-                with patch('yfinance.download', side_effect=side_effects) as mock_yf:
+                with patch.object(service.alpaca_client, 'get_snapshots', side_effect=Exception("force yfinance fallback")) as mock_snapshots, \
+                     patch('yfinance.download', side_effect=side_effects) as mock_yf:
                     # This should take approx 1s (1st wait) + 2s (2nd wait) = 3s
                     prices = service.get_latest_price(["AAPL"])
             
@@ -34,6 +35,7 @@ def test_exponential_backoff_logic():
             
             assert "AAPL" in prices
             assert prices["AAPL"] == 150.0
+            mock_snapshots.assert_called_once_with(["AAPL"])
             assert mock_yf.call_count == 3
             # Allow some margin for execution time
             assert duration >= 3.0, f"Expected backoff duration >= 3s, got {duration:.2f}s"

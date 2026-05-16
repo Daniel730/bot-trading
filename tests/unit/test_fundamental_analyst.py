@@ -1,5 +1,7 @@
 import pytest
 import asyncio
+import importlib
+import warnings
 from src.agents.fundamental_analyst import FundamentalAnalyst
 
 @pytest.fixture
@@ -42,3 +44,31 @@ async def test_neutral_on_missing_data(analyst):
     result = await analyst.analyze_structural_integrity("TEST", {})
     assert result['recommendation'] == "NEUTRAL"
     assert result['risk_factors'] == []
+
+
+@pytest.mark.anyio
+async def test_structural_integrity_accepts_benchmark_metadata(analyst):
+    result = await analyst.analyze_structural_integrity(
+        "TEST",
+        {"Item 7": "Management has sufficient liquidity."},
+        {"type": "10-K", "date": "2026-03-10"},
+    )
+
+    assert result["recommendation"] in {"GO", "NEUTRAL", "NO-GO"}
+
+
+def test_module_exports_benchmark_singleton():
+    module = importlib.import_module("src.agents.fundamental_analyst")
+
+    assert isinstance(module.fundamental_analyst, FundamentalAnalyst)
+
+
+def test_import_without_gemini_key_does_not_load_deprecated_sdk(monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    module = importlib.import_module("src.agents.fundamental_analyst")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        reloaded = importlib.reload(module)
+
+    assert reloaded.fundamental_analyst.model is None

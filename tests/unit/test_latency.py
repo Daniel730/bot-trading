@@ -1,13 +1,14 @@
 import pytest
 from src.services.latency_service import LatencyService
 import numpy as np
+from unittest.mock import AsyncMock
 
 @pytest.fixture
 def latency_service():
     return LatencyService(alarm_threshold_ms=1.0)
 
 @pytest.mark.asyncio
-async def test_alpha_stale_time_calculation(latency_service, mocker):
+async def test_alpha_stale_time_calculation(latency_service, monkeypatch):
     # Mock redis to return specific metrics
     # sent=0, received=500,000ns (0.5ms)
     mock_metrics = [
@@ -18,16 +19,18 @@ async def test_alpha_stale_time_calculation(latency_service, mocker):
             "rtt_ns": 800000 # 0.8ms RTT
         }
     ]
-    mocker.patch("src.services.redis_service.redis_service.get_recent_latency", return_value=mock_metrics)
+    mock_get_recent_latency = AsyncMock(return_value=mock_metrics)
+    monkeypatch.setattr("src.services.latency_service.redis_service.get_recent_latency", mock_get_recent_latency)
     
     report = await latency_service.get_performance_report()
     
+    mock_get_recent_latency.assert_awaited_once()
     assert report["avg_stale_time_ms"] == 0.5
     assert report["avg_rtt_ms"] == 0.8
     assert report["status"] == "HEALTHY"
 
 @pytest.mark.asyncio
-async def test_latency_alarm_trigger(latency_service, mocker):
+async def test_latency_alarm_trigger(latency_service, monkeypatch):
     # Mock redis to return 20% violations (2 out of 10)
     # FR-006: Trigger if > 10%
     mock_metrics = []
@@ -36,15 +39,19 @@ async def test_latency_alarm_trigger(latency_service, mocker):
     for i in range(2):
         mock_metrics.append({"rtt_ns": 1200000}) # 1.2ms (Violation)
         
-    mocker.patch("src.services.redis_service.redis_service.get_recent_latency", return_value=mock_metrics)
+    mock_get_recent_latency = AsyncMock(return_value=mock_metrics)
+    monkeypatch.setattr("src.services.latency_service.redis_service.get_recent_latency", mock_get_recent_latency)
     
     report = await latency_service.get_performance_report()
     
+    mock_get_recent_latency.assert_awaited_once()
     assert report["violation_rate"] == 0.2
     assert report["status"] == "DEGRADED"
 
 @pytest.mark.asyncio
-async def test_empty_metrics_handling(latency_service, mocker):
-    mocker.patch("src.services.redis_service.redis_service.get_recent_latency", return_value=[])
+async def test_empty_metrics_handling(latency_service, monkeypatch):
+    mock_get_recent_latency = AsyncMock(return_value=[])
+    monkeypatch.setattr("src.services.latency_service.redis_service.get_recent_latency", mock_get_recent_latency)
     report = await latency_service.get_performance_report()
+    mock_get_recent_latency.assert_awaited_once()
     assert report["status"] == "no_data"

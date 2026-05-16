@@ -44,6 +44,7 @@ import {
   writeStoredDashboardSession,
 } from './services/dashboardSession';
 import { useTelemetry } from './hooks/useTelemetry';
+import { useAutoDismiss } from './hooks/useAutoDismiss';
 import { useStartupProgress } from './hooks/useStartupProgress';
 import { NAV_ITEMS, type Page } from './constants/navigation';
 import LoginView from './components/dashboard/LoginView';
@@ -102,6 +103,9 @@ function App() {
   const [systemMessage, setSystemMessage] = useState<string | null>(null);
   const [systemError, setSystemError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  useAutoDismiss(systemMessage, setSystemMessage);
+  useAutoDismiss(systemError, setSystemError, 10000);
 
   const clearAuthenticatedSession = useCallback((message?: string) => {
     clearStoredDashboardSession();
@@ -248,7 +252,7 @@ function App() {
   );
   const currentMode = data?.runtime?.mode ?? summary?.mode ?? '—';
   const currentStage = data?.stage ?? summary?.stage ?? botState ?? 'Initializing';
-  const currentBotState = data?.runtime?.desired_bot_state ?? summary?.bot_status ?? 'RUNNING';
+  const currentBotState = summary?.bot_status ?? data?.runtime?.desired_bot_state ?? 'RUNNING';
   const { startupProgress, startupReady, preWarmingProgress } = useStartupProgress({
     isAuthenticated,
     isConnected,
@@ -282,8 +286,8 @@ function App() {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      await discoverPairs(securityToken, sessionToken);
-      setSystemMessage('Pair discovery started. Check terminal feed for updates.');
+      const result = await discoverPairs(securityToken, sessionToken);
+      setSystemMessage(result.message || 'Pair discovery started. Completion will appear in the terminal feed.');
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to start pair discovery.');
