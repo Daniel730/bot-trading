@@ -2278,6 +2278,15 @@ class ArbitrageMonitor:
         except asyncio.CancelledError:
             logger.info("Shutdown signal received. Closing connections...")
         finally:
+            # Signal uvicorn to shut down cleanly before the event loop cancels
+            # the dashboard:uvicorn_server task.  Without this, uvicorn's lifespan
+            # handler is hard-cancelled while blocked on receive_queue.get(), which
+            # produces a spurious "CancelledError" ERROR log from starlette/uvicorn.
+            if dashboard_service.server is not None:
+                try:
+                    await dashboard_service.server.shutdown()
+                except Exception as exc:
+                    logger.warning("Dashboard server shutdown warning: %s", exc)
             # Graceful shutdown of database pools
             await persistence_service.engine.dispose()
             await redis_service.client.aclose()
