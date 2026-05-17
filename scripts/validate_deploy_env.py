@@ -56,6 +56,10 @@ def validate(values: dict[str, str]) -> list[str]:
     if database_url and "bot_pass" in database_url:
         errors.append("DATABASE_URL still contains the default Postgres password.")
 
+    paper_trading = values.get("PAPER_TRADING", "")
+    if paper_trading and paper_trading.lower() != "true":
+        errors.append("PAPER_TRADING must be true for paper-trading startup validation.")
+
     for key in JSON_OBJECT_KEYS:
         value = values.get(key, "")
         if not value:

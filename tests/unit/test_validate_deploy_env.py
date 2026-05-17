@@ -73,3 +73,22 @@ def test_validate_deploy_env_blocks_invalid_json_objects(tmp_path):
 
     assert result.returncode == 1
     assert "CRYPTO_TOKEN_MAPPING" in result.stdout
+
+
+def test_validate_deploy_env_blocks_paper_trading_false(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POSTGRES_PASSWORD=strong-postgres-secret",
+                "DASHBOARD_TOKEN=strong-dashboard-token",
+                "PAPER_TRADING=false",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_validator(env_file)
+
+    assert result.returncode == 1
+    assert "PAPER_TRADING must be true" in result.stdout
