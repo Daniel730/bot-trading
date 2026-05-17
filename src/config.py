@@ -791,6 +791,8 @@ class Settings(BaseSettings):
         dashboard_token = self.DASHBOARD_TOKEN.strip().strip('"').strip("'")
         if not dashboard_token or dashboard_token == "arbi-elite-2026":
             raise ValueError("DASHBOARD_TOKEN must be set to a non-default secret")
+        if not self.PAPER_TRADING and not self.LIVE_CAPITAL_DANGER:
+            raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
         return self
