@@ -14,3 +14,4 @@ import os
 # ---------------------------------------------------------------------------
 os.environ.setdefault("POSTGRES_PASSWORD", "test-postgres-secret")
 os.environ.setdefault("DASHBOARD_TOKEN", "test-dashboard-token-for-pytest")
+os.environ.setdefault("PAPER_TRADING", "true")
