@@ -2098,7 +2098,7 @@ class ArbitrageMonitor:
         except Exception as e:
             msg = f"CRITICAL INIT ERROR: PostgreSQL connection failed! {e}"
             logger.error(msg)
-            await notification_service.send_alert(msg)
+            await notification_service.send_message(msg)
             return
 
         # 2. Redis Check
@@ -2107,7 +2107,7 @@ class ArbitrageMonitor:
         except Exception as e:
             msg = f"CRITICAL INIT ERROR: Redis connection failed! {e}"
             logger.error(msg)
-            await notification_service.send_alert(msg)
+            await notification_service.send_message(msg)
             return
 
         # 3. Alpaca API check (if not exclusively paper/mocked)
@@ -2121,7 +2121,7 @@ class ArbitrageMonitor:
             except Exception as e:
                 msg = f"CRITICAL INIT ERROR: Alpaca API connection failed! {e}"
                 logger.error(msg)
-                await notification_service.send_alert(msg)
+                await notification_service.send_message(msg)
                 return
 
         logger.info("All Health Checks Passed (Postgres, Redis, Alpaca). Bot is active.")
