@@ -2221,6 +2221,21 @@ class ArbitrageMonitor:
                         self.active_pairs,
                         is_market_open=self.is_market_open,
                     )
+                    if not scan_pairs:
+                        msg = (
+                            f"No active pairs are currently scannable "
+                            f"({len(self.active_pairs)} loaded). Waiting for an eligible market/session."
+                        )
+                        logger.warning(msg)
+                        await dashboard_service.update("NO_SCANNABLE_PAIRS", msg)
+                        progress.update(
+                            scan_task,
+                            completed=0,
+                            total=len(self.active_pairs),
+                            description=f"Idle (no scannable pairs; sleeping {settings.SCAN_INTERVAL_SECONDS}s)...",
+                        )
+                        await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
+                        continue
 
                     progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
                     latest_prices = (
