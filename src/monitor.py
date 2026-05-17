@@ -2069,7 +2069,13 @@ class ArbitrageMonitor:
 
         # Initial Setup
         logger.info("Initializing Databases...")
-        await persistence_service.init_db()
+        try:
+            await persistence_service.init_db()
+        except Exception as e:
+            msg = f"CRITICAL INIT ERROR: Database initialization failed! {e}"
+            logger.error(msg)
+            await notification_service.send_message(msg)
+            return
         await self.initialize_pairs()
         if not self.active_pairs:
             logger.warning("Startup loaded zero active pairs. Retrying pair initialization once before entering the scan loop.")

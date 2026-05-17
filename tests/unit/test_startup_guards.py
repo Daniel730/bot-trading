@@ -98,6 +98,24 @@ async def test_startup_success_with_baselines():
 @pytest.mark.asyncio
 @patch("src.monitor.notification_service")
 @patch("src.monitor.persistence_service")
+async def test_startup_handles_database_initialization_failure(mock_persistence, mock_notify):
+    monitor = ArbitrageMonitor()
+    monitor.log_preflight = MagicMock()
+    monitor.initialize_pairs = AsyncMock()
+    mock_persistence.init_db = AsyncMock(side_effect=RuntimeError("db offline"))
+    mock_notify.send_message = AsyncMock()
+
+    await monitor.run()
+
+    mock_persistence.init_db.assert_awaited_once()
+    mock_notify.send_message.assert_awaited_once()
+    assert "Database initialization failed" in mock_notify.send_message.await_args.args[0]
+    monitor.initialize_pairs.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch("src.monitor.notification_service")
+@patch("src.monitor.persistence_service")
 @patch("src.monitor.dashboard_service")
 async def test_startup_blocks_when_unresolved_execution_state_exists(mock_dashboard, mock_persistence, mock_notify):
     monitor = ArbitrageMonitor()
