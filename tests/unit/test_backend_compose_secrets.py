@@ -39,3 +39,12 @@ def test_frontend_compose_does_not_auto_restart():
     compose = yaml.safe_load(FRONTEND_COMPOSE.read_text(encoding="utf-8"))
 
     assert compose["services"]["frontend"]["restart"] == "no"
+
+
+def test_execution_engine_uses_compose_dependency_hosts():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    environment = compose["services"]["execution-engine"]["environment"]
+
+    assert environment["REDIS_HOST"] == "redis"
+    assert environment["POSTGRES_HOST"] == "postgres"
+    assert environment["POSTGRES_PORT"] == "5432"
