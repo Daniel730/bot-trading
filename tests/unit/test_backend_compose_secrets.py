@@ -57,3 +57,10 @@ def test_bot_uses_compose_dependency_hosts():
     assert environment["REDIS_HOST"] == "redis"
     assert environment["POSTGRES_HOST"] == "postgres"
     assert environment["POSTGRES_PORT"] == "5432"
+
+
+def test_mcp_server_uses_compose_redis_host():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    environment = compose["services"]["mcp-server"]["environment"]
+
+    assert environment["REDIS_HOST"] == "redis"
