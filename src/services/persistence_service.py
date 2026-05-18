@@ -449,19 +449,7 @@ class PersistenceService:
         """
         from sqlalchemy import update, select, func
 
-        unresolved_statuses = (
-            OrderStatus.ORDER_SUBMITTED,
-            OrderStatus.LEG_A_SUBMITTED,
-            OrderStatus.LEG_A_PARTIAL,
-            OrderStatus.LEG_B_SUBMITTED,
-            OrderStatus.LEG_B_PARTIAL,
-            OrderStatus.PARTIAL_EXPOSURE,
-            OrderStatus.CLOSING,
-            OrderStatus.CLOSE_FAILED,
-            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
-            OrderStatus.FAILED,
-            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
-        )
+        unresolved_statuses = self._startup_unresolved_statuses()
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 stmt = (
@@ -480,6 +468,64 @@ class PersistenceService:
                 )
                 result = await session.execute(count_stmt)
                 return int(result.scalar() or 0)
+
+    @staticmethod
+    def _startup_unresolved_statuses() -> tuple[OrderStatus, ...]:
+        return (
+            OrderStatus.ORDER_SUBMITTED,
+            OrderStatus.LEG_A_SUBMITTED,
+            OrderStatus.LEG_A_PARTIAL,
+            OrderStatus.LEG_B_SUBMITTED,
+            OrderStatus.LEG_B_PARTIAL,
+            OrderStatus.PARTIAL_EXPOSURE,
+            OrderStatus.CLOSING,
+            OrderStatus.CLOSE_FAILED,
+            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+            OrderStatus.FAILED,
+            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+        )
+
+    async def get_startup_reconciliation_rows(self, limit: int = 5) -> List[dict]:
+        """Return unresolved ledger rows that block startup manual reconciliation."""
+        from sqlalchemy import select, desc
+
+        async with self.AsyncSessionLocal() as session:
+            stmt = (
+                select(TradeLedger)
+                .where(TradeLedger.status.in_(self._startup_unresolved_statuses()))
+                .where(TradeLedger.closed_at.is_(None))
+                .order_by(desc(TradeLedger.execution_timestamp))
+                .limit(limit)
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [
+                {
+                    "id": str(row.id),
+                    "order_id": row.order_id,
+                    "signal_id": str(row.signal_id) if row.signal_id else None,
+                    "ticker": row.ticker,
+                    "side": (
+                        row.side.value
+                        if isinstance(row.side, OrderSide)
+                        else str(row.side)
+                    ),
+                    "quantity": float(row.quantity),
+                    "price": float(row.price),
+                    "status": (
+                        row.status.value
+                        if isinstance(row.status, OrderStatus)
+                        else str(row.status)
+                    ),
+                    "venue": row.venue,
+                    "execution_timestamp": (
+                        row.execution_timestamp.isoformat()
+                        if row.execution_timestamp
+                        else None
+                    ),
+                }
+                for row in rows
+            ]
 
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """Retrieves all currently OPEN positions grouped by signal_id."""
