@@ -27,6 +27,16 @@ Optional but useful:
 - Trading 212 and Web3 settings are legacy/disabled in the current runtime.
 - `OPENAI_API_KEY` and/or `GEMINI_API_KEY` for model-backed analysis paths.
 
+## Paper Startup Check
+
+Before starting a paper session from the host, run:
+
+```bash
+python scripts/paper_startup_check.py .env
+```
+
+This repairs only non-secret paper startup keys, validates the env file, and fails closed if Docker, Redis, or PostgreSQL are unreachable.
+
 ## Local Run
 
 Backend:
