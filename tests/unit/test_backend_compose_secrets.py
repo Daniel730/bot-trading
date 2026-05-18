@@ -11,6 +11,8 @@ FRONTEND_COMPOSE = Path(__file__).resolve().parents[2] / "infra" / "docker-compo
 def test_backend_compose_requires_postgres_password_without_default():
     compose_text = BACKEND_COMPOSE.read_text(encoding="utf-8")
 
+    assert "TBRZVATNGUXD" not in compose_text
+
     password_line = re.search(
         r"^\s*POSTGRES_PASSWORD:\s*(?P<value>.+)$",
         compose_text,
