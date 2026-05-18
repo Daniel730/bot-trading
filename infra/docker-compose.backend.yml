@@ -111,6 +111,8 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
+    environment:
+      REDIS_HOST: redis
     restart: "no"
     depends_on:
       redis:
