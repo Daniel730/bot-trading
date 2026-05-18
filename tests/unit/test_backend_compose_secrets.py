@@ -64,3 +64,10 @@ def test_mcp_server_uses_compose_redis_host():
     environment = compose["services"]["mcp-server"]["environment"]
 
     assert environment["REDIS_HOST"] == "redis"
+
+
+def test_sec_worker_uses_compose_redis_host():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    environment = compose["services"]["sec-worker"]["environment"]
+
+    assert environment["REDIS_HOST"] == "redis"
