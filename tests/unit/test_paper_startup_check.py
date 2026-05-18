@@ -31,6 +31,7 @@ def test_paper_startup_check_repairs_validates_then_preflights(monkeypatch, tmp_
         return ["Docker is unreachable: test"]
 
     monkeypatch.setattr(paper_startup_check.validate_deploy_env, "validate", validate_after_repair)
+    monkeypatch.setattr(paper_startup_check, "check_running_action_containers", lambda: [])
     monkeypatch.setattr(
         paper_startup_check.bug_hunt_audit,
         "check_paper_startup_dependencies",
