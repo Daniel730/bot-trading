@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts import bug_hunt_audit, repair_paper_env, validate_deploy_env
 
 
-ACTION_CONTAINER_SERVICES = ("bot", "mcp-server", "execution-engine", "sec-worker")
+ACTION_CONTAINER_SERVICES = ("bot", "mcp-server", "execution-engine", "sec-worker", "frontend")
 
 
 def check_running_action_containers() -> list[str]:
