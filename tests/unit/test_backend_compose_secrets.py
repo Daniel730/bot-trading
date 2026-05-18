@@ -18,6 +18,7 @@ def test_backend_compose_requires_postgres_password_without_default():
 
     assert password_line is not None
     value = password_line.group("value").strip()
+    assert value == "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
     assert not re.search(r"\$\{POSTGRES_PASSWORD(?::-|-)[^}]*\}", value)
     assert re.search(r"\$\{POSTGRES_PASSWORD(?::\?|\?)[^}]*\}", value)
 
