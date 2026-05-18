@@ -249,6 +249,22 @@ async def test_startup_marks_no_scannable_pairs_after_health_checks(
 async def test_startup_blocks_when_unresolved_execution_state_exists(mock_dashboard, mock_persistence, mock_notify):
     monitor = ArbitrageMonitor()
     mock_persistence.mark_startup_unsafe_signals_needs_reconciliation = AsyncMock(return_value=2)
+    mock_persistence.get_startup_reconciliation_rows = AsyncMock(
+        return_value=[
+            {
+                "id": "ledger-1",
+                "order_id": "ORPHAN_abc",
+                "signal_id": "signal-1",
+                "ticker": "BTC-USD",
+                "side": "BUY",
+                "quantity": 0.004198,
+                "price": 79519.1171875,
+                "status": "FAILED",
+                "venue": "ALPACA",
+                "execution_timestamp": "2026-05-04T14:41:42.942715+00:00",
+            }
+        ]
+    )
     mock_persistence.set_system_state = AsyncMock()
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
@@ -264,7 +280,13 @@ async def test_startup_blocks_when_unresolved_execution_state_exists(mock_dashbo
     mock_notify.send_message.assert_awaited_once()
     mock_dashboard.update.assert_awaited_once()
     assert mock_dashboard.update.await_args.args[0] == "PAUSED_REQUIRES_MANUAL_REVIEW"
-    assert "2 ledger rows require manual reconciliation" in mock_dashboard.update.await_args.args[1]
+    dashboard_msg = mock_dashboard.update.await_args.args[1]
+    assert "2 ledger rows require manual reconciliation" in dashboard_msg
+    assert "Unresolved rows:" in dashboard_msg
+    assert "id=ledger-1" in dashboard_msg
+    assert "order_id=ORPHAN_abc" in dashboard_msg
+    assert "ticker=BTC-USD" in dashboard_msg
+    assert "status=FAILED" in dashboard_msg
 
 
 @pytest.mark.asyncio

@@ -1970,6 +1970,22 @@ class ArbitrageMonitor:
             "CLOSING rows were not reopened because broker close state is ambiguous. "
             "Resolve broker/ledger state before scanning resumes."
         )
+        try:
+            rows = await persistence_service.get_startup_reconciliation_rows()
+        except Exception as exc:
+            logger.warning(f"Could not load startup reconciliation rows: {exc}")
+            rows = []
+        if rows:
+            row_details = []
+            for row in rows:
+                row_details.append(
+                    "id={id} order_id={order_id} signal_id={signal_id} "
+                    "ticker={ticker} side={side} quantity={quantity} "
+                    "status={status} venue={venue} execution_timestamp={execution_timestamp}".format(
+                        **row
+                    )
+                )
+            msg = f"{msg} Unresolved rows: {'; '.join(row_details)}"
         logger.critical(msg)
         await notification_service.send_message(msg)
         await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
