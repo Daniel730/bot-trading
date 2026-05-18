@@ -4,12 +4,38 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import bug_hunt_audit, repair_paper_env, validate_deploy_env
+
+
+ACTION_CONTAINER_SERVICES = ("bot", "mcp-server", "execution-engine", "sec-worker")
+
+
+def check_running_action_containers() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode != 0:
+        return []
+
+    running = []
+    for raw_name in result.stdout.splitlines():
+        name = raw_name.strip()
+        if any(name.endswith(f"-{service}-1") for service in ACTION_CONTAINER_SERVICES):
+            running.append(name)
+    return running
 
 
 def run_check(env_file: Path) -> int:
@@ -29,6 +55,13 @@ def run_check(env_file: Path) -> int:
         print("Paper startup validation failed:")
         for error in validation_errors:
             print(f"- {error}")
+        return 1
+
+    running_action_containers = check_running_action_containers()
+    if running_action_containers:
+        print("Paper startup container guard failed:")
+        for container in running_action_containers:
+            print(f"- {container} is already running; stop app/trading containers before paper startup.")
         return 1
 
     dependency_errors = bug_hunt_audit.check_paper_startup_dependencies(env_file)
