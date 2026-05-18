@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import yaml
+
 
 BACKEND_COMPOSE = Path(__file__).resolve().parents[2] / "infra" / "docker-compose.backend.yml"
 
@@ -18,3 +20,14 @@ def test_backend_compose_requires_postgres_password_without_default():
     value = password_line.group("value").strip()
     assert not re.search(r"\$\{POSTGRES_PASSWORD(?::-|-)[^}]*\}", value)
     assert re.search(r"\$\{POSTGRES_PASSWORD(?::\?|\?)[^}]*\}", value)
+
+
+def test_backend_compose_does_not_auto_restart_trading_services():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert services["redis"]["restart"] == "always"
+    assert services["postgres"]["restart"] == "always"
+
+    for service_name in ("bot", "mcp-server", "execution-engine", "sec-worker"):
+        assert services[service_name]["restart"] == "no"
