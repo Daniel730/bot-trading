@@ -91,3 +91,49 @@ def test_paper_startup_check_blocks_running_action_containers(
     output = capsys.readouterr().out
     assert "Paper startup container guard failed:" in output
     assert "infra-bot-1" in output
+
+
+def test_paper_startup_check_blocks_running_frontend_container(
+    monkeypatch, tmp_path, capsys
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POSTGRES_PASSWORD=strong-postgres-secret",
+                "DASHBOARD_TOKEN=strong-dashboard-token",
+                "PAPER_TRADING=true",
+                "REDIS_HOST=localhost",
+                "POSTGRES_HOST=localhost",
+                "POSTGRES_PORT=5433",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    preflight_calls = []
+
+    monkeypatch.setattr(paper_startup_check.validate_deploy_env, "validate", lambda values: [])
+    monkeypatch.setattr(paper_startup_check, "subprocess", subprocess, raising=False)
+    monkeypatch.setattr(
+        paper_startup_check.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="infra-frontend-1\ninfra-redis-1\n",
+            stderr="",
+        ),
+    )
+    monkeypatch.setattr(
+        paper_startup_check.bug_hunt_audit,
+        "check_paper_startup_dependencies",
+        lambda path: preflight_calls.append(path) or [],
+    )
+
+    result = paper_startup_check.run_check(env_file)
+
+    assert result == 1
+    assert preflight_calls == []
+    output = capsys.readouterr().out
+    assert "Paper startup container guard failed:" in output
+    assert "infra-frontend-1" in output
