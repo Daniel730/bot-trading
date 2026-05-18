@@ -2,6 +2,7 @@ import asyncio
 import inspect
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add project root to sys.path
@@ -54,12 +55,23 @@ def _matching_orders(row, pending_orders: list[dict]) -> list[dict]:
             matches.append(order)
     return matches
 
+def _order_ids(orders: list[dict]) -> list[str]:
+    return [
+        str(order.get("id") or order.get("order_id") or "")
+        for order in orders
+        if order.get("id") or order.get("order_id")
+    ]
+
 async def _maybe_await(value):
     if inspect.isawaitable(value):
         return await value
     return value
 
-async def reconcile_orphans(dry_run: bool = True):
+async def reconcile_orphans(
+    dry_run: bool = True,
+    mark_closed_id: str | None = None,
+    evidence: str | None = None,
+):
     """
     Reports orphan entries in the trade ledger that block startup.
     """
@@ -95,10 +107,12 @@ async def reconcile_orphans(dry_run: bool = True):
         logger.info(f"Found {len(rows)} entries requiring reconciliation.")
 
         brokerage = BrokerageService()
+        broker_read_ok = True
         try:
             positions = await _maybe_await(brokerage.get_portfolio())
             pending_orders = await _maybe_await(brokerage.get_pending_orders())
         except Exception as exc:
+            broker_read_ok = False
             positions = []
             pending_orders = []
             logger.error(
@@ -106,6 +120,7 @@ async def reconcile_orphans(dry_run: bool = True):
                 exc,
             )
 
+        target_review = None
         for row in rows:
             matching_position = next(
                 (
@@ -120,6 +135,8 @@ async def reconcile_orphans(dry_run: bool = True):
             )
             matching_orders = _matching_orders(row, pending_orders)
             broker_qty = _position_quantity(matching_position) if matching_position else 0.0
+            if mark_closed_id and str(row.id) == str(mark_closed_id):
+                target_review = (row, broker_qty, matching_orders)
             logger.info(
                 "  [REVIEW] ledger_id=%s signal_id=%s order_id=%s ticker=%s side=%s "
                 "qty=%s status=%s venue=%s broker_qty=%s open_order_ids=%s",
@@ -135,6 +152,62 @@ async def reconcile_orphans(dry_run: bool = True):
                 [order.get("id") or order.get("order_id") for order in matching_orders],
             )
 
+        if mark_closed_id:
+            if not evidence or not evidence.strip():
+                logger.error(
+                    "Manual close reconciliation blocked: --evidence is required."
+                )
+                return 2
+            if not broker_read_ok:
+                logger.error(
+                    "Manual close reconciliation blocked: broker state could not be read."
+                )
+                return 2
+            if target_review is None:
+                logger.error(
+                    "Manual close reconciliation blocked: ledger_id=%s was not found "
+                    "among unresolved startup rows.",
+                    mark_closed_id,
+                )
+                return 2
+
+            row, broker_qty, matching_orders = target_review
+            if abs(broker_qty) > 0.0 or matching_orders:
+                logger.error(
+                    "Manual close reconciliation blocked for ledger_id=%s: "
+                    "broker_qty=%s open_order_ids=%s",
+                    row.id,
+                    broker_qty,
+                    _order_ids(matching_orders),
+                )
+                return 2
+
+            if dry_run:
+                logger.info(
+                    "[DRY] Would mark ledger_id=%s CLOSED with supplied evidence.",
+                    row.id,
+                )
+                return 0
+
+            reconciled_at = datetime.now(timezone.utc)
+            metadata = dict(row.metadata_json or {})
+            metadata["manual_reconciliation"] = {
+                "evidence": evidence.strip(),
+                "broker_qty": broker_qty,
+                "open_order_ids": _order_ids(matching_orders),
+                "reconciled_at": reconciled_at.isoformat(),
+            }
+            row.status = OrderStatus.CLOSED
+            row.closed_at = reconciled_at
+            row.metadata_json = metadata
+            session.add(row)
+            await session.commit()
+            logger.info(
+                "SUCCESS: Marked ledger_id=%s CLOSED after broker-clear manual reconciliation.",
+                row.id,
+            )
+            return 0
+
         if not dry_run:
             logger.error(
                 "--live is disabled: this script is read-only and will not close, "
@@ -147,5 +220,23 @@ async def reconcile_orphans(dry_run: bool = True):
         return 0
 
 if __name__ == "__main__":
-    is_live = "--live" in sys.argv
-    sys.exit(asyncio.run(reconcile_orphans(dry_run=not is_live)))
+    args = sys.argv[1:]
+    is_live = "--live" in args
+
+    def _arg_value(name):
+        if name not in args:
+            return None
+        index = args.index(name)
+        if index + 1 >= len(args):
+            return None
+        return args[index + 1]
+
+    sys.exit(
+        asyncio.run(
+            reconcile_orphans(
+                dry_run=not is_live,
+                mark_closed_id=_arg_value("--mark-closed"),
+                evidence=_arg_value("--evidence"),
+            )
+        )
+    )
