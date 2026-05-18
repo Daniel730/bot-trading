@@ -40,3 +40,15 @@ def test_docs_use_ordered_paper_startup_check():
         assert command in doc_text, (
             f"{doc_name} must document the ordered paper startup check."
         )
+
+
+def test_docs_include_paper_startup_container_cleanup():
+    cleanup_command = (
+        "docker stop infra-bot-1 infra-execution-engine-1 infra-mcp-server-1 "
+        "infra-sec-worker-1 infra-frontend-1"
+    )
+    for doc_name in ("README.md", "docs/OPERATIONS.md"):
+        doc_text = _read(doc_name)
+        assert cleanup_command in doc_text, (
+            f"{doc_name} must document the paper startup app-container cleanup."
+        )

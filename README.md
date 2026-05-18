@@ -166,6 +166,11 @@ python scripts/paper_startup_check.py .env
 ```
 
 It repairs non-secret paper-mode connectivity keys, validates the env file, and then checks Docker, Redis, and PostgreSQL reachability.
+If the check reports already-running app containers, stop them first:
+
+```bash
+docker stop infra-bot-1 infra-execution-engine-1 infra-mcp-server-1 infra-sec-worker-1 infra-frontend-1
+```
 
 Useful ports:
 
