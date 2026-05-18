@@ -31,3 +31,12 @@ def test_local_setup_uses_locked_requirements():
 
     assert "Python 3.11" in readme
     assert "Python 3.10+" not in readme
+
+
+def test_docs_use_ordered_paper_startup_check():
+    command = "python scripts/paper_startup_check.py .env"
+    for doc_name in ("README.md", "docs/OPERATIONS.md"):
+        doc_text = _read(doc_name)
+        assert command in doc_text, (
+            f"{doc_name} must document the ordered paper startup check."
+        )

@@ -159,6 +159,14 @@ docker compose \
   up -d --build --remove-orphans
 ```
 
+Before starting a paper session from the host, run the ordered startup check:
+
+```bash
+python scripts/paper_startup_check.py .env
+```
+
+It repairs non-secret paper-mode connectivity keys, validates the env file, and then checks Docker, Redis, and PostgreSQL reachability.
+
 Useful ports:
 
 | Port | Service |
