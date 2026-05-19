@@ -21,7 +21,7 @@ Last updated: 2026-05-19
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.
 - DONE 2026-05-19: low `global_strategy_accuracy` now emits an orchestrator warning instead of silently multiplying pair-spread confidence below the execution threshold; high-accuracy boosting remains unchanged.
 - DONE 2026-05-19: cost-scaled entry thresholds now scale gradually from `MONITOR_ENTRY_ZSCORE_COST_BASELINE` to `PAIR_MAX_ROUND_TRIP_COST_PCT`, so moderate accepted costs no longer jump straight to the cap.
-- Investigate any remaining confidence drag from MAB weighting before changing thresholds.
+- DONE 2026-05-19: neutral/default SEC fundamental scores no longer drag pair-spread MAB confidence below bull/bear agent consensus; low fundamental scores still use the existing veto path.
 
 ## P2 - Must fix before public release / monetization
 
