@@ -196,3 +196,31 @@ async def test_get_bid_ask_missing_quote_does_not_fallback_to_zero_spread():
         bid, ask = await service.get_bid_ask("MSFT")
 
     assert (bid, ask) == (0.0, 0.0)
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_uses_alpaca_crypto_snapshot_when_yfinance_quote_is_zero():
+    service = DataService()
+
+    class FakeTicker:
+        info = {
+            "bid": 0.0,
+            "ask": 0.0,
+        }
+
+    class FakeQuote:
+        bp = 90000.0
+        ap = 90010.0
+
+    class FakeSnapshot:
+        latest_quote = FakeQuote()
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()), \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             return_value={"BTC/USD": FakeSnapshot()},
+         ):
+        bid, ask = await service.get_bid_ask("BTC-USD")
+
+    assert (bid, ask) == (90000.0, 90010.0)

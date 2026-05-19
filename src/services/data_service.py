@@ -744,15 +744,40 @@ class DataService:
         """Fetches the actual real-time bid and ask for slippage calculation via yfinance."""
         try:
             def fetch():
+                def quote_bid_ask(quote, bid_fields, ask_fields) -> tuple[float, float]:
+                    def read_float(field_names):
+                        for field_name in field_names:
+                            value = quote.get(field_name) if isinstance(quote, dict) else getattr(quote, field_name, None)
+                            try:
+                                parsed = float(value or 0.0)
+                            except (TypeError, ValueError):
+                                parsed = 0.0
+                            if parsed > 0.0:
+                                return parsed
+                        return 0.0
+
+                    bid_value = read_float(bid_fields)
+                    ask_value = read_float(ask_fields)
+                    if bid_value <= 0.0 or ask_value <= 0.0:
+                        return 0.0, 0.0
+                    return bid_value, ask_value
+
                 info = yf.Ticker(ticker).info
-                try:
-                    bid = float(info.get('bid') or 0.0)
-                    ask = float(info.get('ask') or 0.0)
-                except (TypeError, ValueError):
-                    return 0.0, 0.0
-                if bid <= 0.0 or ask <= 0.0:
-                    return 0.0, 0.0
-                return bid, ask
+                bid, ask = quote_bid_ask(info, ("bid",), ("ask",))
+                if bid > 0.0 and ask > 0.0:
+                    return bid, ask
+
+                if ticker.endswith("-USD"):
+                    crypto_symbol = ticker.replace("-", "/")
+                    snapshots = self.alpaca_client.get_crypto_snapshots([crypto_symbol], exchange='CBSE')
+                    snapshot = snapshots.get(crypto_symbol) if isinstance(snapshots, dict) else None
+                    if snapshot is not None:
+                        quote = getattr(snapshot, "latest_quote", None)
+                        bid, ask = quote_bid_ask(quote, ("bp", "bid_price", "bid"), ("ap", "ask_price", "ask"))
+                        if bid > 0.0 and ask > 0.0:
+                            return bid, ask
+
+                return 0.0, 0.0
             return await self._run_sync_backend(
                 fetch,
                 timeout=settings.MARKET_DATA_TIMEOUT_SECONDS,
