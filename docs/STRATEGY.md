@@ -58,7 +58,9 @@ abs(z_score) > MONITOR_ENTRY_ZSCORE
 Optional cost scaling:
 
 ```text
-entry_threshold = MONITOR_ENTRY_ZSCORE * min(pair_cost / baseline, cap)
+entry_threshold = MONITOR_ENTRY_ZSCORE * (
+  1 + (cap - 1) * clamp((pair_cost - baseline) / (PAIR_MAX_ROUND_TRIP_COST_PCT - baseline), 0, 1)
+)
 ```
 
 controlled by:
@@ -66,6 +68,7 @@ controlled by:
 - `MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED`
 - `MONITOR_ENTRY_ZSCORE_COST_BASELINE`
 - `MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP`
+- `PAIR_MAX_ROUND_TRIP_COST_PCT`
 
 ## Orchestrator Validation
 
