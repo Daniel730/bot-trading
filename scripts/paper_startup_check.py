@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scripts import bug_hunt_audit, repair_paper_env, validate_deploy_env
+from src.services.persistence_service import persistence_service
 
 
 ACTION_CONTAINER_SERVICES = ("bot", "mcp-server", "execution-engine", "sec-worker", "frontend")
@@ -36,6 +38,10 @@ def check_running_action_containers() -> list[str]:
         if any(name.endswith(f"-{service}-1") for service in ACTION_CONTAINER_SERVICES):
             running.append(name)
     return running
+
+
+def check_unresolved_reconciliation_rows() -> list[dict]:
+    return asyncio.run(persistence_service.get_startup_reconciliation_rows(limit=5))
 
 
 def run_check(env_file: Path) -> int:
@@ -69,6 +75,23 @@ def run_check(env_file: Path) -> int:
         print("Paper startup dependency preflight failed:")
         for error in dependency_errors:
             print(f"- {error}")
+        return 1
+
+    try:
+        unresolved_rows = check_unresolved_reconciliation_rows()
+    except Exception as exc:
+        print("Paper startup reconciliation guard failed:")
+        print(f"- Could not verify unresolved ledger rows: {exc}")
+        return 1
+    if unresolved_rows:
+        print("Paper startup reconciliation guard failed:")
+        for row in unresolved_rows:
+            print(
+                "- unresolved ledger row "
+                f"id={row.get('id')} order_id={row.get('order_id')} "
+                f"ticker={row.get('ticker')} status={row.get('status')} "
+                f"venue={row.get('venue')}"
+            )
         return 1
 
     print("Paper startup check passed.")
