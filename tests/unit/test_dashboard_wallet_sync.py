@@ -89,41 +89,34 @@ async def test_wallet_buy_blocks_when_cash_limited(alpaca_wallet_context):
 
 
 @pytest.mark.asyncio
-async def test_wallet_sync_paper_mode_does_not_place_broker_orders(alpaca_wallet_context, monkeypatch):
-    monkeypatch.setattr(settings, "PAPER_TRADING", True)
-
-    result = await dashboard_service.sync_wallet_for_coint(
-        WalletSyncRequest(budget=100.0, delay_seconds=0)
-    )
-
-    assert result["mode"] == "PAPER"
-    assert result["status"] == "ok"
-    assert result["target_tickers"] == ["AAPL", "MSFT"]
-    assert all(order["paper"] is True for order in result["orders"])
-    alpaca_wallet_context.place_value_order.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_wallet_recommendation_buy_paper_mode_does_not_place_broker_orders(
+async def test_wallet_sync_paper_mode_fails_closed_instead_of_pretending_orders(
     alpaca_wallet_context,
     monkeypatch,
 ):
     monkeypatch.setattr(settings, "PAPER_TRADING", True)
 
-    result = await dashboard_service.buy_wallet_recommendations(
-        WalletRecommendationBuyRequest(budget=100.0, tickers=["AAPL"], delay_seconds=0)
-    )
+    with pytest.raises(HTTPException) as excinfo:
+        await dashboard_service.sync_wallet_for_coint(
+            WalletSyncRequest(budget=100.0, delay_seconds=0)
+        )
 
-    assert result["mode"] == "PAPER"
-    assert result["status"] == "ok"
-    assert result["target_tickers"] == ["AAPL"]
-    assert result["orders"] == [
-        {
-            "ticker": "AAPL",
-            "amount": 100.0,
-            "status": "ok",
-            "paper": True,
-            "order_id": "PAPER-AAPL",
-        }
-    ]
+    assert excinfo.value.status_code == 409
+    assert "PAPER_TRADING=true" in excinfo.value.detail
+    alpaca_wallet_context.place_value_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_wallet_recommendation_buy_paper_mode_fails_closed_instead_of_pretending_orders(
+    alpaca_wallet_context,
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+
+    with pytest.raises(HTTPException) as excinfo:
+        await dashboard_service.buy_wallet_recommendations(
+            WalletRecommendationBuyRequest(budget=100.0, tickers=["AAPL"], delay_seconds=0)
+        )
+
+    assert excinfo.value.status_code == 409
+    assert "PAPER_TRADING=true" in excinfo.value.detail
     alpaca_wallet_context.place_value_order.assert_not_awaited()
