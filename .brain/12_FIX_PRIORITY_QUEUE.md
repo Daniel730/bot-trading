@@ -8,7 +8,7 @@ Last updated: 2026-05-19
 - DONE 2026-05-19: Telegram notification exception output now redacts bot tokens and Telegram API bot URLs before printing/logging.
 - Rotate the leaked Telegram bot token and purge or sanitize historical `logs/recovery_window.log` before any operator-facing launch.
 - DONE 2026-05-19: crypto spread-guard bid/ask sourcing now falls back to Alpaca crypto snapshot quotes when yfinance reports zero bid/ask, while still failing closed if no positive quote exists.
-- Add durable per-cycle trade decision reports so paper runs explain why each pair did or did not trade.
+- DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing
 

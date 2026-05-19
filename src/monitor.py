@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from rich.logging import RichHandler
 from rich.console import Console
@@ -10,7 +11,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from src.config import settings
 from src.services.data_service import data_service
 from src.services.arbitrage_service import arbitrage_service, ArbitrageService
@@ -115,6 +117,7 @@ class ArbitrageMonitor:
         self.bumped_pairs_today: dict = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
+        self.trade_decision_report_path = Path("logs") / "trade_decision_reports.jsonl"
 
     async def _await_order_fill(self, order_id: str, timeout: float = 30) -> dict | None:
         """PATCH 5: Poll Alpaca until order_id is filled or timeout elapses.
@@ -890,6 +893,53 @@ class ArbitrageMonitor:
         except Exception as e:
             logger.warning(f"Failed to fetch sizing base from brokerage: {e}. Falling back to default.")
             return settings.PAPER_TRADING_STARTING_CASH
+
+    def _write_trade_decision_report(
+        self,
+        *,
+        scan_pairs: list[dict],
+        results: list[dict],
+        latest_prices: dict,
+        open_signals: list,
+        active_signal_count: int,
+        vetoed_count: int,
+        sizing_base: float,
+    ) -> dict:
+        decisions = []
+        for pair, result in zip(scan_pairs, results):
+            ticker_a = pair.get("ticker_a")
+            ticker_b = pair.get("ticker_b")
+            result = result or {}
+            decisions.append(
+                {
+                    "pair_id": pair.get("id"),
+                    "ticker_a": ticker_a,
+                    "ticker_b": ticker_b,
+                    "verdict": result.get("verdict", "UNKNOWN"),
+                    "confidence": float(result.get("confidence", 0.0) or 0.0),
+                    "has_price_a": ticker_a in latest_prices,
+                    "has_price_b": ticker_b in latest_prices,
+                }
+            )
+
+        report = {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "mode": "paper" if settings.PAPER_TRADING else "live",
+            "pairs_loaded": len(self.active_pairs),
+            "pairs_scanned": len(scan_pairs),
+            "prices_received": len(latest_prices),
+            "signals": int(active_signal_count),
+            "vetoed": int(vetoed_count),
+            "open_positions": len(open_signals),
+            "sizing_base": float(sizing_base or 0.0),
+            "decisions": decisions,
+        }
+
+        report_path = Path(self.trade_decision_report_path)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with report_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(report, sort_keys=True) + "\n")
+        return report
 
     async def process_pair(self, pair: dict, latest_prices: dict, sizing_base: float = 0.0) -> dict:
         """Processes a single pair for signals and validation."""
@@ -2309,6 +2359,18 @@ class ArbitrageMonitor:
                         f"Open: {len(open_signals)}"
                     )
                     logger.info(summary_msg)
+                    try:
+                        self._write_trade_decision_report(
+                            scan_pairs=scan_pairs,
+                            results=results,
+                            latest_prices=latest_prices,
+                            open_signals=open_signals,
+                            active_signal_count=active_signal_count,
+                            vetoed_count=vetoed_count,
+                            sizing_base=current_sizing_base,
+                        )
+                    except Exception as e:
+                        logger.warning("TRADE DECISION REPORT: write failed: %s", e)
 
                     progress.update(scan_task, description=f"Idle (sleeping {settings.SCAN_INTERVAL_SECONDS}s)...")
                     await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
