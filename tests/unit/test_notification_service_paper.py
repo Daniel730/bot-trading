@@ -87,6 +87,38 @@ async def test_request_approval_paper_survives_dashboard_failure():
 
 
 @pytest.mark.asyncio
+async def test_paper_notify_redacts_telegram_token_from_send_failure(capsys):
+    original_enabled = notification_service._telegram_enabled
+    original_app = notification_service.app
+    original_token = notification_service.token
+    leaked_token = "123456:SUPER_SECRET_TOKEN"
+    leaked_url = f"https://api.telegram.org/bot{leaked_token}/sendMessage"
+
+    class FailingBot:
+        async def send_message(self, **_kwargs):
+            raise RuntimeError(f"telegram failed: {leaked_url}")
+
+    class FakeApp:
+        bot = FailingBot()
+
+    try:
+        notification_service._telegram_enabled = True
+        notification_service.app = FakeApp()
+        notification_service.token = leaked_token
+
+        await notification_service._paper_notify("redaction test")
+
+        output = capsys.readouterr().out
+        assert leaked_token not in output
+        assert leaked_url not in output
+        assert "bot<redacted-telegram-token>/sendMessage" in output
+    finally:
+        notification_service._telegram_enabled = original_enabled
+        notification_service.app = original_app
+        notification_service.token = original_token
+
+
+@pytest.mark.asyncio
 async def test_request_approval_live_without_telegram_fails_closed():
     original_paper = settings.PAPER_TRADING
     original_override = settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM
