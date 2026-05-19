@@ -910,17 +910,18 @@ class ArbitrageMonitor:
             ticker_a = pair.get("ticker_a")
             ticker_b = pair.get("ticker_b")
             result = result or {}
-            decisions.append(
-                {
-                    "pair_id": pair.get("id"),
-                    "ticker_a": ticker_a,
-                    "ticker_b": ticker_b,
-                    "verdict": result.get("verdict", "UNKNOWN"),
-                    "confidence": float(result.get("confidence", 0.0) or 0.0),
-                    "has_price_a": ticker_a in latest_prices,
-                    "has_price_b": ticker_b in latest_prices,
-                }
-            )
+            decision = {
+                "pair_id": pair.get("id"),
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "verdict": result.get("verdict", "UNKNOWN"),
+                "confidence": float(result.get("confidence", 0.0) or 0.0),
+                "has_price_a": ticker_a in latest_prices,
+                "has_price_b": ticker_b in latest_prices,
+            }
+            if result.get("reason"):
+                decision["reason"] = result["reason"]
+            decisions.append(decision)
 
         report = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
@@ -947,17 +948,22 @@ class ArbitrageMonitor:
         try:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
 
+            def skip(reason: str) -> dict:
+                diagnostic["reason"] = reason
+                logger.info("PAIR SKIP [%s/%s]: %s", t_a, t_b, reason)
+                return diagnostic
+
             # Multi-Market Hour Enforcement
             is_crypto = is_crypto_pair(t_a, t_b)
             if not is_crypto and not self.is_market_open(t_a):
-                return diagnostic
+                return skip("market_closed")
 
             # Skip pairs whose cointegration has broken (detected by daily re-check).
             if not pair.get('is_cointegrated', True):
-                return diagnostic
+                return skip("not_cointegrated")
 
             if t_a not in latest_prices or t_b not in latest_prices:
-                return diagnostic
+                return skip("missing_price")
 
             price_a = latest_prices[t_a]
             price_b = latest_prices[t_b]
@@ -966,7 +972,7 @@ class ArbitrageMonitor:
             kf = await arbitrage_service.get_or_create_filter(pair['id'])
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
-                return diagnostic
+                return skip("kalman_unavailable")
 
             # Spec 037: Session-boundary Q/P adjustment applied BEFORE this
             # tick's update so the inflated noise is in effect for the very
@@ -1068,6 +1074,7 @@ class ArbitrageMonitor:
                         t_b,
                         float(settings.ORCHESTRATOR_TIMEOUT_SECONDS),
                     )
+                    diagnostic["reason"] = "orchestrator_timeout"
                     return diagnostic
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
@@ -1086,6 +1093,7 @@ class ArbitrageMonitor:
                     logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {final_confidence:.3f} too low.")
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
+                    diagnostic["reason"] = "confidence_below_threshold"
                     return diagnostic
 
                 # Calculate expected profit/loss from the same gross pair
@@ -1117,6 +1125,7 @@ class ArbitrageMonitor:
                     )
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
+                    diagnostic["reason"] = "sizing_below_minimum"
                     return diagnostic
 
                 direction = "Short-Long" if z_score > 0 else "Long-Short"
@@ -1147,6 +1156,7 @@ class ArbitrageMonitor:
                     await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="VETOED_UNPROFITABLE", confidence=final_confidence, hedge_ratio=hedge_ratio)
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
+                    diagnostic["reason"] = "unprofitable"
                     return diagnostic
 
                 trade_summary = (
@@ -1184,6 +1194,7 @@ class ArbitrageMonitor:
                                 hedge_ratio=hedge_ratio,
                             )
                             diagnostic["verdict"] = "EXECUTED"
+                            diagnostic["reason"] = execution_result.get("reason", "executed")
                         else:
                             await self._upsert_active_signal(
                                 t_a,
@@ -1194,16 +1205,23 @@ class ArbitrageMonitor:
                                 hedge_ratio=hedge_ratio,
                             )
                             diagnostic["verdict"] = "EXECUTION_BLOCKED"
+                            diagnostic["reason"] = (
+                                execution_result.get("reason", "execution_blocked")
+                                if execution_result
+                                else "execution_blocked"
+                            )
 
                 diagnostic["confidence"] = final_confidence
             else:
                 # Cleanup inactive signals
                 await self._remove_active_signal(t_a, t_b)
+                skip("below_entry_threshold")
 
             return diagnostic
 
         except Exception as e:
             logger.error(f"Error processing pair {pair.get('ticker_a')}: {e}")
+            diagnostic["reason"] = "exception"
             return diagnostic
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id):

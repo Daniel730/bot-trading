@@ -1,5 +1,6 @@
 import pytest
 import json
+import logging
 from unittest.mock import AsyncMock, patch, MagicMock
 from src.monitor import ArbitrageMonitor
 import uuid
@@ -38,7 +39,7 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
         scan_pairs=monitor.active_pairs,
         results=[
             {"verdict": "EXECUTED", "confidence": 0.92},
-            {"verdict": "IGNORED", "confidence": 0.0},
+            {"verdict": "IGNORED", "confidence": 0.0, "reason": "missing_price"},
         ],
         latest_prices={"AAPL": 150.0, "MSFT": 300.0, "KO": 80.0},
         open_signals=[{"signal_id": "open-1"}],
@@ -73,10 +74,28 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
             "ticker_b": "PEP",
             "verdict": "IGNORED",
             "confidence": 0.0,
+            "reason": "missing_price",
             "has_price_a": True,
             "has_price_b": False,
         },
     ]
+
+
+@pytest.mark.asyncio
+async def test_process_pair_missing_price_reports_skip_reason(monitor, caplog):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    latest_prices = {"AAPL": 150.0}
+
+    with patch.object(monitor, "is_market_open", return_value=True), \
+         patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         caplog.at_level(logging.INFO, logger="src.monitor"):
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+    assert diagnostic["verdict"] == "IGNORED"
+    assert diagnostic["reason"] == "missing_price"
+    assert "PAIR SKIP [AAPL/MSFT]: missing_price" in caplog.text
+    mock_kf_get.assert_not_awaited()
+
 
 @pytest.mark.asyncio
 async def test_execute_trade_success(monitor):
