@@ -97,6 +97,10 @@ def setup_logging():
 
 logger = setup_logging()
 
+KALMAN_BETA_CLIP_MIN = 0.001
+KALMAN_BETA_CLIP_MAX = 1000.0
+KALMAN_MAX_REASONABLE_ABS_ZSCORE = 100.0
+
 class ArbitrageMonitor:
     def __init__(self, mode: str = "live"):
         self.brokerage = BrokerageService()
@@ -998,6 +1002,41 @@ class ArbitrageMonitor:
             # Single Kalman update. z_score is computed from the PRIOR state
             # (before this tick's measurement is absorbed) — correct for signals.
             state_vec, innovation_var, z_score, spread = kf.update(price_a, price_b)
+
+            try:
+                beta = float(state_vec[1])
+                z_score_value = float(z_score)
+                innovation_value = float(innovation_var)
+                spread_value = float(spread)
+                invalid_kalman_state = (
+                    not np.isfinite(beta)
+                    or not np.isfinite(z_score_value)
+                    or not np.isfinite(innovation_value)
+                    or not np.isfinite(spread_value)
+                    or innovation_value <= 0.0
+                    or beta <= KALMAN_BETA_CLIP_MIN
+                    or beta >= KALMAN_BETA_CLIP_MAX
+                    or abs(z_score_value) > KALMAN_MAX_REASONABLE_ABS_ZSCORE
+                )
+            except (TypeError, ValueError, IndexError):
+                beta = None
+                z_score_value = z_score
+                innovation_value = innovation_var
+                spread_value = spread
+                invalid_kalman_state = True
+
+            if invalid_kalman_state:
+                logger.warning(
+                    "KALMAN GUARD [%s/%s]: invalid state. beta=%s z_score=%s "
+                    "innovation_var=%s spread=%s. Blocking entry before state persistence/approval.",
+                    t_a,
+                    t_b,
+                    beta,
+                    z_score_value,
+                    innovation_value,
+                    spread_value,
+                )
+                return skip("kalman_state_invalid")
 
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
