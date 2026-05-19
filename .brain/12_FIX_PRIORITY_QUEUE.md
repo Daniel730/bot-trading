@@ -19,7 +19,8 @@ Last updated: 2026-05-19
 - DONE 2026-05-19: architecture docs/tests now state that `src/monitor.py` paper orders use `shadow_service`, broker-connected orders use Python `BrokerageService`, and the Java execution engine is a dry-run/audit sidecar rather than the monitor's default order path.
 - DONE 2026-05-19: dashboard wallet buy endpoints now fail closed with HTTP 409 while `PAPER_TRADING=true` instead of returning fake successful paper order IDs that never reach Alpaca.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.
-- Investigate any remaining confidence drag from `global_strategy_accuracy` and orchestrator weighting before changing thresholds.
+- DONE 2026-05-19: low `global_strategy_accuracy` now emits an orchestrator warning instead of silently multiplying pair-spread confidence below the execution threshold; high-accuracy boosting remains unchanged.
+- Investigate any remaining confidence drag from MAB weighting before changing thresholds.
 - Review cost-scaled entry thresholds by venue; current EUR-account US equity threshold can rise from `2.2` to about `6.6`.
 
 ## P2 - Must fix before public release / monetization
