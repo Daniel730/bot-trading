@@ -6,7 +6,7 @@ Last updated: 2026-05-19
 
 - Runtime dependencies are currently unavailable locally: Docker, Redis, Postgres, dashboard, and execution-engine preflight checks failed on 2026-05-19.
 - Redact and rotate leaked Telegram notification credentials from `logs/recovery_window.log` before any operator-facing launch.
-- Replace or harden bid/ask sourcing for spread guard, especially crypto pairs where `BTC-USD` and `ETH-USD` returned zero bid/ask values.
+- DONE 2026-05-19: crypto spread-guard bid/ask sourcing now falls back to Alpaca crypto snapshot quotes when yfinance reports zero bid/ask, while still failing closed if no positive quote exists.
 - Add durable per-cycle trade decision reports so paper runs explain why each pair did or did not trade.
 
 ## P1 - Must fix before extended personal testing
