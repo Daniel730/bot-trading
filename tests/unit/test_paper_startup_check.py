@@ -103,6 +103,51 @@ def test_paper_startup_check_blocks_unresolved_reconciliation_rows(
     assert "ticker=BTC-USD" in output
 
 
+def test_paper_startup_check_passes_after_reconciliation_guard_clears(
+    monkeypatch, tmp_path, capsys
+):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POSTGRES_PASSWORD=strong-postgres-secret",
+                "DASHBOARD_TOKEN=strong-dashboard-token",
+                "PAPER_TRADING=true",
+                "REDIS_HOST=localhost",
+                "POSTGRES_HOST=localhost",
+                "POSTGRES_PORT=5433",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    guard_calls = []
+
+    monkeypatch.setattr(paper_startup_check.validate_deploy_env, "validate", lambda values: [])
+    monkeypatch.setattr(paper_startup_check, "check_running_action_containers", lambda: [])
+    monkeypatch.setattr(
+        paper_startup_check.bug_hunt_audit,
+        "check_paper_startup_dependencies",
+        lambda path: [],
+    )
+    monkeypatch.setattr(
+        paper_startup_check,
+        "count_unresolved_reconciliation_rows",
+        lambda: guard_calls.append("count") or 0,
+    )
+    monkeypatch.setattr(
+        paper_startup_check,
+        "check_unresolved_reconciliation_rows",
+        lambda: guard_calls.append("rows") or [],
+    )
+
+    result = paper_startup_check.run_check(env_file)
+
+    assert result == 0
+    assert guard_calls == ["count", "rows"]
+    assert "Paper startup check passed." in capsys.readouterr().out
+
+
 def test_paper_startup_check_blocks_running_action_containers(
     monkeypatch, tmp_path, capsys
 ):
