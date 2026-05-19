@@ -43,7 +43,7 @@ Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/executio
 | Project | Path | Purpose |
 |---|---|---|
 | Python trading backend | `src/` | Monitor loop, dashboard API, persistence, risk, brokerage, agents, telemetry |
-| Java execution engine | `execution-engine/` | gRPC execution service with Redis idempotency, VWAP checks, slippage guards |
+| Java execution engine | `execution-engine/` | gRPC dry-run/audit sidecar with Redis idempotency, VWAP checks, slippage guards |
 | React operations console | `frontend/` | Authenticated dashboard for telemetry, pairs, trade history, config, and health |
 | Infrastructure | `infra/` | Dockerfiles, Compose files, redeploy helper, systemd unit |
 | Operational docs | `docs/` | Architecture, operations, strategy, budget, agents, historical audits |
@@ -59,14 +59,18 @@ Python dashboard API (:8080) <--> Redis
         |                         PostgreSQL
         |                         SQLite fallback/runtime state
         v
-Python monitor loop ---- gRPC ---- Java execution engine (:50051)
+Python monitor loop
         |
-        +---- active broker (Alpaca only)
-        +---- legacy Web3 wallet/router code (disabled)
+        +---- paper: shadow_service
+        +---- broker-connected: Python BrokerageService -> Alpaca
         +---- market data providers
+
+Java execution engine (:50051) is a dry-run/audit sidecar.
 
 FastMCP tool server (:8000) is a separate optional SSE endpoint for assistant/tool integrations.
 ```
+
+`src/monitor.py` order routing: `PAPER_TRADING=true` calls `shadow_service`; broker-connected mode submits both legs through Python `BrokerageService`. The Java execution engine is a dry-run/audit sidecar and is not the monitor's default order path.
 
 ## Quick Start
 

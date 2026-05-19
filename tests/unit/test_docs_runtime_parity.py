@@ -52,3 +52,22 @@ def test_docs_include_paper_startup_container_cleanup():
         assert cleanup_command in doc_text, (
             f"{doc_name} must document the paper startup app-container cleanup."
         )
+
+
+def test_docs_describe_monitor_execution_route_without_java_default():
+    routing_statement = (
+        "`src/monitor.py` order routing: `PAPER_TRADING=true` calls "
+        "`shadow_service`; broker-connected mode submits both legs through "
+        "Python `BrokerageService`. The Java execution engine is a dry-run/audit "
+        "sidecar and is not the monitor's default order path."
+    )
+    for doc_name in ("README.md", "docs/ARCHITECTURE.md", "src/README.md"):
+        doc_text = _read(doc_name)
+        assert routing_statement in doc_text, (
+            f"{doc_name} must document the active monitor execution route."
+        )
+
+    readme = _read("README.md")
+    architecture = _read("docs/ARCHITECTURE.md")
+    assert "Python monitor loop ---- gRPC ---- Java execution engine" not in readme
+    assert "Monitor --> Java" not in architecture
