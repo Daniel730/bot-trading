@@ -1,4 +1,5 @@
 import pytest
+import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from src.monitor import ArbitrageMonitor
 import uuid
@@ -22,6 +23,60 @@ def monitor(monkeypatch):
         m.brokerage.get_account_buying_power.return_value = 10000.0
         monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
         return m
+
+
+def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+    monitor.active_pairs = [
+        {"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"},
+        {"id": "KO_PEP", "ticker_a": "KO", "ticker_b": "PEP"},
+    ]
+
+    monitor._write_trade_decision_report(
+        scan_pairs=monitor.active_pairs,
+        results=[
+            {"verdict": "EXECUTED", "confidence": 0.92},
+            {"verdict": "IGNORED", "confidence": 0.0},
+        ],
+        latest_prices={"AAPL": 150.0, "MSFT": 300.0, "KO": 80.0},
+        open_signals=[{"signal_id": "open-1"}],
+        active_signal_count=1,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+
+    assert report["mode"] == "paper"
+    assert report["pairs_loaded"] == 2
+    assert report["pairs_scanned"] == 2
+    assert report["prices_received"] == 3
+    assert report["signals"] == 1
+    assert report["vetoed"] == 0
+    assert report["open_positions"] == 1
+    assert report["sizing_base"] == 10_000.0
+    assert report["decisions"] == [
+        {
+            "pair_id": "AAPL_MSFT",
+            "ticker_a": "AAPL",
+            "ticker_b": "MSFT",
+            "verdict": "EXECUTED",
+            "confidence": 0.92,
+            "has_price_a": True,
+            "has_price_b": True,
+        },
+        {
+            "pair_id": "KO_PEP",
+            "ticker_a": "KO",
+            "ticker_b": "PEP",
+            "verdict": "IGNORED",
+            "confidence": 0.0,
+            "has_price_a": True,
+            "has_price_b": False,
+        },
+    ]
 
 @pytest.mark.asyncio
 async def test_execute_trade_success(monitor):
