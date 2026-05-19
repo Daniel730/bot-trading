@@ -527,6 +527,20 @@ class PersistenceService:
                 for row in rows
             ]
 
+    async def count_startup_reconciliation_rows(self) -> int:
+        """Count unresolved ledger rows that block startup manual reconciliation."""
+        from sqlalchemy import select, func
+
+        async with self.AsyncSessionLocal() as session:
+            stmt = (
+                select(func.count())
+                .select_from(TradeLedger)
+                .where(TradeLedger.status.in_(self._startup_unresolved_statuses()))
+                .where(TradeLedger.closed_at.is_(None))
+            )
+            result = await session.execute(stmt)
+            return int(result.scalar() or 0)
+
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """Retrieves all currently OPEN positions grouped by signal_id."""
         from sqlalchemy import select

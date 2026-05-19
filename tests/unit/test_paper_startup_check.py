@@ -32,6 +32,7 @@ def test_paper_startup_check_repairs_validates_then_preflights(monkeypatch, tmp_
 
     monkeypatch.setattr(paper_startup_check.validate_deploy_env, "validate", validate_after_repair)
     monkeypatch.setattr(paper_startup_check, "check_running_action_containers", lambda: [])
+    monkeypatch.setattr(paper_startup_check, "count_unresolved_reconciliation_rows", lambda: 0)
     monkeypatch.setattr(paper_startup_check, "check_unresolved_reconciliation_rows", lambda: [])
     monkeypatch.setattr(
         paper_startup_check.bug_hunt_audit,
@@ -76,6 +77,7 @@ def test_paper_startup_check_blocks_unresolved_reconciliation_rows(
         "check_paper_startup_dependencies",
         lambda path: preflight_calls.append(path) or [],
     )
+    monkeypatch.setattr(paper_startup_check, "count_unresolved_reconciliation_rows", lambda: 12)
     monkeypatch.setattr(
         paper_startup_check,
         "check_unresolved_reconciliation_rows",
@@ -96,6 +98,7 @@ def test_paper_startup_check_blocks_unresolved_reconciliation_rows(
     assert preflight_calls == [env_file]
     output = capsys.readouterr().out
     assert "Paper startup reconciliation guard failed:" in output
+    assert "12 unresolved ledger rows require reconciliation" in output
     assert "id=ledger-1" in output
     assert "ticker=BTC-USD" in output
 
