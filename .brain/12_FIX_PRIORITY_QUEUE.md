@@ -10,6 +10,7 @@ Last updated: 2026-05-19
 - DONE 2026-05-19: local historical `logs/recovery_window.log` was sanitized and a regression now catches direct or wrapped Telegram bot token leaks when that ignored log file exists.
 - EXTERNAL ACTION REQUIRED: rotate the leaked Telegram bot token in BotFather/secrets before any operator-facing launch; repository code cannot revoke the old token.
 - DONE 2026-05-19: crypto spread-guard bid/ask sourcing now falls back to Alpaca crypto snapshot quotes when yfinance reports zero bid/ask, while still failing closed if no positive quote exists.
+- DONE 2026-05-20: crypto bid/ask fallback no longer passes unsupported `exchange=` to Alpaca `get_crypto_snapshots()`, fixing zero-quote spread-guard rejects caused by SDK signature mismatch.
 - DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing
