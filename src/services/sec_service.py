@@ -217,8 +217,8 @@ class SECService:
 
     def extract_sections(self, html: str) -> Dict[str, str]:
         text = re.sub(r"<[^>]+>", "\n", html)
-        text = re.sub(r"\s+", " ", text)
-        pattern = re.compile(r"\bITEM\s+(\d+[A-Z]?)\s*[\.:]\s*", re.IGNORECASE)
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        pattern = re.compile(r"^\s*ITEM\s+(\d+[A-Z]?)\s*[\.:]\s*", re.IGNORECASE | re.MULTILINE)
         matches = list(pattern.finditer(text))
         sections: Dict[str, str] = {}
         wanted = {"1A", "3", "7"}
@@ -228,7 +228,7 @@ class SECService:
                 continue
             start = match.end()
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-            sections[f"Item {item}"] = text[start:end].strip()
+            sections[f"Item {item}"] = re.sub(r"\s+", " ", text[start:end]).strip()
         return sections
 
 # Singleton instance
