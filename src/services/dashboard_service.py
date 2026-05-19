@@ -1342,21 +1342,21 @@ class DashboardService:
         failures = 0
         skipped = []
 
+        if settings.PAPER_TRADING:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Broker wallet buys are disabled while PAPER_TRADING=true. "
+                    "Shadow paper mode does not submit Alpaca orders."
+                ),
+            )
+
         for idx, (ticker, amount) in enumerate(plan, start=1):
             order = {
                 "ticker": ticker,
                 "amount": float(amount),
                 "status": "pending",
             }
-            if settings.PAPER_TRADING:
-                order.update({
-                    "status": "ok",
-                    "paper": True,
-                    "order_id": f"PAPER-{ticker}",
-                })
-                orders.append(order)
-                continue
-
             try:
                 result = await brokerage_service.place_value_order(
                     ticker,
