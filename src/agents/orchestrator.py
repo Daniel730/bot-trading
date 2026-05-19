@@ -376,7 +376,17 @@ class Orchestrator:
             p_advice_a = await portfolio_manager_agent.get_optimization_advice(ticker_a)
             p_advice_b = await portfolio_manager_agent.get_optimization_advice(ticker_b)
 
-            base_conf = (bull_conf * w_bull) + ((1 - bear_conf) * w_bear) + (avg_integrity * w_sec)
+            agent_weight_total = bull_weight + bear_weight
+            agent_consensus_conf = (
+                ((bull_conf * bull_weight) + ((1 - bear_conf) * bear_weight)) / agent_weight_total
+            )
+            weighted_conf = (bull_conf * w_bull) + ((1 - bear_conf) * w_bear) + (avg_integrity * w_sec)
+            neutral_fundamental_score = (
+                not crypto_pair
+                and score_a == settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+                and score_b == settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
+            )
+            base_conf = max(weighted_conf, agent_consensus_conf) if neutral_fundamental_score else weighted_conf
             final_conf = base_conf * performance_multiplier
             sec_weight_label = "N/A" if crypto_pair else f"{w_sec:.2f}"
             portfolio_warning = not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]

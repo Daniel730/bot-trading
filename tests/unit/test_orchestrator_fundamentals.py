@@ -238,7 +238,7 @@ async def test_equity_pair_spread_does_not_get_long_only_sortino_confidence_drag
         state = await orchestrator.ainvoke(input_data)
 
     assert "no long-only confidence penalty" in state["final_verdict"]
-    assert state["final_confidence"] == pytest.approx(0.6)
+    assert state["final_confidence"] == pytest.approx(0.65)
     assert state["final_confidence"] > settings.MONITOR_MIN_AI_CONFIDENCE
 
 
@@ -318,5 +318,5 @@ async def test_low_global_accuracy_does_not_drag_pair_confidence_below_execution
         state = await orchestrator.ainvoke(input_data)
 
     assert "GLOBAL ACCURACY WARNING" in state["final_verdict"]
-    assert state["final_confidence"] == pytest.approx(0.6)
+    assert state["final_confidence"] == pytest.approx(0.65)
     assert state["final_confidence"] > settings.MONITOR_MIN_AI_CONFIDENCE
