@@ -1,12 +1,14 @@
 import sys
 import os
 import asyncio
+import pytest
 
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.services.sec_service import sec_service
 
+@pytest.mark.asyncio
 async def test_parser_robustness():
     print("Testing SEC Parser Robustness...")
     
