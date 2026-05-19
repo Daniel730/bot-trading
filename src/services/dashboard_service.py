@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 import uvicorn
 
-from src.config import save_pairs_override, save_settings_override, settings
+from src.config import save_pairs_override, save_settings_override, settings, validate_runtime_settings_update
 from src.models.persistence import PersistenceManager
 from src.services.brokerage_service import BrokerageService, brokerage_service
 
@@ -1698,6 +1698,11 @@ class DashboardService:
                 raise HTTPException(status_code=412, detail="Two-factor authentication must be configured before sensitive changes.")
             if not otp_token or not self.totp.verify_token_or_backup(otp_token):
                 raise HTTPException(status_code=403, detail="A valid 2FA token is required for this change.")
+
+        try:
+            validate_runtime_settings_update(normalized_updates)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         for key, value in normalized_updates.items():
             old_value = getattr(settings, key)

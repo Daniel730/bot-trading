@@ -812,5 +812,23 @@ if _settings_override:
     for _key, _value in _settings_override.items():
         if hasattr(settings, _key):
             setattr(settings, _key, _value)
+    try:
+        settings.validate_secrets()
+    except ValueError as exc:
+        raise ValueError(f"Invalid bot settings override: {exc}") from exc
 
 settings.BROKERAGE_PROVIDER = _validate_supported_brokerage_provider(settings.BROKERAGE_PROVIDER)
+
+
+def validate_runtime_settings_update(updates: dict[str, Any]) -> None:
+    """Validate dashboard/runtime settings updates against the full Settings guardrail set."""
+    originals = {}
+    for key, value in updates.items():
+        if hasattr(settings, key):
+            originals[key] = getattr(settings, key)
+            setattr(settings, key, value)
+    try:
+        settings.validate_secrets()
+    finally:
+        for key, value in originals.items():
+            setattr(settings, key, value)
