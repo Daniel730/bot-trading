@@ -318,10 +318,10 @@ class Orchestrator:
         )
         global_accuracy = float(accuracy_str)
 
-        # Accuracy penalty: if global accuracy < 0.4, we scale down everything
         performance_multiplier = 1.0
+        low_accuracy_warning = False
         if global_accuracy < settings.ORCH_ACCURACY_LOW_THRESHOLD:
-            performance_multiplier = settings.ORCH_ACCURACY_LOW_MULTIPLIER
+            low_accuracy_warning = True
         elif global_accuracy > settings.ORCH_ACCURACY_HIGH_THRESHOLD:
             performance_multiplier = settings.ORCH_ACCURACY_HIGH_MULTIPLIER
 
@@ -387,6 +387,12 @@ class Orchestrator:
             else:
                 state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
+
+            if low_accuracy_warning:
+                state["final_verdict"] += (
+                    f" | GLOBAL ACCURACY WARNING: {global_accuracy:.2f} below "
+                    f"{settings.ORCH_ACCURACY_LOW_THRESHOLD:.2f}; no confidence penalty applied"
+                )
 
             whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))
             whale_delta = float(state["whale_verdict"].get("confidence_delta", 0.0))
