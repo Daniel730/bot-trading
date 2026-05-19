@@ -44,6 +44,10 @@ def check_unresolved_reconciliation_rows() -> list[dict]:
     return asyncio.run(persistence_service.get_startup_reconciliation_rows(limit=5))
 
 
+def count_unresolved_reconciliation_rows() -> int:
+    return asyncio.run(persistence_service.count_startup_reconciliation_rows())
+
+
 def run_check(env_file: Path) -> int:
     if not env_file.exists():
         print(f"Paper startup check failed: {env_file} does not exist.")
@@ -78,13 +82,15 @@ def run_check(env_file: Path) -> int:
         return 1
 
     try:
+        unresolved_count = count_unresolved_reconciliation_rows()
         unresolved_rows = check_unresolved_reconciliation_rows()
     except Exception as exc:
         print("Paper startup reconciliation guard failed:")
         print(f"- Could not verify unresolved ledger rows: {exc}")
         return 1
-    if unresolved_rows:
+    if unresolved_count > 0:
         print("Paper startup reconciliation guard failed:")
+        print(f"- {unresolved_count} unresolved ledger rows require reconciliation.")
         for row in unresolved_rows:
             print(
                 "- unresolved ledger row "
