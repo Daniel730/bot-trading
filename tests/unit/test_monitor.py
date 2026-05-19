@@ -1125,6 +1125,82 @@ async def test_close_position_skips_sell_when_broker_has_no_shares(monitor):
         )
         mock_notify.assert_awaited_once()
 
+
+@pytest.mark.asyncio
+async def test_execute_trade_paper_logs_entry_journal_before_shadow(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+    call_order = []
+
+    async def log_journal(payload):
+        call_order.append(("journal", payload))
+
+    async def execute_shadow(*args, **kwargs):
+        call_order.append(("shadow", {"args": args, "kwargs": kwargs}))
+
+    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new=AsyncMock(side_effect=log_journal)) as mock_log_journal, \
+         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new=AsyncMock(side_effect=execute_shadow)) as mock_shadow_exec, \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(settings, "PAPER_TRADING", True):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+        }
+        mock_regime.return_value = {
+            "regime": "STABLE",
+            "confidence": 0.85,
+            "features": {"volatility": 0.12},
+        }
+
+        result = await monitor.execute_trade(
+            pair,
+            "Short-Long",
+            150.0,
+            300.0,
+            signal_id,
+            entry_context={
+                "z_score": 2.7,
+                "entry_zscore": 2.2,
+                "confidence": 0.81,
+                "orchestrator_verdict": "APPROVE",
+            },
+        )
+
+    assert result == {"executed": True, "reason": "paper_shadow_executed"}
+    assert [name for name, _ in call_order] == ["journal", "shadow"]
+    mock_log_journal.assert_awaited_once()
+    mock_shadow_exec.assert_awaited_once()
+
+    journal_payload = call_order[0][1]
+    assert journal_payload["signal_id"] == uuid.UUID(signal_id)
+    assert journal_payload["entry_regime"] == "STABLE"
+    metrics = journal_payload["metrics_at_entry"]
+    assert metrics["z_score"] == 2.7
+    assert metrics["entry_zscore"] == 2.2
+    assert metrics["confidence"] == 0.81
+    assert metrics["orchestrator_verdict"] == "APPROVE"
+    assert metrics["win_prob"] == settings.DEFAULT_WIN_PROBABILITY
+    assert metrics["regime_confidence"] == 0.85
+    assert metrics["features"] == {"volatility": 0.12}
+    assert metrics["gross_notional"] == pytest.approx(299.98)
+    assert metrics["leg_a_notional"] == pytest.approx(99.99)
+    assert metrics["leg_b_notional"] == pytest.approx(199.99)
+    assert metrics["hedge_ratio"] == 1.0
+    assert metrics["kelly_fraction"] == 0.1
+    assert metrics["sizing_base"] == 10_000.0
+    assert metrics["max_allowed_fiat"] == 300.0
+    assert metrics["direction"] == "Short-Long"
+    assert metrics["paper_trade"] is True
+
 @pytest.mark.asyncio
 async def test_execute_trade_crypto_live_uses_broker(monitor):
     pair = {"ticker_a": "ETH-USD", "ticker_b": "BTC-USD", "id": "ETH-USD_BTC-USD"}
