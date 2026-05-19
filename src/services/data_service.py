@@ -488,8 +488,7 @@ class DataService:
                     crypto_symbols = [t.replace("-", "/") for t in alpaca_crypto_tickers]
                     try:
                         # Note: get_crypto_snapshots is available in alpaca-trade-api
-                        # We use 'CBSE' as a reliable default exchange for Alpaca crypto data
-                        crypto_snapshots = self.alpaca_client.get_crypto_snapshots(crypto_symbols, exchange='CBSE')
+                        crypto_snapshots = self.alpaca_client.get_crypto_snapshots(crypto_symbols)
                         for ticker_key, snapshot in crypto_snapshots.items():
                             internal_ticker = ticker_key.replace("/", "-")
                             if internal_ticker in remaining_tickers:
