@@ -5,6 +5,7 @@ Last updated: 2026-05-19
 ## P0 - Must fix before broker-connected testing
 
 - Runtime dependencies are currently unavailable locally: Docker, Redis, Postgres, dashboard, and execution-engine preflight checks failed on 2026-05-19.
+- DONE 2026-05-19: backend Compose now has a tested fail-fast Postgres password guard and no hardcoded/default fallback password.
 - DONE 2026-05-19: Telegram notification exception output now redacts bot tokens and Telegram API bot URLs before printing/logging.
 - Rotate the leaked Telegram bot token and purge or sanitize historical `logs/recovery_window.log` before any operator-facing launch.
 - DONE 2026-05-19: crypto spread-guard bid/ask sourcing now falls back to Alpaca crypto snapshot quotes when yfinance reports zero bid/ask, while still failing closed if no positive quote exists.

@@ -25,6 +25,12 @@ def test_backend_compose_requires_postgres_password_without_default():
     assert not re.search(r"\$\{POSTGRES_PASSWORD(?::-|-)[^}]*\}", value)
     assert re.search(r"\$\{POSTGRES_PASSWORD(?::\?|\?)[^}]*\}", value)
 
+    compose = yaml.safe_load(compose_text)
+    assert (
+        compose["services"]["postgres"]["environment"]["POSTGRES_PASSWORD"]
+        == "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
+    )
+
 
 def test_backend_compose_does_not_auto_restart_trading_services():
     compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
