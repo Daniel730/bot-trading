@@ -20,8 +20,8 @@ Last updated: 2026-05-19
 - DONE 2026-05-19: dashboard wallet buy endpoints now fail closed with HTTP 409 while `PAPER_TRADING=true` instead of returning fake successful paper order IDs that never reach Alpaca.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.
 - DONE 2026-05-19: low `global_strategy_accuracy` now emits an orchestrator warning instead of silently multiplying pair-spread confidence below the execution threshold; high-accuracy boosting remains unchanged.
+- DONE 2026-05-19: cost-scaled entry thresholds now scale gradually from `MONITOR_ENTRY_ZSCORE_COST_BASELINE` to `PAIR_MAX_ROUND_TRIP_COST_PCT`, so moderate accepted costs no longer jump straight to the cap.
 - Investigate any remaining confidence drag from MAB weighting before changing thresholds.
-- Review cost-scaled entry thresholds by venue; current EUR-account US equity threshold can rise from `2.2` to about `6.6`.
 
 ## P2 - Must fix before public release / monetization
 

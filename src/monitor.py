@@ -1013,6 +1013,7 @@ class ArbitrageMonitor:
                 pair_estimated_cost_pct=float(pair.get("estimated_cost_pct") or 0.0),
                 cost_baseline=float(settings.MONITOR_ENTRY_ZSCORE_COST_BASELINE),
                 scaling_cap=float(settings.MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP),
+                cost_ceiling=float(settings.PAIR_MAX_ROUND_TRIP_COST_PCT),
             )
 
             # Sprint J: Heartbeat log for pair health

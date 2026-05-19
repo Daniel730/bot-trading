@@ -4,7 +4,8 @@ Tests for src/monitor_helpers.py
 Covers:
   - is_crypto_pair: detection based on '-USD' substring in either ticker
   - resolve_pair_sector: pair_id lookup, ticker reverse lookup, fallback to 'Unassigned'
-  - compute_entry_zscore: scaling disabled, zero baseline, below baseline, above baseline, cap enforcement
+  - compute_entry_zscore: scaling disabled, zero baseline, below baseline, above baseline,
+    gradual cost ceiling scaling, cap enforcement
 """
 
 import pytest
@@ -136,6 +137,17 @@ class TestComputeEntryZscore:
             scaling_cap=3.0,
         )
         assert result == 2.0
+
+    def test_scales_gradually_between_baseline_and_cost_ceiling(self):
+        result = compute_entry_zscore(
+            2.2,
+            cost_scaling_enabled=True,
+            pair_estimated_cost_pct=0.0045,
+            cost_baseline=0.0015,
+            scaling_cap=3.0,
+            cost_ceiling=0.0125,
+        )
+        assert result == pytest.approx(3.4)
 
     def test_scales_zscore_when_cost_above_baseline(self):
         # cost_pct=0.2, baseline=0.1 → scale=2.0 → result = 2.0 * 2.0 = 4.0
