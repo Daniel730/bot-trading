@@ -13,7 +13,7 @@ Last updated: 2026-05-19
 ## P1 - Must fix before extended personal testing
 
 - DONE 2026-05-19: dashboard runtime config updates now validate the resulting `Settings` guardrails before persisting; unsafe `PAPER_TRADING=false` with `LIVE_CAPITAL_DANGER=false` is rejected.
-- Log `process_pair()` skip reasons for market closed, non-cointegrated pairs, and missing latest prices.
+- DONE 2026-05-19: `process_pair()` diagnostics and trade decision reports now include skip reasons such as `market_closed`, `not_cointegrated`, `missing_price`, `kalman_unavailable`, and `below_entry_threshold`.
 - Persist paper trade entry context before shadow execution returns so paper trades retain decision evidence.
 - Decide whether the Python monitor should route through the Java execution engine or update architecture docs/tests to match direct brokerage execution.
 - Review cost-scaled entry thresholds by venue; current EUR-account US equity threshold can rise from `2.2` to about `6.6`.
