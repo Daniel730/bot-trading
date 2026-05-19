@@ -226,6 +226,39 @@ async def test_get_bid_ask_uses_alpaca_crypto_snapshot_when_yfinance_quote_is_ze
     assert (bid, ask) == (90000.0, 90010.0)
 
 
+def test_get_latest_price_crypto_snapshot_does_not_require_exchange_kwarg():
+    service = DataService()
+
+    class FakeTrade:
+        p = 90000.0
+
+    class FakeSnapshot:
+        latest_trade = FakeTrade()
+
+    def fake_get_crypto_snapshots(symbols, **kwargs):
+        if kwargs:
+            raise TypeError("REST.get_crypto_snapshots() got an unexpected keyword argument 'exchange'")
+        return {"BTC/USD": FakeSnapshot()}
+
+    with patch("src.services.data_service.redis_service.get_price", return_value=None), \
+         patch.object(service, "_update_redis_cache"), \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             side_effect=fake_get_crypto_snapshots,
+         ), \
+         patch.object(service, "_get_latest_price_polygon", return_value={}), \
+         patch.object(
+             service,
+             "_get_latest_price_yfinance_with_retry",
+             return_value={"BTC-USD": 1.0},
+         ) as yfinance_fallback:
+        prices = service.get_latest_price(["BTC-USD"])
+
+    assert prices == {"BTC-USD": 90000.0}
+    yfinance_fallback.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_get_bid_ask_crypto_snapshot_does_not_require_exchange_kwarg():
     service = DataService()
