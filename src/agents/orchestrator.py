@@ -381,13 +381,9 @@ class Orchestrator:
             sec_weight_label = "N/A" if crypto_pair else f"{w_sec:.2f}"
             portfolio_warning = not p_advice_a["is_recommended"] or not p_advice_b["is_recommended"]
 
-            if portfolio_warning and not crypto_pair:
-                final_conf *= 0.8
-                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO WARNING: Non-Optimal (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
-                logger.info("[ORCHESTRATOR] %s - Portfolio Penalty Applied: Potential Sortino degradation.", pair_id)
-            elif portfolio_warning:
-                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO WARNING: Crypto pair-spread; no long-only confidence penalty (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
-                logger.info("[ORCHESTRATOR] %s - Portfolio warning informational for crypto pair spread.", pair_id)
+            if portfolio_warning:
+                state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO WARNING: Pair-spread; no long-only confidence penalty (Imp A:{p_advice_a['improvement']:.3f}, B:{p_advice_b['improvement']:.3f})"
+                logger.info("[ORCHESTRATOR] %s - Portfolio warning informational for pair spread.", pair_id)
             else:
                 state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
