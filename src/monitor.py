@@ -1183,7 +1183,19 @@ class ArbitrageMonitor:
                     approved = await notification_service.request_approval(trade_summary)
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
-                        execution_result = await self.execute_trade(pair, direction, price_a, price_b, signal_id)
+                        execution_result = await self.execute_trade(
+                            pair,
+                            direction,
+                            price_a,
+                            price_b,
+                            signal_id,
+                            entry_context={
+                                "z_score": z_score,
+                                "entry_zscore": entry_zscore,
+                                "confidence": final_confidence,
+                                "orchestrator_verdict": decision_state.get("final_verdict"),
+                            },
+                        )
                         if execution_result and execution_result.get("executed"):
                             await self._upsert_active_signal(
                                 t_a,
@@ -1224,11 +1236,12 @@ class ArbitrageMonitor:
             diagnostic["reason"] = "exception"
             return diagnostic
 
-    async def execute_trade(self, pair, direction, price_a, price_b, signal_id):
+    async def execute_trade(self, pair, direction, price_a, price_b, signal_id, entry_context: dict | None = None):
         """Executes a trade and logs to PostgreSQL."""
         def execution_result(executed: bool, reason: str) -> dict:
             return {"executed": executed, "reason": reason}
 
+        entry_context = entry_context or {}
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         if await self._has_active_pair_or_pending_order(t_a, t_b):
             return execution_result(False, "active_pair_or_pending_order")
@@ -1450,6 +1463,28 @@ class ArbitrageMonitor:
         # Feature 037: only paper mode is forced to shadow execution. In live
         # mode, crypto routes through the configured brokerage provider.
         if settings.PAPER_TRADING:
+            await persistence_service.log_trade_journal({
+                "signal_id": uuid.UUID(signal_id),
+                "entry_regime": regime_info["regime"],
+                "metrics_at_entry": {
+                    "z_score": float(entry_context.get("z_score", risk_res.get("z_score", 0.0)) or 0.0),
+                    "entry_zscore": entry_context.get("entry_zscore"),
+                    "confidence": entry_context.get("confidence"),
+                    "orchestrator_verdict": entry_context.get("orchestrator_verdict"),
+                    "win_prob": settings.DEFAULT_WIN_PROBABILITY,
+                    "regime_confidence": regime_info["confidence"],
+                    "features": regime_info["features"],
+                    "gross_notional": legs.gross_notional,
+                    "leg_a_notional": target_cash_a,
+                    "leg_b_notional": target_cash_b,
+                    "hedge_ratio": hedge_ratio,
+                    "kelly_fraction": risk_res.get("kelly_fraction"),
+                    "sizing_base": sizing_base,
+                    "max_allowed_fiat": risk_res.get("max_allowed_fiat"),
+                    "direction": direction,
+                    "paper_trade": True,
+                }
+            })
             # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
             # R4 fix (2026-04-19): propagate signal_id so the shadow TradeLedger row
             # can be joined with the AgentReasoning / TradeJournal rows logged for
