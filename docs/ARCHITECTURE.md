@@ -15,6 +15,7 @@ flowchart TD
     Postgres[("PostgreSQL\ntrade ledger, audits, reasoning")]
     SQLite[("SQLite\nruntime state, budgets, config audit")]
     Java["Java gRPC Execution Engine\nexecution-engine/ :50051"]
+    Shadow["Paper Shadow Ledger\nsrc/services/shadow_service.py"]
     SEC["SEC Fundamental Worker\nsrc/daemons/sec_fundamental_worker.py"]
     Alpaca["Alpaca API\nactive broker route"]
     LegacyRoutes["Trading 212 / Web3\nlegacy disabled routes"]
@@ -29,7 +30,7 @@ flowchart TD
     Monitor <--> Redis
     Monitor <--> Postgres
     Monitor <--> SQLite
-    Monitor --> Java
+    Monitor --> Shadow
     Java <--> Redis
     Java <--> Postgres
     SEC <--> Redis
@@ -55,6 +56,8 @@ The Python backend is the control plane and strategy runtime.
 - `src/services/brokerage_service.py` routes through the active Alpaca provider. `BROKERAGE_PROVIDER` must be `ALPACA`; Trading 212 and Web3 routes are legacy/disabled and unsupported values fail startup.
 - `src/services/pair_eligibility_service.py` rejects unsupported or high-friction pairs before Kalman state is allocated.
 
+`src/monitor.py` order routing: `PAPER_TRADING=true` calls `shadow_service`; broker-connected mode submits both legs through Python `BrokerageService`. The Java execution engine is a dry-run/audit sidecar and is not the monitor's default order path.
+
 ### Java Execution Engine
 
 The Java service exposes `ExecutionService` over gRPC:
@@ -63,7 +66,7 @@ The Java service exposes `ExecutionService` over gRPC:
 - `GetTradeStatus`
 - `TriggerKillSwitch`
 
-It wires `ExecutionServiceImpl`, `TradeLedgerRepository`, `RedisOrderSync`, `RedisL2FeedService`, and a broker router at startup. It uses Java 21 virtual threads. Today it must run in `DRY_RUN=true`; live Java brokerage is intentionally blocked until a production broker implementation exists.
+It wires `ExecutionServiceImpl`, `TradeLedgerRepository`, `RedisOrderSync`, `RedisL2FeedService`, and a broker router at startup. It uses Java 21 virtual threads. Today it must run in `DRY_RUN=true`; live Java brokerage is intentionally blocked until a production broker implementation exists. The monitor's paper/live order path does not default through this service.
 
 ### Frontend
 
