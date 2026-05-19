@@ -769,7 +769,7 @@ class DataService:
 
                 if ticker.endswith("-USD"):
                     crypto_symbol = ticker.replace("-", "/")
-                    snapshots = self.alpaca_client.get_crypto_snapshots([crypto_symbol], exchange='CBSE')
+                    snapshots = self.alpaca_client.get_crypto_snapshots([crypto_symbol])
                     snapshot = snapshots.get(crypto_symbol) if isinstance(snapshots, dict) else None
                     if snapshot is not None:
                         quote = getattr(snapshot, "latest_quote", None)
