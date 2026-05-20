@@ -67,6 +67,10 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
             "confidence": 0.92,
             "has_price_a": True,
             "has_price_b": True,
+            "price_a": 150.0,
+            "price_b": 300.0,
+            "price_source_a": "unknown",
+            "price_source_b": "unknown",
         },
         {
             "pair_id": "KO_PEP",
@@ -75,10 +79,44 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
             "verdict": "IGNORED",
             "confidence": 0.0,
             "reason": "missing_price",
+            "rejection_reason": "missing_price",
             "has_price_a": True,
             "has_price_b": False,
+            "price_a": 80.0,
+            "price_b": None,
+            "price_source_a": "unknown",
+            "price_source_b": None,
         },
     ]
+
+
+def test_trade_decision_report_includes_price_source_and_rejection_details(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+        ],
+        results=[
+            {"verdict": "IGNORED", "confidence": 0.0, "reason": "price_sanity_invalid"},
+        ],
+        latest_prices={"BTC-USD": 9.45, "ETH-USD": 2110.0},
+        latest_price_sources={"BTC-USD": "yfinance", "ETH-USD": "alpaca_crypto_snapshot"},
+        open_signals=[],
+        active_signal_count=0,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["price_a"] == 9.45
+    assert decision["price_b"] == 2110.0
+    assert decision["price_source_a"] == "yfinance"
+    assert decision["price_source_b"] == "alpaca_crypto_snapshot"
+    assert decision["rejection_reason"] == "price_sanity_invalid"
 
 
 @pytest.mark.asyncio
