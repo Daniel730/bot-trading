@@ -8,6 +8,7 @@ Covers FR-001..FR-003 from specs/036-paper-readiness-blockers/spec.md:
 """
 
 import asyncio
+import logging
 import time
 import pytest
 from unittest.mock import patch, AsyncMock
@@ -116,6 +117,21 @@ async def test_paper_notify_redacts_telegram_token_from_send_failure(capsys):
         notification_service._telegram_enabled = original_enabled
         notification_service.app = original_app
         notification_service.token = original_token
+
+
+def test_httpx_telegram_request_logs_redact_bot_token(caplog):
+    leaked_token = "123456789:SUPER_SECRET_TOKEN_VALUE_123456"
+    leaked_url = f"https://api.telegram.org/bot{leaked_token}/getMe"
+
+    caplog.set_level(logging.INFO, logger="httpx")
+    logging.getLogger("httpx").info(
+        'HTTP Request: POST %s "HTTP/1.1 200 OK"',
+        leaked_url,
+    )
+
+    assert leaked_token not in caplog.text
+    assert leaked_url not in caplog.text
+    assert "api.telegram.org/bot<redacted-telegram-token>/getMe" in caplog.text
 
 
 @pytest.mark.asyncio
