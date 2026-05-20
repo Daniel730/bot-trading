@@ -27,6 +27,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-20: repeated unchanged Alpaca crypto snapshot price tuples now fail closed before Kalman updates so stale live-data snapshots cannot create or preserve bad signal state.
 - DONE 2026-05-20: latest crypto prices now use newer Alpaca quote midpoints, with quote source and timestamp metadata, when the snapshot trade price is older than the quote.
 - DONE 2026-05-20: repeated unchanged Alpaca crypto quote-mid timestamps now fail closed before Kalman updates, preventing frozen quote midpoint data from silently driving signal math.
+- DONE 2026-05-20: chunked async latest-price reads now mark Redis-cache hits as `redis` and clear old Alpaca timestamps, preventing cached prices from being falsely blocked as repeated Alpaca quote-mid snapshots.
 - DONE 2026-05-20: crypto snapshot stale-repeat cadence is now intentionally pinned at 5 scans and covered by a regression test, resolving the dirty runtime/test mismatch.
 - DONE 2026-05-20: compose files are pinned to LF line endings and normalized, resolving noisy dirty compose diffs without runtime behavior changes.
 - DONE 2026-05-20: trade decision reports now include per-leg latest price timestamps, making quote-mid freshness visible in every scan report.

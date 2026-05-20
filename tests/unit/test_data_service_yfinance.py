@@ -212,6 +212,45 @@ async def test_get_latest_price_async_serializes_crypto_chunks():
 
 
 @pytest.mark.asyncio
+async def test_get_latest_price_async_cached_prices_clear_stale_alpaca_metadata():
+    service = DataService()
+    tickers = ["BTC-USD", "ETH-USD", "LTC-USD", "BCH-USD", "SOL-USD", "AVAX-USD"]
+    cached_prices = {
+        "BTC-USD": 90_000.0,
+        "ETH-USD": 3_000.0,
+        "LTC-USD": 85.0,
+        "BCH-USD": 420.0,
+        "SOL-USD": 160.0,
+        "AVAX-USD": 25.0,
+    }
+    service.last_price_sources.update(
+        {ticker: "alpaca_crypto_quote_mid" for ticker in tickers}
+    )
+    service.last_price_timestamps.update(
+        {ticker: "2026-05-20T12:01:00+00:00" for ticker in tickers}
+    )
+
+    async def fake_cached_price(ticker):
+        return cached_prices[ticker]
+
+    with patch(
+        "src.services.data_service.redis_service.get_price",
+        new_callable=AsyncMock,
+        side_effect=fake_cached_price,
+    ), patch.object(
+        service,
+        "get_latest_price",
+        side_effect=AssertionError("fresh fetch should not run for cached prices"),
+    ):
+        prices = await service.get_latest_price_async(tickers, timeout=1.0)
+
+    assert prices == cached_prices
+    for ticker in tickers:
+        assert service.last_price_sources[ticker] == "redis"
+        assert ticker not in service.last_price_timestamps
+
+
+@pytest.mark.asyncio
 async def test_get_bid_ask_missing_quote_does_not_fallback_to_zero_spread():
     service = DataService()
 

@@ -629,6 +629,7 @@ class DataService:
 
         latest = {}
         remaining_tickers = []
+        cached_price_sources = {}
 
         async def read_cached_price(ticker: str):
             try:
@@ -646,8 +647,12 @@ class DataService:
             ticker, price = item
             if price:
                 latest[ticker] = price
+                cached_price_sources[ticker] = "redis"
             else:
                 remaining_tickers.append(ticker)
+
+        if cached_price_sources:
+            self._update_price_metadata(cached_price_sources)
 
         if not remaining_tickers:
             return AwaitableDict(latest)
