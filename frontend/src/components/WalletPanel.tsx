@@ -20,11 +20,14 @@ import { useAutoDismiss } from '../hooks/useAutoDismiss';
 interface WalletPanelProps {
   token: string;
   sessionToken: string;
+  paperTrading?: boolean;
 }
 
 const RECOMMENDATIONS_PAGE_SIZE = 10;
 const SKIPPED_PAGE_SIZE = 10;
 const ORDERS_PAGE_SIZE = 10;
+const PAPER_WALLET_BUY_DISABLED_MESSAGE =
+  'Broker buys are disabled while PAPER_TRADING=true. Shadow paper mode does not submit Alpaca orders.';
 
 const formatCurrency = (value: number | null | undefined) => {
   if (value === null || value === undefined) return '--';
@@ -51,7 +54,7 @@ const categoryLabel = (category: WalletRecommendation['category']) => {
   return 'BROKEN eligible';
 };
 
-const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
+const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken, paperTrading = false }) => {
   const [budget, setBudget] = useState('100');
   const [includeBroken, setIncludeBroken] = useState(false);
   const [skipOwned, setSkipOwned] = useState(true);
@@ -175,6 +178,12 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
   };
 
   const confirmBuy = async () => {
+    if (paperTrading) {
+      setConfirmOpen(false);
+      setError(PAPER_WALLET_BUY_DISABLED_MESSAGE);
+      return;
+    }
+
     setBuying(true);
     setError(null);
     setOk(null);
@@ -199,7 +208,15 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
     }
   };
 
-  const buyDisabled = buying || !plan || selectedRecommendations.length === 0 || Boolean(plan.cash_limited);
+  const openBuyConfirm = () => {
+    if (paperTrading) {
+      setError(PAPER_WALLET_BUY_DISABLED_MESSAGE);
+      return;
+    }
+    setConfirmOpen(true);
+  };
+
+  const buyDisabled = buying || !plan || selectedRecommendations.length === 0 || Boolean(plan.cash_limited) || paperTrading;
 
   return (
     <div className="wallet-page">
@@ -257,7 +274,12 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
             <RefreshCw size={14} className={loading ? 'spin' : ''} />
             Refresh Plan
           </button>
-          <button className="primary-btn" disabled={buyDisabled} onClick={() => setConfirmOpen(true)}>
+          <button
+            className="primary-btn"
+            disabled={buyDisabled}
+            onClick={openBuyConfirm}
+            title={paperTrading ? PAPER_WALLET_BUY_DISABLED_MESSAGE : undefined}
+          >
             <ShoppingCart size={14} />
             Buy Selected
           </button>
@@ -284,6 +306,12 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
         <div className="banner warning">
           <AlertTriangle size={14} />
           Budget exceeds bot-calculated spendable broker cash. Reduce the budget before buying.
+        </div>
+      ) : null}
+      {paperTrading ? (
+        <div className="banner warning">
+          <AlertTriangle size={14} />
+          {PAPER_WALLET_BUY_DISABLED_MESSAGE}
         </div>
       ) : null}
 

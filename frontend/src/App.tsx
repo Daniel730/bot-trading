@@ -253,6 +253,12 @@ function App() {
   const currentMode = data?.runtime?.mode ?? summary?.mode ?? '—';
   const currentStage = data?.stage ?? summary?.stage ?? botState ?? 'Initializing';
   const currentBotState = summary?.bot_status ?? data?.runtime?.desired_bot_state ?? 'RUNNING';
+  const paperTradingConfigValue = config?.items.find((item) => item.key === 'PAPER_TRADING')?.value;
+  const paperTrading =
+    data?.runtime?.paper_trading ??
+    (typeof paperTradingConfigValue === 'boolean'
+      ? paperTradingConfigValue
+      : String(paperTradingConfigValue).toLowerCase() === 'true');
   const { startupProgress, startupReady, preWarmingProgress } = useStartupProgress({
     isAuthenticated,
     isConnected,
@@ -534,13 +540,13 @@ function App() {
 
         {page === 'pairs' && (
           <>
-            <PairsPanel token={securityToken} sessionToken={sessionToken} />
+            <PairsPanel token={securityToken} sessionToken={sessionToken} paperTrading={paperTrading} />
           </>
         )}
 
         {page === 'wallet' && (
           <>
-            <WalletPanel token={securityToken} sessionToken={sessionToken} />
+            <WalletPanel token={securityToken} sessionToken={sessionToken} paperTrading={paperTrading} />
           </>
         )}
 

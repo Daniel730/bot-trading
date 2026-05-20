@@ -30,6 +30,7 @@ import { useAutoDismiss } from '../hooks/useAutoDismiss';
 interface PairsPanelProps {
   token: string;
   sessionToken: string;
+  paperTrading?: boolean;
 }
 
 type EditorTab = 'stocks' | 'crypto';
@@ -56,6 +57,8 @@ const formatRelative = (iso: string | null | undefined): string => {
 
 const isCryptoTicker = (t: string) => /-USD$/i.test(t);
 type PairDiscoveryStatus = NonNullable<PairsResponse['discovery']>;
+const PAPER_WALLET_BUY_DISABLED_MESSAGE =
+  'Broker buys are disabled while PAPER_TRADING=true. Shadow paper mode does not submit Alpaca orders.';
 
 // ─── PairRow ─────────────────────────────────────────────────────────────────
 
@@ -157,7 +160,7 @@ const PairRow: React.FC<PairRowProps> = ({ p }) => {
 
 // ─── PairsPanel ───────────────────────────────────────────────────────────────
 
-const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
+const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTrading = false }) => {
   const [activePairs, setActivePairs] = useState<PairInfo[]>([]);
   const [configuredStocks, setConfiguredStocks] = useState<PairConfigEntry[]>([]);
   const [configuredCrypto, setConfiguredCrypto] = useState<PairConfigEntry[]>([]);
@@ -352,8 +355,13 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       return;
     }
 
+    if (paperTrading) {
+      setWalletError(PAPER_WALLET_BUY_DISABLED_MESSAGE);
+      return;
+    }
+
     const confirmed = window.confirm(
-      `Place broker BUY orders for missing tickers with a ${budget.toFixed(2)} budget?`,
+      `Place broker BUY orders for missing stock tickers with a ${budget.toFixed(2)} budget?`,
     );
     if (!confirmed) return;
 
@@ -375,6 +383,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
 
   const placeholderA = editorTab === 'crypto' ? 'BTC-USD' : 'KO';
   const placeholderB = editorTab === 'crypto' ? 'ETH-USD' : 'PEP';
+  const walletSyncDisabled = walletSyncing || allEquityTickers.length === 0 || paperTrading;
 
   return (
     <>
@@ -458,9 +467,9 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
               </label>
               <button
                 className="wallet-sync-btn"
-                disabled={walletSyncing || allEquityTickers.length === 0}
+                disabled={walletSyncDisabled}
                 onClick={handleWalletSync}
-                title="Buy missing broker tickers"
+                title={paperTrading ? PAPER_WALLET_BUY_DISABLED_MESSAGE : 'Buy missing broker tickers'}
               >
                 <ShoppingCart size={13} />
                 {walletSyncing ? 'Buying...' : 'Buy All'}
@@ -476,6 +485,11 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
           {walletOk && (
             <div className="editor-msg ok">
               <CheckCircle2 size={12} /> {walletOk}
+            </div>
+          )}
+          {paperTrading && (
+            <div className="editor-msg error">
+              <AlertTriangle size={12} /> {PAPER_WALLET_BUY_DISABLED_MESSAGE}
             </div>
           )}
 

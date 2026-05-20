@@ -20,10 +20,11 @@ vi.mock('../services/api', () => ({
   buyWalletRecommendations: vi.fn(),
 }));
 
-import { fetchWalletRecommendations } from '../services/api';
+import { buyWalletRecommendations, fetchWalletRecommendations } from '../services/api';
 import WalletPanel from '../components/WalletPanel';
 
 const mockFetchRecs = fetchWalletRecommendations as ReturnType<typeof vi.fn>;
+const mockBuyRecs = buyWalletRecommendations as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -194,6 +195,24 @@ describe('WalletPanel cash_limited banner', () => {
 describe('WalletPanel confirm dialog', () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('disables broker buys in paper trading mode before opening confirm or calling the API', async () => {
+    mockFetchRecs.mockResolvedValue(makePlanResponse());
+
+    render(<WalletPanel token={TOKEN} sessionToken={SESSION} paperTrading />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Buy Selected')).toBeDisabled();
+      expect(
+        screen.getByText(/Broker buys are disabled while PAPER_TRADING=true/i),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Buy Selected'));
+
+    expect(screen.queryByText('confirm broker buy')).not.toBeInTheDocument();
+    expect(mockBuyRecs).not.toHaveBeenCalled();
   });
 
   it('confirm dialog title is "confirm broker buy"', async () => {

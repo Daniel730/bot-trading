@@ -312,6 +312,26 @@ describe('PairsPanel buy button disabled state', () => {
     vi.clearAllMocks();
   });
 
+  it('disables broker buys in paper trading mode before calling the API', async () => {
+    mockFetchPairs.mockResolvedValue(makePairsResponse());
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} paperTrading />);
+
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /Buy All/i });
+      expect(btn).toBeDisabled();
+      expect(
+        screen.getByText(/Broker buys are disabled while PAPER_TRADING=true/i),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Buy All/i }));
+
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(mockSyncWallet).not.toHaveBeenCalled();
+  });
+
   it('button is disabled when there are no equity tickers', async () => {
     // Only crypto pairs, no equity
     mockFetchPairs.mockResolvedValue({
