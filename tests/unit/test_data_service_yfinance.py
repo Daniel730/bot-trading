@@ -290,6 +290,43 @@ def test_get_latest_price_crypto_snapshot_does_not_require_exchange_kwarg():
     yfinance_fallback.assert_not_called()
 
 
+def test_get_latest_price_uses_newer_crypto_quote_mid_when_trade_is_stale():
+    service = DataService()
+
+    class FakeTrade:
+        p = 90000.0
+        t = pd.Timestamp("2026-05-20T12:00:00Z")
+
+    class FakeQuote:
+        bp = 90100.0
+        ap = 90110.0
+        t = pd.Timestamp("2026-05-20T12:01:00Z")
+
+    class FakeSnapshot:
+        latest_trade = FakeTrade()
+        latest_quote = FakeQuote()
+
+    with patch("src.services.data_service.redis_service.get_price", return_value=None), \
+         patch.object(service, "_update_redis_cache"), \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             return_value={"BTC/USD": FakeSnapshot()},
+         ), \
+         patch.object(service, "_get_latest_price_polygon", return_value={}), \
+         patch.object(
+             service,
+             "_get_latest_price_yfinance_with_retry",
+             return_value={"BTC-USD": 1.0},
+         ) as yfinance_fallback:
+        prices = service.get_latest_price(["BTC-USD"])
+
+    assert prices == {"BTC-USD": 90105.0}
+    assert service.last_price_sources["BTC-USD"] == "alpaca_crypto_quote_mid"
+    assert service.last_price_timestamps["BTC-USD"] == "2026-05-20T12:01:00+00:00"
+    yfinance_fallback.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_get_bid_ask_crypto_snapshot_does_not_require_exchange_kwarg():
     service = DataService()

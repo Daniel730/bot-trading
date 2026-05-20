@@ -44,6 +44,49 @@ class DataService:
         )
         self._ws_client: Optional[WebSocketClient] = None
         self.last_price_sources: dict[str, str] = {}
+        self.last_price_timestamps: dict[str, str] = {}
+
+    @staticmethod
+    def _snapshot_field(snapshot, *field_names):
+        for field_name in field_names:
+            value = snapshot.get(field_name) if isinstance(snapshot, dict) else getattr(snapshot, field_name, None)
+            if value is not None:
+                return value
+        return None
+
+    @classmethod
+    def _snapshot_positive_float(cls, snapshot, *field_names) -> float:
+        value = cls._snapshot_field(snapshot, *field_names)
+        try:
+            parsed = float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return parsed if parsed > 0.0 else 0.0
+
+    @staticmethod
+    def _snapshot_timestamp(value) -> Optional[datetime]:
+        if value is None:
+            return None
+        try:
+            timestamp = pd.Timestamp(value)
+            if pd.isna(timestamp):
+                return None
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize(timezone.utc)
+            else:
+                timestamp = timestamp.tz_convert(timezone.utc)
+            return timestamp.to_pydatetime()
+        except Exception:
+            return None
+
+    def _update_price_metadata(self, price_sources: dict, price_timestamps: Optional[dict[str, str]] = None):
+        self.last_price_sources.update(price_sources)
+        price_timestamps = price_timestamps or {}
+        for ticker in price_sources:
+            if ticker in price_timestamps:
+                self.last_price_timestamps[ticker] = price_timestamps[ticker]
+            else:
+                self.last_price_timestamps.pop(ticker, None)
 
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
         """
@@ -442,6 +485,7 @@ class DataService:
         tickers = self._dedupe_tickers(tickers)
         latest = {}
         price_sources = {}
+        price_timestamps = {}
         remaining_tickers = []
 
         # 1. Try Redis Shadow Book
@@ -462,7 +506,7 @@ class DataService:
                 remaining_tickers.append(ticker)
 
         if not remaining_tickers:
-            self.last_price_sources.update(price_sources)
+            self._update_price_metadata(price_sources, price_timestamps)
             return latest
 
         # 2. Try Alpaca Snapshot (Batch) for Stocks
@@ -497,10 +541,30 @@ class DataService:
                         for ticker_key, snapshot in crypto_snapshots.items():
                             internal_ticker = ticker_key.replace("/", "-")
                             if internal_ticker in remaining_tickers:
-                                price = float(snapshot.latest_trade.p)
+                                trade = self._snapshot_field(snapshot, "latest_trade")
+                                quote = self._snapshot_field(snapshot, "latest_quote")
+                                price = self._snapshot_positive_float(trade, "p", "price")
+                                source = "alpaca_crypto_snapshot"
+                                timestamp = self._snapshot_timestamp(
+                                    self._snapshot_field(trade, "t", "timestamp")
+                                )
+
+                                bid = self._snapshot_positive_float(quote, "bp", "bid_price", "bid")
+                                ask = self._snapshot_positive_float(quote, "ap", "ask_price", "ask")
+                                quote_timestamp = self._snapshot_timestamp(
+                                    self._snapshot_field(quote, "t", "timestamp")
+                                )
+                                if bid > 0.0 and ask >= bid and quote_timestamp and (
+                                    price <= 0.0 or (timestamp and quote_timestamp > timestamp)
+                                ):
+                                    price = (bid + ask) / 2.0
+                                    source = "alpaca_crypto_quote_mid"
+                                    timestamp = quote_timestamp
                                 if price > 0:
                                     latest[internal_ticker] = price
-                                    price_sources[internal_ticker] = "alpaca_crypto_snapshot"
+                                    price_sources[internal_ticker] = source
+                                    if timestamp is not None:
+                                        price_timestamps[internal_ticker] = timestamp.isoformat()
                                     self._update_redis_cache(internal_ticker, price)
                     except Exception as e:
                         logger.debug(f"DataService: Alpaca crypto snapshot failed (likely unsupported by plan): {e}")
@@ -510,7 +574,7 @@ class DataService:
                 logger.warning(f"DataService: Alpaca snapshot failed: {e}")
 
         if not remaining_tickers:
-            self.last_price_sources.update(price_sources)
+            self._update_price_metadata(price_sources, price_timestamps)
             return latest
 
         # 3. Try Polygon for remaining
@@ -526,7 +590,7 @@ class DataService:
                 remaining_tickers = [t for t in remaining_tickers if t not in latest]
 
         if not remaining_tickers:
-            self.last_price_sources.update(price_sources)
+            self._update_price_metadata(price_sources, price_timestamps)
             return AwaitableDict(latest)
 
         # 3. Fallback to yfinance for remaining with retry logic
@@ -542,7 +606,7 @@ class DataService:
         except Exception as e:
             logger.error(f"DataService: yfinance retry failed for {remaining_tickers}: {e}")
 
-        self.last_price_sources.update(price_sources)
+        self._update_price_metadata(price_sources, price_timestamps)
         return AwaitableDict(latest)
 
     @agent_trace("DataService.get_latest_price_async")
