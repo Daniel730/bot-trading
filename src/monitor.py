@@ -110,6 +110,31 @@ SPREAD_GUARD_DETAIL_FIELDS = (
     "total_spread_pct",
     "max_spread_pct",
 )
+PROFIT_GUARD_DETAIL_FIELDS = (
+    "profit_guard_net_profit",
+    "profit_guard_gross_profit",
+    "profit_guard_friction_usd",
+    "profit_guard_profit_margin_pct",
+    "profit_guard_expected_loss",
+    "profit_guard_loss_margin_pct",
+    "profit_guard_spread_capture",
+    "profit_guard_stop_spread_move",
+    "profit_guard_friction_pct",
+    "profit_guard_gross_notional",
+    "profit_guard_quantity_a",
+    "profit_guard_quantity_b",
+    "profit_guard_notional_a",
+    "profit_guard_notional_b",
+    "profit_guard_side_a",
+    "profit_guard_side_b",
+    "profit_guard_direction",
+    "profit_guard_z_score",
+    "profit_guard_spread",
+    "profit_guard_innovation_variance",
+    "profit_guard_take_profit_zscore",
+    "profit_guard_stop_loss_zscore",
+)
+TRADE_DECISION_DETAIL_FIELDS = SPREAD_GUARD_DETAIL_FIELDS + PROFIT_GUARD_DETAIL_FIELDS
 CRYPTO_PRICE_SANITY_RANGES = {
     "BTC-USD": (10_000.0, 1_000_000.0),
     "ETH-USD": (100.0, 20_000.0),
@@ -977,7 +1002,7 @@ class ArbitrageMonitor:
             if result.get("reason"):
                 decision["reason"] = result["reason"]
                 decision["rejection_reason"] = result["reason"]
-            for field in SPREAD_GUARD_DETAIL_FIELDS:
+            for field in TRADE_DECISION_DETAIL_FIELDS:
                 if field in result:
                     decision[field] = result[field]
             decisions.append(decision)
@@ -1283,6 +1308,30 @@ class ArbitrageMonitor:
                     take_profit_zscore=settings.TAKE_PROFIT_ZSCORE,
                     stop_loss_zscore=settings.STOP_LOSS_ZSCORE,
                 )
+                profit_guard_details = {
+                    "profit_guard_net_profit": preview.net_profit,
+                    "profit_guard_gross_profit": preview.gross_profit,
+                    "profit_guard_friction_usd": preview.friction_usd,
+                    "profit_guard_profit_margin_pct": preview.profit_margin_pct,
+                    "profit_guard_expected_loss": preview.expected_loss,
+                    "profit_guard_loss_margin_pct": preview.loss_margin_pct,
+                    "profit_guard_spread_capture": preview.spread_capture,
+                    "profit_guard_stop_spread_move": preview.stop_spread_move,
+                    "profit_guard_friction_pct": est_friction_pct,
+                    "profit_guard_gross_notional": legs.gross_notional,
+                    "profit_guard_quantity_a": legs.quantity_a,
+                    "profit_guard_quantity_b": legs.quantity_b,
+                    "profit_guard_notional_a": legs.notional_a,
+                    "profit_guard_notional_b": legs.notional_b,
+                    "profit_guard_side_a": legs.side_a,
+                    "profit_guard_side_b": legs.side_b,
+                    "profit_guard_direction": direction,
+                    "profit_guard_z_score": z_score,
+                    "profit_guard_spread": spread,
+                    "profit_guard_innovation_variance": innovation_var,
+                    "profit_guard_take_profit_zscore": settings.TAKE_PROFIT_ZSCORE,
+                    "profit_guard_stop_loss_zscore": settings.STOP_LOSS_ZSCORE,
+                }
 
                 if preview.net_profit <= 0:
                     logger.info(f"PROFIT GUARD [{t_a}/{t_b}]: Net profit ${preview.net_profit:.2f} is non-positive. Vetoing.")
@@ -1290,6 +1339,7 @@ class ArbitrageMonitor:
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
                     diagnostic["reason"] = "unprofitable"
+                    diagnostic.update(profit_guard_details)
                     return diagnostic
 
                 trade_summary = (

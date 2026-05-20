@@ -163,6 +163,52 @@ def test_trade_decision_report_includes_spread_guard_details(monitor, tmp_path, 
     assert decision["max_spread_pct"] == 0.3
 
 
+def test_trade_decision_report_includes_profit_guard_details(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+        ],
+        results=[
+            {
+                "verdict": "VETOED",
+                "confidence": 0.7,
+                "reason": "unprofitable",
+                "profit_guard_net_profit": -1.82,
+                "profit_guard_gross_profit": 0.44,
+                "profit_guard_friction_usd": 2.26,
+                "profit_guard_friction_pct": 0.00125,
+                "profit_guard_gross_notional": 1808.0,
+                "profit_guard_spread_capture": 2.5,
+                "profit_guard_z_score": 3.143,
+            },
+        ],
+        latest_prices={"BTC-USD": 77540.48, "ETH-USD": 2131.16},
+        latest_price_sources={
+            "BTC-USD": "alpaca_crypto_snapshot",
+            "ETH-USD": "alpaca_crypto_snapshot",
+        },
+        open_signals=[],
+        active_signal_count=1,
+        vetoed_count=1,
+        sizing_base=985590.85,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["rejection_reason"] == "unprofitable"
+    assert decision["profit_guard_net_profit"] == -1.82
+    assert decision["profit_guard_gross_profit"] == 0.44
+    assert decision["profit_guard_friction_usd"] == 2.26
+    assert decision["profit_guard_friction_pct"] == 0.00125
+    assert decision["profit_guard_gross_notional"] == 1808.0
+    assert decision["profit_guard_spread_capture"] == 2.5
+    assert decision["profit_guard_z_score"] == 3.143
+
+
 @pytest.mark.asyncio
 async def test_process_pair_missing_price_reports_skip_reason(monitor, caplog):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
@@ -1554,12 +1600,22 @@ async def test_process_pair_unprofitable_veto_preserves_confidence(monitor):
             expected_loss=8.0,
             loss_margin_pct=0.02,
             friction_usd=0.5,
+            spread_capture=0.75,
+            stop_spread_move=12.0,
         )
 
         diagnostic = await monitor.process_pair(pair, latest_prices)
 
         assert diagnostic["verdict"] == "VETOED"
         assert diagnostic["confidence"] == 0.8
+        assert diagnostic["profit_guard_net_profit"] == -0.25
+        assert diagnostic["profit_guard_gross_profit"] == 0.25
+        assert diagnostic["profit_guard_friction_usd"] == 0.5
+        assert diagnostic["profit_guard_friction_pct"] == 0.002
+        assert diagnostic["profit_guard_gross_notional"] == pytest.approx(299.98)
+        assert diagnostic["profit_guard_quantity_a"] == pytest.approx(0.666666)
+        assert diagnostic["profit_guard_quantity_b"] == pytest.approx(0.666666)
+        assert diagnostic["profit_guard_z_score"] == 3.0
         assert monitor.active_signals[-1]["status"] == "VETOED_UNPROFITABLE"
         assert monitor.active_signals[-1]["confidence"] == pytest.approx(0.8)
 
