@@ -77,6 +77,8 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
             "price_b": 300.0,
             "price_source_a": "unknown",
             "price_source_b": "unknown",
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
         },
         {
             "pair_id": "KO_PEP",
@@ -92,6 +94,8 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
             "price_b": None,
             "price_source_a": "unknown",
             "price_source_b": None,
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
         },
     ]
 
@@ -123,6 +127,41 @@ def test_trade_decision_report_includes_price_source_and_rejection_details(monit
     assert decision["price_source_a"] == "yfinance"
     assert decision["price_source_b"] == "alpaca_crypto_snapshot"
     assert decision["rejection_reason"] == "price_sanity_invalid"
+
+
+def test_trade_decision_report_includes_price_timestamps(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+        ],
+        results=[
+            {"verdict": "IGNORED", "confidence": 0.0, "reason": "stale_price_snapshot"},
+        ],
+        latest_prices={"BTC-USD": 90105.0, "ETH-USD": 2130.0},
+        latest_price_sources={
+            "BTC-USD": "alpaca_crypto_quote_mid",
+            "ETH-USD": "alpaca_crypto_quote_mid",
+        },
+        latest_price_timestamps={
+            "BTC-USD": "2026-05-20T12:01:00+00:00",
+            "ETH-USD": "2026-05-20T12:01:03+00:00",
+        },
+        open_signals=[],
+        active_signal_count=0,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["price_timestamp_a"] == "2026-05-20T12:01:00+00:00"
+    assert decision["price_timestamp_b"] == "2026-05-20T12:01:03+00:00"
+    assert decision["price_source_a"] == "alpaca_crypto_quote_mid"
+    assert decision["price_source_b"] == "alpaca_crypto_quote_mid"
 
 
 def test_trade_decision_report_includes_spread_guard_details(monitor, tmp_path, monkeypatch):

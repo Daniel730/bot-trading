@@ -969,12 +969,14 @@ class ArbitrageMonitor:
         results: list[dict],
         latest_prices: dict,
         latest_price_sources: dict | None = None,
+        latest_price_timestamps: dict | None = None,
         open_signals: list,
         active_signal_count: int,
         vetoed_count: int,
         sizing_base: float,
     ) -> dict:
         latest_price_sources = latest_price_sources or {}
+        latest_price_timestamps = latest_price_timestamps or {}
         decisions = []
         for pair, result in zip(scan_pairs, results):
             ticker_a = pair.get("ticker_a")
@@ -997,6 +999,16 @@ class ArbitrageMonitor:
                 ),
                 "price_source_b": (
                     latest_price_sources.get(ticker_b, "unknown")
+                    if ticker_b in latest_prices
+                    else None
+                ),
+                "price_timestamp_a": (
+                    latest_price_timestamps.get(ticker_a)
+                    if ticker_a in latest_prices
+                    else None
+                ),
+                "price_timestamp_b": (
+                    latest_price_timestamps.get(ticker_b)
                     if ticker_b in latest_prices
                     else None
                 ),
@@ -2678,6 +2690,7 @@ class ArbitrageMonitor:
                             results=results,
                             latest_prices=latest_prices,
                             latest_price_sources=getattr(data_service, "last_price_sources", {}),
+                            latest_price_timestamps=getattr(data_service, "last_price_timestamps", {}),
                             open_signals=open_signals,
                             active_signal_count=active_signal_count,
                             vetoed_count=vetoed_count,
