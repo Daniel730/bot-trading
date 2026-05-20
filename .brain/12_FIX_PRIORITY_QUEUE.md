@@ -20,6 +20,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-20: crypto latest prices now pass coarse per-symbol sanity checks before Kalman update, blocking impossible cross-assigned prices such as BTC near $9 or ETH near BTC prices before state can be poisoned.
 - DONE 2026-05-20: chunked latest-price fetches now serialize crypto chunks, preventing concurrent yfinance crypto fallback calls from cross-assigning ticker prices when Alpaca/Polygon do not fill the batch.
 - DONE 2026-05-20: trade decision reports now include latest price values, price source labels, and explicit rejection reasons per pair so skipped/blocked trades are easier to audit.
+- DONE 2026-05-20: trade decision reports now include loaded-but-not-scanned pairs with reasons such as `market_closed` or `not_cointegrated`, explaining gaps like `Scanned: 9/16`.
 - DONE 2026-05-20: spread-guard blocks now carry bid/ask values, leg spread percentages, total spread percentage, and configured max spread into execution diagnostics and trade decision reports.
 - DONE 2026-05-20: unprofitable profit-guard vetoes now carry gross profit, friction, net profit, sizing, z-score, and spread inputs into execution diagnostics and trade decision reports.
 - DONE 2026-05-20: profit-preview math now fails closed when a candidate entry is already at or beyond the configured statistical stop-loss z-score instead of showing positive expected profit with zero loss risk.

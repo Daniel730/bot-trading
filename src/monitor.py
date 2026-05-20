@@ -1000,7 +1000,11 @@ class ArbitrageMonitor:
         latest_price_sources = latest_price_sources or {}
         latest_price_timestamps = latest_price_timestamps or {}
         decisions = []
-        for pair, result in zip(scan_pairs, results):
+
+        def pair_identity(pair: dict) -> str:
+            return str(pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}")
+
+        def append_decision(pair: dict, result: dict | None) -> None:
             ticker_a = pair.get("ticker_a")
             ticker_b = pair.get("ticker_b")
             result = result or {}
@@ -1042,6 +1046,30 @@ class ArbitrageMonitor:
                 if field in result:
                     decision[field] = result[field]
             decisions.append(decision)
+
+        for pair, result in zip(scan_pairs, results):
+            append_decision(pair, result)
+
+        scanned_pair_ids = {pair_identity(pair) for pair in scan_pairs}
+        for pair in self.active_pairs:
+            if pair_identity(pair) in scanned_pair_ids:
+                continue
+            ticker_a = pair.get("ticker_a")
+            ticker_b = pair.get("ticker_b")
+            if pair.get("is_cointegrated", True) is False:
+                reason = "not_cointegrated"
+            elif not is_crypto_pair(ticker_a, ticker_b) and not self.is_market_open(ticker_a):
+                reason = "market_closed"
+            else:
+                reason = "not_scanned"
+            append_decision(
+                pair,
+                {
+                    "verdict": "IGNORED",
+                    "confidence": 0.0,
+                    "reason": reason,
+                },
+            )
 
         report = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),

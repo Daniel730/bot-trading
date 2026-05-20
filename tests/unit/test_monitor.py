@@ -100,6 +100,67 @@ def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatc
     ]
 
 
+def test_trade_decision_report_includes_loaded_pairs_not_scanned(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+    monkeypatch.setattr(monitor, "is_market_open", MagicMock(return_value=False))
+    monitor.active_pairs = [
+        {"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"},
+        {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+    ]
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[monitor.active_pairs[1]],
+        results=[{"verdict": "IGNORED", "confidence": 0.0, "reason": "below_entry_threshold"}],
+        latest_prices={"BTC-USD": 90_000.0, "ETH-USD": 3_000.0},
+        open_signals=[],
+        active_signal_count=0,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+
+    assert report["pairs_loaded"] == 2
+    assert report["pairs_scanned"] == 1
+    assert report["decisions"] == [
+        {
+            "pair_id": "BTC-USD_ETH-USD",
+            "ticker_a": "BTC-USD",
+            "ticker_b": "ETH-USD",
+            "verdict": "IGNORED",
+            "confidence": 0.0,
+            "reason": "below_entry_threshold",
+            "rejection_reason": "below_entry_threshold",
+            "has_price_a": True,
+            "has_price_b": True,
+            "price_a": 90_000.0,
+            "price_b": 3_000.0,
+            "price_source_a": "unknown",
+            "price_source_b": "unknown",
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
+        },
+        {
+            "pair_id": "AAPL_MSFT",
+            "ticker_a": "AAPL",
+            "ticker_b": "MSFT",
+            "verdict": "IGNORED",
+            "confidence": 0.0,
+            "reason": "market_closed",
+            "rejection_reason": "market_closed",
+            "has_price_a": False,
+            "has_price_b": False,
+            "price_a": None,
+            "price_b": None,
+            "price_source_a": None,
+            "price_source_b": None,
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
+        },
+    ]
+
+
 def test_trade_decision_report_includes_price_source_and_rejection_details(monitor, tmp_path, monkeypatch):
     report_path = tmp_path / "trade_decision_reports.jsonl"
     monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
