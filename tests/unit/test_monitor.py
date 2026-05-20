@@ -98,6 +98,28 @@ async def test_process_pair_missing_price_reports_skip_reason(monitor, caplog):
 
 
 @pytest.mark.asyncio
+async def test_process_pair_blocks_impossible_crypto_price_before_kalman(monitor, caplog):
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 9.45, "ETH-USD": 2110.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         caplog.at_level(logging.WARNING, logger="src.monitor"):
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
+        mock_kf_get.return_value = mock_kf
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+    assert diagnostic["verdict"] == "IGNORED"
+    assert diagnostic["reason"] == "price_sanity_invalid"
+    mock_kf_get.assert_not_awaited()
+    mock_orchestrator.assert_not_awaited()
+    assert "PRICE SANITY [BTC-USD/ETH-USD]" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_process_pair_blocks_clipped_kalman_state_before_orchestrator(monitor, caplog):
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}

@@ -100,6 +100,21 @@ logger = setup_logging()
 KALMAN_BETA_CLIP_MIN = 0.001
 KALMAN_BETA_CLIP_MAX = 1000.0
 KALMAN_MAX_REASONABLE_ABS_ZSCORE = 100.0
+CRYPTO_PRICE_SANITY_RANGES = {
+    "BTC-USD": (10_000.0, 1_000_000.0),
+    "ETH-USD": (100.0, 20_000.0),
+    "LTC-USD": (10.0, 1_000.0),
+    "BCH-USD": (50.0, 5_000.0),
+    "SOL-USD": (1.0, 1_000.0),
+    "AVAX-USD": (1.0, 500.0),
+    "ADA-USD": (0.01, 10.0),
+    "DOT-USD": (0.1, 100.0),
+    "LINK-USD": (0.5, 200.0),
+    "XRP-USD": (0.01, 50.0),
+    "XLM-USD": (0.001, 10.0),
+    "DOGE-USD": (0.001, 10.0),
+    "SHIB-USD": (0.00000001, 0.01),
+}
 
 class ArbitrageMonitor:
     def __init__(self, mode: str = "live"):
@@ -986,6 +1001,29 @@ class ArbitrageMonitor:
 
             price_a = latest_prices[t_a]
             price_b = latest_prices[t_b]
+
+            if is_crypto:
+                invalid_prices = []
+                for ticker, price in ((t_a, price_a), (t_b, price_b)):
+                    try:
+                        parsed_price = float(price)
+                    except (TypeError, ValueError):
+                        invalid_prices.append(f"{ticker}={price}")
+                        continue
+                    bounds = CRYPTO_PRICE_SANITY_RANGES.get(ticker)
+                    if not np.isfinite(parsed_price) or parsed_price <= 0.0:
+                        invalid_prices.append(f"{ticker}={price}")
+                    elif bounds and not (bounds[0] <= parsed_price <= bounds[1]):
+                        invalid_prices.append(f"{ticker}={parsed_price} outside {bounds[0]}..{bounds[1]}")
+                if invalid_prices:
+                    logger.warning(
+                        "PRICE SANITY [%s/%s]: invalid latest price(s): %s. "
+                        "Blocking before Kalman update.",
+                        t_a,
+                        t_b,
+                        "; ".join(invalid_prices),
+                    )
+                    return skip("price_sanity_invalid")
 
             # Feature 007: Kalman Filter Update
             kf = await arbitrage_service.get_or_create_filter(pair['id'])
