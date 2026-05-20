@@ -119,6 +119,7 @@ class ArbitrageMonitor:
         self.last_cointegration_check: dict = {}
         # Tracks which pairs have had their Kalman uncertainty bumped today.
         self.bumped_pairs_today: dict = {}
+        self.kalman_quarantined_pairs: set[str] = set()
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
         self.trade_decision_report_path = Path("logs") / "trade_decision_reports.jsonl"
@@ -700,6 +701,14 @@ class ArbitrageMonitor:
 
                 pair_id = f"{ticker_a}_{ticker_b}"
 
+                if pair_id in self.kalman_quarantined_pairs:
+                    arbitrage_service.filters.pop(pair_id, None)
+                    arbitrage_service.filter_fingerprints.pop(pair_id, None)
+                    try:
+                        await redis_service.client.delete(f"kalman:{pair_id}")
+                    except Exception as exc:
+                        logger.warning("KALMAN QUARANTINE: Redis state delete failed for %s: %s", pair_id, exc)
+
                 # Initialize Kalman filter.
                 # Do NOT pass initial_state here — that would bypass both Redis
                 # warm-start and 30-day historical pre-warming, leaving P=eye(2)*10
@@ -715,6 +724,9 @@ class ArbitrageMonitor:
                     r=settings.KALMAN_R,
                     prewarm_data=hist_data
                 )
+                if pair_id in self.kalman_quarantined_pairs:
+                    self.kalman_quarantined_pairs.discard(pair_id)
+                    logger.info("KALMAN QUARANTINE CLEARED for %s after historical rebuild.", pair_id)
 
                 metrics = arbitrage_service.get_spread_metrics(hist_data[col_a], hist_data[col_b], hedge)
                 pair_record = {
@@ -966,6 +978,9 @@ class ArbitrageMonitor:
             if not pair.get('is_cointegrated', True):
                 return skip("not_cointegrated")
 
+            if pair['id'] in self.kalman_quarantined_pairs:
+                return skip("kalman_state_quarantined")
+
             if t_a not in latest_prices or t_b not in latest_prices:
                 return skip("missing_price")
 
@@ -1026,6 +1041,18 @@ class ArbitrageMonitor:
                 invalid_kalman_state = True
 
             if invalid_kalman_state:
+                self.kalman_quarantined_pairs.add(pair['id'])
+                arbitrage_service.filters.pop(pair['id'], None)
+                arbitrage_service.filter_fingerprints.pop(pair['id'], None)
+                try:
+                    await redis_service.client.delete(f"kalman:{pair['id']}")
+                except Exception as exc:
+                    logger.warning(
+                        "KALMAN GUARD [%s/%s]: failed to delete Redis state for quarantine: %s",
+                        t_a,
+                        t_b,
+                        exc,
+                    )
                 logger.warning(
                     "KALMAN GUARD [%s/%s]: invalid state. beta=%s z_score=%s "
                     "innovation_var=%s spread=%s. Blocking entry before state persistence/approval.",

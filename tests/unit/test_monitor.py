@@ -106,6 +106,7 @@ async def test_process_pair_blocks_clipped_kalman_state_before_orchestrator(moni
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
          patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
          patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock), \
          caplog.at_level(logging.WARNING, logger="src.monitor"):
 
         mock_kf = MagicMock()
@@ -120,6 +121,32 @@ async def test_process_pair_blocks_clipped_kalman_state_before_orchestrator(moni
     mock_save_state.assert_not_awaited()
     mock_orchestrator.assert_not_awaited()
     assert "KALMAN GUARD [BTC-USD/ETH-USD]" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_pair_quarantines_invalid_kalman_state_until_rebuild(monitor):
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, 0.001], 0.1, 3.0, 0.5)
+        mock_kf_get.return_value = mock_kf
+        mock_orchestrator.return_value = {"final_confidence": 0.3, "final_verdict": "VETO"}
+
+        first = await monitor.process_pair(pair, latest_prices)
+        second = await monitor.process_pair(pair, latest_prices)
+
+    assert first["reason"] == "kalman_state_invalid"
+    assert second["reason"] == "kalman_state_quarantined"
+    assert mock_kf_get.await_count == 1
+    mock_save_state.assert_not_awaited()
+    mock_orchestrator.assert_not_awaited()
 
 
 @pytest.mark.asyncio
