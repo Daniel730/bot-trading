@@ -119,6 +119,56 @@ async def test_paper_notify_redacts_telegram_token_from_send_failure(capsys):
         notification_service.token = original_token
 
 
+@pytest.mark.asyncio
+async def test_send_message_retries_plain_text_when_markdown_parse_fails():
+    original_enabled = notification_service._telegram_enabled
+    original_app = notification_service.app
+    original_chat_id = notification_service.chat_id
+
+    class ParseFallbackBot:
+        def __init__(self):
+            self.calls = []
+
+        async def send_message(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get("parse_mode") == "Markdown":
+                raise RuntimeError(
+                    "Can't parse entities: can't find end of the entity "
+                    "starting at byte offset 1568"
+                )
+
+    class FakeApp:
+        def __init__(self):
+            self.bot = ParseFallbackBot()
+
+    fake_app = FakeApp()
+    message = (
+        "Order status NEEDS_MANUAL_RECONCILIATION "
+        "signal_id=c8e474ce_0e32_4817 ticker=BTC-USD"
+    )
+
+    try:
+        notification_service._telegram_enabled = True
+        notification_service.app = fake_app
+        notification_service.chat_id = "123"
+
+        with patch(
+            "src.services.dashboard_service.dashboard_state.add_message",
+            new=AsyncMock(),
+        ) as dashboard_add_message:
+            await notification_service.send_message(message)
+
+        assert len(fake_app.bot.calls) == 2
+        assert fake_app.bot.calls[0]["parse_mode"] == "Markdown"
+        assert "parse_mode" not in fake_app.bot.calls[1]
+        assert fake_app.bot.calls[1]["text"] == message
+        dashboard_add_message.assert_awaited_once_with("BOT", message)
+    finally:
+        notification_service._telegram_enabled = original_enabled
+        notification_service.app = original_app
+        notification_service.chat_id = original_chat_id
+
+
 def test_httpx_telegram_request_logs_redact_bot_token(caplog):
     leaked_token = "123456789:SUPER_SECRET_TOKEN_VALUE_123456"
     leaked_url = f"https://api.telegram.org/bot{leaked_token}/getMe"
