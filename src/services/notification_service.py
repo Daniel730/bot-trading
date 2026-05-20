@@ -2,11 +2,67 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 from src.config import settings
 import asyncio
+import logging
 import re
 import uuid
 
+
+REDACTED_TELEGRAM_TOKEN = "<redacted-telegram-token>"
+_TELEGRAM_BOT_URL_RE = re.compile(r"(api\.telegram\.org/bot)[^/\s]+")
+_TELEGRAM_BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}")
+_TELEGRAM_LOG_REDACTION_LOGGERS = (
+    "httpx",
+    "httpcore",
+    "telegram",
+    "telegram.ext",
+    "telegram.request",
+)
+
+
+def _redact_telegram_sensitive_text(value, token: str = "") -> str:
+    text = str(value)
+    token = str(token or "")
+    if token:
+        text = text.replace(token, REDACTED_TELEGRAM_TOKEN)
+    text = _TELEGRAM_BOT_URL_RE.sub(r"\1" + REDACTED_TELEGRAM_TOKEN, text)
+    return _TELEGRAM_BOT_TOKEN_RE.sub(REDACTED_TELEGRAM_TOKEN, text)
+
+
+def _redact_logging_value(value):
+    text = str(value)
+    redacted = _redact_telegram_sensitive_text(text)
+    return redacted if redacted != text else value
+
+
+class TelegramTokenRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = _redact_logging_value(record.msg)
+        if isinstance(record.args, dict):
+            record.args = {
+                key: _redact_logging_value(arg)
+                for key, arg in record.args.items()
+            }
+        elif record.args:
+            record.args = tuple(_redact_logging_value(arg) for arg in record.args)
+        return True
+
+
+_TELEGRAM_LOG_REDACTION_FILTER = TelegramTokenRedactionFilter()
+
+
+def configure_telegram_log_redaction() -> None:
+    for logger_name in _TELEGRAM_LOG_REDACTION_LOGGERS:
+        logger = logging.getLogger(logger_name)
+        if not any(
+            isinstance(filter_, TelegramTokenRedactionFilter)
+            for filter_ in logger.filters
+        ):
+            logger.addFilter(_TELEGRAM_LOG_REDACTION_FILTER)
+
+
 class NotificationService:
     def __init__(self):
+        configure_telegram_log_redaction()
         self.token = settings.TELEGRAM_BOT_TOKEN
         self.chat_id = settings.TELEGRAM_CHAT_ID
         self.pending_approvals = {} # correlation_id -> asyncio.Future
@@ -36,15 +92,7 @@ class NotificationService:
             print(f"TELEGRAM: Failed to initialize ({self._redact_sensitive_text(e)}). Telegram notifications disabled.")
 
     def _redact_sensitive_text(self, value) -> str:
-        text = str(value)
-        token = str(self.token or "")
-        if token:
-            text = text.replace(token, "<redacted-telegram-token>")
-        return re.sub(
-            r"(api\.telegram\.org/bot)[^/\s]+",
-            r"\1<redacted-telegram-token>",
-            text,
-        )
+        return _redact_telegram_sensitive_text(value, self.token)
 
     async def _handle_macro(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Displays macro economic summary."""
