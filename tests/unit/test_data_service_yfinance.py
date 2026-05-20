@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, patch
+import threading
 import time
 
 import pandas as pd
@@ -178,6 +179,36 @@ async def test_get_latest_price_async_caps_large_configured_batch_size():
     assert set(prices) == set(tickers)
     assert len(calls) == 3
     assert all(len(call) <= service.LATEST_PRICE_BATCH_CAP for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_get_latest_price_async_serializes_crypto_chunks():
+    service = DataService()
+    tickers = ["BTC-USD", "ETH-USD", "LTC-USD", "BCH-USD"]
+    active_calls = 0
+    max_active_calls = 0
+    guard = threading.Lock()
+
+    def fake_batch(chunk):
+        nonlocal active_calls, max_active_calls
+        with guard:
+            active_calls += 1
+            max_active_calls = max(max_active_calls, active_calls)
+        time.sleep(0.05)
+        with guard:
+            active_calls -= 1
+        return {ticker: float(idx + 1) for idx, ticker in enumerate(chunk)}
+
+    with patch("src.services.data_service.settings.MARKET_DATA_BATCH_SIZE", 2), \
+         patch("src.services.data_service.settings.MARKET_DATA_BATCH_CONCURRENCY", 2), \
+         patch.object(service, "get_latest_price", side_effect=fake_batch), \
+         patch("src.services.data_service.redis_service.get_price", new_callable=AsyncMock) as get_price, \
+         patch("src.services.data_service.redis_service.set_price", new_callable=AsyncMock):
+        get_price.return_value = None
+        prices = await service.get_latest_price_async(tickers, timeout=1.0)
+
+    assert set(prices) == set(tickers)
+    assert max_active_calls == 1
 
 
 @pytest.mark.asyncio
