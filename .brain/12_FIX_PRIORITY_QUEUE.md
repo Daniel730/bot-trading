@@ -24,6 +24,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-20: profit-preview math now fails closed when a candidate entry is already at or beyond the configured statistical stop-loss z-score instead of showing positive expected profit with zero loss risk.
 - DONE 2026-05-20: repeated unchanged Alpaca crypto snapshot price tuples now fail closed before Kalman updates so stale live-data snapshots cannot create or preserve bad signal state.
 - DONE 2026-05-20: latest crypto prices now use newer Alpaca quote midpoints, with quote source and timestamp metadata, when the snapshot trade price is older than the quote.
+- DONE 2026-05-20: repeated unchanged Alpaca crypto quote-mid timestamps now fail closed before Kalman updates, preventing frozen quote midpoint data from silently driving signal math.
 - DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing

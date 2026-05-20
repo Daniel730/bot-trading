@@ -1081,24 +1081,50 @@ class ArbitrageMonitor:
                     return skip("price_sanity_invalid")
 
                 price_sources = getattr(data_service, "last_price_sources", {})
-                if (
-                    price_sources.get(t_a) == "alpaca_crypto_snapshot"
-                    and price_sources.get(t_b) == "alpaca_crypto_snapshot"
-                ):
-                    pair_prices = (float(price_a), float(price_b))
-                    previous_prices, repeat_count = self._crypto_snapshot_pair_prices.get(
+                source_a = price_sources.get(t_a)
+                source_b = price_sources.get(t_b)
+                alpaca_crypto_sources = {"alpaca_crypto_snapshot", "alpaca_crypto_quote_mid"}
+                if source_a in alpaca_crypto_sources and source_b in alpaca_crypto_sources:
+                    price_timestamps = getattr(data_service, "last_price_timestamps", {})
+
+                    def freshness_marker(ticker: str, price: float, source: str):
+                        if source == "alpaca_crypto_quote_mid":
+                            timestamp = price_timestamps.get(ticker)
+                            return ("quote_mid", timestamp) if timestamp else None
+                        return ("snapshot", float(price))
+
+                    pair_marker = (
+                        freshness_marker(t_a, price_a, source_a),
+                        freshness_marker(t_b, price_b, source_b),
+                    )
+                    if pair_marker[0] is None or pair_marker[1] is None:
+                        logger.warning(
+                            "PRICE STALENESS [%s/%s]: Alpaca crypto quote mid missing "
+                            "timestamp metadata. Blocking before Kalman update.",
+                            t_a,
+                            t_b,
+                        )
+                        return skip("stale_price_snapshot")
+
+                    previous_marker, repeat_count = self._crypto_snapshot_pair_prices.get(
                         pair["id"],
                         ((None, None), 0),
                     )
-                    repeat_count = repeat_count + 1 if previous_prices == pair_prices else 0
-                    self._crypto_snapshot_pair_prices[pair["id"]] = (pair_prices, repeat_count)
+                    repeat_count = repeat_count + 1 if previous_marker == pair_marker else 0
+                    self._crypto_snapshot_pair_prices[pair["id"]] = (pair_marker, repeat_count)
                     if repeat_count >= CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT:
+                        stale_subject = (
+                            "Alpaca crypto quote mid timestamps"
+                            if "alpaca_crypto_quote_mid" in {source_a, source_b}
+                            else "Alpaca crypto snapshot prices"
+                        )
                         logger.warning(
-                            "PRICE STALENESS [%s/%s]: Alpaca crypto snapshot prices repeated "
+                            "PRICE STALENESS [%s/%s]: %s repeated "
                             "unchanged at %s for %s consecutive scan(s). Blocking before Kalman update.",
                             t_a,
                             t_b,
-                            pair_prices,
+                            stale_subject,
+                            pair_marker,
                             repeat_count,
                         )
                         return skip("stale_price_snapshot")
