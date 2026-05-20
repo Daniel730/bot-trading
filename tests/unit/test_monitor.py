@@ -8,6 +8,11 @@ from src.config import settings
 from src.services.data_service import data_service
 from src.services.persistence_service import ExitReason, OrderStatus, persistence_service
 
+
+def test_crypto_snapshot_stale_repeat_limit_matches_runtime_cadence():
+    assert CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT == 5
+
+
 @pytest.fixture
 def monitor(monkeypatch):
     # We need to ensure monitor.brokerage is a mock

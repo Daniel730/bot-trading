@@ -150,7 +150,7 @@ CRYPTO_PRICE_SANITY_RANGES = {
     "DOGE-USD": (0.001, 10.0),
     "SHIB-USD": (0.00000001, 0.01),
 }
-CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT = 1
+CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT = 5
 
 class ArbitrageMonitor:
     def __init__(self, mode: str = "live"):
