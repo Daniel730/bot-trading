@@ -89,6 +89,18 @@ async def test_wallet_buy_blocks_when_cash_limited(alpaca_wallet_context):
 
 
 @pytest.mark.asyncio
+async def test_wallet_sync_blocks_when_cash_limited(alpaca_wallet_context):
+    with pytest.raises(HTTPException) as excinfo:
+        await dashboard_service.sync_wallet_for_coint(
+            WalletSyncRequest(budget=2000.0, delay_seconds=0)
+        )
+
+    assert excinfo.value.status_code == 400
+    assert "cash" in excinfo.value.detail.lower()
+    alpaca_wallet_context.place_value_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_wallet_sync_paper_mode_fails_closed_instead_of_pretending_orders(
     alpaca_wallet_context,
     monkeypatch,

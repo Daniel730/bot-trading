@@ -1474,11 +1474,12 @@ class DashboardService:
         budget = float(request.budget)
 
         if budget > effective_cash + 1e-9:
-            logger.warning(
-                "DASHBOARD: Wallet sync budget %.2f exceeds spendable %s cash/budget %.2f; deferring to broker.",
-                budget,
-                brokerage_service.provider_name,
-                effective_cash,
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Wallet sync blocked: requested budget {budget:.2f} "
+                    f"exceeds effective {brokerage_service.provider_name} cash {effective_cash:.2f}."
+                ),
             )
 
         try:
