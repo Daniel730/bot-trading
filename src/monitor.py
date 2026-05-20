@@ -28,7 +28,7 @@ from src.services.market_regime_service import market_regime_service
 from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
 from src.services.persistence_service import ExitReason
-from src.services.dashboard_service import dashboard_service
+from src.services.dashboard_service import dashboard_service, dashboard_state
 from src.services.background_task_watchdog import background_task_watchdog
 from src.services.trade_math import build_pair_legs, cap_pair_notional, estimate_pair_profit
 import uuid
@@ -526,11 +526,23 @@ class ArbitrageMonitor:
         FR-006: Single informative startup line so the operator immediately
         knows mode, pair universe size, and when the next trading window opens.
         """
-        mode = "PAPER" if settings.PAPER_TRADING else "LIVE"
+        runtime = dashboard_state.runtime_info()
+        mode = runtime["mode"]
         next_open = self.next_market_open()
+        logger.info(
+            "Runtime mode resolved: execution_mode=%s broker_paper_trading=%s "
+            "alpaca_endpoint_class=%s paper_trading=%s live_capital_danger=%s",
+            runtime["execution_mode"],
+            runtime["broker_paper_trading"],
+            runtime["alpaca_endpoint_class"],
+            runtime["paper_trading"],
+            runtime["live_capital_danger"],
+        )
 
         table = Table(title="Bot Pre-flight Configuration", show_header=False, box=None)
         table.add_row("Mode", f"[bold cyan]{mode}[/]")
+        table.add_row("Execution Mode", f"[bold cyan]{runtime['execution_mode']}[/]")
+        table.add_row("Alpaca Endpoint", f"{runtime['alpaca_endpoint_class']}")
         table.add_row("Dev Mode", f"{'[green]Enabled[/]' if settings.DEV_MODE else '[yellow]Disabled[/]'}")
 
         if settings.DEV_MODE:

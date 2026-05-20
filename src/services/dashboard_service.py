@@ -131,9 +131,19 @@ def _wallet_execution_mode() -> str:
 
 
 def _alpaca_base_url_is_paper(base_url: str) -> bool:
+    return _alpaca_endpoint_class(base_url) == "paper"
+
+
+def _alpaca_endpoint_class(base_url: str) -> str:
     parsed = urlparse(str(base_url or "").strip())
     host = (parsed.netloc or parsed.path).split("/")[0].lower()
-    return host == "paper-api.alpaca.markets"
+    if host == "paper-api.alpaca.markets":
+        return "paper"
+    if host == "api.alpaca.markets":
+        return "live"
+    if host:
+        return "custom"
+    return "unknown"
 
 
 async def _brokerage_asset_active(ticker: str) -> bool:
@@ -227,21 +237,24 @@ class DashboardState:
         self.last_control_action: Optional[dict] = None
 
     def runtime_info(self) -> dict:
+        alpaca_endpoint_class = _alpaca_endpoint_class(settings.ALPACA_BASE_URL)
         if settings.DEV_MODE:
             mode = "DEV"
         elif settings.PAPER_TRADING:
             mode = "PAPER"
         elif (
             settings.BROKERAGE_PROVIDER == "ALPACA"
-            and _alpaca_base_url_is_paper(settings.ALPACA_BASE_URL)
+            and alpaca_endpoint_class == "paper"
         ):
             mode = "ALPACA_PAPER"
         else:
             mode = "LIVE"
         return {
             "mode": mode,
+            "execution_mode": mode,
             "paper_trading": settings.PAPER_TRADING,
             "broker_paper_trading": mode == "ALPACA_PAPER",
+            "alpaca_endpoint_class": alpaca_endpoint_class,
             "dev_mode": settings.DEV_MODE,
             "live_capital_danger": settings.LIVE_CAPITAL_DANGER,
             "region": settings.REGION,
@@ -1810,6 +1823,7 @@ class DashboardService:
             "status": status,
             "current": current,
             "history": list(self.health_history),
+            "runtime": dashboard_state.runtime_info(),
             "background_tasks": background_tasks,
         }
 

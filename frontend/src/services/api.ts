@@ -63,8 +63,10 @@ export interface ThoughtTelemetry {
 
 export interface RuntimeInfo {
   mode: 'LIVE' | 'ALPACA_PAPER' | 'PAPER' | 'DEV';
+  execution_mode?: 'LIVE' | 'ALPACA_PAPER' | 'PAPER' | 'DEV';
   paper_trading: boolean;
   broker_paper_trading?: boolean;
+  alpaca_endpoint_class?: 'paper' | 'live' | 'custom' | 'unknown';
   dev_mode: boolean;
   live_capital_danger: boolean;
   region: string;
@@ -313,6 +315,7 @@ export interface HealthResponse {
   status: string;
   current: HealthPoint;
   history: HealthPoint[];
+  runtime?: RuntimeInfo;
 }
 
 export interface LogEvent {
