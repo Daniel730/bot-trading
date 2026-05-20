@@ -119,6 +119,50 @@ def test_trade_decision_report_includes_price_source_and_rejection_details(monit
     assert decision["rejection_reason"] == "price_sanity_invalid"
 
 
+def test_trade_decision_report_includes_spread_guard_details(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"},
+        ],
+        results=[
+            {
+                "verdict": "EXECUTION_BLOCKED",
+                "confidence": 0.8,
+                "reason": "spread_guard",
+                "bid_a": 100.0,
+                "ask_a": 100.2,
+                "bid_b": 50.0,
+                "ask_b": 50.1,
+                "spread_a_pct": 0.2,
+                "spread_b_pct": 0.2,
+                "total_spread_pct": 0.4004,
+                "max_spread_pct": 0.3,
+            },
+        ],
+        latest_prices={"AAPL": 100.2, "MSFT": 50.1},
+        open_signals=[],
+        active_signal_count=1,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["rejection_reason"] == "spread_guard"
+    assert decision["bid_a"] == 100.0
+    assert decision["ask_a"] == 100.2
+    assert decision["bid_b"] == 50.0
+    assert decision["ask_b"] == 50.1
+    assert decision["spread_a_pct"] == 0.2
+    assert decision["spread_b_pct"] == 0.2
+    assert decision["total_spread_pct"] == 0.4004
+    assert decision["max_spread_pct"] == 0.3
+
+
 @pytest.mark.asyncio
 async def test_process_pair_missing_price_reports_skip_reason(monitor, caplog):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}

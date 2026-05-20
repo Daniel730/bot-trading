@@ -34,11 +34,18 @@ async def test_spread_guard_rejection():
          patch('src.monitor.logger') as mock_logger, \
          patch.object(monitor.brokerage, 'get_account_cash', return_value=2000.0):
 
-        await monitor.execute_trade(pair, "BUY", 100.2, 50.0, signal_id)
+        result = await monitor.execute_trade(pair, "BUY", 100.2, 50.0, signal_id)
 
         # Check that rejection log was called
         rej_log = [call for call in mock_logger.warning.call_args_list if "SPREAD GUARD: Rejecting" in call[0][0]]
         assert len(rej_log) == 1, "Monitor should have rejected the trade due to high spread."
+        assert result["reason"] == "spread_guard"
+        assert result["bid_a"] == 100.0
+        assert result["ask_a"] == 100.2
+        assert result["bid_b"] == 50.0
+        assert result["ask_b"] == 50.1
+        assert result["total_spread_pct"] == pytest.approx(0.4004)
+        assert result["max_spread_pct"] == pytest.approx(0.3)
 
 
 @pytest.mark.asyncio
