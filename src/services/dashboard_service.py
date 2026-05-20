@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Literal, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -130,6 +130,12 @@ def _wallet_execution_mode() -> str:
     return "PAPER" if settings.PAPER_TRADING else brokerage_service.provider_name
 
 
+def _alpaca_base_url_is_paper(base_url: str) -> bool:
+    parsed = urlparse(str(base_url or "").strip())
+    host = (parsed.netloc or parsed.path).split("/")[0].lower()
+    return host == "paper-api.alpaca.markets"
+
+
 async def _brokerage_asset_active(ticker: str) -> bool:
     result = brokerage_service.is_asset_active(ticker)
     if inspect.isawaitable(result):
@@ -225,11 +231,17 @@ class DashboardState:
             mode = "DEV"
         elif settings.PAPER_TRADING:
             mode = "PAPER"
+        elif (
+            settings.BROKERAGE_PROVIDER == "ALPACA"
+            and _alpaca_base_url_is_paper(settings.ALPACA_BASE_URL)
+        ):
+            mode = "ALPACA_PAPER"
         else:
             mode = "LIVE"
         return {
             "mode": mode,
             "paper_trading": settings.PAPER_TRADING,
+            "broker_paper_trading": mode == "ALPACA_PAPER",
             "dev_mode": settings.DEV_MODE,
             "live_capital_danger": settings.LIVE_CAPITAL_DANGER,
             "region": settings.REGION,

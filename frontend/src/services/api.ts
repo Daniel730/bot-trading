@@ -62,8 +62,9 @@ export interface ThoughtTelemetry {
 }
 
 export interface RuntimeInfo {
-  mode: 'LIVE' | 'PAPER' | 'DEV';
+  mode: 'LIVE' | 'ALPACA_PAPER' | 'PAPER' | 'DEV';
   paper_trading: boolean;
+  broker_paper_trading?: boolean;
   dev_mode: boolean;
   live_capital_danger: boolean;
   region: string;

@@ -42,6 +42,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-19: architecture docs/tests now state that `src/monitor.py` paper orders use `shadow_service`, broker-connected orders use Python `BrokerageService`, and the Java execution engine is a dry-run/audit sidecar rather than the monitor's default order path.
 - DONE 2026-05-19: dashboard wallet buy endpoints now fail closed with HTTP 409 while `PAPER_TRADING=true` instead of returning fake successful paper order IDs that never reach Alpaca.
 - DONE 2026-05-20: dashboard Pairs and Wallet buy buttons now honor the live `PAPER_TRADING` runtime/config state, disable broker-buy actions in shadow paper mode, and show the same fail-closed message as the backend before any confirm dialog or buy API call.
+- DONE 2026-05-20: dashboard runtime mode now distinguishes local shadow paper (`PAPER_TRADING=true`) from broker-connected Alpaca paper (`PAPER_TRADING=false` with `ALPACA_BASE_URL=https://paper-api.alpaca.markets`) by reporting `ALPACA_PAPER` instead of plain `LIVE`.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.

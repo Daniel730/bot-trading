@@ -1604,6 +1604,6 @@ Use current source and current tests first, but keep these as context:
 5. Does an unknown leg B or emergency close state block automation and notify the operator?
 6. Does startup block when unresolved ledger rows exist?
 7. Does paper-mode dashboard wallet sync avoid broker calls from both backend routes and frontend buy buttons?
-8. Does the test suite express the new fail-closed contract?
+8. Does the dashboard clearly distinguish shadow paper mode from Alpaca paper-broker mode?
 9. Does Compose still require explicit non-default PostgreSQL credentials?
 10. Does documentation match the current Alpaca-only brokerage facade?
