@@ -165,6 +165,18 @@ describe('WalletPanel cash_limited banner', () => {
     });
   });
 
+  it('disables broker buy when cash_limited is true', async () => {
+    mockFetchRecs.mockResolvedValue(makePlanResponse({ cash_limited: true }));
+
+    render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Buy Selected')).toBeDisabled();
+      expect(screen.getByText(/reduce the budget/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Orders will still be attempted/i)).not.toBeInTheDocument();
+  });
+
   it('does NOT show cash_limited banner when cash_limited is false', async () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ cash_limited: false }));
 

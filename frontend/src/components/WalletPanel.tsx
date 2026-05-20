@@ -199,7 +199,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
     }
   };
 
-  const buyDisabled = buying;
+  const buyDisabled = buying || !plan || selectedRecommendations.length === 0 || Boolean(plan.cash_limited);
 
   return (
     <div className="wallet-page">
@@ -283,7 +283,7 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken }) => {
       {plan?.cash_limited ? (
         <div className="banner warning">
           <AlertTriangle size={14} />
-          Budget exceeds bot-calculated spendable broker cash. Orders will still be attempted.
+          Budget exceeds bot-calculated spendable broker cash. Reduce the budget before buying.
         </div>
       ) : null}
 
