@@ -15,6 +15,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-20: monitor entries now fail closed on invalid Kalman state before Redis persistence, AI approval, or execution when beta is clipped, z-score/state values are non-finite, innovation variance is invalid, or z-score is absurd.
 - DONE 2026-05-20: invalid Kalman state now quarantines the affected pair, drops poisoned in-memory/Redis Kalman state, and keeps entries blocked until the existing historical initialization path rebuilds that pair.
 - DONE 2026-05-20: crypto latest prices now pass coarse per-symbol sanity checks before Kalman update, blocking impossible cross-assigned prices such as BTC near $9 or ETH near BTC prices before state can be poisoned.
+- DONE 2026-05-20: chunked latest-price fetches now serialize crypto chunks, preventing concurrent yfinance crypto fallback calls from cross-assigning ticker prices when Alpaca/Polygon do not fill the batch.
 - DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing

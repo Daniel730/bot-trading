@@ -584,9 +584,10 @@ class DataService:
         )
         concurrency = max(1, int(settings.MARKET_DATA_BATCH_CONCURRENCY))
         semaphore = asyncio.Semaphore(concurrency)
+        crypto_chunk_lock = asyncio.Lock()
 
         async def fetch_chunk(chunk: List[str]) -> dict:
-            async with semaphore:
+            async def run_chunk() -> dict:
                 return await self._run_sync_backend(
                     self.get_latest_price,
                     chunk,
@@ -594,6 +595,12 @@ class DataService:
                     label=f"latest price chunk {self._summarize_tickers(chunk)}",
                     fallback={},
                 )
+
+            async with semaphore:
+                if any(ticker.endswith("-USD") for ticker in chunk):
+                    async with crypto_chunk_lock:
+                        return await run_chunk()
+                return await run_chunk()
 
         chunk_results = await asyncio.gather(
             *(fetch_chunk(chunk) for chunk in self._chunks(remaining_tickers, batch_size)),
