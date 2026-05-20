@@ -21,6 +21,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-20: trade decision reports now include latest price values, price source labels, and explicit rejection reasons per pair so skipped/blocked trades are easier to audit.
 - DONE 2026-05-20: spread-guard blocks now carry bid/ask values, leg spread percentages, total spread percentage, and configured max spread into execution diagnostics and trade decision reports.
 - DONE 2026-05-20: unprofitable profit-guard vetoes now carry gross profit, friction, net profit, sizing, z-score, and spread inputs into execution diagnostics and trade decision reports.
+- DONE 2026-05-20: profit-preview math now fails closed when a candidate entry is already at or beyond the configured statistical stop-loss z-score instead of showing positive expected profit with zero loss risk.
 - DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing

@@ -114,3 +114,20 @@ def test_expected_profit_uses_spread_capture_and_full_pair_friction():
     assert preview.gross_profit == pytest.approx(0.833333, rel=1e-5)
     assert preview.friction_usd == pytest.approx(legs.gross_notional * 0.001)
     assert preview.net_profit < 0
+
+
+def test_expected_profit_fails_closed_when_entry_is_beyond_stop_loss():
+    preview = estimate_pair_profit(
+        quantity_a=10.0,
+        gross_notional=1000.0,
+        spread=6.0,
+        z_score=6.0,
+        innovation_variance=1.0,
+        friction_pct=0.0,
+        take_profit_zscore=0.5,
+        stop_loss_zscore=3.5,
+    )
+
+    assert preview.gross_profit == 0.0
+    assert preview.spread_capture == 0.0
+    assert preview.net_profit <= 0.0

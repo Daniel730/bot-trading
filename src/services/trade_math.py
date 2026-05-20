@@ -112,21 +112,37 @@ def estimate_pair_profit(
     if quantity_a <= 0 or gross_notional <= 0:
         return PairProfitPreview(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
+    friction_pct = max(0.0, float(friction_pct or 0.0))
+    friction_usd = gross_notional * friction_pct
+    abs_z_score = abs(float(z_score or 0.0))
+    stop_loss_zscore = _positive(stop_loss_zscore)
+    if stop_loss_zscore <= 0 or abs_z_score >= stop_loss_zscore:
+        friction_usd = _floor(friction_usd, 6)
+        net_profit = -friction_usd
+        return PairProfitPreview(
+            gross_profit=0.0,
+            friction_usd=friction_usd,
+            net_profit=net_profit,
+            profit_margin_pct=(net_profit / gross_notional) * 100.0,
+            expected_loss=0.0,
+            loss_margin_pct=0.0,
+            spread_capture=0.0,
+            stop_spread_move=0.0,
+        )
+
     std = sqrt(_positive(innovation_variance))
     current_deviation = abs(float(spread or 0.0))
     if current_deviation <= 0 and std > 0:
-        current_deviation = abs(float(z_score or 0.0)) * std
+        current_deviation = abs_z_score * std
 
     exit_deviation = max(0.0, _positive(take_profit_zscore) * std)
     spread_capture = max(0.0, current_deviation - exit_deviation)
     gross_profit = quantity_a * spread_capture
 
-    friction_pct = max(0.0, float(friction_pct or 0.0))
-    friction_usd = gross_notional * friction_pct
     net_profit = gross_profit - friction_usd
     profit_margin_pct = (net_profit / gross_notional) * 100.0 if gross_notional > 0 else 0.0
 
-    stop_distance_z = max(0.0, _positive(stop_loss_zscore) - abs(float(z_score or 0.0)))
+    stop_distance_z = max(0.0, stop_loss_zscore - abs_z_score)
     stop_spread_move = stop_distance_z * std
     expected_loss = quantity_a * stop_spread_move
     loss_margin_pct = (expected_loss / gross_notional) * 100.0 if gross_notional > 0 else 0.0
