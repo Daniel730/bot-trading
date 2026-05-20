@@ -34,6 +34,11 @@ def _redact_logging_value(value):
     return redacted if redacted != text else value
 
 
+def _is_telegram_markdown_parse_error(error) -> bool:
+    text = str(error).lower()
+    return "can't parse entities" in text or "can't parse message text" in text
+
+
 class TelegramTokenRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _redact_logging_value(record.msg)
@@ -378,11 +383,19 @@ class NotificationService:
             return
         try:
             # 1. Send to Telegram
-            await self.app.bot.send_message(
-                chat_id=self.chat_id,
-                text=message,
-                parse_mode="Markdown"
-            )
+            try:
+                await self.app.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                if not _is_telegram_markdown_parse_error(e):
+                    raise
+                await self.app.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=message,
+                )
 
             # 2. Send to Dashboard Terminal
             from src.services.dashboard_service import dashboard_state

@@ -9,6 +9,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-19: Telegram notification exception output now redacts bot tokens and Telegram API bot URLs before printing/logging.
 - DONE 2026-05-19: local historical `logs/recovery_window.log` was sanitized and a regression now catches direct or wrapped Telegram bot token leaks when that ignored log file exists.
 - DONE 2026-05-20: Telegram/httpx request logs now redact bot API URLs before console/log handlers can print the bot token.
+- DONE 2026-05-20: Telegram operational alerts retry as plain text when Markdown parsing rejects reconciliation/status messages.
 - EXTERNAL ACTION REQUIRED: rotate the leaked Telegram bot token in BotFather/secrets before any operator-facing launch; repository code cannot revoke the old token.
 - DONE 2026-05-19: crypto spread-guard bid/ask sourcing now falls back to Alpaca crypto snapshot quotes when yfinance reports zero bid/ask, while still failing closed if no positive quote exists.
 - DONE 2026-05-20: crypto bid/ask fallback no longer passes unsupported `exchange=` to Alpaca `get_crypto_snapshots()`, fixing zero-quote spread-guard rejects caused by SDK signature mismatch.
