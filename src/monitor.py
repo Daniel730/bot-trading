@@ -150,6 +150,7 @@ CRYPTO_PRICE_SANITY_RANGES = {
     "DOGE-USD": (0.001, 10.0),
     "SHIB-USD": (0.00000001, 0.01),
 }
+CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT = 1
 
 class ArbitrageMonitor:
     def __init__(self, mode: str = "live"):
@@ -170,6 +171,7 @@ class ArbitrageMonitor:
         # Tracks which pairs have had their Kalman uncertainty bumped today.
         self.bumped_pairs_today: dict = {}
         self.kalman_quarantined_pairs: set[str] = set()
+        self._crypto_snapshot_pair_prices: dict[str, tuple[tuple[float, float], int]] = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
         self.trade_decision_report_path = Path("logs") / "trade_decision_reports.jsonl"
@@ -1077,6 +1079,31 @@ class ArbitrageMonitor:
                         "; ".join(invalid_prices),
                     )
                     return skip("price_sanity_invalid")
+
+                price_sources = getattr(data_service, "last_price_sources", {})
+                if (
+                    price_sources.get(t_a) == "alpaca_crypto_snapshot"
+                    and price_sources.get(t_b) == "alpaca_crypto_snapshot"
+                ):
+                    pair_prices = (float(price_a), float(price_b))
+                    previous_prices, repeat_count = self._crypto_snapshot_pair_prices.get(
+                        pair["id"],
+                        ((None, None), 0),
+                    )
+                    repeat_count = repeat_count + 1 if previous_prices == pair_prices else 0
+                    self._crypto_snapshot_pair_prices[pair["id"]] = (pair_prices, repeat_count)
+                    if repeat_count >= CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT:
+                        logger.warning(
+                            "PRICE STALENESS [%s/%s]: Alpaca crypto snapshot prices repeated "
+                            "unchanged at %s for %s consecutive scan(s). Blocking before Kalman update.",
+                            t_a,
+                            t_b,
+                            pair_prices,
+                            repeat_count,
+                        )
+                        return skip("stale_price_snapshot")
+                else:
+                    self._crypto_snapshot_pair_prices.pop(pair["id"], None)
 
             # Feature 007: Kalman Filter Update
             kf = await arbitrage_service.get_or_create_filter(pair['id'])
