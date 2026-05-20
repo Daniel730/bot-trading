@@ -6,6 +6,13 @@ import yaml
 
 BACKEND_COMPOSE = Path(__file__).resolve().parents[2] / "infra" / "docker-compose.backend.yml"
 FRONTEND_COMPOSE = Path(__file__).resolve().parents[2] / "infra" / "docker-compose.frontend.yml"
+GITATTRIBUTES = Path(__file__).resolve().parents[2] / ".gitattributes"
+
+
+def test_compose_files_are_pinned_to_lf_line_endings():
+    attributes = GITATTRIBUTES.read_text(encoding="utf-8").splitlines()
+
+    assert "infra/docker-compose*.yml text eol=lf" in attributes
 
 
 def test_backend_compose_requires_postgres_password_without_default():
