@@ -8,7 +8,7 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   // --- General ---
   'REGION': { label: 'Trading Region', description: 'Target market region (US or EU). Affects trading hours and asset availability.' },
   'BROKERAGE_PROVIDER': { label: 'Broker', description: 'Active broker for live and paper-order validation.' },
-  'PAPER_TRADING': { label: 'Shadow Trading', description: 'When enabled, trades are simulated locally without hitting any exchange API.' },
+  'PAPER_TRADING': { label: 'Shadow Trading', description: 'When enabled, this is local shadow mode: trades are simulated locally without hitting any exchange API. To submit Alpaca paper broker orders, set PAPER_TRADING=false and use ALPACA_BASE_URL=https://paper-api.alpaca.markets.' },
   'DEV_MODE': { label: 'Development Mode', description: 'Enable 24/7 scanning on test pairs. Do not use for real trading.' },
   'LIVE_CAPITAL_DANGER': { label: 'Live Capital Guard', description: 'Safety switch that must be ON to allow real money trades.' },
   'ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM': { label: 'Allow Live Approval Without Telegram', description: 'Permit live approvals even if Telegram approval delivery is unavailable.' },
@@ -35,7 +35,7 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   'TELEGRAM_CHAT_ID': { label: 'Telegram Chat ID', description: 'Target chat for admin alerts.' },
   'ALPACA_API_KEY': { label: 'Alpaca API Key', description: 'Alpaca API key.' },
   'ALPACA_API_SECRET': { label: 'Alpaca API Secret', description: 'Alpaca API secret.' },
-  'ALPACA_BASE_URL': { label: 'Alpaca Base URL', description: 'Alpaca paper or live REST endpoint.' },
+  'ALPACA_BASE_URL': { label: 'Alpaca Base URL', description: 'Alpaca paper broker or live REST endpoint. Use https://paper-api.alpaca.markets for Alpaca paper broker orders.' },
   'SEC_USER_AGENT': { label: 'SEC User Agent', description: 'User-Agent value used for SEC/EDGAR and similar data-source calls.' },
 
   // --- Advanced ---
