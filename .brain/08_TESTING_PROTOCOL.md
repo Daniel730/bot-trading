@@ -153,14 +153,16 @@ Run:
 
 ```bash
 python scripts/validate_deploy_env.py .env
-docker compose -f infra/docker-compose.yml ps
+POSTGRES_PASSWORD="$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)" docker compose -f infra/docker-compose.yml ps
 ```
 
 Before production sign-off, also run local build mode:
 
 ```bash
-docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml up -d --build --remove-orphans
+POSTGRES_PASSWORD="$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)" docker compose -f infra/docker-compose.yml -f infra/docker-compose.local.yml up -d --build --remove-orphans
 ```
+
+For PowerShell, set `$env:POSTGRES_PASSWORD` from `.env` before running Compose because the compose file keeps Postgres fail-fast interpolation separate from the app `env_file`.
 
 ## Required Tests For Current Active Fixes
 
