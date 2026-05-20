@@ -100,6 +100,16 @@ logger = setup_logging()
 KALMAN_BETA_CLIP_MIN = 0.001
 KALMAN_BETA_CLIP_MAX = 1000.0
 KALMAN_MAX_REASONABLE_ABS_ZSCORE = 100.0
+SPREAD_GUARD_DETAIL_FIELDS = (
+    "bid_a",
+    "ask_a",
+    "bid_b",
+    "ask_b",
+    "spread_a_pct",
+    "spread_b_pct",
+    "total_spread_pct",
+    "max_spread_pct",
+)
 CRYPTO_PRICE_SANITY_RANGES = {
     "BTC-USD": (10_000.0, 1_000_000.0),
     "ETH-USD": (100.0, 20_000.0),
@@ -967,6 +977,9 @@ class ArbitrageMonitor:
             if result.get("reason"):
                 decision["reason"] = result["reason"]
                 decision["rejection_reason"] = result["reason"]
+            for field in SPREAD_GUARD_DETAIL_FIELDS:
+                if field in result:
+                    decision[field] = result[field]
             decisions.append(decision)
 
         report = {
@@ -1316,6 +1329,10 @@ class ArbitrageMonitor:
                                 "orchestrator_verdict": decision_state.get("final_verdict"),
                             },
                         )
+                        if execution_result:
+                            for field in SPREAD_GUARD_DETAIL_FIELDS:
+                                if field in execution_result:
+                                    diagnostic[field] = execution_result[field]
                         if execution_result and execution_result.get("executed"):
                             await self._upsert_active_signal(
                                 t_a,
@@ -1358,8 +1375,10 @@ class ArbitrageMonitor:
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id, entry_context: dict | None = None):
         """Executes a trade and logs to PostgreSQL."""
-        def execution_result(executed: bool, reason: str) -> dict:
-            return {"executed": executed, "reason": reason}
+        def execution_result(executed: bool, reason: str, **details) -> dict:
+            result = {"executed": executed, "reason": reason}
+            result.update(details)
+            return result
 
         entry_context = entry_context or {}
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
@@ -1384,7 +1403,14 @@ class ArbitrageMonitor:
                 f"SPREAD GUARD: Missing or invalid Bid/Ask for {t_a}/{t_b}. "
                 f"Rejecting trade. bid_a={bid_a} ask_a={ask_a} bid_b={bid_b} ask_b={ask_b}"
             )
-            return execution_result(False, "invalid_bid_ask")
+            return execution_result(
+                False,
+                "invalid_bid_ask",
+                bid_a=bid_a,
+                ask_a=ask_a,
+                bid_b=bid_b,
+                ask_b=ask_b,
+            )
 
         spread_a = (ask_a - bid_a) / bid_a
         spread_b = (ask_b - bid_b) / bid_b
@@ -1395,7 +1421,18 @@ class ArbitrageMonitor:
                 f"SPREAD GUARD: Rejecting {t_a}/{t_b}. Total Spread: {total_spread*100:.3f}% > "
                 f"{settings.SPREAD_GUARD_MAX_PCT*100:.3f}% max threshold."
             )
-            return execution_result(False, "spread_guard")
+            return execution_result(
+                False,
+                "spread_guard",
+                bid_a=bid_a,
+                ask_a=ask_a,
+                bid_b=bid_b,
+                ask_b=ask_b,
+                spread_a_pct=spread_a * 100.0,
+                spread_b_pct=spread_b * 100.0,
+                total_spread_pct=total_spread * 100.0,
+                max_spread_pct=settings.SPREAD_GUARD_MAX_PCT * 100.0,
+            )
 
         venue = self.brokerage.get_venue(t_a)
         crypto_pair = is_crypto_pair(t_a, t_b)
