@@ -43,6 +43,7 @@ class DataService:
             base_url=settings.ALPACA_BASE_URL
         )
         self._ws_client: Optional[WebSocketClient] = None
+        self.last_price_sources: dict[str, str] = {}
 
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
         """
@@ -440,6 +441,7 @@ class DataService:
         """
         tickers = self._dedupe_tickers(tickers)
         latest = {}
+        price_sources = {}
         remaining_tickers = []
 
         # 1. Try Redis Shadow Book
@@ -455,10 +457,12 @@ class DataService:
                 price = None
             if price:
                 latest[ticker] = price
+                price_sources[ticker] = "redis"
             else:
                 remaining_tickers.append(ticker)
 
         if not remaining_tickers:
+            self.last_price_sources.update(price_sources)
             return latest
 
         # 2. Try Alpaca Snapshot (Batch) for Stocks
@@ -479,6 +483,7 @@ class DataService:
                             price = float(snapshot.latest_trade.p)
                             if price > 0:
                                 latest[internal_ticker] = price
+                                price_sources[internal_ticker] = "alpaca_stock_snapshot"
                                 self._update_redis_cache(internal_ticker, price)
                 
                 # Fetch Crypto
@@ -495,6 +500,7 @@ class DataService:
                                 price = float(snapshot.latest_trade.p)
                                 if price > 0:
                                     latest[internal_ticker] = price
+                                    price_sources[internal_ticker] = "alpaca_crypto_snapshot"
                                     self._update_redis_cache(internal_ticker, price)
                     except Exception as e:
                         logger.debug(f"DataService: Alpaca crypto snapshot failed (likely unsupported by plan): {e}")
@@ -504,6 +510,7 @@ class DataService:
                 logger.warning(f"DataService: Alpaca snapshot failed: {e}")
 
         if not remaining_tickers:
+            self.last_price_sources.update(price_sources)
             return latest
 
         # 3. Try Polygon for remaining
@@ -511,6 +518,7 @@ class DataService:
             poly_prices = self._get_latest_price_polygon(remaining_tickers)
             for ticker, price in poly_prices.items():
                 latest[ticker] = price
+                price_sources[ticker] = "polygon_snapshot"
                 try:
                     self._update_redis_cache(ticker, price)
                 except Exception:
@@ -518,12 +526,14 @@ class DataService:
                 remaining_tickers = [t for t in remaining_tickers if t not in latest]
 
         if not remaining_tickers:
+            self.last_price_sources.update(price_sources)
             return AwaitableDict(latest)
 
         # 3. Fallback to yfinance for remaining with retry logic
         try:
             yfinance_prices = self._get_latest_price_yfinance_with_retry(remaining_tickers)
             for ticker, price in yfinance_prices.items():
+                price_sources[ticker] = "yfinance"
                 try:
                     self._update_redis_cache(ticker, price)
                 except Exception:
@@ -531,7 +541,8 @@ class DataService:
                 latest.update(yfinance_prices)
         except Exception as e:
             logger.error(f"DataService: yfinance retry failed for {remaining_tickers}: {e}")
-            
+
+        self.last_price_sources.update(price_sources)
         return AwaitableDict(latest)
 
     @agent_trace("DataService.get_latest_price_async")

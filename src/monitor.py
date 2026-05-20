@@ -931,11 +931,13 @@ class ArbitrageMonitor:
         scan_pairs: list[dict],
         results: list[dict],
         latest_prices: dict,
+        latest_price_sources: dict | None = None,
         open_signals: list,
         active_signal_count: int,
         vetoed_count: int,
         sizing_base: float,
     ) -> dict:
+        latest_price_sources = latest_price_sources or {}
         decisions = []
         for pair, result in zip(scan_pairs, results):
             ticker_a = pair.get("ticker_a")
@@ -949,9 +951,22 @@ class ArbitrageMonitor:
                 "confidence": float(result.get("confidence", 0.0) or 0.0),
                 "has_price_a": ticker_a in latest_prices,
                 "has_price_b": ticker_b in latest_prices,
+                "price_a": latest_prices.get(ticker_a),
+                "price_b": latest_prices.get(ticker_b),
+                "price_source_a": (
+                    latest_price_sources.get(ticker_a, "unknown")
+                    if ticker_a in latest_prices
+                    else None
+                ),
+                "price_source_b": (
+                    latest_price_sources.get(ticker_b, "unknown")
+                    if ticker_b in latest_prices
+                    else None
+                ),
             }
             if result.get("reason"):
                 decision["reason"] = result["reason"]
+                decision["rejection_reason"] = result["reason"]
             decisions.append(decision)
 
         report = {
@@ -2522,6 +2537,7 @@ class ArbitrageMonitor:
                             scan_pairs=scan_pairs,
                             results=results,
                             latest_prices=latest_prices,
+                            latest_price_sources=getattr(data_service, "last_price_sources", {}),
                             open_signals=open_signals,
                             active_signal_count=active_signal_count,
                             vetoed_count=vetoed_count,
