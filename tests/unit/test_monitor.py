@@ -420,6 +420,37 @@ async def test_process_pair_quarantines_invalid_kalman_state_until_rebuild(monit
 
 
 @pytest.mark.asyncio
+async def test_quarantined_kalman_state_requests_post_scan_rebuild(monitor):
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "LTC-USD", "id": "BTC-USD_LTC-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "LTC-USD": 85.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, 0.001], 0.1, 3.0, 0.5)
+        mock_kf_get.return_value = mock_kf
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+    assert diagnostic["reason"] == "kalman_state_invalid"
+    assert monitor._kalman_quarantine_reload_requested is True
+    mock_save_state.assert_not_awaited()
+    mock_orchestrator.assert_not_awaited()
+
+    monitor.reload_pairs = AsyncMock()
+
+    rebuilt = await monitor._reload_quarantined_pairs_if_requested()
+
+    assert rebuilt is True
+    monitor.reload_pairs.assert_awaited_once()
+    assert monitor._kalman_quarantine_reload_requested is False
+
+
+@pytest.mark.asyncio
 async def test_execute_trade_success(monitor):
     """
     S-07: Test execute_trade path.

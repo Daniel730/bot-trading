@@ -16,6 +16,7 @@ Last updated: 2026-05-20
 - DONE 2026-05-20: latest crypto price snapshots no longer pass unsupported `exchange=` to Alpaca `get_crypto_snapshots()`, preventing valid paper Alpaca crypto prices from falling through to the concurrent yfinance fallback.
 - DONE 2026-05-20: monitor entries now fail closed on invalid Kalman state before Redis persistence, AI approval, or execution when beta is clipped, z-score/state values are non-finite, innovation variance is invalid, or z-score is absurd.
 - DONE 2026-05-20: invalid Kalman state now quarantines the affected pair, drops poisoned in-memory/Redis Kalman state, and keeps entries blocked until the existing historical initialization path rebuilds that pair.
+- DONE 2026-05-20: newly quarantined Kalman pairs now request a post-scan historical rebuild/reload, so pairs such as BTC-USD/LTC-USD do not remain skipped forever while still blocking entries until rebuild completes.
 - DONE 2026-05-20: crypto latest prices now pass coarse per-symbol sanity checks before Kalman update, blocking impossible cross-assigned prices such as BTC near $9 or ETH near BTC prices before state can be poisoned.
 - DONE 2026-05-20: chunked latest-price fetches now serialize crypto chunks, preventing concurrent yfinance crypto fallback calls from cross-assigning ticker prices when Alpaca/Polygon do not fill the batch.
 - DONE 2026-05-20: trade decision reports now include latest price values, price source labels, and explicit rejection reasons per pair so skipped/blocked trades are easier to audit.

@@ -176,6 +176,7 @@ class ArbitrageMonitor:
         # Tracks which pairs have had their Kalman uncertainty bumped today.
         self.bumped_pairs_today: dict = {}
         self.kalman_quarantined_pairs: set[str] = set()
+        self._kalman_quarantine_reload_requested = False
         self._crypto_snapshot_pair_prices: dict[str, tuple[tuple[float, float], int]] = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
@@ -953,6 +954,22 @@ class ArbitrageMonitor:
                 f"(+{len(new_ids - old_ids)} new, -{len(removed)} removed)"
             )
 
+    async def _reload_quarantined_pairs_if_requested(self) -> bool:
+        if not self._kalman_quarantine_reload_requested:
+            return False
+        if not self.kalman_quarantined_pairs:
+            self._kalman_quarantine_reload_requested = False
+            return False
+
+        quarantined = sorted(self.kalman_quarantined_pairs)
+        self._kalman_quarantine_reload_requested = False
+        logger.warning(
+            "KALMAN QUARANTINE: rebuilding quarantined pair state after scan: %s",
+            quarantined,
+        )
+        await self.reload_pairs()
+        return True
+
     async def _get_sizing_base(self) -> float:
         """Helper to fetch the current account equity/cash for sizing calculations."""
         if settings.PAPER_TRADING:
@@ -1202,6 +1219,7 @@ class ArbitrageMonitor:
                 invalid_kalman_state = True
 
             if invalid_kalman_state:
+                already_quarantined = pair['id'] in self.kalman_quarantined_pairs
                 self.kalman_quarantined_pairs.add(pair['id'])
                 arbitrage_service.filters.pop(pair['id'], None)
                 arbitrage_service.filter_fingerprints.pop(pair['id'], None)
@@ -1224,6 +1242,13 @@ class ArbitrageMonitor:
                     innovation_value,
                     spread_value,
                 )
+                if not already_quarantined:
+                    self._kalman_quarantine_reload_requested = True
+                    logger.warning(
+                        "KALMAN QUARANTINE [%s/%s]: queued historical rebuild after this scan.",
+                        t_a,
+                        t_b,
+                    )
                 return skip("kalman_state_invalid")
 
             # Persist Kalman state to Redis
@@ -2703,6 +2728,8 @@ class ArbitrageMonitor:
                         )
                     except Exception as e:
                         logger.warning("TRADE DECISION REPORT: write failed: %s", e)
+
+                    await self._reload_quarantined_pairs_if_requested()
 
                     progress.update(scan_task, description=f"Idle (sleeping {settings.SCAN_INTERVAL_SECONDS}s)...")
                     await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
