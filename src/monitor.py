@@ -63,12 +63,17 @@ yf_cache_path = os.path.join(tempfile.gettempdir(), "yf_cache")
 yf.set_tz_cache_location(yf_cache_path)
 
 # Configure logging
+def _resolve_log_level(raw_level: str) -> int:
+    level_name = str(raw_level or "INFO").strip().upper()
+    return logging._nameToLevel.get(level_name, logging.INFO)
+
+
 def setup_logging():
     # Remove existing handlers
     """
     Configure the root Python logger to use Rich for formatted console output and reduce noise from common third-party libraries.
 
-    This function clears any existing root logger handlers, installs a RichHandler that displays message-only output with timestamps and paths, sets the root logger level to INFO, and lowers verbosity for `urllib3` and `yfinance`.
+    This function clears any existing root logger handlers, installs a RichHandler that displays message-only output with timestamps and paths, sets the root logger level from `LOG_LEVEL`, and lowers verbosity for `urllib3` and `yfinance`.
 
     Returns:
         logging.Logger: A logger scoped to this module's __name__.
@@ -87,7 +92,7 @@ def setup_logging():
     )
     rich_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger.addHandler(rich_handler)
-    root_logger.setLevel(logging.INFO)
+    root_logger.setLevel(_resolve_log_level(settings.LOG_LEVEL))
 
     # Silence some noisy loggers
     logging.getLogger("urllib3").setLevel(logging.WARNING)

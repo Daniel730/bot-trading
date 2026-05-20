@@ -47,7 +47,8 @@ Last updated: 2026-05-20
 
 ## P2 - Must fix before public release / monetization
 
-- Wire `LOG_LEVEL` into monitor logging and add durable structured logs.
+- DONE 2026-05-20: monitor logging now honors `LOG_LEVEL` from settings, covered by a regression test.
+- Add durable structured logs.
 - Reconcile local runtime docs with Python 3.14 usage, absent npm, and absent Gradle wrapper on this machine.
 
 ## P3 - Can wait

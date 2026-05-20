@@ -144,6 +144,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = Field(default="trading_bot", validation_alias="POSTGRES_DB")
 
     DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
+    LOG_LEVEL: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")
 
     DB_PATH: str = Field(default="data/trading_bot.db", validation_alias="DB_PATH")
