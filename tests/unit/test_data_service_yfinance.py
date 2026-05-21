@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, patch
+import importlib
 import threading
 import time
 
@@ -6,6 +7,23 @@ import pandas as pd
 import pytest
 
 from src.services.data_service import DataService
+
+
+def test_module_import_does_not_initialize_external_market_clients():
+    import src.services.data_service as module
+
+    with patch(
+        "polygon.RESTClient",
+        side_effect=AssertionError("import must not initialize Polygon client"),
+    ) as polygon_client, patch(
+        "alpaca_trade_api.REST",
+        side_effect=AssertionError("import must not initialize Alpaca client"),
+    ) as alpaca_client:
+        reloaded = importlib.reload(module)
+
+    importlib.reload(reloaded)
+    polygon_client.assert_not_called()
+    alpaca_client.assert_not_called()
 
 
 def test_extract_latest_close_handles_flat_yfinance_columns():

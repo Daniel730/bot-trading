@@ -904,4 +904,36 @@ class DataService:
         # Note: This is a simplified version; real usage might need a separate thread/task
         await self._ws_client.run(handle_msg)
 
-data_service = DataService()
+
+class _LazyDataService:
+    def __init__(self):
+        self._instance: Optional[DataService] = None
+
+    def _get_instance(self) -> DataService:
+        if self._instance is None:
+            self._instance = DataService()
+        return self._instance
+
+    def __getattr__(self, name):
+        return getattr(self._get_instance(), name)
+
+    def get_historical_data(self, *args, **kwargs):
+        return self._get_instance().get_historical_data(*args, **kwargs)
+
+    async def get_historical_data_async(self, *args, **kwargs):
+        return await self._get_instance().get_historical_data_async(*args, **kwargs)
+
+    def get_latest_price(self, *args, **kwargs):
+        return self._get_instance().get_latest_price(*args, **kwargs)
+
+    async def get_latest_price_async(self, *args, **kwargs):
+        return await self._get_instance().get_latest_price_async(*args, **kwargs)
+
+    async def get_bid_ask(self, *args, **kwargs):
+        return await self._get_instance().get_bid_ask(*args, **kwargs)
+
+    async def stream_realtime_data(self, *args, **kwargs):
+        return await self._get_instance().stream_realtime_data(*args, **kwargs)
+
+
+data_service = _LazyDataService()
