@@ -1,6 +1,22 @@
+import importlib
 from unittest.mock import patch
 
+import pytest
+
 from src.services.brokerage_service import BrokerageService
+
+
+def test_brokerage_module_import_does_not_initialize_alpaca_provider():
+    import src.services.brokerage_service as module
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        def fail_on_init(*args, **kwargs):
+            raise AssertionError("brokerage import must not initialize AlpacaProvider")
+
+        monkeypatch.setattr("src.services.brokerage.alpaca.AlpacaProvider", fail_on_init)
+        reloaded = importlib.reload(module)
+
+    importlib.reload(reloaded)
 
 
 def test_brokerage_service_always_uses_alpaca():

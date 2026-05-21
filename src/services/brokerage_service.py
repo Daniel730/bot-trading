@@ -246,4 +246,109 @@ class BrokerageService:
         
         return AwaitableFloat(total_value)
 
-brokerage_service = BrokerageService()
+
+class _LazyBrokerageService:
+    def __init__(self):
+        self._instance: Optional[BrokerageService] = None
+
+    def _get_instance(self) -> BrokerageService:
+        if self._instance is None:
+            self._instance = BrokerageService()
+        return self._instance
+
+    def __getattr__(self, name):
+        return getattr(self._get_instance(), name)
+
+    @property
+    def provider_name(self):
+        return self._get_instance().provider_name
+
+    @provider_name.setter
+    def provider_name(self, value):
+        self._get_instance().provider_name = value
+
+    @property
+    def provider(self):
+        return self._get_instance().provider
+
+    @provider.setter
+    def provider(self, value):
+        self._get_instance().provider = value
+
+    def configure_provider(self, provider_name: str = None):
+        return self._get_instance().configure_provider(provider_name)
+
+    def test_connection(self) -> bool:
+        return self._get_instance().test_connection()
+
+    def get_venue(self, ticker: str) -> str:
+        return self._get_instance().get_venue(ticker)
+
+    def _format_ticker(self, ticker: str) -> str:
+        return self._get_instance()._format_ticker(ticker)
+
+    async def place_market_order(
+        self,
+        ticker: str,
+        quantity: float,
+        side: str,
+        limit_price: float = None,
+        client_order_id: str = None,
+    ) -> Dict[str, Any]:
+        return await self._get_instance().place_market_order(
+            ticker, quantity, side, limit_price, client_order_id
+        )
+
+    async def place_value_order(
+        self,
+        ticker: str,
+        amount: float,
+        side: str,
+        price: float = None,
+        client_order_id: str = None,
+    ) -> Dict[str, Any]:
+        return await self._get_instance().place_value_order(
+            ticker, amount, side, price, client_order_id
+        )
+
+    def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
+        return self._get_instance().get_symbol_metadata(ticker)
+
+    async def is_asset_active(self, ticker: str) -> bool:
+        return await self._get_instance().is_asset_active(ticker)
+
+    async def get_portfolio(self) -> List[Dict[str, Any]]:
+        return await self._get_instance().get_portfolio()
+
+    async def get_positions(self, ticker: str = None) -> List[Dict[str, Any]]:
+        return await self._get_instance().get_positions(ticker)
+
+    async def get_available_quantity(self, ticker: str) -> float:
+        return await self._get_instance().get_available_quantity(ticker)
+
+    async def get_pending_orders(self) -> List[Dict[str, Any]]:
+        return await self._get_instance().get_pending_orders()
+
+    async def has_pending_order(self, ticker: str) -> bool:
+        return await self._get_instance().has_pending_order(ticker)
+
+    async def get_order(self, order_id: str) -> Dict[str, Any]:
+        return await self._get_instance().get_order(order_id)
+
+    async def is_ticker_owned(self, ticker: str) -> bool:
+        return await self._get_instance().is_ticker_owned(ticker)
+
+    async def get_account_cash(self) -> float:
+        return await self._get_instance().get_account_cash()
+
+    async def get_account_equity(self) -> float:
+        return await self._get_instance().get_account_equity()
+
+    async def get_account_buying_power(self) -> float:
+        return await self._get_instance().get_account_buying_power()
+
+    async def get_pending_orders_value(self) -> float:
+        return await self._get_instance().get_pending_orders_value()
+
+
+brokerage_service = _LazyBrokerageService()
