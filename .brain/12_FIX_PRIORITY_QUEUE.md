@@ -57,6 +57,7 @@ Last updated: 2026-05-21
 - DONE 2026-05-21: `src.services.brokerage_service` no longer initializes `AlpacaProvider` at module import; the public `brokerage_service` singleton is lazy and only creates `BrokerageService` on first real brokerage use.
 - DONE 2026-05-21: `src.services.redis_service` no longer initializes a Redis client at module import; the public `redis_service` singleton is lazy and only creates `RedisService` on first real Redis use.
 - DONE 2026-05-21: tests that exercise imported module singletons now patch the target used by the module under test (`src.monitor.*`, `NotificationService`'s runtime brokerage import, and `src.agents.orchestrator.macro_economic_agent`), eliminating order-dependent real service calls after module reloads.
+- DONE 2026-05-21: official reusable fake fixtures now exist for broker, market data, Redis, and persistence boundaries via `tests/conftest.py` and `tests/fakes.py`, giving future tests a shared isolation layer instead of ad hoc real-service patches.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.
