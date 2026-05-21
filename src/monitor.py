@@ -2460,6 +2460,49 @@ class ArbitrageMonitor:
                 continue
         return 0.0
 
+    @staticmethod
+    def _broker_position_float(position: dict, *keys: str) -> float | None:
+        for key in keys:
+            value = position.get(key)
+            if value is None:
+                continue
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _broker_ledger_audit_line(
+        self,
+        position: dict,
+        raw_symbol: str,
+        canonical_symbol: str,
+        quantity: float,
+        matched_signal_ids: list[str],
+    ) -> str:
+        available_quantity = self._broker_position_float(
+            position,
+            "quantityAvailableForTrading",
+            "qty_available",
+            "available_quantity",
+        )
+        current_price = self._broker_position_float(position, "currentPrice", "current_price")
+        market_value = self._broker_position_float(position, "marketValue", "market_value")
+        ledger_match = "yes" if matched_signal_ids else "no"
+        signal_ids = ",".join(matched_signal_ids) if matched_signal_ids else "none"
+        suggested_action = (
+            "VERIFY_LEDGER_MATCH"
+            if matched_signal_ids
+            else "IMPORT_OR_CLOSE_MANUALLY_BEFORE_RESTART"
+        )
+        return (
+            f"broker_symbol={raw_symbol} canonical_symbol={canonical_symbol} "
+            f"quantity={quantity} available_quantity={available_quantity} "
+            f"current_price={current_price} market_value={market_value} "
+            f"ledger_match={ledger_match} signal_ids={signal_ids} "
+            f"suggested_action={suggested_action}"
+        )
+
     async def _fail_fast_on_broker_ledger_mismatch(self) -> bool:
         if settings.PAPER_TRADING:
             return True
@@ -2481,13 +2524,17 @@ class ArbitrageMonitor:
             await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
             return False
 
-        ledger_symbols = {
-            self._canonical_position_symbol(leg.get("ticker"))
-            for signal in open_signals
-            for leg in signal.get("legs", [])
-            if leg.get("ticker")
-        }
+        ledger_matches = {}
+        for signal in open_signals:
+            signal_id = str(signal.get("signal_id") or "unknown")
+            for leg in signal.get("legs", []):
+                canonical = self._canonical_position_symbol(leg.get("ticker"))
+                if canonical:
+                    ledger_matches.setdefault(canonical, set()).add(signal_id)
+
+        ledger_symbols = set(ledger_matches)
         unmanaged_symbols = []
+        audit_lines = []
         for position in broker_positions or []:
             quantity = self._broker_position_quantity(position)
             if abs(quantity) <= 1e-12:
@@ -2499,6 +2546,17 @@ class ArbitrageMonitor:
                 or position.get("instrument")
             )
             canonical_symbol = self._canonical_position_symbol(raw_symbol)
+            matched_signal_ids = sorted(ledger_matches.get(canonical_symbol, set()))
+            if canonical_symbol:
+                audit_lines.append(
+                    self._broker_ledger_audit_line(
+                        position,
+                        str(raw_symbol),
+                        canonical_symbol,
+                        quantity,
+                        matched_signal_ids,
+                    )
+                )
             if canonical_symbol and canonical_symbol not in ledger_symbols:
                 unmanaged_symbols.append(str(raw_symbol))
 
@@ -2514,6 +2572,8 @@ class ArbitrageMonitor:
             f"position(s): {', '.join(sorted(unmanaged_symbols))}. "
             "Resolve broker and ledger state before scanning resumes."
         )
+        if audit_lines:
+            msg = f"{msg} Broker/ledger reconciliation audit: {'; '.join(audit_lines)}"
         logger.critical(msg)
         await notification_service.send_message(msg)
         await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
