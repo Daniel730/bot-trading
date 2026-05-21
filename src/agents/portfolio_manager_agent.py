@@ -24,10 +24,20 @@ class PortfolioManagerAgent:
         from src.models.persistence import PersistenceManager
 
         self.db = db or PersistenceManager(settings.DB_PATH)
-        self.data_service = DataService()
+        self._data_service = None
         self.arbitrage_service = ArbitrageService()
         self._sp500_cache: pd.DataFrame = None
         self._last_cache_update: datetime = None
+
+    @property
+    def data_service(self):
+        if self._data_service is None:
+            self._data_service = DataService()
+        return self._data_service
+
+    @data_service.setter
+    def data_service(self, value):
+        self._data_service = value
 
     @agent_trace("PortfolioManagerAgent.generate_investment_thesis")
     async def generate_investment_thesis(self, ticker: str) -> str:
