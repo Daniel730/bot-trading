@@ -1,6 +1,6 @@
 # Fix Priority Queue
 
-Last updated: 2026-05-21
+Last updated: 2026-05-22
 
 ## P0 - Must fix before broker-connected testing
 
@@ -61,6 +61,7 @@ Last updated: 2026-05-21
 - DONE 2026-05-21: monitor execution-contract tests (`execute_trade*` and `_await_order_fill`) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_execution.py`, with a layout guard preventing them from sliding back.
 - DONE 2026-05-21: monitor closing-contract tests (`test_close_position*`) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_closing.py`, with the contract layout guard covering the new boundary.
 - DONE 2026-05-22: monitor price-guard tests (`missing_price`, impossible crypto prices, and repeated Alpaca crypto snapshot/quote-mid staleness) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_price_guard.py`, with the contract layout guard covering the boundary.
+- DONE 2026-05-22: monitor process-pair/ledger-state tests (Kalman invalid/quarantine/rebuild, orchestrator/profit vetoes, and failed execution status) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_process_pair.py`, with the contract layout guard covering the boundary.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.
