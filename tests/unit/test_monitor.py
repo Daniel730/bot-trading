@@ -16,7 +16,7 @@ def test_crypto_snapshot_stale_repeat_limit_matches_runtime_cadence():
 @pytest.fixture
 def monitor(monkeypatch):
     # We need to ensure monitor.brokerage is a mock
-    with patch("src.services.brokerage_service.BrokerageService") as mock_broker_class:
+    with patch("src.monitor.BrokerageService") as mock_broker_class:
         monkeypatch.setattr(persistence_service, "get_open_signals", AsyncMock(return_value=[]))
         m = ArbitrageMonitor(mode="live")
         # Ensure the instance created inside __init__ is our mock
@@ -519,7 +519,7 @@ async def test_execute_trade_success(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -564,7 +564,7 @@ async def test_execute_trade_success_marks_both_final_legs_open_pair(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
@@ -614,7 +614,7 @@ async def test_execute_trade_blocks_duplicate_active_pair_before_broker_order(mo
     signal_id = str(uuid.uuid4())
 
     with patch("src.monitor.persistence_service.get_open_signals", new_callable=AsyncMock) as mock_open_signals, \
-         patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
@@ -669,7 +669,7 @@ async def test_execute_trade_blocks_pending_pair_order_before_broker_order(monit
     )
 
     with patch("src.monitor.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=[]), \
-         patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
@@ -711,7 +711,7 @@ async def test_execute_trade_marks_partial_exposure_when_leg_b_not_terminal(moni
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
@@ -769,7 +769,7 @@ async def test_execute_trade_fails_closed_when_leg_b_partially_fills(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -828,7 +828,7 @@ async def test_execute_trade_blocks_when_pending_orders_budget_read_fails(monito
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
          patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch.object(settings, "PAPER_TRADING", False):
@@ -854,7 +854,7 @@ async def test_execute_trade_blocks_when_account_balance_read_fails(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
          patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch.object(settings, "PAPER_TRADING", False):
@@ -890,7 +890,7 @@ async def test_execute_trade_marks_manual_reconciliation_when_leg_a_submission_a
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -952,7 +952,7 @@ async def test_execute_trade_blocks_leg_b_without_confirmed_leg_a_fill(
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -999,7 +999,7 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -1070,7 +1070,7 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fails(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -1127,7 +1127,7 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fill_rejects_afte
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -1184,7 +1184,7 @@ async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_am
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -1245,7 +1245,7 @@ async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_fi
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -1303,7 +1303,7 @@ async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_pa
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
@@ -1552,7 +1552,7 @@ async def test_execute_trade_paper_logs_entry_journal_before_shadow(monitor):
     async def execute_shadow(*args, **kwargs):
         call_order.append(("shadow", {"args": args, "kwargs": kwargs}))
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new=AsyncMock(side_effect=log_journal)) as mock_log_journal, \
          patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new=AsyncMock(side_effect=execute_shadow)) as mock_shadow_exec, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
@@ -1620,7 +1620,7 @@ async def test_execute_trade_crypto_live_uses_broker(monitor):
     pair = {"ticker_a": "ETH-USD", "ticker_b": "BTC-USD", "id": "ETH-USD_BTC-USD"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
@@ -1665,7 +1665,7 @@ async def test_execute_trade_crypto_budget_cap_applied(monitor):
     pair = {"ticker_a": "ETH-USD", "ticker_b": "BTC-USD", "id": "ETH-USD_BTC-USD"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
          patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
          patch("src.services.budget_service.budget_service.get_effective_cash", return_value=250.0), \

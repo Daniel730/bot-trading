@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.services.brokerage_service import BrokerageService
 from src.services.notification_service import NotificationService
 from src.services.cash_management_service import CashManagementService
 from src.services import cash_management_service as cash_module
@@ -15,11 +14,13 @@ async def test_cash_command_uses_real_ticker_formatter(monkeypatch):
     update = SimpleNamespace(message=SimpleNamespace(reply_text=AsyncMock()))
     context = SimpleNamespace(args=[])
 
-    monkeypatch.setattr(BrokerageService, "__init__", lambda self: None)
-    monkeypatch.setattr(BrokerageService, "get_account_cash", AsyncMock(return_value=25.0))
+    monkeypatch.setattr("src.services.brokerage_service.BrokerageService.__init__", lambda self: None)
     monkeypatch.setattr(
-        BrokerageService,
-        "get_portfolio",
+        "src.services.brokerage_service.BrokerageService.get_account_cash",
+        AsyncMock(return_value=25.0),
+    )
+    monkeypatch.setattr(
+        "src.services.brokerage_service.BrokerageService.get_portfolio",
         AsyncMock(return_value=[{"ticker": "SGOV", "quantity": 2.0}]),
     )
     monkeypatch.setattr(
