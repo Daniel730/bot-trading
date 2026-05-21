@@ -55,6 +55,7 @@ Last updated: 2026-05-21
 - DONE 2026-05-21: `MacroEconomicAgent` no longer constructs `DataService` during module-level singleton import; market-data clients are created only when the agent first needs historical data.
 - DONE 2026-05-21: `PortfolioManagerAgent` no longer constructs `DataService` during module-level singleton import; market-data clients are created only when portfolio optimization/discovery first needs historical data.
 - DONE 2026-05-21: `src.services.brokerage_service` no longer initializes `AlpacaProvider` at module import; the public `brokerage_service` singleton is lazy and only creates `BrokerageService` on first real brokerage use.
+- DONE 2026-05-21: `src.services.redis_service` no longer initializes a Redis client at module import; the public `redis_service` singleton is lazy and only creates `RedisService` on first real Redis use.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.
