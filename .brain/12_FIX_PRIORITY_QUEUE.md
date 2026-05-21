@@ -52,6 +52,7 @@ Last updated: 2026-05-21
 - DONE 2026-05-20: startup preflight logs and `/api/system/health` now expose sanitized runtime mode fields (`execution_mode`, `broker_paper_trading`, and `alpaca_endpoint_class`) so Docker logs and health payloads show shadow, Alpaca paper, or live posture without leaking the raw Alpaca URL.
 - DONE 2026-05-20: System Health now displays sanitized runtime mode fields (`execution_mode`, broker-paper flag, and Alpaca endpoint class) from `/api/system/health`, so operators can verify shadow, Alpaca paper, or live posture from the dashboard.
 - DONE 2026-05-21: `src.services.data_service` no longer initializes Polygon/Alpaca clients at module import; the public `data_service` singleton is lazy and only creates `DataService` on first real use.
+- DONE 2026-05-21: `MacroEconomicAgent` no longer constructs `DataService` during module-level singleton import; market-data clients are created only when the agent first needs historical data.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.

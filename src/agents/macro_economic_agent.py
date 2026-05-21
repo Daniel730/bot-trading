@@ -13,14 +13,24 @@ class MacroEconomicAgent:
             inflation_threshold (float): Inflation threshold used to classify market risk; when current inflation is greater than this value it contributes to a "RISK_OFF" decision.
         
         Notes:
-            This sets instance attributes `rate_threshold`, `inflation_threshold`, `data_service` (a DataService instance), and `logger`.
+            This sets instance attributes `rate_threshold`, `inflation_threshold`, lazy `data_service`, and `logger`.
         """
         self.rate_threshold = rate_threshold
         self.inflation_threshold = inflation_threshold
-        self.data_service = DataService()
+        self._data_service = None
         self.logger = logging.getLogger(__name__)
         self._regime_cache = {} # ticker -> (regime, timestamp)
         self._cache_ttl = 900   # 15 minutes
+
+    @property
+    def data_service(self):
+        if self._data_service is None:
+            self._data_service = DataService()
+        return self._data_service
+
+    @data_service.setter
+    def data_service(self, value):
+        self._data_service = value
 
     @staticmethod
     def _extract_series(df: pd.DataFrame, ticker: str) -> pd.Series:
