@@ -93,6 +93,8 @@ services:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
+      DRY_RUN: "true"
+      LIVE_CAPITAL_DANGER: "false"
     restart: "no"
     # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
     # dependent services (bot, mcp-server) start sending gRPC calls.

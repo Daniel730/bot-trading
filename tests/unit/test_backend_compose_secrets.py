@@ -65,6 +65,14 @@ def test_execution_engine_uses_compose_dependency_hosts():
     assert environment["POSTGRES_PORT"] == "5432"
 
 
+def test_execution_engine_forces_dry_run_sidecar_mode():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    environment = compose["services"]["execution-engine"]["environment"]
+
+    assert environment["DRY_RUN"] == "true"
+    assert environment["LIVE_CAPITAL_DANGER"] == "false"
+
+
 def test_bot_uses_compose_dependency_hosts():
     compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
     environment = compose["services"]["bot"]["environment"]

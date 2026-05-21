@@ -34,6 +34,8 @@ Last updated: 2026-05-21
 - DONE 2026-05-20: local Docker runtime was rebuilt from current code, `.env` was repaired from stale `POSTGRES_PASSWORD=bot_pass`/`DATABASE_URL` defaults to the existing Postgres volume secret, and live decision reports confirmed `alpaca_crypto_quote_mid` price sources plus per-leg price timestamps.
 - DONE 2026-05-21: L2 entropy baseline startup guard now skips Alpaca paper broker mode (`PAPER_TRADING=false` with the Alpaca paper endpoint) while still requiring baselines for actual live endpoints, preventing paper-broker boot refusal as "LIVE mode".
 - DONE 2026-05-21: Docker `sec-worker` now overrides host-side `.env` Postgres settings with Compose dependency host `postgres:5432`, fixing container failures that tried `localhost:5433`.
+- DONE 2026-05-21: Docker `execution-engine` is pinned to dry-run sidecar mode (`DRY_RUN=true`, `LIVE_CAPITAL_DANGER=false`) so Python Alpaca paper broker mode can use `LIVE_CAPITAL_DANGER=true` without the Java sidecar blocking startup on live entropy baselines.
+- BLOCKED 2026-05-21: Alpaca paper broker startup now reaches health checks, then correctly fails closed on broker/ledger mismatch because the paper account has unmanaged positions (`ADA-USD`, `AVAX-USD`, `BCH-USD`, `BTC-USD`, `DOT-USD`, `ETH-USD`, `LINK-USD`, `LTC-USD`, `SOL-USD`). Resolve by importing, closing, or otherwise reconciling broker positions before scans resume.
 - DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing
