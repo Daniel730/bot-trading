@@ -113,6 +113,8 @@ services:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
     environment:
       REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
     restart: "no"
     depends_on:
       redis:

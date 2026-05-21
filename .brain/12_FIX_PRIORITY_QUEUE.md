@@ -33,6 +33,7 @@ Last updated: 2026-05-21
 - DONE 2026-05-20: trade decision reports now include per-leg latest price timestamps, making quote-mid freshness visible in every scan report.
 - DONE 2026-05-20: local Docker runtime was rebuilt from current code, `.env` was repaired from stale `POSTGRES_PASSWORD=bot_pass`/`DATABASE_URL` defaults to the existing Postgres volume secret, and live decision reports confirmed `alpaca_crypto_quote_mid` price sources plus per-leg price timestamps.
 - DONE 2026-05-21: L2 entropy baseline startup guard now skips Alpaca paper broker mode (`PAPER_TRADING=false` with the Alpaca paper endpoint) while still requiring baselines for actual live endpoints, preventing paper-broker boot refusal as "LIVE mode".
+- DONE 2026-05-21: Docker `sec-worker` now overrides host-side `.env` Postgres settings with Compose dependency host `postgres:5432`, fixing container failures that tried `localhost:5433`.
 - DONE 2026-05-19: completed scan iterations now append durable JSONL trade decision reports under `logs/trade_decision_reports.jsonl`.
 
 ## P1 - Must fix before extended personal testing

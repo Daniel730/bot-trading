@@ -69,6 +69,7 @@ The active safety work is moving the bot away from optimistic `OPEN`/`COMPLETED`
 - `src/config.py` validates `BROKERAGE_PROVIDER` and fails startup for unsupported values instead of silently coercing them.
 - The Java execution engine intentionally refuses `DRY_RUN=false`; live Java brokerage is not available.
 - `infra/docker-compose.backend.yml` keeps `POSTGRES_PASSWORD` required with no default; this is protected by `tests/unit/test_backend_compose_secrets.py`.
+- Docker services that need internal dependencies must override host-side `.env` values in Compose; `bot`, `execution-engine`, and `sec-worker` use `POSTGRES_HOST=postgres` and `POSTGRES_PORT=5432` inside the Docker network.
 
 ## External Interfaces
 
