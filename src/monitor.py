@@ -664,9 +664,17 @@ class ArbitrageMonitor:
             allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
         )
 
-        # US1: Verify entropy baselines ONLY for the pairs we are about to trade.
+        # US1: Verify entropy baselines ONLY for actual live broker endpoints.
         if settings.LIVE_CAPITAL_DANGER:
-            await self.verify_entropy_baselines(pairs_to_init)
+            runtime = dashboard_state.runtime_info()
+            if runtime.get("broker_paper_trading"):
+                logger.info(
+                    "Skipping L2 entropy baseline startup check in %s mode; "
+                    "baseline enforcement remains required for actual live endpoints.",
+                    runtime.get("execution_mode", "UNKNOWN"),
+                )
+            else:
+                await self.verify_entropy_baselines(pairs_to_init)
         logger.info(
             f"Initializing {len(pairs_to_init)} pairs in "
             f"{'DEV' if settings.DEV_MODE else 'PROD'} mode "

@@ -7,7 +7,7 @@ Path: `src/monitor.py`
 1. Create `ArbitrageMonitor`.
 2. Attach monitor to dashboard service.
 3. Initialize active pair universe.
-4. If `LIVE_CAPITAL_DANGER=true`, verify Redis L2 entropy baselines.
+4. If `LIVE_CAPITAL_DANGER=true` and the resolved runtime is an actual live broker endpoint, verify Redis L2 entropy baselines.
 5. Start dashboard/API runtime.
 6. Send system-health notification.
 7. Current active edit: call `_fail_fast_on_unresolved_execution_state()`.

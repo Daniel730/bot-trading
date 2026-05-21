@@ -57,6 +57,31 @@ class _HealthCheckConnection:
     async def __aexit__(self, exc_type, exc, tb):
         return False
 
+
+@pytest.mark.asyncio
+async def test_alpaca_paper_broker_startup_skips_live_entropy_baselines(monkeypatch):
+    pairs = [{"ticker_a": "BTC-USD", "ticker_b": "ETH-USD"}]
+    monitor = ArbitrageMonitor()
+    monitor.verify_entropy_baselines = AsyncMock(
+        side_effect=AssertionError("Alpaca paper broker mode must not require live entropy baselines")
+    )
+
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setattr("src.monitor.persistence_service.get_active_trading_pairs", AsyncMock(return_value=pairs))
+    monkeypatch.setattr("src.monitor.build_candidate_pairs", MagicMock(return_value=pairs))
+    monkeypatch.setattr("src.monitor.filter_pair_universe", AsyncMock(return_value=(pairs, [])))
+    monkeypatch.setattr("src.monitor.dashboard_service.update", AsyncMock())
+    monkeypatch.setattr("src.monitor.data_service.get_historical_data_async", AsyncMock(return_value=None))
+
+    await monitor.initialize_pairs()
+
+    monitor.verify_entropy_baselines.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_startup_refusal_missing_baselines():
     """

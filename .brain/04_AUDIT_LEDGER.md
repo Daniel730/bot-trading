@@ -1607,3 +1607,4 @@ Use current source and current tests first, but keep these as context:
 8. Does the dashboard clearly distinguish shadow paper mode from Alpaca paper-broker mode in runtime labels, settings copy, health payloads, startup logs, and System Health UI?
 9. Does Compose still require explicit non-default PostgreSQL credentials?
 10. Does documentation match the current Alpaca-only brokerage facade?
+11. Does the L2 entropy baseline startup guard distinguish Alpaca paper broker mode from actual live endpoints?
