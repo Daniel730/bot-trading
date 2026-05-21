@@ -43,6 +43,8 @@ async def test_grpc_latency_audit():
 
     with patch('src.services.redis_service.redis_service.get_json', new=AsyncMock(return_value=None)) as mock_get_json, \
          patch('src.services.redis_service.redis_service.set_json', new=AsyncMock()) as mock_set_json, \
+         patch('src.services.redis_service.redis_service.set_json_nx', new=AsyncMock(return_value=True)), \
+         patch('src.services.redis_service.redis_service.delete', new=AsyncMock(return_value=1)), \
          patch('src.services.redis_service.redis_service.get_recent_latency', new=AsyncMock(return_value=mock_latency_metrics)), \
          patch('src.services.risk_service.risk_service.get_execution_params', new=AsyncMock(return_value={
              "max_slippage_pct": 0.001,

@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 # Bug M-11: Increased from 50ms to 500ms to avoid premature timeouts.
 _RPC_DEADLINE_SECONDS = 0.500
 _ATTEMPT_TTL_SECONDS = 3600
+_ATTEMPT_LOCK_TTL_SECONDS = 60
 
 def _to_decimal_str(value) -> str:
     """Serialise a numeric value to an exact decimal string, avoiding float repr."""
@@ -58,6 +59,7 @@ class ExecutionServiceClient:
         from src.services.risk_service import risk_service
         client_order_id = f"order-{signal_id}"
         attempt_key = f"execution_attempt:{signal_id}"
+        lock_key = f"execution_attempt_lock:{signal_id}"
 
         async def _load_attempt() -> dict:
             loaded = await redis_service.get_json(attempt_key)
@@ -65,7 +67,7 @@ class ExecutionServiceClient:
                 return loaded
             return {}
 
-        async def _save_attempt(state: str, note: str = "", **extra):
+        def _attempt_payload(state: str, note: str = "", **extra) -> dict:
             attempt = {
                 "signal_id": signal_id,
                 "client_order_id": client_order_id,
@@ -74,18 +76,68 @@ class ExecutionServiceClient:
                 "note": note,
             }
             attempt.update(extra)
+            return attempt
+
+        async def _save_attempt(state: str, note: str = "", **extra):
+            attempt = _attempt_payload(state, note, **extra)
             await redis_service.set_json(attempt_key, attempt, ex=_ATTEMPT_TTL_SECONDS)
             logger.info("Idempotency transition signal=%s -> %s (%s)", signal_id, state, note)
 
-        attempt = await _load_attempt()
+        async def _acquire_attempt_lock() -> bool:
+            lock = _attempt_payload("LOCKED_IN_FLIGHT", "dispatch lock acquired")
+            return await redis_service.set_json_nx(
+                lock_key,
+                lock,
+                ex=_ATTEMPT_LOCK_TTL_SECONDS,
+            )
+
+        async def _release_attempt_lock():
+            try:
+                await redis_service.delete(lock_key)
+            except Exception as e:
+                logger.warning("Failed to release execution attempt lock for %s: %s", signal_id, e)
+
+        try:
+            lock_acquired = await _acquire_attempt_lock()
+        except Exception as e:
+            logger.error("Could not acquire execution idempotency lock for %s: %s", signal_id, e)
+            return execution_pb2.ExecutionResponse(
+                signal_id=signal_id,
+                status=execution_pb2.STATUS_BROKER_ERROR,
+                message="Could not acquire execution idempotency lock; refusing dispatch",
+            )
+
+        if not lock_acquired:
+            status = await self.get_trade_status(signal_id)
+            if status is not None:
+                return status
+            return execution_pb2.ExecutionResponse(
+                signal_id=signal_id,
+                status=execution_pb2.STATUS_BROKER_ERROR,
+                message="Execution attempt already in flight; reconciliation required before retry",
+            )
+
+        try:
+            attempt = await _load_attempt()
+        except Exception as e:
+            logger.error("Could not read execution attempt state for %s: %s", signal_id, e)
+            await _release_attempt_lock()
+            return execution_pb2.ExecutionResponse(
+                signal_id=signal_id,
+                status=execution_pb2.STATUS_BROKER_ERROR,
+                message="Could not read execution attempt state; refusing dispatch",
+            )
+
         current_state = attempt.get("state")
 
         if current_state in {"ACCEPTED", "LOCKED_IN_FLIGHT"}:
             status = await self.get_trade_status(signal_id)
             if status is not None:
                 await _save_attempt("ACCEPTED", "reconciled existing execution", last_status=int(status.status))
+                await _release_attempt_lock()
                 return status
             await _save_attempt("UNKNOWN_REQUIRES_RECONCILIATION", "status probe inconclusive")
+            await _release_attempt_lock()
             return execution_pb2.ExecutionResponse(
                 signal_id=signal_id,
                 status=execution_pb2.STATUS_BROKER_ERROR,
@@ -96,6 +148,7 @@ class ExecutionServiceClient:
             status = await self.get_trade_status(signal_id)
             if status is not None:
                 await _save_attempt("ACCEPTED", "reconciled unknown state", last_status=int(status.status))
+                await _release_attempt_lock()
                 return status
             await _save_attempt("FAILED_BEFORE_SUBMIT", "reconciliation found no order")
 
@@ -171,6 +224,8 @@ class ExecutionServiceClient:
             logger.error("Unexpected error in ExecutionServiceClient.execute_trade: %s", e)
             await _save_attempt("FAILED_BEFORE_SUBMIT", f"client exception before dispatch: {e}")
             return None
+        finally:
+            await _release_attempt_lock()
 
     async def get_trade_status(
         self, signal_id: str

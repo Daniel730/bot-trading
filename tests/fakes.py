@@ -129,6 +129,7 @@ class FakeRedisClient:
     async def delete(self, key: str):
         self.owner.raw_values.pop(key, None)
         self.owner.json_values.pop(key, None)
+        self.owner.locks.discard(key)
         return 1
 
 
@@ -153,8 +154,21 @@ class FakeRedis:
     async def set_json(self, key: str, value: Any, ex: int | None = None):
         self.json_values[key] = value
 
+    async def set_json_nx(self, key: str, value: Any, ex: int | None = None) -> bool:
+        if key in self.locks:
+            return False
+        self.locks.add(key)
+        self.json_values[key] = value
+        return True
+
     async def get_json(self, key: str) -> Any:
         return self.json_values.get(key)
+
+    async def delete(self, key: str) -> int:
+        self.raw_values.pop(key, None)
+        self.json_values.pop(key, None)
+        self.locks.discard(key)
+        return 1
 
     async def publish(self, channel: str, message: Any):
         self.published.append((channel, message))

@@ -46,7 +46,8 @@ async def test_kill_switch_trigger_and_rejection():
              
             mock_redis.get_json = AsyncMock(return_value=None)
             mock_redis.set_json = AsyncMock()
-            mock_redis.set_nx = AsyncMock(return_value=True)
+            mock_redis.set_json_nx = AsyncMock(return_value=True)
+            mock_redis.delete = AsyncMock(return_value=1)
             mock_risk.get_execution_params = AsyncMock(return_value={
                 "max_slippage_pct": 0.01,
                 "risk_multiplier": 1.0

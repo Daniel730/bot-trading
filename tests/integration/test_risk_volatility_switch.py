@@ -86,7 +86,8 @@ async def test_execution_client_dynamic_params():
     
     with patch.object(redis_service, 'get_json', new=AsyncMock(return_value=None)) as mock_get_json, \
          patch.object(redis_service, 'set_json', new=AsyncMock()) as mock_set_json, \
-         patch.object(redis_service, 'set_nx', return_value=True), \
+         patch.object(redis_service, 'set_json_nx', new=AsyncMock(return_value=True)), \
+         patch.object(redis_service, 'delete', new=AsyncMock(return_value=1)), \
          patch.object(risk_service, 'get_execution_params', return_value=mock_params), \
          patch.object(execution_client, 'get_stub') as mock_stub_factory:
         

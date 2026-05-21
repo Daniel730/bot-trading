@@ -9,6 +9,8 @@ import uuid
 class _ConcurrentAttemptStore:
     def __init__(self):
         self.store = {}
+        self.locks = set()
+        self.client = _ConcurrentAttemptStoreClient(self)
         self.load_count = 0
 
     async def get_json(self, key):
@@ -19,6 +21,25 @@ class _ConcurrentAttemptStore:
 
     async def set_json(self, key, value, ex=None):
         self.store[key] = value
+
+    async def set_json_nx(self, key, value, ex=None):
+        if key in self.locks:
+            return False
+        self.locks.add(key)
+        return True
+
+    async def delete(self, key):
+        self.locks.discard(key)
+        return 1
+
+
+class _ConcurrentAttemptStoreClient:
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def delete(self, key):
+        self.owner.locks.discard(key)
+        return 1
 
 
 @pytest.mark.asyncio

@@ -96,6 +96,8 @@ async def test_full_execution_hotpath_latency():
     # Mock everything except the telemetry call
     with patch.object(redis_service, 'get_json', new=AsyncMock(side_effect=mock_get_json)) as mock_get_json_call, \
          patch.object(redis_service, 'set_json', new=AsyncMock()) as mock_set_json, \
+         patch.object(redis_service, 'set_json_nx', new=AsyncMock(return_value=True)), \
+         patch.object(redis_service, 'delete', new=AsyncMock(return_value=1)), \
          patch.object(performance_service, 'get_portfolio_metrics', new=AsyncMock(return_value={
              "sharpe_ratio": 1.0,
              "max_drawdown": 0.0,

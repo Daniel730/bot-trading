@@ -33,10 +33,19 @@ class RedisService:
         """Sets a JSON value in Redis."""
         await self.client.set(key, json.dumps(value), ex=ex)
 
+    async def set_json_nx(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        """Sets a JSON value only when the key does not already exist."""
+        result = await self.client.set(key, json.dumps(value), nx=True, ex=ex)
+        return bool(result)
+
     async def get_json(self, key: str) -> Optional[Any]:
         """Gets a JSON value from Redis."""
         value = await self.client.get(key)
         return json.loads(value) if value else None
+
+    async def delete(self, key: str) -> int:
+        """Deletes a Redis key."""
+        return await self.client.delete(key)
 
     async def publish(self, channel: str, message: Any):
         """Publishes a message to a Redis channel."""
@@ -152,8 +161,14 @@ class _LazyRedisService:
     async def set_json(self, key: str, value: Any, ex: Optional[int] = None):
         return await self._get_instance().set_json(key, value, ex=ex)
 
+    async def set_json_nx(self, key: str, value: Any, ex: Optional[int] = None) -> bool:
+        return await self._get_instance().set_json_nx(key, value, ex=ex)
+
     async def get_json(self, key: str) -> Optional[Any]:
         return await self._get_instance().get_json(key)
+
+    async def delete(self, key: str) -> int:
+        return await self._get_instance().delete(key)
 
     async def publish(self, channel: str, message: Any):
         return await self._get_instance().publish(channel, message)

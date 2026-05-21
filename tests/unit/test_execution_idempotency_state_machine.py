@@ -1,5 +1,6 @@
 import pytest
 import grpc
+import asyncio
 from unittest.mock import AsyncMock
 
 from src.generated import execution_pb2
@@ -9,12 +10,40 @@ from src.services.execution_service_client import ExecutionServiceClient
 class _InMemRedis:
     def __init__(self):
         self.store = {}
+        self.locks = {}
+        self.client = _InMemRedisClient(self)
 
     async def get_json(self, key):
         return self.store.get(key)
 
     async def set_json(self, key, value, ex=None):
         self.store[key] = value
+
+    async def set_json_nx(self, key, value, ex=None):
+        if key in self.locks:
+            return False
+        self.locks[key] = value
+        return True
+
+    async def delete(self, key):
+        self.locks.pop(key, None)
+        return 1
+
+
+class _InMemRedisClient:
+    def __init__(self, owner):
+        self.owner = owner
+
+    async def delete(self, key):
+        self.owner.locks.pop(key, None)
+        return 1
+
+
+class _RacyAttemptRedis(_InMemRedis):
+    async def get_json(self, key):
+        value = self.store.get(key)
+        await asyncio.sleep(0)
+        return value
 
 
 def _patch_attempt_store_and_risk(monkeypatch, redis):
@@ -137,3 +166,32 @@ async def test_adversarial_retry_does_not_duplicate_when_order_already_accepted(
     assert r.status == execution_pb2.STATUS_SUCCESS
     assert "already accepted" in r.message
     assert stub.ExecuteTrade.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_attempts_acquire_atomic_dispatch_lock(monkeypatch):
+    client = ExecutionServiceClient()
+    redis = _RacyAttemptRedis()
+    _patch_attempt_store_and_risk(monkeypatch, redis)
+
+    stub = AsyncMock()
+    stub.ExecuteTrade.return_value = execution_pb2.ExecutionResponse(
+        signal_id="sig-race",
+        status=execution_pb2.STATUS_SUCCESS,
+        message="accepted",
+    )
+    monkeypatch.setattr(client, "get_stub", AsyncMock(return_value=stub))
+    monkeypatch.setattr(client, "get_trade_status", AsyncMock(return_value=None))
+
+    legs = [{"ticker": "AAPL", "side": "BUY", "quantity": 1, "target_price": 100}]
+
+    results = await asyncio.gather(
+        client.execute_trade("sig-race", "AAPL_MSFT", legs),
+        client.execute_trade("sig-race", "AAPL_MSFT", legs),
+    )
+
+    statuses = [result.status for result in results if result is not None]
+    assert statuses.count(execution_pb2.STATUS_SUCCESS) == 1
+    assert statuses.count(execution_pb2.STATUS_BROKER_ERROR) == 1
+    assert stub.ExecuteTrade.call_count == 1
+    assert redis.store["execution_attempt:sig-race"]["state"] == "ACCEPTED"
