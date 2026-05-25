@@ -6,6 +6,9 @@ from src.generated import execution_pb2
 import uuid
 
 
+pytestmark = pytest.mark.benchmark
+
+
 class _ConcurrentAttemptStore:
     def __init__(self):
         self.store = {}

@@ -4,12 +4,18 @@ import sys
 import unittest
 from typing import Dict
 
+import pytest
+
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.agents.fundamental_analyst import fundamental_analyst
 from src.services.sec_service import sec_service
 from src.config import settings
+
+
+pytestmark = pytest.mark.benchmark
+
 
 class ValueTrapBenchmark(unittest.IsolatedAsyncioTestCase):
     """
