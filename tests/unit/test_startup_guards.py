@@ -1,5 +1,7 @@
 import pytest
 import asyncio
+import ast
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.monitor import ArbitrageMonitor
 from src.config import settings
@@ -58,10 +60,48 @@ class _HealthCheckConnection:
         return False
 
 
+def _make_startup_monitor(mode: str = "live") -> ArbitrageMonitor:
+    return ArbitrageMonitor(mode=mode)
+
+
+@pytest.fixture
+def startup_monitor_factory(fake_broker):
+    with patch("src.monitor.BrokerageService", return_value=fake_broker):
+        yield _make_startup_monitor
+
+
+def test_startup_guards_construct_monitor_through_isolated_factory():
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    violations = []
+
+    class Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.stack = []
+
+        def visit_FunctionDef(self, node):
+            self.stack.append(node.name)
+            self.generic_visit(node)
+            self.stack.pop()
+
+        def visit_AsyncFunctionDef(self, node):
+            self.visit_FunctionDef(node)
+
+        def visit_Call(self, node):
+            if getattr(node.func, "id", None) == "ArbitrageMonitor":
+                current = self.stack[-1] if self.stack else None
+                if current != "_make_startup_monitor":
+                    violations.append(node.lineno)
+            self.generic_visit(node)
+
+    Visitor().visit(tree)
+
+    assert violations == []
+
+
 @pytest.mark.asyncio
-async def test_alpaca_paper_broker_startup_skips_live_entropy_baselines(monkeypatch):
+async def test_alpaca_paper_broker_startup_skips_live_entropy_baselines(monkeypatch, startup_monitor_factory):
     pairs = [{"ticker_a": "BTC-USD", "ticker_b": "ETH-USD"}]
-    monitor = ArbitrageMonitor()
+    monitor = startup_monitor_factory()
     monitor.verify_entropy_baselines = AsyncMock(
         side_effect=AssertionError("Alpaca paper broker mode must not require live entropy baselines")
     )
@@ -83,7 +123,7 @@ async def test_alpaca_paper_broker_startup_skips_live_entropy_baselines(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_startup_refusal_missing_baselines():
+async def test_startup_refusal_missing_baselines(startup_monitor_factory):
     """
     T006: Verify that ArbitrageMonitor refuses to boot if LIVE_CAPITAL_DANGER is True
     and Redis baselines are missing.
@@ -105,7 +145,7 @@ async def test_startup_refusal_missing_baselines():
                 async def mock_send_message(msg): pass
                 mock_notify.send_message = mock_send_message
 
-                monitor = ArbitrageMonitor()
+                monitor = startup_monitor_factory()
 
                 # Should raise SystemExit
                 with pytest.raises(SystemExit) as excinfo:
@@ -113,7 +153,7 @@ async def test_startup_refusal_missing_baselines():
 
                 assert "CRITICAL: Missing L2 Entropy Baselines" in str(excinfo.value)
 @pytest.mark.asyncio
-async def test_startup_success_with_baselines():
+async def test_startup_success_with_baselines(startup_monitor_factory):
     """
     T006: Verify that ArbitrageMonitor proceeds if baselines exist.
     """
@@ -129,15 +169,15 @@ async def test_startup_success_with_baselines():
         with patch('src.monitor.redis_service') as mock_redis_service:
             mock_redis_service.client = mock_redis
             
-            monitor = ArbitrageMonitor()
+            monitor = startup_monitor_factory()
             # Should not raise exception
             await monitor.verify_entropy_baselines([{'ticker_a': 'KO', 'ticker_b': 'PEP'}])
 
 @pytest.mark.asyncio
 @patch("src.monitor.notification_service")
 @patch("src.monitor.persistence_service")
-async def test_startup_handles_database_initialization_failure(mock_persistence, mock_notify):
-    monitor = ArbitrageMonitor()
+async def test_startup_handles_database_initialization_failure(mock_persistence, mock_notify, startup_monitor_factory):
+    monitor = startup_monitor_factory()
     monitor.log_preflight = MagicMock()
     monitor.initialize_pairs = AsyncMock()
     mock_persistence.init_db = AsyncMock(side_effect=RuntimeError("db offline"))
@@ -171,8 +211,9 @@ async def test_startup_health_check_failures_use_existing_notification_api(
     mock_notify,
     failing_check,
     expected_message,
+    startup_monitor_factory,
 ):
-    monitor = ArbitrageMonitor()
+    monitor = startup_monitor_factory()
     monitor.log_preflight = MagicMock()
     monitor.active_pairs = [{"ticker_a": "KO", "ticker_b": "PEP"}]
     monitor.initialize_pairs = AsyncMock()
@@ -211,8 +252,9 @@ async def test_startup_marks_no_scannable_pairs_after_health_checks(
     mock_redis,
     mock_notify,
     mock_data,
+    startup_monitor_factory,
 ):
-    monitor = ArbitrageMonitor()
+    monitor = startup_monitor_factory()
     monitor.log_preflight = MagicMock()
     monitor.active_pairs = [{"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"}]
     monitor.initialize_pairs = AsyncMock()
@@ -271,8 +313,13 @@ async def test_startup_marks_no_scannable_pairs_after_health_checks(
 @patch("src.monitor.notification_service")
 @patch("src.monitor.persistence_service")
 @patch("src.monitor.dashboard_service")
-async def test_startup_blocks_when_unresolved_execution_state_exists(mock_dashboard, mock_persistence, mock_notify):
-    monitor = ArbitrageMonitor()
+async def test_startup_blocks_when_unresolved_execution_state_exists(
+    mock_dashboard,
+    mock_persistence,
+    mock_notify,
+    startup_monitor_factory,
+):
+    monitor = startup_monitor_factory()
     mock_persistence.mark_startup_unsafe_signals_needs_reconciliation = AsyncMock(return_value=2)
     mock_persistence.get_startup_reconciliation_rows = AsyncMock(
         return_value=[
@@ -347,8 +394,13 @@ async def test_startup_treats_failed_submitted_and_partial_states_as_unresolved(
 @patch("src.monitor.notification_service")
 @patch("src.monitor.persistence_service")
 @patch("src.monitor.dashboard_service")
-async def test_startup_blocks_when_broker_has_unmanaged_position(mock_dashboard, mock_persistence, mock_notify):
-    monitor = ArbitrageMonitor()
+async def test_startup_blocks_when_broker_has_unmanaged_position(
+    mock_dashboard,
+    mock_persistence,
+    mock_notify,
+    startup_monitor_factory,
+):
+    monitor = startup_monitor_factory()
     monitor.brokerage.get_portfolio = AsyncMock(
         return_value=[
             {
@@ -385,8 +437,9 @@ async def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_a
     mock_dashboard,
     mock_persistence,
     mock_notify,
+    startup_monitor_factory,
 ):
-    monitor = ArbitrageMonitor()
+    monitor = startup_monitor_factory()
     monitor.brokerage.get_portfolio = AsyncMock(
         return_value=[
             {
