@@ -40,3 +40,12 @@ def test_startup_entropy_baseline_contract_tests_are_split_from_monolith():
     assert "def test_alpaca_paper_broker_startup_skips_live_entropy_baselines" in entropy
     assert "def test_startup_refusal_missing_baselines" in entropy
     assert "def test_startup_success_with_baselines" in entropy
+
+
+def test_startup_health_check_contract_tests_are_split_from_monolith():
+    unit_dir = _repo_root() / "tests" / "unit"
+    monolith = (unit_dir / "test_startup_guards.py").read_text(encoding="utf-8")
+    health_checks = (unit_dir / "test_startup_health_checks.py").read_text(encoding="utf-8")
+
+    assert "def test_startup_health_check_failures_use_existing_notification_api" not in monolith
+    assert "def test_startup_health_check_failures_use_existing_notification_api" in health_checks
