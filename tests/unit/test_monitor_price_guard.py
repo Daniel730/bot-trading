@@ -3,30 +3,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.monitor import ArbitrageMonitor, CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+from src.monitor import CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
 from src.services.data_service import data_service
-from src.services.persistence_service import persistence_service
 
 
 def test_crypto_snapshot_stale_repeat_limit_matches_runtime_cadence():
     assert CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT == 5
-
-
-@pytest.fixture
-def monitor(monkeypatch):
-    with patch("src.monitor.BrokerageService") as mock_broker_class:
-        monkeypatch.setattr(persistence_service, "get_open_signals", AsyncMock(return_value=[]))
-        m = ArbitrageMonitor(mode="live")
-        m.brokerage = mock_broker_class.return_value
-        m.brokerage.get_venue.return_value = "ALPACA"
-        m.brokerage.get_available_quantity = AsyncMock(return_value=1_000_000.0)
-        m.brokerage.get_pending_orders = AsyncMock(return_value=[])
-        m.brokerage.get_pending_orders_value.return_value = 0.0
-        m.brokerage.get_account_cash.return_value = 10000.0
-        m.brokerage.get_account_equity.return_value = 10000.0
-        m.brokerage.get_account_buying_power.return_value = 10000.0
-        monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
-        return m
 
 
 @pytest.mark.asyncio

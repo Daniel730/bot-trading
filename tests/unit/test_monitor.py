@@ -1,29 +1,9 @@
 ﻿import pytest
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
-from src.monitor import ArbitrageMonitor
 import uuid
 from src.config import settings
-from src.services.persistence_service import ExitReason, persistence_service
-
-
-@pytest.fixture
-def monitor(monkeypatch):
-    # We need to ensure monitor.brokerage is a mock
-    with patch("src.monitor.BrokerageService") as mock_broker_class:
-        monkeypatch.setattr(persistence_service, "get_open_signals", AsyncMock(return_value=[]))
-        m = ArbitrageMonitor(mode="live")
-        # Ensure the instance created inside __init__ is our mock
-        m.brokerage = mock_broker_class.return_value
-        m.brokerage.get_venue.return_value = "ALPACA"
-        m.brokerage.get_available_quantity = AsyncMock(return_value=1_000_000.0)
-        m.brokerage.get_pending_orders = AsyncMock(return_value=[])
-        m.brokerage.get_pending_orders_value.return_value = 0.0
-        m.brokerage.get_account_cash.return_value = 10000.0
-        m.brokerage.get_account_equity.return_value = 10000.0
-        m.brokerage.get_account_buying_power.return_value = 10000.0
-        monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
-        return m
+from src.services.persistence_service import ExitReason
 
 
 def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatch):

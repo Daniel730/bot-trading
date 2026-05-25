@@ -51,3 +51,25 @@ def startup_health_check_connection():
             return False
 
     return StartupHealthCheckConnection
+
+
+@pytest.fixture
+def monitor(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    from src.monitor import ArbitrageMonitor
+    from src.services.persistence_service import persistence_service
+
+    with patch("src.monitor.BrokerageService") as mock_broker_class:
+        monkeypatch.setattr(persistence_service, "get_open_signals", AsyncMock(return_value=[]))
+        monitor_instance = ArbitrageMonitor(mode="live")
+        monitor_instance.brokerage = mock_broker_class.return_value
+        monitor_instance.brokerage.get_venue.return_value = "ALPACA"
+        monitor_instance.brokerage.get_available_quantity = AsyncMock(return_value=1_000_000.0)
+        monitor_instance.brokerage.get_pending_orders = AsyncMock(return_value=[])
+        monitor_instance.brokerage.get_pending_orders_value.return_value = 0.0
+        monitor_instance.brokerage.get_account_cash.return_value = 10000.0
+        monitor_instance.brokerage.get_account_equity.return_value = 10000.0
+        monitor_instance.brokerage.get_account_buying_power.return_value = 10000.0
+        monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
+        return monitor_instance

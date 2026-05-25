@@ -5,6 +5,26 @@ def _repo_root() -> Path:
     return Path(__file__).parents[2]
 
 
+def test_monitor_fixture_is_shared_from_conftest():
+    root = _repo_root()
+    conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
+    monitor_contracts = [
+        "test_monitor.py",
+        "test_monitor_execution.py",
+        "test_monitor_closing.py",
+        "test_monitor_process_pair.py",
+        "test_monitor_price_guard.py",
+    ]
+
+    assert "def monitor(" in conftest
+    assert "src.monitor.BrokerageService" in conftest
+
+    for filename in monitor_contracts:
+        source = (root / "tests" / "unit" / filename).read_text(encoding="utf-8")
+        assert "def monitor(" not in source
+        assert "ArbitrageMonitor(mode=\"live\")" not in source
+
+
 def test_monitor_execution_contract_tests_are_split_from_monolith():
     unit_dir = _repo_root() / "tests" / "unit"
     monolith = (unit_dir / "test_monitor.py").read_text(encoding="utf-8")
