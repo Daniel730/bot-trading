@@ -67,3 +67,24 @@ def test_startup_no_scannable_pairs_contract_tests_are_split_from_monolith():
 
     assert "def test_startup_marks_no_scannable_pairs_after_health_checks" not in monolith
     assert "def test_startup_marks_no_scannable_pairs_after_health_checks" in no_scannable
+
+
+def test_startup_monitor_factory_is_shared_from_conftest():
+    root = _repo_root()
+    conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
+    startup_contracts = [
+        "test_startup_broker_ledger_mismatch.py",
+        "test_startup_database_initialization.py",
+        "test_startup_entropy_baselines.py",
+        "test_startup_health_checks.py",
+        "test_startup_no_scannable_pairs.py",
+        "test_startup_unresolved_execution_state.py",
+    ]
+
+    assert "def startup_monitor_factory" in conftest
+    assert "src.monitor.BrokerageService" in conftest
+
+    for filename in startup_contracts:
+        source = (root / "tests" / "unit" / filename).read_text(encoding="utf-8")
+        assert "def _make_startup_monitor" not in source
+        assert "def startup_monitor_factory" not in source

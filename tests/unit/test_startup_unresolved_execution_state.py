@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.monitor import ArbitrageMonitor
 from src.services.persistence_service import OrderStatus, persistence_service
 
 
@@ -43,16 +42,6 @@ class _StartupRecoverySession:
                 sum(1 for status in self.statuses_to_count if status in unresolved_statuses)
             )
         return _ScalarResult(0)
-
-
-def _make_startup_monitor(mode: str = "live") -> ArbitrageMonitor:
-    return ArbitrageMonitor(mode=mode)
-
-
-@pytest.fixture
-def startup_monitor_factory(fake_broker):
-    with patch("src.monitor.BrokerageService", return_value=fake_broker):
-        yield _make_startup_monitor
 
 
 @pytest.mark.asyncio

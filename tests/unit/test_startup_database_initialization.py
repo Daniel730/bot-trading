@@ -2,19 +2,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.monitor import ArbitrageMonitor
-
-
-def _make_startup_monitor(mode: str = "live") -> ArbitrageMonitor:
-    return ArbitrageMonitor(mode=mode)
-
-
-@pytest.fixture
-def startup_monitor_factory(fake_broker):
-    with patch("src.monitor.BrokerageService", return_value=fake_broker):
-        yield _make_startup_monitor
-
-
 @pytest.mark.asyncio
 @patch("src.monitor.notification_service")
 @patch("src.monitor.persistence_service")
