@@ -2,6 +2,7 @@ import logging
 import yfinance as yf
 import pandas as pd
 import requests
+from contextvars import ContextVar
 from polygon import RESTClient
 from typing import Callable, List, Optional, TypeVar
 from src.config import settings
@@ -13,6 +14,10 @@ from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+_REDIS_CACHE_WRITE_LOOP: ContextVar[asyncio.AbstractEventLoop | None] = ContextVar(
+    "redis_cache_write_loop",
+    default=None,
+)
 
 class AwaitableDict(dict):
     def __await__(self):
@@ -208,19 +213,26 @@ class DataService:
 
     def _update_redis_cache(self, ticker: str, price: float):
         """Helper to fire-and-forget Redis price updates safely from sync context."""
+        coro = None
         try:
+            target_loop = _REDIS_CACHE_WRITE_LOOP.get()
             coro = redis_service.set_price(ticker, price)
             try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.run_coroutine_threadsafe(coro, loop)
-                else:
-                    # Close it to avoid warning if we can't run it
-                    if inspect.isawaitable(coro): coro.close()
-            except Exception:
-                if inspect.isawaitable(coro): coro.close()
+                running_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                running_loop = None
+
+            if running_loop is not None:
+                running_loop.create_task(coro)
+                coro = None
+            elif target_loop is not None and target_loop.is_running():
+                asyncio.run_coroutine_threadsafe(coro, target_loop)
+                coro = None
         except Exception:
             pass
+        finally:
+            if coro is not None and inspect.isawaitable(coro):
+                coro.close()
 
     async def _run_sync_backend(
         self,
@@ -235,13 +247,17 @@ class DataService:
         deadline = timeout if timeout is not None else settings.MARKET_DATA_TIMEOUT_SECONDS
 
         async def runner():
-            if inspect.iscoroutinefunction(func):
-                result = func(*args, **kwargs)
-            else:
-                result = await asyncio.to_thread(func, *args, **kwargs)
-            if inspect.isawaitable(result):
-                return await result
-            return result
+            token = _REDIS_CACHE_WRITE_LOOP.set(asyncio.get_running_loop())
+            try:
+                if inspect.iscoroutinefunction(func):
+                    result = func(*args, **kwargs)
+                else:
+                    result = await asyncio.to_thread(func, *args, **kwargs)
+                if inspect.isawaitable(result):
+                    return await result
+                return result
+            finally:
+                _REDIS_CACHE_WRITE_LOOP.reset(token)
 
         try:
             return await asyncio.wait_for(runner(), timeout=deadline)

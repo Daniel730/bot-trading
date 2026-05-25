@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, patch
+import asyncio
 import importlib
 import threading
 import time
@@ -146,6 +147,28 @@ async def test_get_latest_price_async_times_out_without_blocking_loop():
 
     assert prices == {}
     assert time.perf_counter() - start < 0.15
+
+
+@pytest.mark.asyncio
+async def test_get_latest_price_async_schedules_sync_cache_write_from_worker_thread():
+    service = DataService()
+
+    with patch("src.services.data_service.redis_service.get_price", new_callable=AsyncMock) as get_price, \
+         patch("src.services.data_service.redis_service.set_price", new_callable=AsyncMock) as set_price, \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}), \
+         patch.object(service, "_get_latest_price_polygon", return_value={}), \
+         patch.object(
+             service,
+             "_get_latest_price_yfinance_with_retry",
+             return_value={"MSFT": 151.25},
+         ):
+        get_price.return_value = None
+
+        prices = await service.get_latest_price_async(["MSFT"], timeout=1.0)
+        await asyncio.sleep(0)
+
+    assert prices == {"MSFT": 151.25}
+    set_price.assert_awaited_once_with("MSFT", 151.25)
 
 
 @pytest.mark.asyncio
