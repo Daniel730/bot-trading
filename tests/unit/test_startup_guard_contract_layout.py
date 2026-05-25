@@ -49,3 +49,12 @@ def test_startup_health_check_contract_tests_are_split_from_monolith():
 
     assert "def test_startup_health_check_failures_use_existing_notification_api" not in monolith
     assert "def test_startup_health_check_failures_use_existing_notification_api" in health_checks
+
+
+def test_startup_database_initialization_contract_tests_are_split_from_monolith():
+    unit_dir = _repo_root() / "tests" / "unit"
+    monolith = (unit_dir / "test_startup_guards.py").read_text(encoding="utf-8")
+    database_init = (unit_dir / "test_startup_database_initialization.py").read_text(encoding="utf-8")
+
+    assert "def test_startup_handles_database_initialization_failure" not in monolith
+    assert "def test_startup_handles_database_initialization_failure" in database_init
