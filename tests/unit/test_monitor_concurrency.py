@@ -1,15 +1,11 @@
 import asyncio
 import pytest
-from src.monitor import ArbitrageMonitor
-from unittest.mock import MagicMock, patch
 
 @pytest.mark.asyncio
-async def test_active_signals_concurrency():
+async def test_active_signals_concurrency(monitor):
     """
     A-03: Verify that concurrent updates to active_signals are protected by a lock.
     """
-    monitor = ArbitrageMonitor(mode="live")
-    
     # Mock process_pair to simulate concurrent updates
     async def mock_process_pair(pair, prices):
         # In a real scenario, this would happen inside process_pair

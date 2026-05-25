@@ -76,6 +76,7 @@ Last updated: 2026-05-26
 - DONE 2026-05-22: monitor price-guard tests (`missing_price`, impossible crypto prices, and repeated Alpaca crypto snapshot/quote-mid staleness) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_price_guard.py`, with the contract layout guard covering the boundary.
 - DONE 2026-05-22: monitor process-pair/ledger-state tests (Kalman invalid/quarantine/rebuild, orchestrator/profit vetoes, and failed execution status) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_process_pair.py`, with the contract layout guard covering the boundary.
 - DONE 2026-05-26: monitor contract tests now share the official `monitor` fixture from `tests/conftest.py`, with the monitor contract layout guard preventing local monitor fixture copies from returning.
+- DONE 2026-05-26: monitor concurrency tests now use the shared `monitor` fixture instead of direct `ArbitrageMonitor` construction, with the monitor contract layout guard covering that file too.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.

@@ -10,6 +10,7 @@ def test_monitor_fixture_is_shared_from_conftest():
     conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
     monitor_contracts = [
         "test_monitor.py",
+        "test_monitor_concurrency.py",
         "test_monitor_execution.py",
         "test_monitor_closing.py",
         "test_monitor_process_pair.py",
