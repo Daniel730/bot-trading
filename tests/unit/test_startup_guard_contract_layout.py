@@ -14,3 +14,16 @@ def test_startup_broker_ledger_contract_tests_are_split_from_monolith():
     assert "def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_audit" not in monolith
     assert "def test_startup_blocks_when_broker_has_unmanaged_position" in broker_ledger
     assert "def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_audit" in broker_ledger
+
+
+def test_startup_unresolved_execution_contract_tests_are_split_from_monolith():
+    unit_dir = _repo_root() / "tests" / "unit"
+    monolith = (unit_dir / "test_startup_guards.py").read_text(encoding="utf-8")
+    unresolved = (unit_dir / "test_startup_unresolved_execution_state.py").read_text(encoding="utf-8")
+
+    assert "def test_startup_blocks_when_unresolved_execution_state_exists" not in monolith
+    assert "def test_startup_treats_close_failed_as_unresolved_execution_state" not in monolith
+    assert "def test_startup_treats_failed_submitted_and_partial_states_as_unresolved" not in monolith
+    assert "def test_startup_blocks_when_unresolved_execution_state_exists" in unresolved
+    assert "def test_startup_treats_close_failed_as_unresolved_execution_state" in unresolved
+    assert "def test_startup_treats_failed_submitted_and_partial_states_as_unresolved" in unresolved

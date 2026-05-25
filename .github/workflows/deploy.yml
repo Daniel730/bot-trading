@@ -249,7 +249,7 @@ jobs:
             tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_ambiguous \
             tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_partial_fill \
             tests/unit/test_monitor.py::test_close_position_does_not_close_ledger_until_all_close_orders_fill \
-            tests/unit/test_startup_guards.py::test_startup_blocks_when_unresolved_execution_state_exists \
+            tests/unit/test_startup_unresolved_execution_state.py::test_startup_blocks_when_unresolved_execution_state_exists \
             tests/unit/test_dashboard_wallet_sync.py \
             tests/unit/test_production_soak_gate.py \
             tests/unit/test_runtime_alert_rules.py \
