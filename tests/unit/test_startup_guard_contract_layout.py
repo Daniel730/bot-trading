@@ -58,3 +58,12 @@ def test_startup_database_initialization_contract_tests_are_split_from_monolith(
 
     assert "def test_startup_handles_database_initialization_failure" not in monolith
     assert "def test_startup_handles_database_initialization_failure" in database_init
+
+
+def test_startup_no_scannable_pairs_contract_tests_are_split_from_monolith():
+    unit_dir = _repo_root() / "tests" / "unit"
+    monolith = (unit_dir / "test_startup_guards.py").read_text(encoding="utf-8")
+    no_scannable = (unit_dir / "test_startup_no_scannable_pairs.py").read_text(encoding="utf-8")
+
+    assert "def test_startup_marks_no_scannable_pairs_after_health_checks" not in monolith
+    assert "def test_startup_marks_no_scannable_pairs_after_health_checks" in no_scannable
