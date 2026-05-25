@@ -1,6 +1,6 @@
 # Fix Priority Queue
 
-Last updated: 2026-05-25
+Last updated: 2026-05-26
 
 ## P0 - Must fix before broker-connected testing
 
@@ -70,6 +70,7 @@ Last updated: 2026-05-25
 - DONE 2026-05-25: startup no-scannable-pairs tests are split out of the `test_startup_guards.py` monolith into `tests/unit/test_startup_no_scannable_pairs.py`, with the startup contract layout guard covering the boundary.
 - DONE 2026-05-25: startup tests now share the official `startup_monitor_factory` fixture from `tests/conftest.py`, with the startup contract layout guard preventing local monitor factory copies from returning.
 - DONE 2026-05-25: startup health-check tests now share the official `startup_health_check_connection` fixture from `tests/conftest.py`, with the startup contract layout guard preventing local connection helper copies from returning.
+- DONE 2026-05-26: residual startup structural guards now live in `tests/unit/test_startup_guard_contract_layout.py`, and the empty `tests/unit/test_startup_guards.py` monolith was removed after all functional startup contracts were split out.
 - DONE 2026-05-21: monitor execution-contract tests (`execute_trade*` and `_await_order_fill`) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_execution.py`, with a layout guard preventing them from sliding back.
 - DONE 2026-05-21: monitor closing-contract tests (`test_close_position*`) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_closing.py`, with the contract layout guard covering the new boundary.
 - DONE 2026-05-22: monitor price-guard tests (`missing_price`, impossible crypto prices, and repeated Alpaca crypto snapshot/quote-mid staleness) are split out of the `test_monitor.py` monolith into `tests/unit/test_monitor_price_guard.py`, with the contract layout guard covering the boundary.
