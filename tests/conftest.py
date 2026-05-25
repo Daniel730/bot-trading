@@ -34,3 +34,20 @@ def startup_monitor_factory(fake_broker):
 
     with patch("src.monitor.BrokerageService", return_value=fake_broker):
         yield make_startup_monitor
+
+
+@pytest.fixture
+def startup_health_check_connection():
+    class StartupHealthCheckConnection:
+        def __init__(self, error=None):
+            self._error = error
+
+        async def __aenter__(self):
+            if self._error:
+                raise self._error
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    return StartupHealthCheckConnection

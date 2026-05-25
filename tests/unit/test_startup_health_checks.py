@@ -5,19 +5,6 @@ import pytest
 from src.config import settings
 
 
-class _HealthCheckConnection:
-    def __init__(self, error=None):
-        self._error = error
-
-    async def __aenter__(self):
-        if self._error:
-            raise self._error
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failing_check", "expected_message"),
@@ -39,6 +26,7 @@ async def test_startup_health_check_failures_use_existing_notification_api(
     failing_check,
     expected_message,
     startup_monitor_factory,
+    startup_health_check_connection,
 ):
     monitor = startup_monitor_factory()
     monitor.log_preflight = MagicMock()
@@ -46,7 +34,7 @@ async def test_startup_health_check_failures_use_existing_notification_api(
     monitor.initialize_pairs = AsyncMock()
     monitor.brokerage.get_portfolio = AsyncMock(return_value=[])
     mock_persistence.init_db = AsyncMock()
-    mock_persistence.engine.connect.return_value = _HealthCheckConnection()
+    mock_persistence.engine.connect.return_value = startup_health_check_connection()
     mock_dashboard.attach_monitor = MagicMock()
     mock_dashboard.start = AsyncMock()
     mock_notify.start_listening = AsyncMock()
@@ -54,7 +42,7 @@ async def test_startup_health_check_failures_use_existing_notification_api(
     mock_redis.client.ping = AsyncMock()
 
     if failing_check == "postgres":
-        mock_persistence.engine.connect.return_value = _HealthCheckConnection(RuntimeError("pg offline"))
+        mock_persistence.engine.connect.return_value = startup_health_check_connection(RuntimeError("pg offline"))
     elif failing_check == "redis":
         mock_redis.client.ping.side_effect = RuntimeError("redis offline")
     else:

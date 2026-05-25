@@ -6,19 +6,6 @@ import pytest
 from src.config import settings
 
 
-class _HealthCheckConnection:
-    def __init__(self, error=None):
-        self._error = error
-
-    async def __aenter__(self):
-        if self._error:
-            raise self._error
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-
 @pytest.mark.asyncio
 @patch("src.monitor.data_service")
 @patch("src.monitor.notification_service")
@@ -32,6 +19,7 @@ async def test_startup_marks_no_scannable_pairs_after_health_checks(
     mock_notify,
     mock_data,
     startup_monitor_factory,
+    startup_health_check_connection,
 ):
     monitor = startup_monitor_factory()
     monitor.log_preflight = MagicMock()
@@ -45,7 +33,7 @@ async def test_startup_marks_no_scannable_pairs_after_health_checks(
     monitor._auto_scout_and_rotate_loop = MagicMock(return_value=None)
 
     mock_persistence.init_db = AsyncMock()
-    mock_persistence.engine.connect.return_value = _HealthCheckConnection()
+    mock_persistence.engine.connect.return_value = startup_health_check_connection()
     mock_persistence.engine.dispose = AsyncMock()
     mock_persistence.set_system_state = AsyncMock()
     mock_persistence.get_total_pnl = AsyncMock(return_value=0.0)

@@ -88,3 +88,20 @@ def test_startup_monitor_factory_is_shared_from_conftest():
         source = (root / "tests" / "unit" / filename).read_text(encoding="utf-8")
         assert "def _make_startup_monitor" not in source
         assert "def startup_monitor_factory" not in source
+
+
+def test_startup_health_check_connection_is_shared_from_conftest():
+    root = _repo_root()
+    conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
+    startup_contracts = [
+        "test_startup_health_checks.py",
+        "test_startup_no_scannable_pairs.py",
+    ]
+
+    assert "def startup_health_check_connection" in conftest
+
+    for filename in startup_contracts:
+        source = (root / "tests" / "unit" / filename).read_text(encoding="utf-8")
+        assert "class _HealthCheckConnection" not in source
+        assert "_HealthCheckConnection(" not in source
+        assert "startup_health_check_connection" in source
