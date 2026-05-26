@@ -1,26 +1,14 @@
 import pytest
-import sys
-import os
 import uuid
-import logging
-
-# Ensure src is in the path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
-
-from unittest.mock import patch, MagicMock, AsyncMock
-from src.monitor import ArbitrageMonitor
+from unittest.mock import patch, AsyncMock
 
 
 @pytest.mark.asyncio
-async def test_spread_guard_rejection():
+async def test_spread_guard_rejection(monitor):
     """
     Test F3: Verify that the bot rejects a trade when the combined Bid-Ask spread
     exceeds the 0.3% threshold.
     """
-    # Initialize monitor without starting loops
-    with patch('src.monitor.BrokerageService', return_value=MagicMock()):
-        monitor = ArbitrageMonitor()
-
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT"}
     signal_id = str(uuid.uuid4())
 
@@ -49,12 +37,10 @@ async def test_spread_guard_rejection():
 
 
 @pytest.mark.asyncio
-async def test_spread_guard_rejects_missing_bid_ask():
+async def test_spread_guard_rejects_missing_bid_ask(monitor):
     """
     Missing or zero bid/ask data must fail closed before risk checks or orders.
     """
-    with patch('src.monitor.BrokerageService', return_value=MagicMock()):
-        monitor = ArbitrageMonitor()
     monitor.brokerage.place_value_order = AsyncMock()
 
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
@@ -78,13 +64,10 @@ async def test_spread_guard_rejects_missing_bid_ask():
 
 
 @pytest.mark.asyncio
-async def test_spread_guard_acceptance():
+async def test_spread_guard_acceptance(monitor):
     """
     Test F3: Verify that the bot proceeds when the spread is within limits.
     """
-    with patch('src.monitor.BrokerageService', return_value=MagicMock()):
-        monitor = ArbitrageMonitor()
-
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT"}
     signal_id = str(uuid.uuid4())
 

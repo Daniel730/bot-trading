@@ -15,6 +15,7 @@ def test_monitor_fixture_is_shared_from_conftest():
         "test_monitor_closing.py",
         "test_monitor_process_pair.py",
         "test_monitor_price_guard.py",
+        "test_spread_guard_unit.py",
     ]
 
     assert "def monitor(" in conftest
@@ -23,6 +24,7 @@ def test_monitor_fixture_is_shared_from_conftest():
     for filename in monitor_contracts:
         source = (root / "tests" / "unit" / filename).read_text(encoding="utf-8")
         assert "def monitor(" not in source
+        assert "ArbitrageMonitor()" not in source
         assert "ArbitrageMonitor(mode=\"live\")" not in source
 
 
