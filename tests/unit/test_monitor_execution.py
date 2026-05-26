@@ -247,13 +247,14 @@ async def test_execute_trade_blocks_pending_pair_order_before_broker_order(monit
 
 
 @pytest.mark.asyncio
-async def test_execute_trade_marks_partial_exposure_when_leg_b_not_terminal(monitor):
+async def test_execute_trade_marks_manual_reconciliation_when_leg_b_not_terminal(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
+         patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
@@ -282,27 +283,25 @@ async def test_execute_trade_marks_partial_exposure_when_leg_b_not_terminal(moni
             {"status": "success", "order_id": "leg-b"},
         ])
 
-        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+        result = await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
+        assert result == {"executed": False, "reason": "leg_b_fill_timeout"}
         assert monitor.brokerage.place_value_order.await_count == 2
         assert mock_await_fill.await_count == 2
         mock_notify.assert_awaited_once()
-
-        partial_rows = [
-            call
-            for call in mock_update_fill.await_args_list
-            if call.kwargs["metadata_updates"].get("pair_status") == OrderStatus.PARTIAL_EXPOSURE.value
-        ]
-
-        assert len(partial_rows) == 2
-        assert {call.args[1]: call.kwargs["status"] for call in partial_rows} == {
-            "leg-a": OrderStatus.PARTIAL_EXPOSURE,
-            "leg-b": OrderStatus.PARTIAL_EXPOSURE,
-        }
-        assert {call.args[1]: call.kwargs["metadata_updates"]["order_status"] for call in partial_rows} == {
-            "leg-a": OrderStatus.LEG_A_FILLED.value,
-            "leg-b": OrderStatus.LEG_B_SUBMITTED.value,
-        }
+        assert "NEEDS_MANUAL_RECONCILIATION" in mock_notify.await_args.args[0]
+        mock_update_fill.assert_awaited_once()
+        assert mock_update_fill.await_args.args[1] == "leg-a"
+        assert mock_update_fill.await_args.kwargs["filled_quantity"] == 1.0
+        assert mock_update_fill.await_args.kwargs["status"] == OrderStatus.NEEDS_MANUAL_RECONCILIATION
+        assert (
+            mock_update_fill.await_args.kwargs["metadata_updates"]["pair_status"]
+            == OrderStatus.NEEDS_MANUAL_RECONCILIATION.value
+        )
+        mock_update_status.assert_awaited_once_with(
+            uuid.UUID(signal_id),
+            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+        )
 
 
 @pytest.mark.asyncio

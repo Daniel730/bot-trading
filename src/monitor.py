@@ -2224,10 +2224,33 @@ class ArbitrageMonitor:
             return execution_result(False, "leg_b_rejected")
         fill_b = await self._await_order_fill(order_id_b, timeout=30)
         if not fill_b:
-            status_b = OrderStatus.LEG_B_SUBMITTED
-            await notification_service.send_message(
-                f"Leg B ({exec_t_b}) not terminal within 30s; signal {signal_id} requires follow-up."
+            await persistence_service.update_trade_fill(
+                uuid.UUID(signal_id),
+                order_id_a,
+                filled_quantity=filled_qty_a,
+                fill_price=fill_price_a,
+                status=OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                metadata_updates={
+                    "filled_qty": filled_qty_a,
+                    "filled_avg_price": fill_price_a,
+                    "order_status": status_a.value,
+                    "pair_status": OrderStatus.NEEDS_MANUAL_RECONCILIATION.value,
+                    "fill_snapshot": fill_a,
+                },
             )
+            await persistence_service.update_signal_status(
+                uuid.UUID(signal_id),
+                OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+            )
+            alert = (
+                f"Leg B ({exec_t_b}) not terminal within 30s. "
+                f"Signal marked NEEDS_MANUAL_RECONCILIATION; Leg B fill quantity is unknown "
+                f"and ledger was not advanced from requested size. "
+                f"order_id={order_id_b} signal_id={signal_id}"
+            )
+            logger.critical(alert)
+            await notification_service.send_message(alert)
+            return execution_result(False, "leg_b_fill_timeout")
         else:
             status_raw_b = str(fill_b.get('status', '')).lower()
             if status_raw_b in ("partially_filled", "partial_fill"):
