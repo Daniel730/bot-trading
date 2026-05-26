@@ -10,6 +10,7 @@ def test_monitor_fixture_is_shared_from_conftest():
     conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
     monitor_contracts = [
         "test_dashboard_runtime_mode.py",
+        "test_dev_mode.py",
         "test_market_calendar.py",
         "test_monitor.py",
         "test_monitor_concurrency.py",
@@ -26,6 +27,7 @@ def test_monitor_fixture_is_shared_from_conftest():
     for filename in monitor_contracts:
         source = (root / "tests" / "unit" / filename).read_text(encoding="utf-8")
         assert "def monitor(" not in source
+        assert "from src.monitor import ArbitrageMonitor" not in source
         assert "ArbitrageMonitor()" not in source
         assert "ArbitrageMonitor(mode=\"live\")" not in source
         assert "object.__new__(ArbitrageMonitor)" not in source

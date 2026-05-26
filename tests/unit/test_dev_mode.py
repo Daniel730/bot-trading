@@ -1,6 +1,5 @@
 import unittest
 from src.config import settings
-from src.monitor import ArbitrageMonitor
 import asyncio
 
 class TestDevMode(unittest.IsolatedAsyncioTestCase):

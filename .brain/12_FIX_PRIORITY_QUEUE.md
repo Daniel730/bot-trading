@@ -80,6 +80,7 @@ Last updated: 2026-05-26
 - DONE 2026-05-26: spread-guard monitor tests now use the shared `monitor` fixture instead of direct `ArbitrageMonitor` construction, with the monitor contract layout guard covering that file too.
 - DONE 2026-05-26: dashboard runtime preflight tests now use the shared `monitor` fixture instead of direct `ArbitrageMonitor` construction, with the monitor contract layout guard covering that file too.
 - DONE 2026-05-26: market-calendar monitor tests now use the shared `monitor` fixture instead of `object.__new__(ArbitrageMonitor)`, with the monitor contract layout guard blocking that workaround from returning.
+- DONE 2026-05-26: dev-mode config tests no longer import `ArbitrageMonitor` just to validate settings, with the monitor contract layout guard blocking direct monitor imports from covered unit contracts.
 - DONE 2026-05-20: dashboard wallet sync now fails closed when requested budget exceeds effective Alpaca cash instead of deferring an oversized buy to the broker.
 - DONE 2026-05-20: WalletPanel disables broker buys and shows a reduce-budget warning when the recommendation plan is cash-limited, matching the backend fail-closed wallet-buy behavior.
 - DONE 2026-05-19: equity pair-spread confidence no longer receives a long-only Sortino penalty that could drag a `0.60` orchestrator score below the `0.5` execution threshold.

@@ -1,0 +1,12 @@
+# Command: speckit.research
+# Use: /speckit.research [ticker_a] [ticker_b]
+# Description: Generates a pair research file from the arbitrage-elite template.
+
+prompt = """
+Generate a pair research document for {{arg1}} and {{arg2}} using the `research-pair` template.
+Ensure you research their recent market performance and correlation history.
+"""
+
+[options]
+template = "research-pair"
+output_file = "specs/{{branch}}/research-{{arg1}}-{{arg2}}.md"
