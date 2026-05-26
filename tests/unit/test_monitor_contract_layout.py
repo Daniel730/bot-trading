@@ -9,6 +9,7 @@ def test_monitor_fixture_is_shared_from_conftest():
     root = _repo_root()
     conftest = (root / "tests" / "conftest.py").read_text(encoding="utf-8")
     monitor_contracts = [
+        "test_dashboard_runtime_mode.py",
         "test_monitor.py",
         "test_monitor_concurrency.py",
         "test_monitor_execution.py",

@@ -36,9 +36,7 @@ def test_system_health_exposes_sanitized_runtime_mode(monkeypatch):
     assert "paper-api.alpaca.markets" not in str(runtime)
 
 
-def test_preflight_logs_sanitized_runtime_mode(monkeypatch):
-    from src.monitor import ArbitrageMonitor
-
+def test_preflight_logs_sanitized_runtime_mode(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
     monkeypatch.setattr(settings, "PAPER_TRADING", False)
     monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
@@ -48,7 +46,7 @@ def test_preflight_logs_sanitized_runtime_mode(monkeypatch):
     log_info = MagicMock()
     monkeypatch.setattr("src.monitor.logger.info", log_info)
 
-    ArbitrageMonitor().log_preflight()
+    monitor.log_preflight()
 
     runtime_log = next(
         call for call in log_info.call_args_list
