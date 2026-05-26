@@ -1,7 +1,6 @@
 from datetime import datetime as real_datetime
 
 from src.config import settings
-from src.monitor import ArbitrageMonitor
 
 
 class _NewYearsDayDateTime:
@@ -85,27 +84,22 @@ class _AmsterdamChristmasEveAfternoonDateTime:
         return tz.localize(current)
 
 
-def test_holiday_blocks_equity_scan_even_inside_suffix_window(monkeypatch):
+def test_holiday_blocks_equity_scan_even_inside_suffix_window(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
     monkeypatch.setattr("src.monitor.datetime", _NewYearsDayDateTime)
 
-    monitor = object.__new__(ArbitrageMonitor)
-
     assert monitor.is_market_open("AAPL") is False
 
 
-def test_nyse_half_day_blocks_equity_scan_after_early_close(monkeypatch):
+def test_nyse_half_day_blocks_equity_scan_after_early_close(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
     monkeypatch.setattr("src.monitor.datetime", _DayAfterThanksgivingDateTime)
 
-    monitor = object.__new__(ArbitrageMonitor)
-
     assert monitor.is_market_open("AAPL") is False
 
 
-def test_hk_half_day_uses_local_session_and_blocks_afternoon(monkeypatch):
+def test_hk_half_day_uses_local_session_and_blocks_afternoon(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
-    monitor = object.__new__(ArbitrageMonitor)
 
     monkeypatch.setattr("src.monitor.datetime", _HongKongChristmasEveMorningDateTime)
     assert monitor.is_market_open("0700.HK") is True
@@ -114,9 +108,8 @@ def test_hk_half_day_uses_local_session_and_blocks_afternoon(monkeypatch):
     assert monitor.is_market_open("0700.HK") is False
 
 
-def test_lse_half_day_blocks_equity_scan_after_early_close(monkeypatch):
+def test_lse_half_day_blocks_equity_scan_after_early_close(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
-    monitor = object.__new__(ArbitrageMonitor)
 
     monkeypatch.setattr("src.monitor.datetime", _LondonChristmasEveMorningDateTime)
     assert monitor.is_market_open("SHEL.L") is True
@@ -125,18 +118,15 @@ def test_lse_half_day_blocks_equity_scan_after_early_close(monkeypatch):
     assert monitor.is_market_open("SHEL.L") is False
 
 
-def test_xetra_exchange_closure_blocks_equity_scan(monkeypatch):
+def test_xetra_exchange_closure_blocks_equity_scan(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
     monkeypatch.setattr("src.monitor.datetime", _XetraChristmasEveDateTime)
-
-    monitor = object.__new__(ArbitrageMonitor)
 
     assert monitor.is_market_open("SAP.DE") is False
 
 
-def test_euronext_half_day_blocks_scan_after_early_close(monkeypatch):
+def test_euronext_half_day_blocks_scan_after_early_close(monkeypatch, monitor):
     monkeypatch.setattr(settings, "DEV_MODE", False)
-    monitor = object.__new__(ArbitrageMonitor)
 
     monkeypatch.setattr("src.monitor.datetime", _AmsterdamChristmasEveMorningDateTime)
     assert monitor.is_market_open("ASML.AS") is True
