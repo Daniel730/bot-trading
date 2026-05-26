@@ -88,7 +88,7 @@ async def test_request_approval_paper_survives_dashboard_failure():
 
 
 @pytest.mark.asyncio
-async def test_paper_notify_redacts_telegram_token_from_send_failure(capsys):
+async def test_paper_notify_logs_and_redacts_telegram_token_from_send_failure(caplog, capsys):
     original_enabled = notification_service._telegram_enabled
     original_app = notification_service.app
     original_token = notification_service.token
@@ -107,12 +107,13 @@ async def test_paper_notify_redacts_telegram_token_from_send_failure(capsys):
         notification_service.app = FakeApp()
         notification_service.token = leaked_token
 
-        await notification_service._paper_notify("redaction test")
+        with caplog.at_level(logging.WARNING, logger="src.services.notification_service"):
+            await notification_service._paper_notify("redaction test")
 
-        output = capsys.readouterr().out
-        assert leaked_token not in output
-        assert leaked_url not in output
-        assert "bot<redacted-telegram-token>/sendMessage" in output
+        assert capsys.readouterr().out == ""
+        assert leaked_token not in caplog.text
+        assert leaked_url not in caplog.text
+        assert "bot<redacted-telegram-token>/sendMessage" in caplog.text
     finally:
         notification_service._telegram_enabled = original_enabled
         notification_service.app = original_app

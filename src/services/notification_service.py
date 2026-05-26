@@ -7,10 +7,12 @@ import re
 import uuid
 
 
+logger = logging.getLogger(__name__)
 REDACTED_TELEGRAM_TOKEN = "<redacted-telegram-token>"
 _TELEGRAM_BOT_URL_RE = re.compile(r"(api\.telegram\.org/bot)[^/\s]+")
 _TELEGRAM_BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}")
 _TELEGRAM_LOG_REDACTION_LOGGERS = (
+    __name__,
     "httpx",
     "httpcore",
     "telegram",
@@ -94,7 +96,10 @@ class NotificationService:
             self.app.add_handler(CommandHandler("macro", self._handle_macro))
             self._telegram_enabled = True
         except Exception as e:
-            print(f"TELEGRAM: Failed to initialize ({self._redact_sensitive_text(e)}). Telegram notifications disabled.")
+            logger.warning(
+                "TELEGRAM: Failed to initialize (%s). Telegram notifications disabled.",
+                self._redact_sensitive_text(e),
+            )
 
     def _redact_sensitive_text(self, value) -> str:
         return _redact_telegram_sensitive_text(value, self.token)
@@ -351,7 +356,7 @@ class NotificationService:
                 try:
                     await query.edit_message_text(text=f"{query.message.text}\n\n✅ Resultado: {'APROVADO' if action == 'approve' else 'REJEITADO'}")
                 except Exception as e:
-                    print(f"TELEGRAM: Could not edit message: {self._redact_sensitive_text(e)}")
+                    logger.warning("TELEGRAM: Could not edit message: %s", self._redact_sensitive_text(e))
 
     async def start_listening(self):
         """
@@ -379,7 +384,7 @@ class NotificationService:
                 from src.services.dashboard_service import dashboard_state
                 await dashboard_state.add_message("BOT", message)
             except Exception as e:
-                print(f"DASHBOARD ERROR (send_message fallback): {self._redact_sensitive_text(e)}")
+                logger.warning("DASHBOARD ERROR (send_message fallback): %s", self._redact_sensitive_text(e))
             return
         try:
             # 1. Send to Telegram
@@ -402,7 +407,7 @@ class NotificationService:
             await dashboard_state.add_message("BOT", message)
 
         except Exception as e:
-            print(f"TELEGRAM ERROR (send_message): {self._redact_sensitive_text(e)}")
+            logger.warning("TELEGRAM ERROR (send_message): %s", self._redact_sensitive_text(e))
 
     async def send_dashboard_login_approval(self, correlation_id: str, summary: str) -> bool:
         """Send an interactive dashboard-login approval request."""
@@ -415,7 +420,7 @@ class NotificationService:
                 metadata={"correlation_id": correlation_id, "type": "dashboard_login_approval"},
             )
         except Exception as e:
-            print(f"DASHBOARD ERROR (login approval): {self._redact_sensitive_text(e)}")
+            logger.warning("DASHBOARD ERROR (login approval): %s", self._redact_sensitive_text(e))
 
         if not self._telegram_enabled:
             print(f"[LOGIN APPROVAL] Telegram not configured. Challenge {correlation_id}: {summary}")
@@ -437,7 +442,7 @@ class NotificationService:
             )
             return True
         except Exception as e:
-            print(f"TELEGRAM ERROR (login approval): {self._redact_sensitive_text(e)}")
+            logger.warning("TELEGRAM ERROR (login approval): %s", self._redact_sensitive_text(e))
             return False
 
     async def _paper_notify(self, trade_summary: str) -> None:
@@ -451,7 +456,10 @@ class NotificationService:
             try:
                 await self.app.bot.send_message(chat_id=self.chat_id, text=text)
             except Exception as e:
-                print(f"TELEGRAM (paper-notify): send failed, non-fatal: {self._redact_sensitive_text(e)}")
+                logger.warning(
+                    "TELEGRAM (paper-notify): send failed, non-fatal: %s",
+                    self._redact_sensitive_text(e),
+                )
         else:
             print(f"[PAPER TRADE] {text}")
         try:
@@ -460,14 +468,17 @@ class NotificationService:
                 "BOT", text, metadata={"type": "paper_auto_approved"}
             )
         except Exception as e:
-            print(f"DASHBOARD (paper-notify): add_message failed, non-fatal: {self._redact_sensitive_text(e)}")
+            logger.warning(
+                "DASHBOARD (paper-notify): add_message failed, non-fatal: %s",
+                self._redact_sensitive_text(e),
+            )
 
     def _schedule_paper_notify(self, trade_summary: str) -> None:
         async def runner():
             try:
                 await self._paper_notify(trade_summary)
             except Exception as e:
-                print(f"PAPER notify failed, non-fatal: {self._redact_sensitive_text(e)}")
+                logger.warning("PAPER notify failed, non-fatal: %s", self._redact_sensitive_text(e))
         asyncio.create_task(runner())
 
     async def request_approval(self, trade_summary: str, trade_value: float = None, force_manual: bool = False) -> bool:
@@ -487,14 +498,17 @@ class NotificationService:
 
         if not self._telegram_enabled:
             # Live mode must fail-closed when human approval is required but unavailable.
-            print(f"[APPROVAL] Telegram approval channel unavailable. Pausing live trading for manual review: {trade_summary}")
+            logger.warning(
+                "[APPROVAL] Telegram approval channel unavailable. Pausing live trading for manual review: %s",
+                trade_summary,
+            )
             try:
                 from src.services.dashboard_service import dashboard_service
                 from src.services.persistence_service import persistence_service
                 await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", "Telegram approval channel unavailable; live execution paused.")
                 await persistence_service.set_system_state("operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW")
             except Exception as pause_exc:
-                print(f"[APPROVAL] Failed to publish pause state: {self._redact_sensitive_text(pause_exc)}")
+                logger.warning("[APPROVAL] Failed to publish pause state: %s", self._redact_sensitive_text(pause_exc))
             return False
 
         # Threshold auto-approval fast path. In live mode this is only allowed
@@ -534,18 +548,21 @@ class NotificationService:
             return await asyncio.wait_for(future, timeout=300)
         except asyncio.TimeoutError:
             self.pending_approvals.pop(correlation_id, None)
-            print(f"TELEGRAM: Timeout waiting for approval {correlation_id}")
+            logger.warning("TELEGRAM: Timeout waiting for approval %s", correlation_id)
             return False
         except Exception as e:
             self.pending_approvals.pop(correlation_id, None)
-            print(f"TELEGRAM ERROR: {self._redact_sensitive_text(e)}")
+            logger.warning("TELEGRAM ERROR: %s", self._redact_sensitive_text(e))
             try:
                 from src.services.dashboard_service import dashboard_service
                 from src.services.persistence_service import persistence_service
                 await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", "Approval workflow failed; live execution paused.")
                 await persistence_service.set_system_state("operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW")
             except Exception as pause_exc:
-                print(f"[APPROVAL] Failed to publish pause state after approval error: {self._redact_sensitive_text(pause_exc)}")
+                logger.warning(
+                    "[APPROVAL] Failed to publish pause state after approval error: %s",
+                    self._redact_sensitive_text(pause_exc),
+                )
             return False
 
     async def handle_dashboard_command(self, command: str, metadata: dict = None):
