@@ -380,6 +380,7 @@ class PersistenceService:
         *,
         filled_quantity: float,
         fill_price: Optional[float] = None,
+        status: Optional[OrderStatus] = None,
         metadata_updates: Optional[dict] = None,
     ):
         from sqlalchemy import select, update
@@ -387,6 +388,8 @@ class PersistenceService:
         values = {"quantity": filled_quantity}
         if fill_price and fill_price > 0:
             values["price"] = fill_price
+        if status is not None:
+            values["status"] = status
 
         async with self.AsyncSessionLocal() as session:
             async with session.begin():

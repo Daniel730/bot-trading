@@ -2274,49 +2274,34 @@ class ArbitrageMonitor:
                 }
             })
 
-        # Log Leg A
-        await persistence_service.log_trade({
-            "order_id": order_id_a,
-            "signal_id": uuid.UUID(signal_id),
-            "ticker": t_a,
-            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-            "quantity": filled_qty_a or size_a,
-            "price": fill_price_a or price_a,
-            "status": visible_status,
-            "venue": venue,
-            "metadata_json": {
-                "broker_order_id": order_id_a,
-                "submitted_qty": size_a,
-                "side": side_a,
-                "symbol": exec_t_a,
+        await persistence_service.update_trade_fill(
+            uuid.UUID(signal_id),
+            order_id_a,
+            filled_quantity=filled_qty_a or size_a,
+            fill_price=fill_price_a or price_a,
+            status=visible_status,
+            metadata_updates={
+                "filled_qty": filled_qty_a,
+                "filled_avg_price": fill_price_a,
                 "order_status": status_a.value,
                 "pair_status": pair_status.value,
-                "broker_response": res_a,
                 "fill_snapshot": fill_a,
-            }
-        })
-
-        # Log Leg B
-        await persistence_service.log_trade({
-            "order_id": order_id_b,
-            "signal_id": uuid.UUID(signal_id),
-            "ticker": t_b,
-            "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
-            "quantity": filled_qty_b or size_b,
-            "price": fill_price_b or price_b,
-            "status": visible_status,
-            "venue": venue,
-            "metadata_json": {
-                "broker_order_id": order_id_b,
-                "submitted_qty": size_b,
-                "side": side_b,
-                "symbol": exec_t_b,
+            },
+        )
+        await persistence_service.update_trade_fill(
+            uuid.UUID(signal_id),
+            order_id_b,
+            filled_quantity=filled_qty_b or size_b,
+            fill_price=fill_price_b or price_b,
+            status=visible_status,
+            metadata_updates={
+                "filled_qty": filled_qty_b,
+                "filled_avg_price": fill_price_b,
                 "order_status": status_b.value,
                 "pair_status": pair_status.value,
-                "broker_response": res_b,
                 "fill_snapshot": fill_b,
-            }
-        })
+            },
+        )
 
         logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}")
         return execution_result(pair_status == OrderStatus.OPEN_PAIR, pair_status.value)

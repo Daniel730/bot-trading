@@ -16,6 +16,7 @@ async def test_execute_trade_success(monitor):
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
          patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
@@ -47,7 +48,8 @@ async def test_execute_trade_success(monitor):
         await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
         assert monitor.brokerage.place_value_order.await_count == 2
-        assert mock_log_trade.await_count == 4
+        assert mock_log_trade.await_count == 2
+        assert mock_update_fill.await_count == 2
         mock_log_journal.assert_awaited_once()
         assert mock_await_fill.await_count == 2
         mock_update_status.assert_not_awaited()
@@ -59,6 +61,7 @@ async def test_execute_trade_success_marks_both_final_legs_open_pair(monitor):
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
@@ -88,17 +91,61 @@ async def test_execute_trade_success_marks_both_final_legs_open_pair(monitor):
 
         await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
-        final_rows = [
-            call.args[0]
-            for call in mock_log_trade.await_args_list
-            if call.args[0]["metadata_json"].get("fill_snapshot")
+        submitted_rows = [call.args[0] for call in mock_log_trade.await_args_list]
+        assert [row["status"] for row in submitted_rows] == [
+            OrderStatus.LEG_A_SUBMITTED,
+            OrderStatus.LEG_B_SUBMITTED,
         ]
+        assert mock_update_fill.await_count == 2
+        assert all(call.kwargs["status"] == OrderStatus.OPEN_PAIR for call in mock_update_fill.await_args_list)
 
-        assert len(final_rows) == 2
-        assert {row["ticker"]: row["status"] for row in final_rows} == {
-            "AAPL": OrderStatus.OPEN_PAIR,
-            "MSFT": OrderStatus.OPEN_PAIR,
+
+@pytest.mark.asyncio
+async def test_execute_trade_success_resolves_submitted_ledger_rows(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         patch.object(settings, "PAPER_TRADING", False):
+
+        mock_bid_ask.return_value = (150.0, 150.1)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
         }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 150.0},
+            {"status": "filled", "filled_qty": 1.0, "filled_avg_price": 300.0},
+        ]
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "leg-a"},
+            {"status": "success", "order_id": "leg-b"},
+        ])
+
+        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        assert [call.args[0]["status"] for call in mock_log_trade.await_args_list] == [
+            OrderStatus.LEG_A_SUBMITTED,
+            OrderStatus.LEG_B_SUBMITTED,
+        ]
+        assert [call.args[1] for call in mock_update_fill.await_args_list] == ["leg-a", "leg-b"]
+        assert [call.kwargs["status"] for call in mock_update_fill.await_args_list] == [
+            OrderStatus.OPEN_PAIR,
+            OrderStatus.OPEN_PAIR,
+        ]
 
 
 @pytest.mark.asyncio
@@ -205,7 +252,8 @@ async def test_execute_trade_marks_partial_exposure_when_leg_b_not_terminal(moni
     signal_id = str(uuid.uuid4())
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
-         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
@@ -241,19 +289,19 @@ async def test_execute_trade_marks_partial_exposure_when_leg_b_not_terminal(moni
         mock_notify.assert_awaited_once()
 
         partial_rows = [
-            call.args[0]
-            for call in mock_log_trade.await_args_list
-            if call.args[0]["metadata_json"].get("pair_status") == OrderStatus.PARTIAL_EXPOSURE.value
+            call
+            for call in mock_update_fill.await_args_list
+            if call.kwargs["metadata_updates"].get("pair_status") == OrderStatus.PARTIAL_EXPOSURE.value
         ]
 
         assert len(partial_rows) == 2
-        assert {row["ticker"]: row["status"] for row in partial_rows} == {
-            "AAPL": OrderStatus.PARTIAL_EXPOSURE,
-            "MSFT": OrderStatus.PARTIAL_EXPOSURE,
+        assert {call.args[1]: call.kwargs["status"] for call in partial_rows} == {
+            "leg-a": OrderStatus.PARTIAL_EXPOSURE,
+            "leg-b": OrderStatus.PARTIAL_EXPOSURE,
         }
-        assert {row["ticker"]: row["metadata_json"]["order_status"] for row in partial_rows} == {
-            "AAPL": OrderStatus.LEG_A_FILLED.value,
-            "MSFT": OrderStatus.LEG_B_SUBMITTED.value,
+        assert {call.args[1]: call.kwargs["metadata_updates"]["order_status"] for call in partial_rows} == {
+            "leg-a": OrderStatus.LEG_A_FILLED.value,
+            "leg-b": OrderStatus.LEG_B_SUBMITTED.value,
         }
 
 
@@ -266,6 +314,7 @@ async def test_execute_trade_fails_closed_when_leg_b_partially_fills(monitor):
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
@@ -306,14 +355,14 @@ async def test_execute_trade_fails_closed_when_leg_b_partially_fills(monitor):
         assert "manual reconciliation" in mock_notify.await_args.args[0].lower()
 
         partial_rows = [
-            call.args[0]
-            for call in mock_log_trade.await_args_list
-            if call.args[0]["metadata_json"].get("pair_status") == OrderStatus.PARTIAL_EXPOSURE.value
+            call
+            for call in mock_update_fill.await_args_list
+            if call.kwargs["metadata_updates"].get("pair_status") == OrderStatus.PARTIAL_EXPOSURE.value
         ]
         assert len(partial_rows) == 2
-        rows_by_ticker = {row["ticker"]: row for row in partial_rows}
-        assert rows_by_ticker["MSFT"]["quantity"] == 0.25
-        assert rows_by_ticker["MSFT"]["metadata_json"]["order_status"] == OrderStatus.LEG_B_PARTIAL.value
+        rows_by_order = {call.args[1]: call for call in partial_rows}
+        assert rows_by_order["leg-b"].kwargs["filled_quantity"] == 0.25
+        assert rows_by_order["leg-b"].kwargs["metadata_updates"]["order_status"] == OrderStatus.LEG_B_PARTIAL.value
 
 
 @pytest.mark.asyncio
@@ -932,6 +981,7 @@ async def test_execute_trade_crypto_live_uses_broker(monitor):
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock) as mock_update_fill, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock) as mock_shadow_portfolio, \
@@ -966,7 +1016,8 @@ async def test_execute_trade_crypto_live_uses_broker(monitor):
         assert monitor.brokerage.place_value_order.await_count == 2
         monitor.brokerage.get_account_cash.assert_called_once()
         mock_shadow_exec.assert_not_called()
-        assert mock_log_trade.await_count == 4
+        assert mock_log_trade.await_count == 2
+        assert mock_update_fill.await_count == 2
         mock_log_journal.assert_awaited_once()
         assert mock_await_fill.await_count == 2
 
