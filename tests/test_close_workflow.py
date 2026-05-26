@@ -11,6 +11,7 @@ def monitor():
     m = ArbitrageMonitor(mode="test")
     m.brokerage = AsyncMock()
     m.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "close-order"})
+    m.brokerage.get_available_quantity = AsyncMock(return_value=0.0)
     # Mock preflight check to always pass
     m._preflight_live_sell_inventory = AsyncMock(return_value=True)
     m._await_order_fill = AsyncMock(return_value={"status": "filled", "filled_qty": 999})

@@ -82,7 +82,8 @@ Path: `src/monitor.py::_evaluate_exit_conditions`
 6. If any close order submit is unknown, mark `NEEDS_MANUAL_RECONCILIATION` and stop.
 7. If any close order fails after a prior confirmed close fill, mark `NEEDS_MANUAL_RECONCILIATION`.
 8. Poll close fills and require confirmed fill quantities before ledger closure.
-9. Only then calculate realized PnL and close the ledger.
+9. Re-read broker quantities for every closed leg and require zero residual exposure.
+10. Only then calculate realized PnL and close the ledger.
 
 Audit rule: ledger closure must reflect broker reality, not submitted intent.
 

@@ -3051,6 +3051,39 @@ class ArbitrageMonitor:
 
                     confirmed_close_fills.append(close_fill)
 
+                for order in close_orders:
+                    try:
+                        maybe_remaining = self.brokerage.get_available_quantity(order["ticker"])
+                        remaining_qty = await maybe_remaining if inspect.isawaitable(maybe_remaining) else maybe_remaining
+                        remaining_qty = float(remaining_qty or 0.0)
+                    except Exception as exc:
+                        msg = (
+                            f"Close position verification failed for {sig_id_str}: could not verify "
+                            f"remaining broker quantity for {order['display_ticker']} after close fills ({exc}). "
+                            f"Ledger NOT closed. Manual broker reconciliation required."
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
+                    if abs(remaining_qty) > 1e-9:
+                        msg = (
+                            f"Close position verification failed for {sig_id_str}: broker still reports "
+                            f"{remaining_qty:.6f} remaining {order['display_ticker']} after confirmed close fills. "
+                            f"Ledger NOT closed. Manual broker reconciliation required."
+                        )
+                        logger.critical(msg)
+                        await notification_service.send_message(msg)
+                        await persistence_service.update_signal_status(
+                            sig_uuid,
+                            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
+                        return
+
             # M-04: Compute realized PnL from entry vs exit price per leg
             leg_a, leg_b = signal["legs"][0], signal["legs"][1]
             exit_prices, pnl = calculate_realized_pnl(
