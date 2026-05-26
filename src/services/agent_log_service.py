@@ -6,8 +6,11 @@ from datetime import datetime
 from contextvars import ContextVar
 from typing import List, Dict, Any, Optional
 import functools
+import logging
 from src.models.persistence import PersistenceManager
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Thread-safe breadcrumb path
 _BREADCRUMBS: ContextVar[List[str]] = ContextVar("breadcrumbs", default=[])
@@ -31,7 +34,7 @@ class AgentLogService:
             fundamental_impact=fundamental_impact,
             sec_ref=sec_ref
         )
-        print(f"AGENT_LOGGER: Thought Journal persisted for signal {signal_id}")
+        logger.info("Thought Journal persisted for signal %s", signal_id)
 
     def log_fractional_trade(self, ticker: str, amount: float, quantity: float, price: float, side: str, friction: Dict):
         """Logs detailed execution metrics for fractional value-based trades."""
@@ -49,7 +52,7 @@ class AgentLogService:
             message=f"Executed {side} for {ticker}: ${amount:.2f} @ ${price:.2f} ({quantity:.6f} shares)",
             metadata=metadata
         )
-        print(f"AGENT_LOGGER: Fractional trade logged for {ticker}")
+        logger.info("Fractional trade logged for %s", ticker)
         
         # FR-008: Auto-generate thesis in background
         # Note: In a real scenario, we'd use a shared instance or pass db
@@ -116,7 +119,7 @@ class AgentLogService:
         with open(self.history_file, "a") as f:
             f.write(f"\n---\n{report}\n")
             
-        print(f"AGENT_LOGGER: Error report generated at {self.error_file}")
+        logger.info("Error report generated at %s", self.error_file)
 
     def _scrub_dict(self, d: Any) -> Any:
         """Recursively removes sensitive keys from dictionaries."""
