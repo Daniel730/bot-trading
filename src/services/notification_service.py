@@ -474,9 +474,11 @@ class NotificationService:
             )
 
     def _schedule_paper_notify(self, trade_summary: str) -> None:
+        notify = self._paper_notify
+
         async def runner():
             try:
-                await self._paper_notify(trade_summary)
+                await notify(trade_summary)
             except Exception as e:
                 logger.warning("PAPER notify failed, non-fatal: %s", self._redact_sensitive_text(e))
         asyncio.create_task(runner())

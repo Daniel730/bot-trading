@@ -88,6 +88,47 @@ async def test_request_approval_paper_survives_dashboard_failure():
 
 
 @pytest.mark.asyncio
+async def test_request_approval_paper_task_uses_scheduled_notify_callable():
+    original_paper = settings.PAPER_TRADING
+    original_enabled = notification_service._telegram_enabled
+    original_app = notification_service.app
+    settings.PAPER_TRADING = True
+    notification_service.pending_approvals.clear()
+
+    class FakeBot:
+        async def send_message(self, **_kwargs):
+            return None
+
+    class FakeApp:
+        bot = FakeBot()
+
+    try:
+        notification_service._telegram_enabled = True
+        notification_service.app = FakeApp()
+        fake_notify = AsyncMock(return_value=None)
+
+        with patch.object(notification_service, "_paper_notify", fake_notify), \
+             patch(
+                 "src.services.dashboard_service.dashboard_state.add_message",
+                 new=AsyncMock(),
+             ):
+            result = await notification_service.request_approval(
+                "patched paper notification"
+            )
+
+        assert result is True
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        fake_notify.assert_awaited_once_with("patched paper notification")
+    finally:
+        settings.PAPER_TRADING = original_paper
+        notification_service._telegram_enabled = original_enabled
+        notification_service.app = original_app
+        notification_service.pending_approvals.clear()
+
+
+@pytest.mark.asyncio
 async def test_paper_notify_logs_and_redacts_telegram_token_from_send_failure(caplog, capsys):
     original_enabled = notification_service._telegram_enabled
     original_app = notification_service.app
