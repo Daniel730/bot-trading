@@ -9,8 +9,10 @@ Covers FR-001..FR-003 from specs/036-paper-readiness-blockers/spec.md:
 
 import asyncio
 import logging
+import sys
 import time
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch, AsyncMock
 
 from src.config import settings
@@ -240,12 +242,30 @@ async def test_request_approval_live_without_telegram_fails_closed():
         settings.APPROVAL_THRESHOLD = 1000.0
         notification_service._telegram_enabled = False
 
-        result = await notification_service.request_approval(
-            "live trade without approval channel",
-            trade_value=1.0,
-        )
+        pause_update = AsyncMock()
+        set_state = AsyncMock()
+        with patch.dict(
+            sys.modules,
+            {
+                "src.services.dashboard_service": SimpleNamespace(
+                    dashboard_service=SimpleNamespace(update=pause_update)
+                ),
+                "src.services.persistence_service": SimpleNamespace(
+                    persistence_service=SimpleNamespace(set_system_state=set_state)
+                ),
+            },
+        ):
+            result = await notification_service.request_approval(
+                "live trade without approval channel",
+                trade_value=1.0,
+            )
 
         assert result is False
+        pause_update.assert_awaited_once_with(
+            "PAUSED_REQUIRES_MANUAL_REVIEW",
+            "Telegram approval channel unavailable; live execution paused.",
+        )
+        set_state.assert_awaited_once_with("operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW")
         assert notification_service.pending_approvals == {}
     finally:
         settings.PAPER_TRADING = original_paper
