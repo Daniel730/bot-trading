@@ -131,3 +131,25 @@ def test_release_checklist_confirms_paper_wallet_sync_no_broker_calls():
     assert "- [ ] Confirm paper-mode wallet sync tests prove no broker calls." not in checklist
     assert "Wallet sync in paper mode fails closed and does not submit broker orders." in checklist
     assert "Wallet sync in paper mode returns paper orders and does not submit broker orders." not in checklist
+
+
+def test_release_checklist_confirms_focused_gate_rerun_evidence():
+    checklist = (ROOT / ".brain/10_RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    protocol = (ROOT / ".brain/08_TESTING_PROTOCOL.md").read_text(encoding="utf-8")
+    command = (
+        "wsl .venv/bin/python -m pytest -q tests/unit/test_monitor.py "
+        "tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py "
+        "tests/unit/test_startup_unresolved_execution_state.py "
+        "tests/unit/test_startup_broker_ledger_mismatch.py "
+        "tests/unit/test_startup_entropy_baselines.py "
+        "tests/unit/test_startup_health_checks.py "
+        "tests/unit/test_startup_database_initialization.py "
+        "tests/unit/test_startup_no_scannable_pairs.py "
+        "tests/unit/test_startup_guard_contract_layout.py --asyncio-mode=auto"
+    )
+
+    assert "- [x] Re-run the focused test gate in `08_TESTING_PROTOCOL.md`." in checklist
+    assert "- [ ] Re-run the focused test gate in `08_TESTING_PROTOCOL.md`." not in checklist
+    assert "## 2026-05-28 Focused Gate Re-Run Evidence" in protocol
+    assert command in protocol
+    assert "Result: 59 passed" in protocol

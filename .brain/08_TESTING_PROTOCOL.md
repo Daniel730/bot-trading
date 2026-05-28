@@ -67,7 +67,7 @@ Close/startup/paper-mode safety:
 .venv/bin/python -m pytest \
   tests/unit/test_monitor.py::test_close_position_success \
   tests/unit/test_monitor.py::test_close_position_does_not_close_ledger_until_all_close_orders_fill \
-  tests/unit/test_startup_guards.py::test_startup_blocks_when_unresolved_execution_state_exists \
+  tests/unit/test_startup_unresolved_execution_state.py::test_startup_blocks_when_unresolved_execution_state_exists \
   tests/unit/test_dashboard_wallet_sync.py \
   tests/unit/test_spread_guard_unit.py::test_spread_guard_rejects_missing_bid_ask \
   -q
@@ -84,12 +84,22 @@ Resolved testing caveat:
 
 - `tests/unit/test_monitor.py` passed on 2026-05-13 with 24 tests. The old monitor fixture-isolation warning is superseded for this slice.
 
+## 2026-05-28 Focused Gate Re-Run Evidence
+
+The old `tests/unit/test_startup_guards.py` monolith has been removed after startup tests were split by contract, so the current focused gate targets the split startup files explicitly.
+
+```bash
+wsl .venv/bin/python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py tests/unit/test_startup_unresolved_execution_state.py tests/unit/test_startup_broker_ledger_mismatch.py tests/unit/test_startup_entropy_baselines.py tests/unit/test_startup_health_checks.py tests/unit/test_startup_database_initialization.py tests/unit/test_startup_no_scannable_pairs.py tests/unit/test_startup_guard_contract_layout.py --asyncio-mode=auto
+```
+
+Result: 59 passed in 37.90s.
+
 ## Minimum Local Gate Before Committing Execution Logic
 
 Run:
 
 ```bash
-python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py tests/unit/test_startup_guards.py
+python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py tests/unit/test_startup_unresolved_execution_state.py tests/unit/test_startup_broker_ledger_mismatch.py tests/unit/test_startup_entropy_baselines.py tests/unit/test_startup_health_checks.py tests/unit/test_startup_database_initialization.py tests/unit/test_startup_no_scannable_pairs.py tests/unit/test_startup_guard_contract_layout.py
 ```
 
 Expected:
