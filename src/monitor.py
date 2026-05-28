@@ -56,6 +56,20 @@ custom_theme = Theme({
 })
 console = Console(theme=custom_theme)
 log_console = Console(theme=custom_theme, stderr=True)
+STRUCTURED_LOG_PATH = Path("logs") / "structured_logs.jsonl"
+
+
+class JsonLineFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exception"] = self.formatException(record.exc_info)
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 # Disable yfinance cache or use a cross-platform temp path
 import tempfile
@@ -93,6 +107,10 @@ def setup_logging():
     )
     rich_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger.addHandler(rich_handler)
+    STRUCTURED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    structured_handler = logging.FileHandler(STRUCTURED_LOG_PATH, encoding="utf-8")
+    structured_handler.setFormatter(JsonLineFormatter())
+    root_logger.addHandler(structured_handler)
     root_logger.setLevel(_resolve_log_level(settings.LOG_LEVEL))
 
     # Silence some noisy loggers
