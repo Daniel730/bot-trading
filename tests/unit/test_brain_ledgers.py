@@ -98,3 +98,18 @@ def test_brain_does_not_claim_risk_fixture_max_allowed_fiat_is_unresolved():
         "Brain docs still describe resolved risk fixture max_allowed_fiat problems as active.\n"
         + "\n".join(offenders)
     )
+
+
+def test_release_checklist_confirms_alpaca_ambiguous_submit_coverage():
+    checklist = (ROOT / ".brain/10_RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    alpaca_tests = (ROOT / "tests/unit/test_alpaca_provider.py").read_text(encoding="utf-8")
+    required_tests = [
+        "test_place_value_order_timeout_reconciles_client_order_id_before_fallback",
+        "test_place_value_order_timeout_returns_unknown_when_reconcile_fails",
+    ]
+
+    for test_name in required_tests:
+        assert f"async def {test_name}" in alpaca_tests
+
+    assert "- [x] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes." in checklist
+    assert "- [ ] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes." not in checklist
