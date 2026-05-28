@@ -33,6 +33,15 @@ def test_monitor_fixture_is_shared_from_conftest():
         assert "object.__new__(ArbitrageMonitor)" not in source
 
 
+def test_close_workflow_uses_shared_monitor_fixture():
+    root = _repo_root()
+    source = (root / "tests" / "test_close_workflow.py").read_text(encoding="utf-8")
+
+    assert "def monitor(" not in source
+    assert "from src.monitor import ArbitrageMonitor" not in source
+    assert "ArbitrageMonitor(" not in source
+
+
 def test_monitor_execution_contract_tests_are_split_from_monolith():
     unit_dir = _repo_root() / "tests" / "unit"
     monolith = (unit_dir / "test_monitor.py").read_text(encoding="utf-8")
