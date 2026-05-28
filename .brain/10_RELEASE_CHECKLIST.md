@@ -12,7 +12,7 @@ The repo can be used for local development and paper-mode validation, but unreso
 - [x] Resolve the historical 2026-05-07 six-test monitor failure list.
 - [x] Ensure monitor tests mock fill polling and persistence boundaries correctly.
 - [x] Ensure risk-service test fixtures include `max_allowed_fiat` when monitor reads it.
-- [ ] Decide expected precedence between orchestrator veto and profit guard veto.
+- [x] Decide expected precedence between orchestrator veto and profit guard veto.
 - [ ] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes.
 - [ ] Confirm paper-mode wallet sync tests prove no broker calls.
 - [x] Update docs that still imply active T212/Web3 live routing, or restore routing with tests.

@@ -1400,8 +1400,10 @@ class ArbitrageMonitor:
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
                 final_confidence = float(decision_state["final_confidence"])
                 hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+                final_verdict = str(decision_state.get("final_verdict") or "")
+                orchestrator_vetoed = "VETO" in final_verdict.upper()
 
-                if final_confidence <= settings.MONITOR_MIN_AI_CONFIDENCE:
+                if orchestrator_vetoed or final_confidence <= settings.MONITOR_MIN_AI_CONFIDENCE:
                     await self._upsert_active_signal(
                         t_a,
                         t_b,
@@ -1410,10 +1412,13 @@ class ArbitrageMonitor:
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
                     )
-                    logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {final_confidence:.3f} too low.")
+                    if orchestrator_vetoed:
+                        logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: {final_verdict}")
+                    else:
+                        logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: Confidence {final_confidence:.3f} too low.")
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
-                    diagnostic["reason"] = "confidence_below_threshold"
+                    diagnostic["reason"] = "orchestrator_veto" if orchestrator_vetoed else "confidence_below_threshold"
                     return diagnostic
 
                 # Calculate expected profit/loss from the same gross pair

@@ -163,6 +163,39 @@ async def test_process_pair_low_confidence_veto_precedes_profit_guard(monitor):
 
 
 @pytest.mark.asyncio
+async def test_process_pair_orchestrator_veto_text_precedes_profit_guard(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    latest_prices = {"AAPL": 150.0, "MSFT": 300.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.monitor.estimate_pair_profit") as mock_estimate_profit, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
+         patch.object(monitor, "is_market_open", return_value=True), \
+         patch.object(settings, "MONITOR_MIN_AI_CONFIDENCE", 0.5):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0, 1.0], 0.1, 3.0, 0.5)
+        mock_kf_get.return_value = mock_kf
+        mock_orchestrator.return_value = {
+            "final_confidence": 0.8,
+            "final_verdict": "VETO: conflicting macro regime",
+        }
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+        assert diagnostic["verdict"] == "VETOED"
+        assert diagnostic["confidence"] == 0.8
+        assert diagnostic["reason"] == "orchestrator_veto"
+        mock_validate_trade.assert_not_called()
+        mock_estimate_profit.assert_not_called()
+        assert monitor.active_signals[-1]["status"] == "VETOED"
+        assert monitor.active_signals[-1]["confidence"] == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
 async def test_process_pair_unprofitable_veto_preserves_confidence(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     latest_prices = {"AAPL": 150.0, "MSFT": 300.0}

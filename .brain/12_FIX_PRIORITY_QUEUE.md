@@ -23,6 +23,7 @@ Last updated: 2026-05-28
 - DONE 2026-05-20: trade decision reports now include loaded-but-not-scanned pairs with reasons such as `market_closed` or `not_cointegrated`, explaining gaps like `Scanned: 9/16`.
 - DONE 2026-05-20: spread-guard blocks now carry bid/ask values, leg spread percentages, total spread percentage, and configured max spread into execution diagnostics and trade decision reports.
 - DONE 2026-05-20: unprofitable profit-guard vetoes now carry gross profit, friction, net profit, sizing, z-score, and spread inputs into execution diagnostics and trade decision reports.
+- DONE 2026-05-28: orchestrator veto verdicts now take precedence over risk sizing and profit guard checks, even when the confidence value is above threshold.
 - DONE 2026-05-20: profit-preview math now fails closed when a candidate entry is already at or beyond the configured statistical stop-loss z-score instead of showing positive expected profit with zero loss risk.
 - DONE 2026-05-20: repeated unchanged Alpaca crypto snapshot price tuples now fail closed before Kalman updates so stale live-data snapshots cannot create or preserve bad signal state.
 - DONE 2026-05-20: latest crypto prices now use newer Alpaca quote midpoints, with quote source and timestamp metadata, when the snapshot trade price is older than the quote.
