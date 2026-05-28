@@ -113,3 +113,21 @@ def test_release_checklist_confirms_alpaca_ambiguous_submit_coverage():
 
     assert "- [x] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes." in checklist
     assert "- [ ] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes." not in checklist
+
+
+def test_release_checklist_confirms_paper_wallet_sync_no_broker_calls():
+    checklist = (ROOT / ".brain/10_RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    wallet_tests = (ROOT / "tests/unit/test_dashboard_wallet_sync.py").read_text(encoding="utf-8")
+    required_tests = [
+        "test_wallet_sync_paper_mode_fails_closed_instead_of_pretending_orders",
+        "test_wallet_recommendation_buy_paper_mode_fails_closed_instead_of_pretending_orders",
+    ]
+
+    for test_name in required_tests:
+        assert f"async def {test_name}" in wallet_tests
+
+    assert "place_value_order.assert_not_awaited()" in wallet_tests
+    assert "- [x] Confirm paper-mode wallet sync tests prove no broker calls." in checklist
+    assert "- [ ] Confirm paper-mode wallet sync tests prove no broker calls." not in checklist
+    assert "Wallet sync in paper mode fails closed and does not submit broker orders." in checklist
+    assert "Wallet sync in paper mode returns paper orders and does not submit broker orders." not in checklist

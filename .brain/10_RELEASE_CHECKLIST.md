@@ -14,7 +14,7 @@ The repo can be used for local development and paper-mode validation, but unreso
 - [x] Ensure risk-service test fixtures include `max_allowed_fiat` when monitor reads it.
 - [x] Decide expected precedence between orchestrator veto and profit guard veto.
 - [x] Confirm Alpaca ambiguous-submit tests cover both reconciled and unreconciled outcomes.
-- [ ] Confirm paper-mode wallet sync tests prove no broker calls.
+- [x] Confirm paper-mode wallet sync tests prove no broker calls.
 - [x] Update docs that still imply active T212/Web3 live routing, or restore routing with tests.
 - [ ] Re-run the focused test gate in `08_TESTING_PROTOCOL.md`.
 
@@ -38,7 +38,7 @@ The repo can be used for local development and paper-mode validation, but unreso
 - [ ] SSE and WebSocket telemetry authenticate.
 - [ ] Scan loop logs active pair processing.
 - [ ] Paper trades preserve `signal_id` across reasoning, journal, and ledger.
-- [ ] Wallet sync in paper mode returns paper orders and does not submit broker orders.
+- [x] Wallet sync in paper mode fails closed and does not submit broker orders.
 - [ ] No unresolved `NEEDS_MANUAL_RECONCILIATION` rows before scan.
 
 ## Production Sign-Off Gate
