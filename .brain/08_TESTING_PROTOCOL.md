@@ -94,6 +94,16 @@ wsl .venv/bin/python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alp
 
 Result: 59 passed in 37.90s.
 
+## 2026-05-28 Dashboard Wallet Sync Gate Evidence
+
+The standalone dashboard wallet sync gate was re-run to confirm the current paper-mode wallet endpoint coverage remains green.
+
+```bash
+wsl .venv/bin/python -m pytest -q tests/unit/test_dashboard_wallet_sync.py --asyncio-mode=auto
+```
+
+Result: 7 passed in 33.99s.
+
 ## Minimum Local Gate Before Committing Execution Logic
 
 Run:

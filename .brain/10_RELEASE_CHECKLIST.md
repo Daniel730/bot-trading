@@ -21,7 +21,7 @@ The repo can be used for local development and paper-mode validation, but unreso
 ## Local Development Release Gate
 
 - [x] `wsl .venv/bin/python -m pytest -q tests/unit/test_monitor.py tests/unit/test_alpaca_provider.py tests/unit/test_spread_guard_unit.py tests/unit/test_startup_unresolved_execution_state.py tests/unit/test_startup_broker_ledger_mismatch.py tests/unit/test_startup_entropy_baselines.py tests/unit/test_startup_health_checks.py tests/unit/test_startup_database_initialization.py tests/unit/test_startup_no_scannable_pairs.py tests/unit/test_startup_guard_contract_layout.py --asyncio-mode=auto`
-- [ ] `python -m pytest -q tests/unit/test_dashboard_wallet_sync.py`
+- [x] `wsl .venv/bin/python -m pytest -q tests/unit/test_dashboard_wallet_sync.py --asyncio-mode=auto`
 - [ ] `python scripts/validate_deploy_env.py .env`
 - [ ] `cd frontend && npm run lint`
 - [ ] `cd frontend && npm run test`

@@ -153,3 +153,18 @@ def test_release_checklist_confirms_focused_gate_rerun_evidence():
     assert "## 2026-05-28 Focused Gate Re-Run Evidence" in protocol
     assert command in protocol
     assert "Result: 59 passed" in protocol
+
+
+def test_release_checklist_confirms_dashboard_wallet_sync_gate_evidence():
+    checklist = (ROOT / ".brain/10_RELEASE_CHECKLIST.md").read_text(encoding="utf-8")
+    protocol = (ROOT / ".brain/08_TESTING_PROTOCOL.md").read_text(encoding="utf-8")
+    command = (
+        "wsl .venv/bin/python -m pytest -q "
+        "tests/unit/test_dashboard_wallet_sync.py --asyncio-mode=auto"
+    )
+
+    assert f"- [x] `{command}`" in checklist
+    assert "- [ ] `python -m pytest -q tests/unit/test_dashboard_wallet_sync.py`" not in checklist
+    assert "## 2026-05-28 Dashboard Wallet Sync Gate Evidence" in protocol
+    assert command in protocol
+    assert "Result: 7 passed" in protocol
