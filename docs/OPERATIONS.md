@@ -57,6 +57,13 @@ python src/monitor.py
 
 On Windows, use `py -3.11 -m venv .venv` and `.venv\Scripts\Activate.ps1` for the virtual environment steps. Local runs should use `requirements.lock` so they match CI and Docker.
 
+Local tooling note:
+
+- Validated backend commands use the repo WSL/Python 3.11 virtualenv (`.venv/bin/python`).
+- Windows `python`/`py` may resolve to Python 3.14; do not use it as proof that the locked backend stack is compatible.
+- If `npm` is not installed, frontend gates are not runnable locally; install Node/npm or run the frontend checks in an environment that has them.
+- No Gradle wrapper is committed; use an installed `gradle` command for the Java sidecar, or run the Docker build path.
+
 Frontend:
 
 ```bash
@@ -66,6 +73,8 @@ npm run dev
 ```
 
 Java engine:
+
+No Gradle wrapper is committed; use an installed `gradle` command.
 
 ```bash
 cd execution-engine

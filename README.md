@@ -102,6 +102,13 @@ python scripts/init_db.py
 
 On Windows, use `py -3.11 -m venv .venv` and `.venv\Scripts\Activate.ps1` for the virtual environment steps.
 
+Local tooling note:
+
+- Validated backend commands use the repo WSL/Python 3.11 virtualenv (`.venv/bin/python`).
+- Windows `python`/`py` may resolve to Python 3.14; do not use it as proof that the locked backend stack is compatible.
+- If `npm` is not installed, frontend gates are not runnable locally; install Node/npm or run the frontend checks in an environment that has them.
+- No Gradle wrapper is committed; use an installed `gradle` command for the Java sidecar, or run the Docker build path.
+
 3. Start the monitor. This also starts the dashboard API on port `8080`:
 
 ```bash
@@ -128,7 +135,7 @@ It runs on port `8000` with SSE transport.
 
 ## Java Execution Engine
 
-The Java service requires Java 21 and Gradle:
+The Java service requires Java 21 and Gradle. No Gradle wrapper is committed; use an installed `gradle` command:
 
 ```bash
 cd execution-engine

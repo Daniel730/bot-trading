@@ -101,7 +101,7 @@ Last updated: 2026-05-28
 - DONE 2026-05-26: `AgentLogService` persistence diagnostics now use the module logger instead of stdout prints, covered by `tests/unit/test_agent_log_service_logging.py`.
 - DONE 2026-05-28: Rich logging now writes through stderr instead of stdout, so logger diagnostics do not trip stdout-only assertions after monitor logging is configured.
 - DONE 2026-05-28: monitor logging now appends durable structured JSONL records to `logs/structured_logs.jsonl`, covered by `tests/unit/test_monitor_logging.py`.
-- Reconcile local runtime docs with Python 3.14 usage, absent npm, and absent Gradle wrapper on this machine.
+- DONE 2026-05-28: local runtime docs now call out Windows Python 3.14 vs validated WSL/Python 3.11, absent npm frontend gates, and the missing Gradle wrapper, covered by `tests/unit/test_docs_runtime_parity.py`.
 
 ## P3 - Can wait
 

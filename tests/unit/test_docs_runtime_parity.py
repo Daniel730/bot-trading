@@ -71,3 +71,17 @@ def test_docs_describe_monitor_execution_route_without_java_default():
     architecture = _read("docs/ARCHITECTURE.md")
     assert "Python monitor loop ---- gRPC ---- Java execution engine" not in readme
     assert "Monitor --> Java" not in architecture
+
+
+def test_local_runtime_docs_match_current_tooling_limits():
+    required_notes = [
+        "Validated backend commands use the repo WSL/Python 3.11 virtualenv",
+        "Windows `python`/`py` may resolve to Python 3.14",
+        "If `npm` is not installed, frontend gates are not runnable locally",
+        "No Gradle wrapper is committed; use an installed `gradle` command",
+    ]
+
+    for doc_name in ("README.md", "docs/OPERATIONS.md"):
+        doc_text = _read(doc_name)
+        for note in required_notes:
+            assert note in doc_text, f"{doc_name} must document: {note}"
