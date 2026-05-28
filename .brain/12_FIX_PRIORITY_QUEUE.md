@@ -99,6 +99,7 @@ Last updated: 2026-05-28
 
 - DONE 2026-05-20: monitor logging now honors `LOG_LEVEL` from settings, covered by a regression test.
 - DONE 2026-05-26: `AgentLogService` persistence diagnostics now use the module logger instead of stdout prints, covered by `tests/unit/test_agent_log_service_logging.py`.
+- DONE 2026-05-28: Rich logging now writes through stderr instead of stdout, so logger diagnostics do not trip stdout-only assertions after monitor logging is configured.
 - Add durable structured logs.
 - Reconcile local runtime docs with Python 3.14 usage, absent npm, and absent Gradle wrapper on this machine.
 

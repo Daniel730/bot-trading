@@ -1,5 +1,6 @@
 import logging
 
+from src import monitor as _monitor
 from src.services.agent_log_service import AgentLogService
 
 

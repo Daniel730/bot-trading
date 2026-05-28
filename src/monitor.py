@@ -55,6 +55,7 @@ custom_theme = Theme({
     "trade": "bold blue"
 })
 console = Console(theme=custom_theme)
+log_console = Console(theme=custom_theme, stderr=True)
 
 # Disable yfinance cache or use a cross-platform temp path
 import tempfile
@@ -84,7 +85,7 @@ def setup_logging():
 
     # Rich logging handler
     rich_handler = RichHandler(
-        console=console,
+        console=log_console,
         rich_tracebacks=True,
         markup=True,
         show_time=True,
