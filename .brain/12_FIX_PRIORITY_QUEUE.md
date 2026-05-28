@@ -105,4 +105,4 @@ Last updated: 2026-05-28
 
 ## P3 - Can wait
 
-- Improve market-regime hot-path latency once paper launch blockers are resolved.
+- DONE 2026-05-28: market-regime classification now reuses a recent per-ticker result during the scan interval instead of repeating historical-data, entropy, and persistence work on hot-path calls.

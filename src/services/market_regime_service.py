@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import logging
+import time
 from typing import Dict, Any
 from src.services.data_service import data_service
 from src.services.volatility_service import volatility_service
@@ -10,8 +11,21 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 class MarketRegimeService:
-    def __init__(self, window: int = 20):
+    def __init__(self, window: int = 20, cache_ttl_seconds: float | None = None):
         self.window = window
+        self.cache_ttl_seconds = (
+            float(cache_ttl_seconds)
+            if cache_ttl_seconds is not None
+            else float(settings.SCAN_INTERVAL_SECONDS)
+        )
+        self._regime_cache: dict[str, tuple[float, Dict[str, Any]]] = {}
+
+    def _copy_regime_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "regime": result["regime"],
+            "confidence": result["confidence"],
+            "features": dict(result.get("features") or {}),
+        }
 
     async def classify_current_regime(self, ticker: str = "SPY") -> Dict[str, Any]:
         """
@@ -19,6 +33,12 @@ class MarketRegimeService:
         Returns regime type and features.
         """
         try:
+            cache_key = ticker.upper()
+            if self.cache_ttl_seconds > 0:
+                cached = self._regime_cache.get(cache_key)
+                if cached and time.monotonic() - cached[0] <= self.cache_ttl_seconds:
+                    return self._copy_regime_result(cached[1])
+
             # 1. Fetch historical data (daily for regime detection)
             hist = data_service.get_historical_data([ticker], period="60d", interval="1d")
             if hist.empty:
@@ -93,17 +113,20 @@ class MarketRegimeService:
             }
 
             # 4. Log to DB
-            await persistence_service.log_market_regime({
-                "regime": regime,
-                "confidence": confidence,
-                "features": features
-            })
-
-            return {
+            result = {
                 "regime": regime,
                 "confidence": confidence,
                 "features": features
             }
+            await persistence_service.log_market_regime(result)
+
+            if self.cache_ttl_seconds > 0:
+                self._regime_cache[cache_key] = (
+                    time.monotonic(),
+                    self._copy_regime_result(result),
+                )
+
+            return result
 
         except Exception as e:
             logger.error(f"Error classifying market regime: {e}")
