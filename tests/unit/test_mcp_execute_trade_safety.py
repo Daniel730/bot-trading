@@ -17,7 +17,7 @@ async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch
     monkeypatch.setattr(mcp_server.persistence_service, "log_trade", log_trade)
 
     result = json.loads(
-        await mcp_server.execute_trade(
+        await mcp_server.execute_trade.fn(
             ticker="AAPL",
             side="BUY",
             quantity=1.0,
