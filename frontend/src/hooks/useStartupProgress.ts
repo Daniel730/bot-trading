@@ -63,25 +63,18 @@ export function useStartupProgress(input: StartupProgressInput) {
     return Math.min(progress, 95);
   }, [config, dataReady, health, isAuthenticated, isConnected, startupReady, startupStageText, summary, tradeHistory]);
 
-  const [startupProgress, setStartupProgress] = useState(8);
+  const [animatedProgress, setAnimatedProgress] = useState(8);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setStartupProgress(8);
-      return;
-    }
-    setStartupProgress((current) => {
-      if (startupReady) return 100;
-      if (current > startupTargetProgress) return startupTargetProgress;
-      if (current < startupTargetProgress) return startupTargetProgress;
-      return current;
-    });
-  }, [isAuthenticated, startupReady, startupTargetProgress]);
+  const startupProgress = useMemo(() => {
+    if (!isAuthenticated) return 8;
+    if (startupReady) return 100;
+    return Math.max(animatedProgress, startupTargetProgress);
+  }, [animatedProgress, isAuthenticated, startupReady, startupTargetProgress]);
 
   useEffect(() => {
     if (!isAuthenticated || startupReady) return;
     const id = window.setInterval(() => {
-      setStartupProgress((current) => {
+      setAnimatedProgress((current) => {
         if (current >= startupTargetProgress) return current;
         const remaining = startupTargetProgress - current;
         const step = Math.max(1, Math.ceil(remaining / 6));

@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import json
 from unittest.mock import AsyncMock, patch, MagicMock
 import uuid
