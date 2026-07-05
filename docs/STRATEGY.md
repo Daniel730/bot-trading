@@ -14,7 +14,7 @@ A pair can be rejected before any Kalman state is allocated when:
 - an LSE ticker is present while short-hold LSE pairs are blocked;
 - estimated round-trip cost exceeds `PAIR_MAX_ROUND_TRIP_COST_PCT`.
 
-Crypto pairs are admitted as 24/7 same-session pairs and use the Web3/active-broker venue dispatcher rules later.
+Crypto pairs are admitted as 24/7 same-session pairs and use the active Alpaca brokerage path later. Web3 execution is legacy/disabled in the current runtime.
 
 ## Cointegration
 
@@ -58,7 +58,9 @@ abs(z_score) > MONITOR_ENTRY_ZSCORE
 Optional cost scaling:
 
 ```text
-entry_threshold = MONITOR_ENTRY_ZSCORE * min(pair_cost / baseline, cap)
+entry_threshold = MONITOR_ENTRY_ZSCORE * (
+  1 + (cap - 1) * clamp((pair_cost - baseline) / (PAIR_MAX_ROUND_TRIP_COST_PCT - baseline), 0, 1)
+)
 ```
 
 controlled by:
@@ -66,6 +68,7 @@ controlled by:
 - `MONITOR_ENTRY_ZSCORE_COST_SCALING_ENABLED`
 - `MONITOR_ENTRY_ZSCORE_COST_BASELINE`
 - `MONITOR_ENTRY_ZSCORE_COST_SCALING_CAP`
+- `PAIR_MAX_ROUND_TRIP_COST_PCT`
 
 ## Orchestrator Validation
 
@@ -75,7 +78,7 @@ The orchestrator is an async Python ensemble, not a required LangGraph runtime p
 2. Macro beacon fail-fast veto by sector.
 3. Bull and bear agent evaluation.
 4. Cached SEC/fundamental integrity scores from Redis.
-5. Whale watcher context for crypto-sensitive flows.
+5. Whale watcher status for crypto-sensitive flows. The current active implementation reports `INACTIVE` because cache-backed whale-flow analysis is legacy-disabled.
 6. Portfolio manager confidence adjustment.
 7. Historical global accuracy multiplier.
 8. Per-ticker beacon flash-crash veto.
@@ -84,7 +87,7 @@ Hard veto examples:
 
 - sector beacon is in `EXTREME_VOLATILITY`;
 - fundamental score is below `ORCH_FUNDAMENTAL_VETO_SCORE`;
-- whale watcher returns a veto;
+- active whale watcher returns a veto. Current active runtime reports whale watcher as `INACTIVE`, so no whale-flow veto is applied until the evaluator is restored;
 - operational status is `DEGRADED_MODE`.
 
 ## Risk Guards
@@ -94,8 +97,8 @@ Hard veto examples:
 | Spread guard | Rejects trades when combined bid/ask spread exceeds `SPREAD_GUARD_MAX_PCT`. |
 | Cluster guard | Prevents projected sector exposure above `MAX_SECTOR_EXPOSURE`. |
 | Friction guard | Rejects trades whose estimated fee/spread friction exceeds venue thresholds. |
-| Budget guard | Caps spend by venue using the active equity broker budget path and `WEB3_BUDGET_USD`. |
-| Live sell preflight | Blocks Trading 212 sell legs when available shares are insufficient. |
+| Budget guard | Caps spend by venue using the active Alpaca broker budget path. |
+| Live sell preflight | Blocks sell legs when available shares are insufficient. |
 | Atomic leg guard | Aborts after leg A failure; emergency-closes leg A when leg B fails. |
 | Kill switch | Closes positions when current value breaches `FINANCIAL_KILL_SWITCH_PCT`. |
 | Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE`; stop loss at `STOP_LOSS_ZSCORE`. |
@@ -114,10 +117,10 @@ When z-score is negative:
 Long A / Short B
 ```
 
-In paper mode the shadow service records simulated fills. In live mode the Python brokerage dispatcher routes:
+In paper mode the shadow service records simulated fills. In live mode the Python brokerage dispatcher routes through Alpaca only:
 
-- equity/non-crypto tickers to the configured broker provider (`BROKERAGE_PROVIDER=T212|ALPACA`);
-- `*-USD` crypto tickers to Web3 when Web3 is enabled and paper mode is off.
+- `BROKERAGE_PROVIDER=ALPACA` is required;
+- Trading 212 and Web3 execution routes are legacy/disabled and unsupported provider values fail startup.
 
 ## Position Exit
 

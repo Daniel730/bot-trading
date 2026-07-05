@@ -1,5 +1,21 @@
+import importlib
+
 import pytest
 from src.agents.macro_economic_agent import MacroEconomicAgent
+
+
+def test_macro_module_import_does_not_initialize_data_service():
+    import src.agents.macro_economic_agent as module
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        def fail_on_init(*args, **kwargs):
+            raise AssertionError("macro import must not initialize DataService")
+
+        monkeypatch.setattr("src.services.data_service.DataService", fail_on_init)
+        reloaded = importlib.reload(module)
+
+    importlib.reload(reloaded)
+
 
 def test_macro_agent_risk_on_signal():
     agent = MacroEconomicAgent()

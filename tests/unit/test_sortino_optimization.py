@@ -1,3 +1,4 @@
+import importlib
 import pytest
 import numpy as np
 import pandas as pd
@@ -9,6 +10,20 @@ from unittest.mock import patch, MagicMock, AsyncMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.agents.portfolio_manager_agent import portfolio_manager_agent
+
+
+def test_portfolio_module_import_does_not_initialize_data_service():
+    import src.agents.portfolio_manager_agent as module
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        def fail_on_init(*args, **kwargs):
+            raise AssertionError("portfolio import must not initialize DataService")
+
+        monkeypatch.setattr("src.services.data_service.DataService", fail_on_init)
+        reloaded = importlib.reload(module)
+
+    importlib.reload(reloaded)
+
 
 def test_sortino_ratio_calculation():
     """

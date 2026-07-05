@@ -11,6 +11,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../.
 from src.agents.macro_economic_agent import macro_economic_agent
 from src.agents.orchestrator import orchestrator
 
+
+@pytest.fixture(autouse=True)
+def clear_macro_regime_cache():
+    macro_economic_agent._regime_cache.clear()
+    yield
+    macro_economic_agent._regime_cache.clear()
+
+
 @pytest.mark.asyncio
 async def test_regime_bullish_sma():
     """Test H4: BULLISH regime (SMA20 > SMA50)"""
@@ -61,7 +69,7 @@ async def test_orchestrator_sector_veto():
     }
     
     # Mock NVDA (leader for AMD/TSMC) returning EXTREME_VOLATILITY
-    with patch('src.agents.macro_economic_agent.macro_economic_agent.get_ticker_regime', return_value="EXTREME_VOLATILITY"), \
+    with patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="EXTREME_VOLATILITY"), \
          patch('src.services.persistence_service.persistence_service.get_agent_metrics', new_callable=AsyncMock, return_value=(1,1)), \
          patch('src.services.persistence_service.persistence_service.get_system_state', new_callable=AsyncMock, return_value="0"), \
          patch('src.services.persistence_service.persistence_service.set_system_state', new_callable=AsyncMock, return_value=None), \
@@ -83,7 +91,7 @@ async def test_orchestrator_missing_sector_defaults_to_spy():
         'signal_context': {'ticker_a': 'PNC', 'ticker_b': 'USB', 'signal_id': 'IA_SCAN_002'},
     }
 
-    with patch('src.agents.macro_economic_agent.macro_economic_agent.get_ticker_regime', return_value="EXTREME_VOLATILITY") as mock_regime, \
+    with patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="EXTREME_VOLATILITY") as mock_regime, \
          patch('src.services.persistence_service.persistence_service.get_system_state', new_callable=AsyncMock, return_value="0"), \
          patch('src.services.telemetry_service.telemetry_service.broadcast', return_value=None):
 

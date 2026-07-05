@@ -10,6 +10,10 @@ from pathlib import Path
 
 BLOCKED_POSTGRES_PASSWORDS = {"bot_pass", "postgres", "password", "changeme"}
 BLOCKED_DASHBOARD_TOKENS = {"arbi-elite-2026", "dashboard-token", "changeme"}
+BLOCKED_ALPACA_VALUES = {
+    "your_alpaca_key",
+    "your_alpaca_secret",
+}
 JSON_OBJECT_KEYS = {"CRYPTO_TOKEN_MAPPING"}
 
 
@@ -55,6 +59,15 @@ def validate(values: dict[str, str]) -> list[str]:
     database_url = values.get("DATABASE_URL", "")
     if database_url and "bot_pass" in database_url:
         errors.append("DATABASE_URL still contains the default Postgres password.")
+
+    for key in ("ALPACA_API_KEY", "ALPACA_API_SECRET"):
+        value = values.get(key, "")
+        if value in BLOCKED_ALPACA_VALUES:
+            errors.append(f"{key} is still a template placeholder.")
+
+    paper_trading = values.get("PAPER_TRADING", "")
+    if paper_trading and paper_trading.lower() != "true":
+        errors.append("PAPER_TRADING must be true for paper-trading startup validation.")
 
     for key in JSON_OBJECT_KEYS:
         value = values.get(key, "")

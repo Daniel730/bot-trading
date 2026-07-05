@@ -15,10 +15,10 @@ flowchart TD
     Postgres[("PostgreSQL\ntrade ledger, audits, reasoning")]
     SQLite[("SQLite\nruntime state, budgets, config audit")]
     Java["Java gRPC Execution Engine\nexecution-engine/ :50051"]
+    Shadow["Paper Shadow Ledger\nsrc/services/shadow_service.py"]
     SEC["SEC Fundamental Worker\nsrc/daemons/sec_fundamental_worker.py"]
-    T212["Trading 212 API"]
-    Alpaca["Alpaca API"]
-    Web3["Web3 wallet / router"]
+    Alpaca["Alpaca API\nactive broker route"]
+    LegacyRoutes["Trading 212 / Web3\nlegacy disabled routes"]
     Data["Market data providers\nyfinance / Polygon"]
     Telegram["Telegram approvals"]
 
@@ -30,15 +30,14 @@ flowchart TD
     Monitor <--> Redis
     Monitor <--> Postgres
     Monitor <--> SQLite
-    Monitor --> Java
+    Monitor --> Shadow
     Java <--> Redis
     Java <--> Postgres
     SEC <--> Redis
     SEC <--> Postgres
     Monitor <--> Data
-    Monitor <--> T212
     Monitor <--> Alpaca
-    Monitor <--> Web3
+    Monitor -. disabled .-> LegacyRoutes
     Monitor <--> Telegram
     MCP <--> Redis
     MCP --> Java
@@ -54,8 +53,10 @@ The Python backend is the control plane and strategy runtime.
 - `src/monitor.py` runs the scan loop, initializes pairs, computes signals, requests approvals, and submits paper/live executions.
 - `src/services/dashboard_service.py` starts the operator API on port `8080`, serves the SPA when available, streams SSE telemetry, handles WebSocket telemetry, and exposes authenticated config/pair/trade/health routes.
 - `src/mcp_server.py` is a separate optional FastMCP SSE server on port `8000` for assistant/tool workflows.
-- `src/services/brokerage_service.py` routes non-crypto tickers to the configured equity broker (`BROKERAGE_PROVIDER=T212|ALPACA`) and crypto tickers to Web3 when not in paper mode.
+- `src/services/brokerage_service.py` routes through the active Alpaca provider. `BROKERAGE_PROVIDER` must be `ALPACA`; Trading 212 and Web3 routes are legacy/disabled and unsupported values fail startup.
 - `src/services/pair_eligibility_service.py` rejects unsupported or high-friction pairs before Kalman state is allocated.
+
+`src/monitor.py` order routing: `PAPER_TRADING=true` calls `shadow_service`; broker-connected mode submits both legs through Python `BrokerageService`. The Java execution engine is a dry-run/audit sidecar and is not the monitor's default order path.
 
 ### Java Execution Engine
 
@@ -65,7 +66,7 @@ The Java service exposes `ExecutionService` over gRPC:
 - `GetTradeStatus`
 - `TriggerKillSwitch`
 
-It wires `ExecutionServiceImpl`, `TradeLedgerRepository`, `RedisOrderSync`, `RedisL2FeedService`, and a broker router at startup. It uses Java 21 virtual threads. Today it must run in `DRY_RUN=true`; live Java brokerage is intentionally blocked until a production broker implementation exists.
+It wires `ExecutionServiceImpl`, `TradeLedgerRepository`, `RedisOrderSync`, `RedisL2FeedService`, and a broker router at startup. It uses Java 21 virtual threads. Today it must run in `DRY_RUN=true`; live Java brokerage is intentionally blocked until a production broker implementation exists. The monitor's paper/live order path does not default through this service.
 
 ### Frontend
 
@@ -99,13 +100,13 @@ The React console provides:
 6. The orchestrator validates the signal through macro beacon checks, bull/bear agents, Redis SEC scores, whale watcher context, portfolio logic, and global accuracy scaling.
 7. If confidence exceeds `MONITOR_MIN_AI_CONFIDENCE`, the operator approval path is triggered.
 8. Paper mode calls `shadow_service.execute_simulated_trade()` with the original `signal_id`.
-9. Live mode submits both legs through `BrokerageService`, using the active equity broker for non-crypto tickers and emergency-closing leg A if leg B fails. The Trading 212 path keeps its available-share preflight before live sell legs.
+9. Live mode submits both legs through `BrokerageService`, using the active Alpaca broker path and emergency-closing leg A if leg B fails.
 10. Trade ledger and journal rows are persisted for auditability.
 
 ## Security Model
 
 - `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` are required and must be non-default.
-- Broker credentials are only required for the configured live path: `T212_API_KEY`/`T212_API_SECRET` for Trading 212, or `ALPACA_API_KEY`/`ALPACA_API_SECRET`/`ALPACA_BASE_URL` for Alpaca.
+- Alpaca broker credentials are required for the active live path: `ALPACA_API_KEY`/`ALPACA_API_SECRET`/`ALPACA_BASE_URL`. Trading 212 and Web3 settings are legacy/disabled in the current runtime.
 - Dashboard API calls use `Authorization: Bearer <DASHBOARD_TOKEN>` plus `X-Dashboard-Session`.
 - Login can be approved by Telegram notification; TOTP/backup codes protect sensitive config writes after setup.
 - CORS origins are controlled by `DASHBOARD_ALLOWED_ORIGINS`; wildcard origins are only accepted in `DEV_MODE=true`.

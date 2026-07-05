@@ -1,224 +1,321 @@
-import pytest
+﻿import pytest
+import json
 from unittest.mock import AsyncMock, patch, MagicMock
-from src.monitor import ArbitrageMonitor
 import uuid
 from src.config import settings
+from src.services.persistence_service import ExitReason
 
-@pytest.fixture
-def monitor():
-    # We need to ensure monitor.brokerage is a mock
-    with patch("src.services.brokerage_service.BrokerageService") as mock_broker_class:
-        m = ArbitrageMonitor(mode="live")
-        # Ensure the instance created inside __init__ is our mock
-        m.brokerage = mock_broker_class.return_value
-        m.brokerage.get_venue.side_effect = lambda ticker: "WEB3" if "-USD" in ticker else "T212"
-        m.brokerage.get_available_quantity = AsyncMock(return_value=1_000_000.0)
-        m.brokerage.get_pending_orders_value.return_value = 0.0
-        return m
+
+def test_trade_decision_report_appends_cycle_jsonl(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+    monitor.active_pairs = [
+        {"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"},
+        {"id": "KO_PEP", "ticker_a": "KO", "ticker_b": "PEP"},
+    ]
+
+    monitor._write_trade_decision_report(
+        scan_pairs=monitor.active_pairs,
+        results=[
+            {"verdict": "EXECUTED", "confidence": 0.92},
+            {"verdict": "IGNORED", "confidence": 0.0, "reason": "missing_price"},
+        ],
+        latest_prices={"AAPL": 150.0, "MSFT": 300.0, "KO": 80.0},
+        open_signals=[{"signal_id": "open-1"}],
+        active_signal_count=1,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+
+    assert report["mode"] == "paper"
+    assert report["pairs_loaded"] == 2
+    assert report["pairs_scanned"] == 2
+    assert report["prices_received"] == 3
+    assert report["signals"] == 1
+    assert report["vetoed"] == 0
+    assert report["open_positions"] == 1
+    assert report["sizing_base"] == 10_000.0
+    assert report["decisions"] == [
+        {
+            "pair_id": "AAPL_MSFT",
+            "ticker_a": "AAPL",
+            "ticker_b": "MSFT",
+            "verdict": "EXECUTED",
+            "confidence": 0.92,
+            "has_price_a": True,
+            "has_price_b": True,
+            "price_a": 150.0,
+            "price_b": 300.0,
+            "price_source_a": "unknown",
+            "price_source_b": "unknown",
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
+        },
+        {
+            "pair_id": "KO_PEP",
+            "ticker_a": "KO",
+            "ticker_b": "PEP",
+            "verdict": "IGNORED",
+            "confidence": 0.0,
+            "reason": "missing_price",
+            "rejection_reason": "missing_price",
+            "has_price_a": True,
+            "has_price_b": False,
+            "price_a": 80.0,
+            "price_b": None,
+            "price_source_a": "unknown",
+            "price_source_b": None,
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
+        },
+    ]
+
+
+def test_trade_decision_report_includes_loaded_pairs_not_scanned(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+    monkeypatch.setattr(monitor, "is_market_open", MagicMock(return_value=False))
+    monitor.active_pairs = [
+        {"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"},
+        {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+    ]
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[monitor.active_pairs[1]],
+        results=[{"verdict": "IGNORED", "confidence": 0.0, "reason": "below_entry_threshold"}],
+        latest_prices={"BTC-USD": 90_000.0, "ETH-USD": 3_000.0},
+        open_signals=[],
+        active_signal_count=0,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+
+    assert report["pairs_loaded"] == 2
+    assert report["pairs_scanned"] == 1
+    assert report["decisions"] == [
+        {
+            "pair_id": "BTC-USD_ETH-USD",
+            "ticker_a": "BTC-USD",
+            "ticker_b": "ETH-USD",
+            "verdict": "IGNORED",
+            "confidence": 0.0,
+            "reason": "below_entry_threshold",
+            "rejection_reason": "below_entry_threshold",
+            "has_price_a": True,
+            "has_price_b": True,
+            "price_a": 90_000.0,
+            "price_b": 3_000.0,
+            "price_source_a": "unknown",
+            "price_source_b": "unknown",
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
+        },
+        {
+            "pair_id": "AAPL_MSFT",
+            "ticker_a": "AAPL",
+            "ticker_b": "MSFT",
+            "verdict": "IGNORED",
+            "confidence": 0.0,
+            "reason": "market_closed",
+            "rejection_reason": "market_closed",
+            "has_price_a": False,
+            "has_price_b": False,
+            "price_a": None,
+            "price_b": None,
+            "price_source_a": None,
+            "price_source_b": None,
+            "price_timestamp_a": None,
+            "price_timestamp_b": None,
+        },
+    ]
+
+
+def test_trade_decision_report_includes_price_source_and_rejection_details(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+        ],
+        results=[
+            {"verdict": "IGNORED", "confidence": 0.0, "reason": "price_sanity_invalid"},
+        ],
+        latest_prices={"BTC-USD": 9.45, "ETH-USD": 2110.0},
+        latest_price_sources={"BTC-USD": "yfinance", "ETH-USD": "alpaca_crypto_snapshot"},
+        open_signals=[],
+        active_signal_count=0,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["price_a"] == 9.45
+    assert decision["price_b"] == 2110.0
+    assert decision["price_source_a"] == "yfinance"
+    assert decision["price_source_b"] == "alpaca_crypto_snapshot"
+    assert decision["rejection_reason"] == "price_sanity_invalid"
+
+
+def test_trade_decision_report_includes_price_timestamps(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+        ],
+        results=[
+            {"verdict": "IGNORED", "confidence": 0.0, "reason": "stale_price_snapshot"},
+        ],
+        latest_prices={"BTC-USD": 90105.0, "ETH-USD": 2130.0},
+        latest_price_sources={
+            "BTC-USD": "alpaca_crypto_quote_mid",
+            "ETH-USD": "alpaca_crypto_quote_mid",
+        },
+        latest_price_timestamps={
+            "BTC-USD": "2026-05-20T12:01:00+00:00",
+            "ETH-USD": "2026-05-20T12:01:03+00:00",
+        },
+        open_signals=[],
+        active_signal_count=0,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["price_timestamp_a"] == "2026-05-20T12:01:00+00:00"
+    assert decision["price_timestamp_b"] == "2026-05-20T12:01:03+00:00"
+    assert decision["price_source_a"] == "alpaca_crypto_quote_mid"
+    assert decision["price_source_b"] == "alpaca_crypto_quote_mid"
+
+
+def test_trade_decision_report_includes_spread_guard_details(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "AAPL_MSFT", "ticker_a": "AAPL", "ticker_b": "MSFT"},
+        ],
+        results=[
+            {
+                "verdict": "EXECUTION_BLOCKED",
+                "confidence": 0.8,
+                "reason": "spread_guard",
+                "bid_a": 100.0,
+                "ask_a": 100.2,
+                "bid_b": 50.0,
+                "ask_b": 50.1,
+                "spread_a_pct": 0.2,
+                "spread_b_pct": 0.2,
+                "total_spread_pct": 0.4004,
+                "max_spread_pct": 0.3,
+            },
+        ],
+        latest_prices={"AAPL": 100.2, "MSFT": 50.1},
+        open_signals=[],
+        active_signal_count=1,
+        vetoed_count=0,
+        sizing_base=10_000.0,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["rejection_reason"] == "spread_guard"
+    assert decision["bid_a"] == 100.0
+    assert decision["ask_a"] == 100.2
+    assert decision["bid_b"] == 50.0
+    assert decision["ask_b"] == 50.1
+    assert decision["spread_a_pct"] == 0.2
+    assert decision["spread_b_pct"] == 0.2
+    assert decision["total_spread_pct"] == 0.4004
+    assert decision["max_spread_pct"] == 0.3
+
+
+def test_trade_decision_report_includes_profit_guard_details(monitor, tmp_path, monkeypatch):
+    report_path = tmp_path / "trade_decision_reports.jsonl"
+    monkeypatch.setattr(monitor, "trade_decision_report_path", report_path, raising=False)
+
+    monitor._write_trade_decision_report(
+        scan_pairs=[
+            {"id": "BTC-USD_ETH-USD", "ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+        ],
+        results=[
+            {
+                "verdict": "VETOED",
+                "confidence": 0.7,
+                "reason": "unprofitable",
+                "profit_guard_net_profit": -1.82,
+                "profit_guard_gross_profit": 0.44,
+                "profit_guard_friction_usd": 2.26,
+                "profit_guard_friction_pct": 0.00125,
+                "profit_guard_gross_notional": 1808.0,
+                "profit_guard_spread_capture": 2.5,
+                "profit_guard_z_score": 3.143,
+            },
+        ],
+        latest_prices={"BTC-USD": 77540.48, "ETH-USD": 2131.16},
+        latest_price_sources={
+            "BTC-USD": "alpaca_crypto_snapshot",
+            "ETH-USD": "alpaca_crypto_snapshot",
+        },
+        open_signals=[],
+        active_signal_count=1,
+        vetoed_count=1,
+        sizing_base=985590.85,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8").strip())
+    decision = report["decisions"][0]
+
+    assert decision["rejection_reason"] == "unprofitable"
+    assert decision["profit_guard_net_profit"] == -1.82
+    assert decision["profit_guard_gross_profit"] == 0.44
+    assert decision["profit_guard_friction_usd"] == 2.26
+    assert decision["profit_guard_friction_pct"] == 0.00125
+    assert decision["profit_guard_gross_notional"] == 1808.0
+    assert decision["profit_guard_spread_capture"] == 2.5
+    assert decision["profit_guard_z_score"] == 3.143
+
 
 @pytest.mark.asyncio
-async def test_execute_trade_success(monitor):
-    """
-    S-07: Test execute_trade path.
-    """
-    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
-    signal_id = str(uuid.uuid4())
-    
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
-         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
-         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
-         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
-         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
-         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock) as mock_shadow, \
-         patch.object(settings, "PAPER_TRADING", False):
-        
-        mock_bid_ask.return_value = (150.0, 150.1) # low spread
-        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
-        mock_shadow.return_value = [] # empty portfolio for simplicity
-        # get_account_cash is SYNC
-        monitor.brokerage.get_account_cash.return_value = 10000.0
-        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "orderId": "123"})
-        
-        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
-        
-        assert monitor.brokerage.place_value_order.call_count == 2
-        assert mock_log_trade.call_count == 2
-        mock_log_journal.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_execute_trade_skips_t212_sell_when_not_owned(monitor):
-    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
-    signal_id = str(uuid.uuid4())
-
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
-         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
-         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
-         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
-         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
-         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
-         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
-         patch.object(settings, "PAPER_TRADING", False):
-
-        mock_bid_ask.return_value = (150.0, 150.1)
-        mock_validate_trade.return_value = {
-            "is_acceptable": True,
-            "final_amount": 150.0,
-            "kelly_fraction": 0.1,
-        }
-        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
-        monitor.brokerage.get_account_cash.return_value = 10000.0
-        monitor.brokerage.get_available_quantity.return_value = 0.0
-        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "orderId": "123"})
-
-        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
-
-        monitor.brokerage.place_value_order.assert_not_called()
-        mock_log_trade.assert_not_called()
-        mock_log_journal.assert_not_called()
-        mock_notify.assert_awaited_once()
-        assert "selling more than owned" in mock_notify.call_args.args[0]
-
-@pytest.mark.asyncio
-async def test_close_position_success(monitor):
-    """
-    S-07: Test _close_position path.
-    """
+async def test_financial_kill_switch_uses_directional_pair_pnl(monitor):
     signal = {
         "signal_id": str(uuid.uuid4()),
         "legs": [
-            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
-            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0}
-        ]
-    }
-    
-    from src.services.persistence_service import ExitReason
-    with patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close, \
-         patch.object(settings, "PAPER_TRADING", False):
-        monitor.brokerage.place_market_order = AsyncMock(return_value={"status": "success"})
-        
-        await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
-        
-        assert monitor.brokerage.place_market_order.call_count == 2
-        mock_close.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_close_position_skips_t212_sell_when_broker_has_no_shares(monitor):
-    signal = {
-        "signal_id": str(uuid.uuid4()),
-        "legs": [
-            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
-            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0}
-        ]
+            {"ticker": "AAPL", "quantity": 10, "side": "SELL", "price": 100.0},
+            {"ticker": "MSFT", "quantity": 10, "side": "BUY", "price": 100.0},
+        ],
+        "total_cost_basis": 2000.0,
     }
 
-    from src.services.persistence_service import ExitReason
-    with patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close, \
-         patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
-         patch.object(settings, "PAPER_TRADING", False):
-        monitor.brokerage.get_available_quantity.return_value = 0.0
-        monitor.brokerage.place_market_order = AsyncMock(return_value={"status": "success"})
+    with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
+         patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close:
 
-        await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
+        mock_prices.return_value = {"AAPL": 120.0, "MSFT": 100.0}
+        kf = MagicMock()
+        kf.calculate_spread_and_zscore.return_value = (0.0, 1.0)
+        mock_filter.return_value = kf
 
-        monitor.brokerage.place_market_order.assert_not_called()
-        mock_close.assert_not_called()
-        mock_notify.assert_awaited_once()
+        await monitor._evaluate_exit_conditions(signal)
 
-@pytest.mark.asyncio
-async def test_execute_trade_crypto_live_uses_broker(monitor):
-    pair = {"ticker_a": "ETH-USD", "ticker_b": "BTC-USD", "id": "ETH-USD_BTC-USD"}
-    signal_id = str(uuid.uuid4())
-
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
-         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
-         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
-         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
-         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock) as mock_shadow_portfolio, \
-         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
-         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
-         patch.object(settings, "PAPER_TRADING", False):
-
-        mock_bid_ask.return_value = (100.0, 100.05)
-        mock_shadow_portfolio.return_value = []
-        mock_validate_trade.return_value = {
-            "is_acceptable": True,
-            "final_amount": 100.0,
-            "kelly_fraction": 0.1,
-        }
-        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
-        monitor.brokerage.web3.enabled = True
-        monitor.brokerage.web3.get_budget_snapshot = AsyncMock(
-            return_value={"status": "success", "available_usd": 10000.0, "source": "unit_test"}
+        mock_close.assert_awaited_once_with(
+            signal,
+            120.0,
+            100.0,
+            reason=ExitReason.KILL_SWITCH,
+            prices_by_ticker={"AAPL": 120.0, "MSFT": 100.0},
         )
-        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "0xtx"})
-
-        await monitor.execute_trade(pair, "Short-Long", 2000.0, 50000.0, signal_id)
-
-        assert monitor.brokerage.place_value_order.call_count == 2
-        monitor.brokerage.get_account_cash.assert_not_called()
-        mock_shadow_exec.assert_not_called()
-        assert mock_log_trade.call_count == 2
-        mock_log_journal.assert_called_once()
-
-@pytest.mark.asyncio
-async def test_execute_trade_crypto_budget_cap_applied(monitor):
-    pair = {"ticker_a": "ETH-USD", "ticker_b": "BTC-USD", "id": "ETH-USD_BTC-USD"}
-    signal_id = str(uuid.uuid4())
-
-    with patch("src.services.data_service.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
-         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
-         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
-         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=250.0), \
-         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 250.0, "used": 0.0, "remaining": 250.0}), \
-         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
-         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
-         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
-         patch.object(settings, "PAPER_TRADING", False), \
-         patch.object(settings, "WEB3_BUDGET_USD", 250.0):
-
-        mock_bid_ask.return_value = (100.0, 100.05)
-        mock_validate_trade.return_value = {
-            "is_acceptable": True,
-            "final_amount": 100.0,
-            "kelly_fraction": 0.1,
-        }
-        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
-        monitor.brokerage.web3.enabled = True
-        monitor.brokerage.web3.get_budget_snapshot = AsyncMock(
-            return_value={"status": "success", "available_usd": 1200.0, "source": "unit_test"}
-        )
-        monitor.brokerage.place_value_order = AsyncMock(return_value={"status": "success", "order_id": "0xtx"})
-
-        await monitor.execute_trade(pair, "Short-Long", 2000.0, 50000.0, signal_id)
-
-        assert monitor.brokerage.place_value_order.call_count == 2
-        assert mock_validate_trade.call_count == 1
-        assert mock_validate_trade.call_args.kwargs["total_portfolio_cash"] == 250.0
-
-@pytest.mark.asyncio
-async def test_orchestrator_veto(monitor):
-    """
-    S-07: Test orchestrator veto path in process_pair.
-    """
-    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
-    latest_prices = {"AAPL": 150.0, "MSFT": 300.0}
-    
-    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
-         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
-         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock) as mock_audit, \
-         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
-         patch.object(monitor, "is_market_open", return_value=True):
-        
-        mock_kf = MagicMock()
-        # New signature: (state, innovation_variance, z_score, spread)
-        mock_kf.update.return_value = ([0, 1.0], 0.1, 3.0, 0.5) 
-        mock_kf_get.return_value = mock_kf
-        
-        # Orchestrator VETO (confidence < 0.5)
-        mock_orchestrator.return_value = {"final_confidence": 0.3, "final_verdict": "VETO"}
-        
-        diagnostic = await monitor.process_pair(pair, latest_prices)
-        
-        assert diagnostic["verdict"] == "VETOED"
-        assert diagnostic["confidence"] == 0.3
-        mock_audit.assert_called_once()
+        mock_filter.assert_not_awaited()

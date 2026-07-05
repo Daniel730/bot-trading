@@ -4,15 +4,38 @@ from unittest.mock import AsyncMock, call, patch
 import pytest
 
 from src.services.brokerage.alpaca import AlpacaProvider
+from src.services.brokerage_service import BrokerageService
 
 
 def _order(order_id="ord-1", client_order_id="client-1"):
     return SimpleNamespace(id=order_id, client_order_id=client_order_id)
 
 
+def _position(symbol="BTCUSD", qty="0.25"):
+    return SimpleNamespace(
+        symbol=symbol,
+        qty=qty,
+        qty_available=qty,
+        avg_entry_price="50000",
+        current_price="51000",
+        market_value="12750",
+    )
+
+
+class _NotFoundError(Exception):
+    status_code = 404
+
+
 @pytest.fixture
 def alpaca_rest():
     with patch("src.services.brokerage.alpaca.tradeapi.REST") as rest_cls:
+        rest_cls.return_value.list_assets.return_value = [
+            SimpleNamespace(symbol="AAPL"),
+            SimpleNamespace(symbol="BTC/USD"),
+            SimpleNamespace(symbol="ETH/USD"),
+            SimpleNamespace(symbol="MSFT"),
+            SimpleNamespace(symbol="NVDA"),
+        ]
         yield rest_cls, rest_cls.return_value
 
 
@@ -44,6 +67,34 @@ def test_alpaca_connection_uses_account_probe(alpaca_rest):
     assert provider.test_connection() is False
 
 
+def test_alpaca_crypto_symbol_helpers():
+    assert AlpacaProvider.normalize_symbol("BTC-USD") == "BTC/USD"
+    assert AlpacaProvider.to_bot_symbol("ETH/USD") == "ETH-USD"
+    assert AlpacaProvider.to_bot_symbol("BTCUSD") == "BTC-USD"
+    assert AlpacaProvider.is_supported_symbol("BTC-USD") is True
+    assert AlpacaProvider.order_time_in_force("BTC-USD") == "gtc"
+
+
+def test_get_positions_crypto_dash_falls_back_to_compact_broker_symbol(alpaca_rest):
+    _, client = alpaca_rest
+    client.get_position.side_effect = [_NotFoundError("position not found"), _position("BTCUSD", "0.25")]
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    positions = provider.get_positions("BTC-USD")
+
+    assert positions == [
+        {
+            "ticker": "BTC-USD",
+            "quantity": 0.25,
+            "quantityAvailableForTrading": 0.25,
+            "averagePrice": 50000.0,
+            "currentPrice": 51000.0,
+            "marketValue": 12750.0,
+        }
+    ]
+    assert client.get_position.call_args_list == [call("BTC/USD"), call("BTCUSD")]
+
+
 @pytest.mark.asyncio
 async def test_place_market_order_submits_alpaca_market_payload(alpaca_rest):
     _, client = alpaca_rest
@@ -70,6 +121,30 @@ async def test_place_market_order_submits_alpaca_market_payload(alpaca_rest):
         type="market",
         time_in_force="day",
         client_order_id="cid-market",
+    )
+
+
+@pytest.mark.asyncio
+async def test_place_market_order_submits_alpaca_crypto_payload(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.return_value = _order("ord-crypto", "cid-crypto")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_market_order(
+        "BTC-USD",
+        0.001,
+        "BUY",
+        client_order_id="cid-crypto",
+    )
+
+    assert result["order_id"] == "ord-crypto"
+    client.submit_order.assert_called_once_with(
+        symbol="BTC/USD",
+        qty=0.001,
+        side="buy",
+        type="market",
+        time_in_force="gtc",
+        client_order_id="cid-crypto",
     )
 
 
@@ -129,6 +204,55 @@ async def test_place_value_order_uses_alpaca_notional_orders(alpaca_rest):
 
 
 @pytest.mark.asyncio
+async def test_place_value_order_uses_alpaca_crypto_notional_orders(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.return_value = _order("ord-crypto-notional", "cid-crypto-value")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_value_order(
+        "ETH-USD",
+        25.0,
+        "BUY",
+        client_order_id="cid-crypto-value",
+    )
+
+    assert result["order_id"] == "ord-crypto-notional"
+    client.submit_order.assert_called_once_with(
+        symbol="ETH/USD",
+        notional=25.0,
+        side="buy",
+        type="market",
+        time_in_force="gtc",
+        client_order_id="cid-crypto-value",
+    )
+
+
+@pytest.mark.asyncio
+async def test_place_value_sell_order_uses_quantity_with_price(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.return_value = _order("ord-sell", "cid-sell")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_value_order(
+        "MSFT",
+        500.0,
+        "SELL",
+        price=250.0,
+        client_order_id="cid-sell",
+    )
+
+    assert result["order_id"] == "ord-sell"
+    client.submit_order.assert_called_once_with(
+        symbol="MSFT",
+        qty=2.0,
+        side="sell",
+        type="market",
+        time_in_force="day",
+        client_order_id="cid-sell",
+    )
+
+
+@pytest.mark.asyncio
 async def test_place_value_order_falls_back_to_quantity_when_notional_fails(alpaca_rest):
     _, client = alpaca_rest
     client.submit_order.side_effect = [
@@ -169,6 +293,56 @@ async def test_place_value_order_falls_back_to_quantity_when_notional_fails(alpa
             client_order_id="cid-fallback",
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_place_value_order_timeout_reconciles_client_order_id_before_fallback(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.side_effect = TimeoutError("submit timed out")
+    client.get_order_by_client_order_id.return_value = _order("ord-reconciled", "cid-timeout")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_value_order(
+        "NVDA",
+        125.0,
+        "BUY",
+        client_order_id="cid-timeout",
+    )
+
+    assert result == {
+        "status": "success",
+        "order_id": "ord-reconciled",
+        "broker": "ALPACA",
+        "client_order_id": "cid-timeout",
+    }
+    assert client.submit_order.call_count == 1
+    client.get_order_by_client_order_id.assert_called_once_with("cid-timeout")
+
+
+@pytest.mark.asyncio
+async def test_place_value_order_timeout_returns_unknown_when_reconcile_fails(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.side_effect = TimeoutError("submit timed out")
+    client.get_order_by_client_order_id.side_effect = RuntimeError("not found yet")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with patch(
+        "src.services.data_service.data_service.get_latest_price_async",
+        new_callable=AsyncMock,
+    ) as mock_price:
+        result = await provider.place_value_order(
+            "NVDA",
+            125.0,
+            "BUY",
+            client_order_id="cid-timeout",
+        )
+
+    assert result["status"] == "unknown"
+    assert result["requires_reconciliation"] is True
+    assert result["client_order_id"] == "cid-timeout"
+    assert client.submit_order.call_count == 1
+    client.get_order_by_client_order_id.assert_called_once_with("cid-timeout")
+    mock_price.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -215,6 +389,64 @@ def test_alpaca_positions_are_normalized(alpaca_rest):
     ]
 
 
+def test_alpaca_get_portfolio_raises_on_read_failure(alpaca_rest):
+    _, client = alpaca_rest
+    client.list_positions.side_effect = RuntimeError("portfolio unavailable")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with pytest.raises(RuntimeError, match="portfolio unavailable"):
+        provider.get_portfolio()
+
+    client.list_positions.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "get_account_cash",
+        "get_account_equity",
+        "get_account_buying_power",
+    ],
+)
+def test_alpaca_account_reads_raise_on_api_failure(alpaca_rest, method_name):
+    _, client = alpaca_rest
+    client.get_account.side_effect = RuntimeError("account unavailable")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with pytest.raises(RuntimeError, match="account unavailable"):
+        getattr(provider, method_name)()
+
+    client.get_account.assert_called_once_with()
+
+
+def test_alpaca_crypto_positions_are_normalized_to_bot_symbol(alpaca_rest):
+    _, client = alpaca_rest
+    client.list_positions.return_value = [
+        SimpleNamespace(
+            symbol="BTC/USD",
+            qty="0.02",
+            qty_available="0.01",
+            avg_entry_price="65000.00",
+            current_price="66000.00",
+            market_value="1320.00",
+        )
+    ]
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    assert provider.get_portfolio()[0]["ticker"] == "BTC-USD"
+
+
+def test_alpaca_get_positions_for_ticker_raises_on_read_failure(alpaca_rest):
+    _, client = alpaca_rest
+    client.get_position.side_effect = RuntimeError("positions unavailable")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with pytest.raises(RuntimeError, match="positions unavailable"):
+        provider.get_positions("AAPL")
+
+    client.get_position.assert_called_once_with("AAPL")
+
+
 def test_alpaca_pending_orders_are_normalized(alpaca_rest):
     _, client = alpaca_rest
     client.list_orders.return_value = [
@@ -237,9 +469,57 @@ def test_alpaca_pending_orders_are_normalized(alpaca_rest):
             "status": "accepted",
             "limitPrice": 412.3,
             "id": "ord-open",
+            "filled_qty": 0.0,
+            "filled_avg_price": 0.0,
         }
     ]
     client.list_orders.assert_called_once_with(status="open")
+
+
+@pytest.mark.asyncio
+async def test_alpaca_pending_notional_orders_count_toward_pending_value(alpaca_rest):
+    _, client = alpaca_rest
+    client.list_orders.return_value = [
+        SimpleNamespace(
+            symbol="MSFT",
+            qty=None,
+            side="buy",
+            status="accepted",
+            limit_price=None,
+            notional="250.00",
+            id="ord-notional-open",
+        )
+    ]
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+    service = BrokerageService.__new__(BrokerageService)
+    service.provider = provider
+
+    pending_value = await service.get_pending_orders_value()
+
+    assert float(pending_value) == 250.0
+
+
+def test_alpaca_pending_orders_raise_on_fetch_failure(alpaca_rest):
+    _, client = alpaca_rest
+    client.list_orders.side_effect = RuntimeError("open orders unavailable")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with pytest.raises(RuntimeError, match="open orders unavailable"):
+        provider.get_pending_orders()
+
+    client.list_orders.assert_called_once_with(status="open")
+
+
+@pytest.mark.asyncio
+async def test_alpaca_get_order_raises_on_fetch_failure(alpaca_rest):
+    _, client = alpaca_rest
+    client.get_order.side_effect = RuntimeError("order snapshot unavailable")
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    with pytest.raises(RuntimeError, match="order snapshot unavailable"):
+        await provider.get_order("ord-missing")
+
+    client.get_order.assert_called_once_with("ord-missing")
 
 
 def test_alpaca_symbol_metadata_reflects_fractionable_asset(alpaca_rest):

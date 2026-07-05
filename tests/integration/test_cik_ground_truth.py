@@ -2,6 +2,10 @@ import pytest
 import asyncio
 from src.services.sec_service import SECService
 
+
+pytestmark = pytest.mark.live
+
+
 # Ground truth mapping for 50 major tickers (as of early 2026)
 # Sources: SEC EDGAR official listings
 GROUND_TRUTH = {

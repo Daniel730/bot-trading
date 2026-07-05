@@ -1,0 +1,15 @@
+hooks:
+  before_tasks:
+    - extension: arbitrage-elite
+      command: speckit.verify-env
+      description: Verify mandatory API keys for the Arbitrage Engine.
+      prompt: Checking for POLYGON_API_KEY, GEMINI_API_KEY, T212_API_KEY, and Telegram credentials.
+      optional: false
+      enabled: true
+
+  after_tasks:
+    - extension: arbitrage-elite
+      command: speckit.analyze
+      description: Run a project analysis for consistency after task generation.
+      optional: true
+      enabled: true

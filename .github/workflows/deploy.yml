@@ -82,6 +82,7 @@ jobs:
               - 'execution-engine/src/main/proto/**'
             python_tests:
               - 'tests/**'
+              - '.github/workflows/deploy.yml'
             java_image:
               - 'execution-engine/**'
             frontend_image:
@@ -236,6 +237,24 @@ jobs:
 
       - name: Initialize Postgres schema
         run: python scripts/init_db.py
+
+      - name: Run broker/execution safety contract tests
+        run: |
+          python -m pytest -q \
+            tests/unit/test_alpaca_provider.py \
+            tests/unit/test_monitor.py::test_execute_trade_blocks_when_pending_orders_budget_read_fails \
+            tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_leg_a_submission_ambiguous \
+            tests/unit/test_monitor.py::test_execute_trade_blocks_leg_b_without_confirmed_leg_a_fill \
+            tests/unit/test_monitor.py::test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short \
+            tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_ambiguous \
+            tests/unit/test_monitor.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_partial_fill \
+            tests/unit/test_monitor.py::test_close_position_does_not_close_ledger_until_all_close_orders_fill \
+            tests/unit/test_startup_unresolved_execution_state.py::test_startup_blocks_when_unresolved_execution_state_exists \
+            tests/unit/test_dashboard_wallet_sync.py \
+            tests/unit/test_production_soak_gate.py \
+            tests/unit/test_runtime_alert_rules.py \
+            tests/unit/test_config_broker_routes.py \
+            --asyncio-mode=auto
 
       - name: Run Python unit tests
         run: python -m pytest tests/unit -v --asyncio-mode=auto

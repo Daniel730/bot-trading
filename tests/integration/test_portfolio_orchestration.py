@@ -8,15 +8,17 @@ from src.config import settings
 from unittest.mock import patch, MagicMock, AsyncMock
 
 def test_portfolio_allocation_flow():
-    persistence = PersistenceManager(settings.DB_PATH)
+    persistence = PersistenceManager(":memory:")
     
     # 1. Define strategy
     strategy_id = "test_strat"
     persistence.save_portfolio_strategy(strategy_id, "AAPL", 0.6, "Balanced")
     persistence.save_portfolio_strategy(strategy_id, "MSFT", 0.4, "Balanced")
+    assert len(persistence.get_portfolio_strategy(strategy_id)) == 2
     
     # 2. Mock brokerage to avoid real orders
-    with patch('src.services.brokerage_service.BrokerageService.place_value_order') as mock_order:
+    with patch.object(portfolio_manager, 'db', persistence), \
+         patch('src.services.brokerage_service.BrokerageService.place_value_order') as mock_order:
         mock_order.return_value = {"status": "success"}
         
         # 3. Trigger allocation

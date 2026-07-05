@@ -1,46 +1,32 @@
-import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from src.services.brokerage_service import BrokerageService
-from src.config import settings
 
-class TestBrokerageServiceIntegration(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        # Patch settings instead of service module
-        self.patcher_key = patch.object(settings, 'T212_API_KEY', 'test_key')
-        self.patcher_mode = patch.object(settings, 'TRADING_212_MODE', 'demo')
-        self.patcher_key.start()
-        self.patcher_mode.start()
-        self.service = BrokerageService("T212")
 
-    async def asyncTearDown(self):
-        self.patcher_key.stop()
-        self.patcher_mode.stop()
+@pytest.mark.asyncio
+async def test_brokerage_service_places_alpaca_market_order():
+    with patch("src.services.brokerage_service.AlpacaProvider"):
+        service = BrokerageService("LEGACY")
+    service.provider.place_market_order = AsyncMock(
+        return_value={"status": "success", "order_id": "123"}
+    )
 
-    async def test_place_market_order_success(self):
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "success", "orderId": "123"}
+    result = await service.place_market_order("KO", 1.0, "BUY")
 
-        with patch.object(self.service.provider.session, "post", return_value=mock_response) as mock_post:
-            with patch.object(self.service.provider, "get_symbol_metadata", return_value={}):
-                result = await self.service.place_market_order("KO", 1.0, "BUY")
+    assert result["status"] == "success"
+    assert result["venue"] == "ALPACA"
+    service.provider.place_market_order.assert_awaited_once_with("KO", 1.0, "BUY", None, None)
 
-        self.assertEqual(result["status"], "success")
-        mock_post.assert_called_once()
 
-    async def test_get_portfolio_success(self):
-        # Mocking successful 200 response for T212 Portfolio
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = [{"ticker": "KO", "quantity": 10.0}]
-        
-        with patch.object(self.service.provider.session, 'get', return_value=mock_response) as mock_get:
-            # S-08 Fix: Added await
-            result = await self.service.get_portfolio()
-            
-            self.assertEqual(len(result), 1)
-            self.assertEqual(result[0]["ticker"], "KO")
-            mock_get.assert_called_once()
+@pytest.mark.asyncio
+async def test_brokerage_service_gets_alpaca_portfolio():
+    with patch("src.services.brokerage_service.AlpacaProvider"):
+        service = BrokerageService()
+    service.provider.get_portfolio = MagicMock(return_value=[{"ticker": "KO", "quantity": 10.0}])
 
-if __name__ == '__main__':
-    unittest.main()
+    result = await service.get_portfolio()
+
+    assert len(result) == 1
+    assert result[0]["ticker"] == "KO"

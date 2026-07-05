@@ -4,7 +4,7 @@
  * - Uses renamed types: WalletRecommendation, WalletRecommendationResponse,
  *   WalletRecommendationBuyResponse (instead of T212Wallet* variants)
  * - categoryLabel uses WalletRecommendation['category']
- * - Broker ticker display: item.broker_ticker || item.t212_ticker || item.ticker
+ * - Broker ticker display: item.broker_ticker || item.ticker
  * - Mode display: plan.mode.toUpperCase() (no "T212" suffix), fallback to 'BROKER'
  * - cash_limited banner: "spendable broker cash"
  * - Confirm dialog title: "confirm broker buy"
@@ -20,10 +20,11 @@ vi.mock('../services/api', () => ({
   buyWalletRecommendations: vi.fn(),
 }));
 
-import { fetchWalletRecommendations } from '../services/api';
+import { buyWalletRecommendations, fetchWalletRecommendations } from '../services/api';
 import WalletPanel from '../components/WalletPanel';
 
 const mockFetchRecs = fetchWalletRecommendations as ReturnType<typeof vi.fn>;
+const mockBuyRecs = buyWalletRecommendations as ReturnType<typeof vi.fn>;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -35,13 +36,11 @@ const SESSION = 'test-session';
 function makeRecommendation(overrides: Partial<{
   ticker: string;
   broker_ticker: string;
-  t212_ticker: string | null;
   category: 'coint' | 'broken_eligible' | 'manual_override';
 }> = {}) {
   return {
     ticker: overrides.ticker ?? 'AAPL',
     broker_ticker: overrides.broker_ticker ?? 'AAPL',
-    t212_ticker: overrides.t212_ticker ?? null,
     category: overrides.category ?? 'coint',
     categories: [overrides.category ?? 'coint'],
     pairs: [],
@@ -62,7 +61,7 @@ function makePlanResponse(overrides: Partial<{
 }> = {}) {
   return {
     status: 'ok' as const,
-    mode: overrides.mode ?? 'T212',
+    mode: overrides.mode ?? 'ALPACA',
     message: 'Calculated 1 recommendations.',
     generated_at: '2026-01-01T00:00:00',
     include_broken: false,
@@ -99,15 +98,6 @@ describe('WalletPanel mode display', () => {
     });
   });
 
-  it('shows T212 uppercased when mode is T212', async () => {
-    mockFetchRecs.mockResolvedValue(makePlanResponse({ mode: 'T212' }));
-
-    render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await waitFor(() => {
-      expect(screen.getByText('T212')).toBeInTheDocument();
-    });
-  });
-
   it('falls back to BROKER when plan is null', async () => {
     mockFetchRecs.mockRejectedValue(new Error('Network error'));
 
@@ -140,25 +130,10 @@ describe('WalletPanel broker_ticker display', () => {
     });
   });
 
-  it('falls back to t212_ticker when broker_ticker is empty', async () => {
-    const rec = {
-      ...makeRecommendation({ ticker: 'MSFT' }),
-      broker_ticker: '',
-      t212_ticker: 'MSFT_US_EQ',
-    };
-    mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec as any] }));
-
-    render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
-    await waitFor(() => {
-      expect(screen.getByText('MSFT_US_EQ')).toBeInTheDocument();
-    });
-  });
-
-  it('falls back to ticker when both broker_ticker and t212_ticker are absent', async () => {
+  it('falls back to ticker when broker_ticker is absent', async () => {
     const rec = {
       ...makeRecommendation({ ticker: 'GOOG' }),
       broker_ticker: '',
-      t212_ticker: null,
     };
     mockFetchRecs.mockResolvedValue(makePlanResponse({ recommendations: [rec as any] }));
 
@@ -191,6 +166,18 @@ describe('WalletPanel cash_limited banner', () => {
     });
   });
 
+  it('disables broker buy when cash_limited is true', async () => {
+    mockFetchRecs.mockResolvedValue(makePlanResponse({ cash_limited: true }));
+
+    render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Buy Selected')).toBeDisabled();
+      expect(screen.getByText(/reduce the budget/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/Orders will still be attempted/i)).not.toBeInTheDocument();
+  });
+
   it('does NOT show cash_limited banner when cash_limited is false', async () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse({ cash_limited: false }));
 
@@ -208,6 +195,24 @@ describe('WalletPanel cash_limited banner', () => {
 describe('WalletPanel confirm dialog', () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('disables broker buys in paper trading mode before opening confirm or calling the API', async () => {
+    mockFetchRecs.mockResolvedValue(makePlanResponse());
+
+    render(<WalletPanel token={TOKEN} sessionToken={SESSION} paperTrading />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Buy Selected')).toBeDisabled();
+      expect(
+        screen.getByText(/Broker buys are disabled while PAPER_TRADING=true/i),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Buy Selected'));
+
+    expect(screen.queryByText('confirm broker buy')).not.toBeInTheDocument();
+    expect(mockBuyRecs).not.toHaveBeenCalled();
   });
 
   it('confirm dialog title is "confirm broker buy"', async () => {

@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 from contextlib import ExitStack
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from src.agents.orchestrator import Orchestrator
 from src.models.persistence import PersistenceManager
 
@@ -33,6 +33,35 @@ def _route_system_state_to(db):
     return stack
 
 
+def _mock_slow_orchestrator_reads():
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            'src.agents.orchestrator.redis_service.get_fundamental_score',
+            new=AsyncMock(return_value={"score": 75}),
+        )
+    )
+    stack.enter_context(
+        patch(
+            'src.agents.orchestrator.portfolio_manager_agent.get_optimization_advice',
+            new=AsyncMock(
+                return_value={
+                    "is_recommended": False,
+                    "improvement": 0.0,
+                    "reason": "test-isolated",
+                }
+            ),
+        )
+    )
+    stack.enter_context(
+        patch(
+            'src.agents.orchestrator.persistence_service.get_agent_metrics',
+            new=AsyncMock(return_value=(1, 1)),
+        )
+    )
+    return stack
+
+
 @pytest.mark.asyncio
 async def test_circuit_breaker_tripping():
     """
@@ -44,6 +73,7 @@ async def test_circuit_breaker_tripping():
 
     with patch('src.models.persistence.PersistenceManager', return_value=db), \
          _route_system_state_to(db), \
+         _mock_slow_orchestrator_reads(), \
          patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="BULLISH"):
         orchestrator = Orchestrator()
 
@@ -78,6 +108,7 @@ async def test_circuit_breaker_reset():
 
     with patch('src.models.persistence.PersistenceManager', return_value=db), \
          _route_system_state_to(db), \
+         _mock_slow_orchestrator_reads(), \
          patch('src.agents.orchestrator.macro_economic_agent.get_ticker_regime', return_value="BULLISH"):
         orchestrator = Orchestrator()
 

@@ -1,15 +1,15 @@
 # Alpha Arbitrage Bot — Open-Source Statistical Arbitrage Trading Bot Framework
 
-> Open-source statistical arbitrage trading bot framework in Python and Java for paired equities and crypto. Includes a Kalman-filter spread engine, multi-agent signal validation, paper trading, Trading 212, Alpaca, and Web3 connectors, a gRPC execution engine, and a React operations dashboard.
+> Open-source statistical arbitrage trading bot framework in Python and Java for paired equities and crypto. Includes a Kalman-filter spread engine, multi-agent signal validation, paper trading, the active Alpaca brokerage connector, legacy Trading 212/Web3 code paths, a gRPC execution engine, and a React operations dashboard.
 
 [![License](https://img.shields.io/github/license/Daniel730/bot-trading)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Daniel730/bot-trading?style=social)](https://github.com/Daniel730/bot-trading/stargazers)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/Daniel730)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11-blue?logo=python)](https://www.python.org/)
 [![Java](https://img.shields.io/badge/java-21-orange?logo=openjdk)](https://openjdk.org/)
 [![React](https://img.shields.io/badge/react-19-61dafb?logo=react)](https://react.dev/)
 
-Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/execution stack for paired assets. The Python monitor scans an equity and crypto pair universe, runs **Kalman-filter spread logic**, asks a small **agent ensemble** to validate signals, and routes accepted trades to either paper shadow execution, the active equity broker (**Trading 212** or **Alpaca**), **Web3**, or the **Java gRPC execution engine** depending on mode and venue. A **React operations console** exposes telemetry, pairs, trade history, config, and health.
+Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/execution stack for paired assets. The Python monitor scans an equity and crypto pair universe, runs **Kalman-filter spread logic**, asks a small **agent ensemble** to validate signals, and routes accepted trades to paper shadow execution or the active Alpaca brokerage path. Trading 212 and Web3 paths are legacy/disabled in the current runtime. A **React operations console** exposes telemetry, pairs, trade history, config, and health.
 
 **Keywords:** statistical arbitrage, pairs trading, algorithmic trading bot, quantitative trading, Kalman filter, mean reversion, Python trading bot, Java gRPC trading engine, crypto arbitrage bot, equity arbitrage, paper trading, backtesting, Trading 212 API, Alpaca API, Web3 trading bot, FastMCP, React trading dashboard, open source trading framework.
 
@@ -33,7 +33,7 @@ Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/executio
 
 - **Statistical arbitrage** signal engine with Kalman-filter spread estimation and entropy/risk gates.
 - **Multi-agent validation** ensemble that vets signals before they reach execution.
-- **Pluggable execution venues**: paper shadow, Trading 212, Alpaca, Web3 wallet/router, and a high-performance Java gRPC engine.
+- **Execution venues**: paper shadow and the active Alpaca brokerage path; Trading 212 and Web3 code is legacy/disabled in the current runtime.
 - **Operations console** built in React for live telemetry, pair management, trade history, and configuration.
 - **FastMCP tool server** for assistant/AI integrations over SSE.
 - **Production-ready infra** with Dockerfiles, Compose files, Redis idempotency, and PostgreSQL persistence.
@@ -43,7 +43,7 @@ Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/executio
 | Project | Path | Purpose |
 |---|---|---|
 | Python trading backend | `src/` | Monitor loop, dashboard API, persistence, risk, brokerage, agents, telemetry |
-| Java execution engine | `execution-engine/` | gRPC execution service with Redis idempotency, VWAP checks, slippage guards |
+| Java execution engine | `execution-engine/` | gRPC dry-run/audit sidecar with Redis idempotency, VWAP checks, slippage guards |
 | React operations console | `frontend/` | Authenticated dashboard for telemetry, pairs, trade history, config, and health |
 | Infrastructure | `infra/` | Dockerfiles, Compose files, redeploy helper, systemd unit |
 | Operational docs | `docs/` | Architecture, operations, strategy, budget, agents, historical audits |
@@ -59,14 +59,18 @@ Python dashboard API (:8080) <--> Redis
         |                         PostgreSQL
         |                         SQLite fallback/runtime state
         v
-Python monitor loop ---- gRPC ---- Java execution engine (:50051)
+Python monitor loop
         |
-        +---- active equity broker (Trading 212 or Alpaca)
-        +---- Web3 wallet/router
+        +---- paper: shadow_service
+        +---- broker-connected: Python BrokerageService -> Alpaca
         +---- market data providers
+
+Java execution engine (:50051) is a dry-run/audit sidecar.
 
 FastMCP tool server (:8000) is a separate optional SSE endpoint for assistant/tool integrations.
 ```
+
+`src/monitor.py` order routing: `PAPER_TRADING=true` calls `shadow_service`; broker-connected mode submits both legs through Python `BrokerageService`. The Java execution engine is a dry-run/audit sidecar and is not the monitor's default order path.
 
 ## Quick Start
 
@@ -76,23 +80,34 @@ FastMCP tool server (:8000) is a separate optional SSE endpoint for assistant/to
 cp .env.template .env
 ```
 
-Set at least `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` to non-default secret values. Add market data, Telegram, broker, OpenAI/Gemini, and Web3 credentials only for the paths you intend to use.
+Set at least `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` to non-default secret values. Add market data, Telegram, Alpaca broker, and OpenAI/Gemini credentials only for the paths you intend to use.
 
-For live equity execution, choose one active broker:
+The current active broker runtime is Alpaca only:
 
 ```bash
-BROKERAGE_PROVIDER=T212      # Trading 212
-# BROKERAGE_PROVIDER=ALPACA  # Alpaca paper/live endpoint from ALPACA_BASE_URL
+BROKERAGE_PROVIDER=ALPACA  # Alpaca paper/live endpoint from ALPACA_BASE_URL
 ```
 
-`BROKERAGE_PROVIDER=ALPACA` uses `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL`; the template defaults Alpaca to the paper endpoint.
+`BROKERAGE_PROVIDER=ALPACA` uses `ALPACA_API_KEY`, `ALPACA_API_SECRET`, and `ALPACA_BASE_URL`; the template defaults Alpaca to the paper endpoint. `BROKERAGE_PROVIDER=T212` and `BROKERAGE_PROVIDER=WEB3` fail startup because those live routes are legacy/disabled.
 
-2. Install and initialize the Python backend:
+2. Install and initialize the Python backend with Python 3.11 and the locked dependency set used by CI and Docker:
 
 ```bash
-pip install -r requirements.txt
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip uv
+uv pip install -r requirements.lock
 python scripts/init_db.py
 ```
+
+On Windows, use `py -3.11 -m venv .venv` and `.venv\Scripts\Activate.ps1` for the virtual environment steps.
+
+Local tooling note:
+
+- Validated backend commands use the repo WSL/Python 3.11 virtualenv (`.venv/bin/python`).
+- Windows `python`/`py` may resolve to Python 3.14; do not use it as proof that the locked backend stack is compatible.
+- If `npm` is not installed, frontend gates are not runnable locally; install Node/npm or run the frontend checks in an environment that has them.
+- No Gradle wrapper is committed; use an installed `gradle` command for the Java sidecar, or run the Docker build path.
 
 3. Start the monitor. This also starts the dashboard API on port `8080`:
 
@@ -120,7 +135,7 @@ It runs on port `8000` with SSE transport.
 
 ## Java Execution Engine
 
-The Java service requires Java 21 and Gradle:
+The Java service requires Java 21 and Gradle. No Gradle wrapper is committed; use an installed `gradle` command:
 
 ```bash
 cd execution-engine
@@ -155,6 +170,19 @@ docker compose \
   up -d --build --remove-orphans
 ```
 
+Before starting a paper session from the host, run the ordered startup check:
+
+```bash
+python scripts/paper_startup_check.py .env
+```
+
+It repairs non-secret paper-mode connectivity keys, validates the env file, and then checks Docker, Redis, and PostgreSQL reachability.
+If the check reports already-running app containers, stop them first:
+
+```bash
+docker stop infra-bot-1 infra-execution-engine-1 infra-mcp-server-1 infra-sec-worker-1 infra-frontend-1
+```
+
 Useful ports:
 
 | Port | Service |
@@ -171,7 +199,7 @@ Useful ports:
 | Setting | Effect |
 |---|---|
 | `PAPER_TRADING=true` | Uses shadow execution and does not submit live broker orders |
-| `BROKERAGE_PROVIDER=T212` | Selects the live equity broker for non-crypto tickers (`T212` or `ALPACA`) |
+| `BROKERAGE_PROVIDER=ALPACA` | Required active brokerage provider; unsupported values fail startup |
 | `DEV_MODE=true` | Uses crypto test pairs, bypasses equity market hours, and enables development behavior |
 | `DRY_RUN=true` | Keeps the Java engine in mock-broker mode |
 | `LIVE_CAPITAL_DANGER=true` | Refuses startup unless Redis L2 entropy baselines exist |
@@ -218,7 +246,7 @@ You can also help by:
 It is an open-source framework for building and running **statistical arbitrage / pairs-trading** strategies across equities and crypto, with paper-trading and live-broker execution paths.
 
 **What languages and stack does it use?**
-Python 3.10+ for the monitor, signal engine, dashboard API, and agent ensemble; Java 21 for the gRPC execution engine; React 19 + Vite for the operations console; PostgreSQL and Redis for persistence and idempotency.
+Python 3.11 for the monitor, signal engine, dashboard API, and agent ensemble; Java 21 for the gRPC execution engine; React 19 + Vite for the operations console; PostgreSQL and Redis for persistence and idempotency.
 
 **Can I use it for live trading?**
 Yes, but only after extensive paper trading. The Java engine ships in `DRY_RUN` mode and intentionally refuses to boot live until a real broker implementation is wired. Read [docs/OPERATIONS.md](docs/OPERATIONS.md) and [docs/STRATEGY.md](docs/STRATEGY.md) first.

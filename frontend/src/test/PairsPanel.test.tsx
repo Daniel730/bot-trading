@@ -1,9 +1,9 @@
 /**
  * Tests for PairsPanel.tsx changes in this PR:
  *
- * - Uses syncWallet (renamed from syncT212Wallet) from api.ts
- * - Wallet section label is "Broker Wallet" (not "T212 Wallet")
- * - Button title is "Buy missing broker tickers" (not "Buy missing T212 tickers")
+ * - Uses syncWallet from api.ts
+ * - Wallet section label is "Broker Wallet"
+ * - Button title is "Buy missing broker tickers"
  * - Confirm dialog says "Place broker BUY orders for missing stock tickers..."
  * - Error fallback message is "Failed to sync broker wallet"
  */
@@ -15,13 +15,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 vi.mock('../services/api', () => ({
   fetchPairs: vi.fn(),
   syncWallet: vi.fn(),
+  discoverPairs: vi.fn(),
+  updatePairs: vi.fn(),
 }));
 
-import { fetchPairs, syncWallet } from '../services/api';
+import { discoverPairs, fetchPairs, syncWallet } from '../services/api';
 import PairsPanel from '../components/PairsPanel';
 
 const mockFetchPairs = fetchPairs as ReturnType<typeof vi.fn>;
 const mockSyncWallet = syncWallet as ReturnType<typeof vi.fn>;
+const mockDiscoverPairs = discoverPairs as ReturnType<typeof vi.fn>;
 
 const TOKEN = 'test-token';
 const SESSION = 'test-session';
@@ -48,6 +51,13 @@ function makePairsResponse(extraPairs = []) {
     configured_pairs: [{ ticker_a: 'AAPL', ticker_b: 'MSFT' }],
     crypto_test_pairs: [],
     dev_mode: false,
+    discovery: {
+      active: false,
+      active_count: 0,
+      last_status: null,
+      last_finished_at: null,
+      last_message: null,
+    },
   };
 }
 
@@ -76,6 +86,63 @@ describe('PairsPanel Broker Wallet label', () => {
     await waitFor(() => {
       expect(screen.queryByText('T212 Wallet')).not.toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Pair discovery status
+// ---------------------------------------------------------------------------
+
+describe('PairsPanel pair discovery status', () => {
+  beforeEach(() => {
+    mockFetchPairs.mockResolvedValue(makePairsResponse());
+    mockDiscoverPairs.mockResolvedValue({
+      status: 'accepted',
+      message: 'Discovery cycle started. Completion will be reported in the terminal feed.',
+    });
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows the API acknowledgement when pair discovery starts', async () => {
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Edit pairs')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTitle('Edit pairs'));
+    fireEvent.click(screen.getByTitle('Search for new cointegrated pairs in background'));
+
+    await waitFor(() => {
+      expect(mockDiscoverPairs).toHaveBeenCalledOnce();
+      expect(screen.getByText(/Discovery cycle started/)).toBeInTheDocument();
+    });
+  });
+
+  it('shows the last completed discovery result from the pairs endpoint', async () => {
+    mockFetchPairs.mockResolvedValue({
+      ...makePairsResponse(),
+      discovery: {
+        active: false,
+        active_count: 0,
+        last_status: 'completed',
+        last_finished_at: new Date().toISOString(),
+        last_message: null,
+      },
+    });
+
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getByTitle('Edit pairs')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTitle('Edit pairs'));
+
+    expect(screen.getByText(/Pair discovery completed/)).toBeInTheDocument();
   });
 });
 
@@ -124,7 +191,7 @@ describe('PairsPanel wallet sync interaction', () => {
   it('calls syncWallet (not syncT212Wallet) when user confirms', async () => {
     mockSyncWallet.mockResolvedValue({
       status: 'ok',
-      mode: 'T212',
+      mode: 'ALPACA',
       message: 'Submitted 2/2 BUY orders.',
       coint_pairs: 1,
       candidate_tickers: ['AAPL', 'MSFT'],
@@ -209,7 +276,7 @@ describe('PairsPanel wallet sync interaction', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockSyncWallet.mockResolvedValue({
       status: 'ok',
-      mode: 'T212',
+      mode: 'ALPACA',
       message: 'Submitted 1/1 BUY orders.',
       coint_pairs: 1,
       candidate_tickers: ['AAPL'],
@@ -243,6 +310,26 @@ describe('PairsPanel wallet sync interaction', () => {
 describe('PairsPanel buy button disabled state', () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('disables broker buys in paper trading mode before calling the API', async () => {
+    mockFetchPairs.mockResolvedValue(makePairsResponse());
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} paperTrading />);
+
+    await waitFor(() => {
+      const btn = screen.getByRole('button', { name: /Buy All/i });
+      expect(btn).toBeDisabled();
+      expect(
+        screen.getByText(/Broker buys are disabled while PAPER_TRADING=true/i),
+      ).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Buy All/i }));
+
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(mockSyncWallet).not.toHaveBeenCalled();
   });
 
   it('button is disabled when there are no equity tickers', async () => {

@@ -44,19 +44,25 @@ async def test_kill_switch_trigger_and_rejection():
              patch('src.services.redis_service.redis_service') as mock_redis, \
              patch('src.services.risk_service.risk_service') as mock_risk:
              
-            mock_redis.set_nx = AsyncMock(return_value=True)
+            mock_redis.get_json = AsyncMock(return_value=None)
+            mock_redis.set_json = AsyncMock()
+            mock_redis.set_json_nx = AsyncMock(return_value=True)
+            mock_redis.delete = AsyncMock(return_value=1)
             mock_risk.get_execution_params = AsyncMock(return_value={
                 "max_slippage_pct": 0.01,
                 "risk_multiplier": 1.0
             })
             
+            signal_id = str(uuid.uuid4())
             trade_resp = await execution_client.execute_trade(
-                str(uuid.uuid4()), "KO_PEP", 
+                signal_id, "KO_PEP",
                 [{"ticker": "KO", "side": "BUY", "quantity": 1, "target_price": 1.0}]
             )
             
             assert trade_resp.status == execution_pb2.STATUS_HALTED
             assert "Halted" in trade_resp.message
+            mock_redis.get_json.assert_awaited_once_with(f"execution_attempt:{signal_id}")
+            assert mock_redis.set_json.await_count == 2
 
 @pytest.mark.asyncio
 async def test_kill_switch_error_handling():

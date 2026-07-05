@@ -14,3 +14,6 @@ import os
 # ---------------------------------------------------------------------------
 os.environ.setdefault("POSTGRES_PASSWORD", "test-postgres-secret")
 os.environ.setdefault("DASHBOARD_TOKEN", "test-dashboard-token-for-pytest")
+os.environ.setdefault("PAPER_TRADING", "true")
+os.environ.setdefault("ALPACA_API_KEY", "test-alpaca-key-for-pytest")
+os.environ.setdefault("ALPACA_API_SECRET", "test-alpaca-secret-for-pytest")

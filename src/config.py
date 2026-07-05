@@ -11,6 +11,7 @@ load_dotenv()
 # Path to user-editable pairs override file (created/edited by the dashboard).
 PAIRS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "pairs.json"
 BOT_SETTINGS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "bot_settings.json"
+ACTIVE_BROKERAGE_PROVIDER = "ALPACA"
 
 def _load_settings_override():
     try:
@@ -37,6 +38,16 @@ def _strip_wrapping_quotes(value: str) -> str:
     if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
         return stripped[1:-1].strip()
     return stripped
+
+
+def _validate_supported_brokerage_provider(value: Any) -> str:
+    provider = str(value or "").strip().upper()
+    if provider != ACTIVE_BROKERAGE_PROVIDER:
+        raise ValueError(
+            "BROKERAGE_PROVIDER only supports ALPACA in the active runtime; "
+            "T212 and WEB3 routes are legacy/disabled."
+        )
+    return ACTIVE_BROKERAGE_PROVIDER
 
 
 class _DockerEnvSettingsSource(EnvSettingsSource):
@@ -118,7 +129,7 @@ class Settings(BaseSettings):
         default="https://paper-api.alpaca.markets",
         validation_alias=AliasChoices("ALPACA_BASE_URL", "APCA_API_BASE_URL"),
     )
-    BROKERAGE_PROVIDER: Literal["T212", "ALPACA"] = Field(default="T212", validation_alias="BROKERAGE_PROVIDER")
+    BROKERAGE_PROVIDER: str = Field(default="ALPACA", validation_alias="BROKERAGE_PROVIDER")
 
     REDIS_HOST: str = Field(default="localhost", validation_alias="REDIS_HOST")
     REDIS_PORT: int = Field(default=6379, validation_alias="REDIS_PORT")
@@ -133,6 +144,7 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = Field(default="trading_bot", validation_alias="POSTGRES_DB")
 
     DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
+    LOG_LEVEL: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")
 
     DB_PATH: str = Field(default="data/trading_bot.db", validation_alias="DB_PATH")
@@ -142,8 +154,9 @@ class Settings(BaseSettings):
     PAPER_TRADING: bool = True
     PAPER_TRADING_STARTING_CASH: float = Field(default=10000.0, validation_alias="PAPER_TRADING_STARTING_CASH")
     T212_BUDGET_USD: float = Field(default=0.0, validation_alias="T212_BUDGET_USD")
+    ALPACA_BUDGET_USD: float = Field(default=0.0, validation_alias="ALPACA_BUDGET_USD")
     WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
-    MAX_ALLOCATION_PERCENTAGE: float = 10.0
+    MAX_ALLOCATION_PERCENTAGE: float = 15.0
     MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
     SCOUT_INTERVAL_HOURS: int = Field(default=12, validation_alias="SCOUT_INTERVAL_HOURS")
     SGOV_SWEEP_TICKER: str = "SGOV"
@@ -152,6 +165,10 @@ class Settings(BaseSettings):
     ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM: bool = Field(
         default=False,
         validation_alias="ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM",
+    )
+    IGNORE_UNMANAGED_POSITIONS: bool = Field(
+        default=True,
+        validation_alias="IGNORE_UNMANAGED_POSITIONS",
     )
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     DASHBOARD_ALLOWED_ORIGINS: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGINS")
@@ -171,7 +188,10 @@ class Settings(BaseSettings):
     DEFAULT_WIN_LOSS_RATIO: float = 1.0
 
     MAX_FRICTION_PCT: float = 0.015
-    T212_FLAT_SPREAD_USD: float = Field(default=0.5, validation_alias="T212_FLAT_SPREAD_USD")
+    FLAT_ORDER_FRICTION_USD: float = Field(
+        default=0.5,
+        validation_alias=AliasChoices("FLAT_ORDER_FRICTION_USD", "T212_FLAT_SPREAD_USD"),
+    )
     MICRO_TRADE_THRESHOLD_USD: float = Field(default=5.0, validation_alias="MICRO_TRADE_THRESHOLD_USD")
     # WEB3 / DEX trades carry percentage-based gas + slippage instead of a
     # fixed equity spread, so they need a wider friction tolerance.
@@ -237,13 +257,18 @@ class Settings(BaseSettings):
         validation_alias="CRYPTO_TOKEN_MAPPING",
     )
 
+    TARGET_CASH_PER_LEG: float = Field(default=0.0, validation_alias="TARGET_CASH_PER_LEG")
+
     KALMAN_DELTA: float = 1e-5
     KALMAN_R: float = 0.001
     MONITOR_ENTRY_ZSCORE: float = Field(default=2.0, validation_alias="MONITOR_ENTRY_ZSCORE")
     MONITOR_MIN_AI_CONFIDENCE: float = Field(default=0.5, validation_alias="MONITOR_MIN_AI_CONFIDENCE")
-    ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
-    MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
-    MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=8.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
+    ELITE_ROTATION_SORTINO_THRESHOLD: float = Field(
+        default=2.0,
+        validation_alias="ELITE_ROTATION_SORTINO_THRESHOLD",
+    )
+    ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=60.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
+    MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=45.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
     MARKET_DATA_BATCH_SIZE: int = Field(default=30, validation_alias="MARKET_DATA_BATCH_SIZE")
     MARKET_DATA_BATCH_CONCURRENCY: int = Field(default=3, validation_alias="MARKET_DATA_BATCH_CONCURRENCY")
     SPREAD_GUARD_MAX_PCT: float = Field(default=0.003, validation_alias="SPREAD_GUARD_MAX_PCT")
@@ -273,7 +298,8 @@ class Settings(BaseSettings):
     ORCH_ACCURACY_HIGH_MULTIPLIER: float = Field(default=1.1, validation_alias="ORCH_ACCURACY_HIGH_MULTIPLIER")
     GLOBAL_STRATEGY_ACCURACY_DEFAULT: float = Field(default=0.5, validation_alias="GLOBAL_STRATEGY_ACCURACY_DEFAULT")
 
-    WHALE_WATCHER_ENABLED: bool = Field(default=True, validation_alias="WHALE_WATCHER_ENABLED")
+    # The active whale-flow evaluator is legacy/disabled; keep the knobs for a future restored service.
+    WHALE_WATCHER_ENABLED: bool = Field(default=False, validation_alias="WHALE_WATCHER_ENABLED")
     WHALE_WATCHER_ROLLING_WINDOW_SECONDS: int = Field(default=1800, validation_alias="WHALE_WATCHER_ROLLING_WINDOW_SECONDS")
     WHALE_WATCHER_CACHE_TTL_SECONDS: int = Field(default=3600, validation_alias="WHALE_WATCHER_CACHE_TTL_SECONDS")
     WHALE_WATCHER_MAX_EVENTS_PER_SYMBOL: int = Field(default=250, validation_alias="WHALE_WATCHER_MAX_EVENTS_PER_SYMBOL")
@@ -545,7 +571,7 @@ class Settings(BaseSettings):
         {'ticker_a': 'COF',     'ticker_b': 'SYF'},
         {'ticker_a': 'GS',      'ticker_b': 'MS'},
         {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'},
-        
+
         # --- YOUR ORIGINAL HIGH-VOL PAIRS ---
         {'ticker_a': 'NVDA',    'ticker_b': 'AMD'},
         {'ticker_a': 'TSLA',    'ticker_b': 'RIVN'},
@@ -564,17 +590,17 @@ class Settings(BaseSettings):
         {"ticker_a": "BMW.DE", "ticker_b": "MBG.DE"},        # BMW vs Mercedes-Benz
         {"ticker_a": "VOW3.DE", "ticker_b": "PAH3.DE"},      # VW vs Porsche SE
         {"ticker_a": "CON.DE", "ticker_b": "PUM.DE"},        # Continental vs Puma (Consumer/Industrial)
-        
+
         # European Banking (High Beta)
         {"ticker_a": "DBK.DE", "ticker_b": "CBK.DE"},        # Deutsche Bank vs Commerzbank
         {"ticker_a": "BNP.PA", "ticker_b": "GLE.PA"},        # BNP Paribas vs Societe Generale
         {"ticker_a": "ACA.PA", "ticker_b": "BNP.PA"},        # Credit Agricole vs BNP Paribas
-        
+
         # French Luxury (The "Gold Standard" for Pairs)
         {"ticker_a": "MC.PA", "ticker_b": "RMS.PA"},         # LVMH vs Hermes
         {"ticker_a": "MC.PA", "ticker_b": "KER.PA"},         # LVMH vs Kering (Gucci)
         {"ticker_a": "OR.PA", "ticker_b": "EL.PA"},          # L'Oreal vs EssilorLuxottica
-        
+
         # Energy & Utilities
         {"ticker_a": "RWE.DE", "ticker_b": "EOAN.DE"},       # RWE vs E.ON
         {"ticker_a": "ENGI.PA", "ticker_b": "ORA.PA"},       # Engie vs Orange
@@ -583,12 +609,12 @@ class Settings(BaseSettings):
         {"ticker_a": "SHEL.L", "ticker_b": "BP.L"},          # Shell vs BP
         {"ticker_a": "RIO.L", "ticker_b": "BHP.L"},          # Rio Tinto vs BHP
         {"ticker_a": "AAL.L", "ticker_b": "GLEN.L"},         # Anglo American vs Glencore
-        
+
         # Banking & Insurance
         {"ticker_a": "LLOY.L", "ticker_b": "BARC.L"},        # Lloyds vs Barclays
         {"ticker_a": "HSBA.L", "ticker_b": "STAN.L"},        # HSBC vs Standard Chartered
         {"ticker_a": "AV.L", "ticker_b": "LGEN.L"},          # Aviva vs Legal & General
-        
+
         # Consumer & Retail
         {"ticker_a": "TSCO.L", "ticker_b": "SBRY.L"},        # Tesco vs Sainsbury’s
         {"ticker_a": "ULVR.L", "ticker_b": "RKT.L"},         # Unilever vs Reckitt
@@ -690,57 +716,26 @@ class Settings(BaseSettings):
         {'ticker_a': 'SPOT',    'ticker_b': 'WMG'}
     ]
 
-    # Crypto pairs traded 24/7 — including weekends and outside US equity
-    # hours. The monitor loads these alongside ARBITRAGE_PAIRS in production
-    # mode; process_pair's `is_crypto` guard makes sure equity pairs pause
-    # off-hours while crypto pairs keep scanning.
+    # Crypto pairs traded 24/7 — 100% compatible with Alpaca Paper/Free tier.
     CRYPTO_TEST_PAIRS: list = [
         {'ticker_a': 'BTC-USD',   'ticker_b': 'ETH-USD'},
-        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
         # --- Layer 1 / smart-contract platforms ---
-        # {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
-        # {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
-        # {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
-        # {'ticker_a': 'BNB-USD',   'ticker_b': 'ETH-USD'},
-        # {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
-        # {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'NEAR-USD',  'ticker_b': 'SOL-USD'},
-        # {'ticker_a': 'ATOM-USD',  'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'AVAX-USD',  'ticker_b': 'ATOM-USD'},
-        # {'ticker_a': 'ADA-USD',   'ticker_b': 'ALGO-USD'},
-        # {'ticker_a': 'ETH-USD',   'ticker_b': 'ATOM-USD'},
-        # # --- Stores of value / Bitcoin forks ---
-        # {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
-        # {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
-        # {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
-        # {'ticker_a': 'ETC-USD',   'ticker_b': 'LTC-USD'},
-        # # --- Payments / XRP-style ---
-        # {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
-        # {'ticker_a': 'XRP-USD',   'ticker_b': 'HBAR-USD'},  # Competing payment networks
-        # {'ticker_a': 'TRX-USD',   'ticker_b': 'EOS-USD'},
-        # # --- DeFi (UNI-USD removed — delisted on Yahoo Finance) ---
-        # {'ticker_a': 'AAVE-USD',  'ticker_b': 'LINK-USD'},  # replaces UNI/LINK
-        # {'ticker_a': 'AAVE-USD',  'ticker_b': 'CRV-USD'},   # replaces UNI/AAVE
-        # {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
-        # {'ticker_a': 'INJ-USD',   'ticker_b': 'ATOM-USD'},  # Cosmos DeFi
-        # # --- Storage / utility ---
-        # {'ticker_a': 'FIL-USD',   'ticker_b': 'ATOM-USD'},
-        # # --- Cosmos ecosystem ---
-        # {'ticker_a': 'TIA-USD',   'ticker_b': 'ATOM-USD'},  # Celestia modular L1
-        # # --- Infrastructure / enterprise ---
-        # {'ticker_a': 'HBAR-USD',  'ticker_b': 'ALGO-USD'},  # Enterprise DLT pair
-        # # --- Memes (high vol, mean-reverting spreads) ---
-        # {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
-        # {'ticker_a': 'WIF-USD',   'ticker_b': 'BONK-USD'},  # Solana memes
-        # # --- Newer L1s ---
-        # {'ticker_a': 'ALGO-USD',  'ticker_b': 'NEAR-USD'},
-        # # P-09 (2026-04-26): Removed pairs containing tickers that yfinance
-        # # consistently reports as delisted (no spot data available):
-        # #   SUI-USD, APT-USD (paired with SUI), ARB-USD, OP-USD, POL-USD,
-        # #   STX-USD, GRT-USD, RNDR-USD, FET-USD (paired with RNDR),
-        # #   JUP-USD, PEPE-USD.
-        # # Re-add them once Yahoo Finance restores their feeds.
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'BTC-USD'},
+        {'ticker_a': 'SOL-USD',   'ticker_b': 'AVAX-USD'},
+        {'ticker_a': 'ETH-USD',   'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'DOT-USD'},
+        {'ticker_a': 'ADA-USD',   'ticker_b': 'SOL-USD'},
+        {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
+        # --- Stores of value / Bitcoin forks ---
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
+        {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
+        {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
+        # --- Payments ---
+        {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
+        # --- DeFi ---
+        {'ticker_a': 'LINK-USD',  'ticker_b': 'DOT-USD'},
+        # --- Memes ---
+        {'ticker_a': 'DOGE-USD',  'ticker_b': 'SHIB-USD'},
     ]
 
     DEV_EXECUTION_TICKERS: dict = {
@@ -761,11 +756,7 @@ class Settings(BaseSettings):
 
     @property
     def web3_enabled(self) -> bool:
-        return bool(
-            self.WEB3_RPC_URL.strip()
-            and self.WEB3_PRIVATE_KEY.strip()
-            and self.WEB3_ROUTER_ADDRESS.strip()
-        )
+        return False
 
     @property
     def dashboard_allowed_origins(self) -> list[str]:
@@ -799,11 +790,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_secrets(self):
+        self.BROKERAGE_PROVIDER = _validate_supported_brokerage_provider(self.BROKERAGE_PROVIDER)
         if not self.POSTGRES_PASSWORD or self.POSTGRES_PASSWORD == "bot_pass":
             raise ValueError("POSTGRES_PASSWORD must be set to a non-default secret")
         dashboard_token = self.DASHBOARD_TOKEN.strip().strip('"').strip("'")
         if not dashboard_token or dashboard_token == "arbi-elite-2026":
             raise ValueError("DASHBOARD_TOKEN must be set to a non-default secret")
+        if not self.PAPER_TRADING and not self.LIVE_CAPITAL_DANGER:
+            raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
         return self
@@ -823,3 +817,23 @@ if _settings_override:
     for _key, _value in _settings_override.items():
         if hasattr(settings, _key):
             setattr(settings, _key, _value)
+    try:
+        settings.validate_secrets()
+    except ValueError as exc:
+        raise ValueError(f"Invalid bot settings override: {exc}") from exc
+
+settings.BROKERAGE_PROVIDER = _validate_supported_brokerage_provider(settings.BROKERAGE_PROVIDER)
+
+
+def validate_runtime_settings_update(updates: dict[str, Any]) -> None:
+    """Validate dashboard/runtime settings updates against the full Settings guardrail set."""
+    originals = {}
+    for key, value in updates.items():
+        if hasattr(settings, key):
+            originals[key] = getattr(settings, key)
+            setattr(settings, key, value)
+    try:
+        settings.validate_secrets()
+    finally:
+        for key, value in originals.items():
+            setattr(settings, key, value)

@@ -4,12 +4,18 @@ import sys
 import unittest
 from typing import Dict
 
+import pytest
+
 # Add src to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from src.agents.fundamental_analyst import fundamental_analyst
 from src.services.sec_service import sec_service
 from src.config import settings
+
+
+pytestmark = pytest.mark.benchmark
+
 
 class ValueTrapBenchmark(unittest.IsolatedAsyncioTestCase):
     """
@@ -18,6 +24,9 @@ class ValueTrapBenchmark(unittest.IsolatedAsyncioTestCase):
     """
 
     async def asyncSetUp(self):
+        if os.getenv("RUN_LIVE_BENCHMARKS") != "1":
+            self.skipTest("Set RUN_LIVE_BENCHMARKS=1 to run live SEC/Gemini benchmarks.")
+
         # Ensure we have a valid API key for Gemini and the model is initialized
         if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "mock" or not fundamental_analyst.model:
             self.skipTest("GEMINI_API_KEY not set, is mock, or model not initialized. Cannot run benchmark.")

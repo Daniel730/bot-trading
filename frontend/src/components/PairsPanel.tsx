@@ -23,11 +23,14 @@ import {
   discoverPairs,
   type PairInfo,
   type PairConfigEntry,
+  type PairsResponse,
 } from '../services/api';
+import { useAutoDismiss } from '../hooks/useAutoDismiss';
 
 interface PairsPanelProps {
   token: string;
   sessionToken: string;
+  paperTrading?: boolean;
 }
 
 type EditorTab = 'stocks' | 'crypto';
@@ -53,12 +56,27 @@ const formatRelative = (iso: string | null | undefined): string => {
 };
 
 const isCryptoTicker = (t: string) => /-USD$/i.test(t);
+type PairDiscoveryStatus = NonNullable<PairsResponse['discovery']>;
+const PAPER_WALLET_BUY_DISABLED_MESSAGE =
+  'Broker buys are disabled while PAPER_TRADING=true. Shadow paper mode does not submit Alpaca orders.';
 
 // ─── PairRow ─────────────────────────────────────────────────────────────────
 
 interface PairRowProps {
   p: PairInfo;
 }
+
+const pairStatusLabel = (isCointegrated: boolean | null) => {
+  if (isCointegrated === true) return 'COINT';
+  if (isCointegrated === false) return 'BROKEN';
+  return 'PENDING';
+};
+
+const pairStatusBadgeClass = (isCointegrated: boolean | null) => {
+  if (isCointegrated === true) return 'badge-green';
+  if (isCointegrated === false) return 'badge-red';
+  return 'badge-blue';
+};
 
 const PairRow: React.FC<PairRowProps> = ({ p }) => {
   const [expanded, setExpanded] = useState(false);
@@ -96,12 +114,8 @@ const PairRow: React.FC<PairRowProps> = ({ p }) => {
         </span>
 
         <div className="pair-col-badge">
-          <span
-            className={`badge ${
-              p.is_cointegrated ? 'badge-green' : 'badge-red'
-            }`}
-          >
-            {p.is_cointegrated ? 'COINT' : 'BROKEN'}
+          <span className={`badge ${pairStatusBadgeClass(p.is_cointegrated)}`}>
+            {pairStatusLabel(p.is_cointegrated)}
           </span>
         </div>
 
@@ -154,7 +168,7 @@ const PairRow: React.FC<PairRowProps> = ({ p }) => {
 
 // ─── PairsPanel ───────────────────────────────────────────────────────────────
 
-const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
+const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTrading = false }) => {
   const [activePairs, setActivePairs] = useState<PairInfo[]>([]);
   const [configuredStocks, setConfiguredStocks] = useState<PairConfigEntry[]>([]);
   const [configuredCrypto, setConfiguredCrypto] = useState<PairConfigEntry[]>([]);
@@ -176,6 +190,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const [walletSyncing, setWalletSyncing] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [walletOk, setWalletOk] = useState<string | null>(null);
+  const [discoveryStatus, setDiscoveryStatus] = useState<PairDiscoveryStatus | null>(null);
+
+  useAutoDismiss(saveOk, setSaveOk);
+  useAutoDismiss(saveError, setSaveError, 10000);
+  useAutoDismiss(walletOk, setWalletOk);
+  useAutoDismiss(walletError, setWalletError, 10000);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -184,6 +204,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       setActivePairs(data.active_pairs || []);
       setConfiguredStocks(data.configured_pairs || []);
       setConfiguredCrypto(data.crypto_test_pairs || []);
+      setDiscoveryStatus(data.discovery || null);
     } catch (err) {
       console.error('Failed to fetch pairs:', err);
     } finally {
@@ -202,7 +223,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
     if (filter === 'crypto') list = list.filter((p) => p.is_crypto);
     else if (filter === 'stocks') list = list.filter((p) => !p.is_crypto);
     else if (filter === 'coint') list = list.filter((p) => p.is_cointegrated === true);
-    else if (filter === 'broken') list = list.filter((p) => p.is_cointegrated !== true);
+    else if (filter === 'broken') list = list.filter((p) => p.is_cointegrated === false);
     // Sort: cointegrated pairs first, then by |z-score| descending so the
     // most actionable signals bubble to the top. Pairs without a z-score
     // (Kalman still warming up) sort to the bottom of their group.
@@ -234,23 +255,45 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
   const stockCount = activePairs.filter((p) => !p.is_crypto).length;
   const cryptoCount = activePairs.filter((p) => p.is_crypto).length;
   const cointCount = activePairs.filter((p) => p.is_cointegrated === true).length;
-  const brokenCount = activePairs.filter((p) => p.is_cointegrated !== true).length;
+  const brokenCount = activePairs.filter((p) => p.is_cointegrated === false).length;
   const allEquityTickers = useMemo(() => {
     const tickers: string[] = [];
-    for (const pair of activePairs.filter(p => !p.is_crypto)) {
-      if (!tickers.includes(pair.ticker_a)) tickers.push(pair.ticker_a);
-      if (!tickers.includes(pair.ticker_b)) tickers.push(pair.ticker_b);
+    for (const pair of activePairs) {
+      if (pair.is_crypto) continue;
+      for (const ticker of [pair.ticker_a, pair.ticker_b]) {
+        if (isCryptoTicker(ticker) || tickers.includes(ticker)) continue;
+        tickers.push(ticker);
+      }
     }
     return tickers;
   }, [activePairs]);
 
   const [discovering, setDiscovering] = useState(false);
 
+  const discoveryMessage = useMemo(() => {
+    if (discovering || discoveryStatus?.active) {
+      return 'Pair discovery is running. This panel will update when it finishes.';
+    }
+    if (discoveryStatus?.last_status === 'completed') {
+      return `Pair discovery completed ${formatRelative(discoveryStatus.last_finished_at)}.`;
+    }
+    if (discoveryStatus?.last_status === 'failed') {
+      return `Pair discovery failed ${formatRelative(discoveryStatus.last_finished_at)}: ${discoveryStatus.last_message || 'unknown error'}`;
+    }
+    if (discoveryStatus?.last_status === 'cancelled') {
+      return `Pair discovery was cancelled ${formatRelative(discoveryStatus.last_finished_at)}.`;
+    }
+    return null;
+  }, [discovering, discoveryStatus]);
+
   const handleDiscover = async () => {
     setDiscovering(true);
+    setSaveError(null);
+    setSaveOk(null);
     try {
-      await discoverPairs(token, sessionToken);
-      setSaveOk('Global discovery cycle started in background. Check terminal for updates.');
+      const result = await discoverPairs(token, sessionToken);
+      setSaveOk(result.message || 'Pair discovery started. Completion will appear here and in the terminal feed.');
+      await refresh();
     } catch (err: any) {
       setSaveError(err.message || 'Failed to start discovery.');
     } finally {
@@ -323,6 +366,11 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
       return;
     }
 
+    if (paperTrading) {
+      setWalletError(PAPER_WALLET_BUY_DISABLED_MESSAGE);
+      return;
+    }
+
     const confirmed = window.confirm(
       `Place broker BUY orders for missing stock tickers with a ${budget.toFixed(2)} budget?`,
     );
@@ -346,6 +394,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
 
   const placeholderA = editorTab === 'crypto' ? 'BTC-USD' : 'KO';
   const placeholderB = editorTab === 'crypto' ? 'ETH-USD' : 'PEP';
+  const walletSyncDisabled = walletSyncing || allEquityTickers.length === 0 || paperTrading;
 
   return (
     <>
@@ -413,7 +462,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
               <Wallet size={16} />
               <div>
                 <strong>Broker Wallet</strong>
-                <span>{activePairs.filter(p => !p.is_crypto).length} pairs / {allEquityTickers.length} tickers</span>
+                <span>{activePairs.length} pairs / {allEquityTickers.length} tickers</span>
               </div>
             </div>
             <div className="wallet-sync-controls">
@@ -429,9 +478,9 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
               </label>
               <button
                 className="wallet-sync-btn"
-                disabled={walletSyncing || allEquityTickers.length === 0}
+                disabled={walletSyncDisabled}
                 onClick={handleWalletSync}
-                title="Buy missing broker tickers"
+                title={paperTrading ? PAPER_WALLET_BUY_DISABLED_MESSAGE : 'Buy missing broker tickers'}
               >
                 <ShoppingCart size={13} />
                 {walletSyncing ? 'Buying...' : 'Buy All'}
@@ -447,6 +496,11 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
           {walletOk && (
             <div className="editor-msg ok">
               <CheckCircle2 size={12} /> {walletOk}
+            </div>
+          )}
+          {paperTrading && (
+            <div className="editor-msg error">
+              <AlertTriangle size={12} /> {PAPER_WALLET_BUY_DISABLED_MESSAGE}
             </div>
           )}
 
@@ -616,16 +670,26 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken }) => {
                     <CheckCircle2 size={12} /> {saveOk}
                   </div>
                 )}
+                {discoveryMessage && (
+                  <div className={`editor-msg ${discoveryStatus?.last_status === 'failed' ? 'error' : 'ok'}`}>
+                    {discoveryStatus?.last_status === 'failed' ? (
+                      <AlertTriangle size={12} />
+                    ) : (
+                      <CheckCircle2 size={12} />
+                    )}
+                    {discoveryMessage}
+                  </div>
+                )}
                 <div className="editor-footer">
                   <button
                     className="editor-discover-btn"
                     onClick={handleDiscover}
-                    disabled={discovering}
+                    disabled={discovering || Boolean(discoveryStatus?.active)}
                     title="Search for new cointegrated pairs in background"
                     style={{ marginRight: 'auto' }}
                   >
-                    <RefreshCw size={12} className={discovering ? 'spin' : ''} />
-                    {discovering ? 'Scouting...' : 'Search & Update Eligibles'}
+                    <RefreshCw size={12} className={discovering || discoveryStatus?.active ? 'spin' : ''} />
+                    {discovering || discoveryStatus?.active ? 'Scanning...' : 'Search & Update Eligibles'}
                   </button>
                   <label className="editor-apply-label">
                     <input

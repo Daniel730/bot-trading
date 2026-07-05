@@ -14,8 +14,8 @@ const runtimeLocation = (url: string) => {
 describe('getRuntimeApiBase', () => {
   it('uses configured API URLs first', () => {
     expect(
-      getRuntimeApiBase('http://100.78.70.91:8080', runtimeLocation('http://100.78.70.91:3000/')),
-    ).toBe('http://100.78.70.91:8080');
+      getRuntimeApiBase('http://localhost:8080', runtimeLocation('http://localhost:3000/')),
+    ).toBe('http://localhost:8080');
   });
 
   it('points localhost development at the backend port', () => {
@@ -23,8 +23,8 @@ describe('getRuntimeApiBase', () => {
   });
 
   it('keeps remote nginx deployments on the same origin', () => {
-    expect(getRuntimeApiBase(undefined, runtimeLocation('http://100.78.70.91:3000/'))).toBe(
-      'http://100.78.70.91:3000',
+    expect(getRuntimeApiBase(undefined, runtimeLocation('http://203.0.113.50:3000/'))).toBe(
+      'http://203.0.113.50:3000',
     );
   });
 });

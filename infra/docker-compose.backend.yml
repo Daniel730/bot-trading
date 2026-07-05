@@ -40,7 +40,11 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
-    restart: always
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    restart: "no"
     depends_on:
       redis:
         condition: service_healthy
@@ -62,7 +66,9 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
-    restart: always
+    environment:
+      REDIS_HOST: redis
+    restart: "no"
     depends_on:
       redis:
         condition: service_healthy
@@ -83,7 +89,13 @@ services:
       - "50051:50051"
     env_file:
       - ${APP_ENV_FILE:-../.env}
-    restart: always
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      DRY_RUN: "true"
+      LIVE_CAPITAL_DANGER: "false"
+    restart: "no"
     # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
     # dependent services (bot, mcp-server) start sending gRPC calls.
     healthcheck:
@@ -101,7 +113,11 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
-    restart: always
+    environment:
+      REDIS_HOST: redis
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+    restart: "no"
     depends_on:
       redis:
         condition: service_healthy

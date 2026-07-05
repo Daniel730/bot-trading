@@ -1,10 +1,19 @@
 import asyncio
 import re
+import warnings
 from typing import Optional, Dict
-from edgar import set_identity, Company
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.models.persistence import PersistenceManager
 from src.config import settings
+
+with warnings.catch_warnings():
+    warnings.filterwarnings(
+        "ignore",
+        message=r"edgar\.files\..* is deprecated and will be removed in v6\.0\..*",
+        category=DeprecationWarning,
+    )
+    from edgar import set_identity, Company
+
 
 class SECRateLimitException(Exception):
     """Custom exception for SEC rate limit (429)."""
@@ -208,8 +217,8 @@ class SECService:
 
     def extract_sections(self, html: str) -> Dict[str, str]:
         text = re.sub(r"<[^>]+>", "\n", html)
-        text = re.sub(r"\s+", " ", text)
-        pattern = re.compile(r"\bITEM\s+(\d+[A-Z]?)\s*[\.:]\s*", re.IGNORECASE)
+        text = re.sub(r"[ \t\r\f\v]+", " ", text)
+        pattern = re.compile(r"^\s*ITEM\s+(\d+[A-Z]?)\s*[\.:]\s*", re.IGNORECASE | re.MULTILINE)
         matches = list(pattern.finditer(text))
         sections: Dict[str, str] = {}
         wanted = {"1A", "3", "7"}
@@ -219,7 +228,7 @@ class SECService:
                 continue
             start = match.end()
             end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
-            sections[f"Item {item}"] = text[start:end].strip()
+            sections[f"Item {item}"] = re.sub(r"\s+", " ", text[start:end]).strip()
         return sections
 
 # Singleton instance
