@@ -57,6 +57,18 @@ async def test_wallet_recommendations_are_alpaca_only(alpaca_wallet_context):
 
 
 @pytest.mark.asyncio
+async def test_wallet_recommendations_paper_mode_returns_paper(alpaca_wallet_context, monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+
+    result = await dashboard_service.calculate_wallet_recommendations(
+        WalletRecommendationRequest(budget=100.0)
+    )
+
+    assert result["mode"] == "PAPER"
+    assert result["recommended_tickers"] == ["AAPL", "MSFT"]
+
+
+@pytest.mark.asyncio
 async def test_wallet_sync_places_weighted_alpaca_buy_orders(alpaca_wallet_context):
     result = await dashboard_service.sync_wallet_for_coint(WalletSyncRequest(budget=100.0))
 

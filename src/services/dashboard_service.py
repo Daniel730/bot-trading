@@ -183,12 +183,18 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket, accept: bool = True) -> bool:
         if len(self.active_connections) >= self.max_connections:
             logger.warning("WebSocket: Max connections reached. Rejecting client.")
-            if accept:
-                await websocket.accept()
-            await websocket.close(code=1008)
+            try:
+                if accept:
+                    await websocket.accept()
+                await websocket.close(code=1008)
+            except Exception:
+                pass
             return False
         if accept:
-            await websocket.accept()
+            try:
+                await websocket.accept()
+            except Exception:
+                return False
         self.active_connections.append(websocket)
         logger.info("New WebSocket client connected. Total: %s", len(self.active_connections))
         return True
@@ -753,15 +759,24 @@ class BotControlRequest(BaseModel):
 app = FastAPI(title="Arbitrage Dashboard", redirect_slashes=True)
 
 
-@app.middleware("http")
-async def dashboard_auth_context(request: Request, call_next):
-    token_marker = _dashboard_auth_token.set(_bearer_token(request.headers.get("authorization")))
-    session_marker = _dashboard_auth_session.set(request.headers.get("x-dashboard-session"))
-    try:
-        return await call_next(request)
-    finally:
-        _dashboard_auth_token.reset(token_marker)
-        _dashboard_auth_session.reset(session_marker)
+class DashboardAuthMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] not in ("http", "websocket"):
+            return await self.app(scope, receive, send)
+
+        request = Request(scope)
+        token_marker = _dashboard_auth_token.set(_bearer_token(request.headers.get("authorization")))
+        session_marker = _dashboard_auth_session.set(request.headers.get("x-dashboard-session"))
+        try:
+            return await self.app(scope, receive, send)
+        finally:
+            _dashboard_auth_token.reset(token_marker)
+            _dashboard_auth_session.reset(session_marker)
+
+app.add_middleware(DashboardAuthMiddleware)
 
 
 app.add_middleware(
@@ -805,6 +820,7 @@ class DashboardService:
             "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True},
             "PAPER_TRADING": {"type": "bool", "sensitive": True},
             "DEV_MODE": {"type": "bool", "sensitive": True},
+            "IGNORE_UNMANAGED_POSITIONS": {"type": "bool", "sensitive": False},
             "OPENAI_API_KEY": {"type": "str", "sensitive": True},
             "GEMINI_API_KEY": {"type": "str", "sensitive": True},
             "POLYGON_API_KEY": {"type": "str", "sensitive": True},
@@ -1067,7 +1083,7 @@ class DashboardService:
         Returns:
             dict: A summary object with the following keys:
                 - status: Operation status, always `"ok"` on success.
-                - mode: The active brokerage provider name used for ticker formatting and cash checks.
+                - mode: Execution mode (`PAPER` when paper trading is enabled, otherwise the brokerage provider name).
                 - message: Human-readable summary of the result.
                 - generated_at: ISO8601 timestamp when recommendations were generated.
                 - include_broken: Echoes the `include_broken` request flag.
@@ -1163,10 +1179,11 @@ class DashboardService:
         else:
             message = f"Calculated {len(recommendations)} recommended {brokerage_service.provider_name} buys."
 
+        execution_mode = _wallet_execution_mode()
         return _scrub_non_finite(
             {
                 "status": "ok",
-                "mode": brokerage_service.provider_name,
+                "mode": execution_mode,
                 "message": message,
                 "generated_at": _utcnow().isoformat(),
                 "include_broken": request.include_broken,
@@ -1477,7 +1494,7 @@ class DashboardService:
         if not target_tickers:
             result = {
                 "status": "ok",
-                "mode": brokerage_service.provider_name,
+                "mode": _wallet_execution_mode(),
                 "message": f"All active {brokerage_service.provider_name} tickers are already owned or pending.",
                 "coint_pairs": coint_pair_count,
                 "candidate_tickers": candidate_tickers,
@@ -2236,37 +2253,54 @@ async def ping():
 
 @app.websocket("/ws/telemetry")
 async def websocket_endpoint(websocket: WebSocket, token: str = Query(None), session: str = Query(None)):
-    if token or session:
-        try:
-            verify_token(token, session)
-        except HTTPException:
-            await websocket.accept()
-            await websocket.close(code=4003)
-            return
-        if not await connection_manager.connect(websocket):
-            return
-    else:
-        await websocket.accept()
-        try:
-            raw_auth = await asyncio.wait_for(websocket.receive_text(), timeout=5)
-            auth_payload = json.loads(raw_auth)
-            if auth_payload.get("type") != "auth":
-                raise ValueError("First WebSocket message must authenticate.")
-            verify_token(auth_payload.get("token"), auth_payload.get("session"))
-        except Exception as exc:
-            logger.warning("WebSocket auth failed: %s", exc)
-            await websocket.close(code=4003)
-            return
-        if not await connection_manager.connect(websocket, accept=False):
-            return
-
     try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        connection_manager.disconnect(websocket)
+        if token or session:
+            try:
+                verify_token(token, session)
+            except HTTPException:
+                try:
+                    await websocket.accept()
+                    await websocket.close(code=4003)
+                except Exception:
+                    pass
+                return
+            if not await connection_manager.connect(websocket):
+                return
+        else:
+            try:
+                await websocket.accept()
+            except Exception:
+                return
+            try:
+                raw_auth = await asyncio.wait_for(websocket.receive_text(), timeout=5)
+                auth_payload = json.loads(raw_auth)
+                if auth_payload.get("type") != "auth":
+                    raise ValueError("First WebSocket message must authenticate.")
+                verify_token(auth_payload.get("token"), auth_payload.get("session"))
+            except Exception as exc:
+                if not isinstance(exc, WebSocketDisconnect):
+                    logger.warning("WebSocket auth failed: %s", exc)
+                try:
+                    await websocket.close(code=4003)
+                except Exception:
+                    pass
+                return
+            if not await connection_manager.connect(websocket, accept=False):
+                return
+
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            pass
+        except Exception as exc:
+            logger.error("WebSocket error: %s", exc)
+    except asyncio.CancelledError:
+        # Expected during service shutdown
+        pass
     except Exception as exc:
-        logger.error("WebSocket error: %s", exc)
+        logger.error("Unhandled WebSocket exception: %s", exc)
+    finally:
         connection_manager.disconnect(websocket)
 
 
