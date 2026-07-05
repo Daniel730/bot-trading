@@ -30,7 +30,8 @@ async def test_startup_blocks_when_broker_has_unmanaged_position(
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
 
-    with patch.object(settings, "PAPER_TRADING", False):
+    with patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", False):
         should_continue = await monitor._fail_fast_on_broker_ledger_mismatch()
 
     assert should_continue is False
@@ -85,7 +86,8 @@ async def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_a
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
 
-    with patch.object(settings, "PAPER_TRADING", False):
+    with patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", False):
         should_continue = await monitor._fail_fast_on_broker_ledger_mismatch()
 
     assert should_continue is False
@@ -101,3 +103,38 @@ async def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_a
         "available_quantity=0.5 current_price=3500.0 market_value=1750.0 "
         "ledger_match=yes signal_ids=managed-eth-signal suggested_action=VERIFY_LEDGER_MATCH"
     ) in message
+
+
+@pytest.mark.asyncio
+@patch("src.monitor.notification_service")
+@patch("src.monitor.persistence_service")
+@patch("src.monitor.dashboard_service")
+async def test_startup_allows_unmanaged_positions_when_ignore_flag_enabled(
+    mock_dashboard,
+    mock_persistence,
+    mock_notify,
+    startup_monitor_factory,
+):
+    monitor = startup_monitor_factory()
+    monitor.brokerage.get_portfolio = AsyncMock(
+        return_value=[
+            {
+                "ticker": "BTCUSD",
+                "quantity": 0.03,
+                "quantityAvailableForTrading": 0.03,
+            }
+        ]
+    )
+    mock_persistence.get_open_signals = AsyncMock(return_value=[])
+    mock_persistence.set_system_state = AsyncMock()
+    mock_notify.send_message = AsyncMock()
+    mock_dashboard.update = AsyncMock()
+
+    with patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", True):
+        should_continue = await monitor._fail_fast_on_broker_ledger_mismatch()
+
+    assert should_continue is True
+    mock_persistence.set_system_state.assert_not_awaited()
+    mock_notify.send_message.assert_not_awaited()
+    mock_dashboard.update.assert_not_awaited()
