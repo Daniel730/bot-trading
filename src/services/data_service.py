@@ -878,6 +878,14 @@ class DataService:
                         bid, ask = quote_bid_ask(quote, ("bp", "bid_price", "bid"), ("ap", "ask_price", "ask"))
                         if bid > 0.0 and ask > 0.0:
                             return bid, ask
+                else:
+                    snapshots = self.alpaca_client.get_snapshots([ticker])
+                    snapshot = snapshots.get(ticker) if isinstance(snapshots, dict) else None
+                    if snapshot is not None:
+                        quote = getattr(snapshot, "latest_quote", None)
+                        bid, ask = quote_bid_ask(quote, ("bp", "bid_price", "bid"), ("ap", "ask_price", "ask"))
+                        if bid > 0.0 and ask > 0.0:
+                            return bid, ask
 
                 return 0.0, 0.0
             return await self._run_sync_backend(

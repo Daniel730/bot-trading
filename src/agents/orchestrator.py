@@ -250,10 +250,11 @@ class Orchestrator:
                 telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
                 unknown_fundamental_tickers.append(ticker_b)
 
-        live_fundamental_guard_active = (
-            not settings.PAPER_TRADING
-            or bool(getattr(settings, "LIVE_CAPITAL_DANGER", False))
-        )
+        # Paper mode must not fail-closed on SEC cache misses — operators validate
+        # execution in shadow mode without the SEC worker. LIVE_CAPITAL_DANGER
+        # still enforces entropy baselines at startup; fundamental vetoes apply
+        # only when real capital is at risk (PAPER_TRADING=false).
+        live_fundamental_guard_active = not settings.PAPER_TRADING
         live_unknown_fundamental_state = (
             not crypto_pair
             and

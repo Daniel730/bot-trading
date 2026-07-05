@@ -36,11 +36,19 @@ class ArbitrageService:
         ).hexdigest()
 
     @agent_trace("ArbitrageService.get_or_create_filter")
-    async def get_or_create_filter(self, pair_id: str, delta: float = 1e-5, r: float = 0.01,
-                             initial_state: list = None, initial_covariance: list = None,
-                             prewarm_data: Optional[pd.DataFrame] = None,
-                             state_fingerprint: Optional[str] = None) -> KalmanFilter:
+    async def get_or_create_filter(
+        self,
+        pair_id: str,
+        delta: Optional[float] = None,
+        r: Optional[float] = None,
+        initial_state: list = None,
+        initial_covariance: list = None,
+        prewarm_data: Optional[pd.DataFrame] = None,
+        state_fingerprint: Optional[str] = None,
+    ) -> KalmanFilter:
         """Retrieves or initializes a Kalman filter for a specific pair, reloading from Redis if possible."""
+        delta = settings.KALMAN_DELTA if delta is None else delta
+        r = settings.KALMAN_R if r is None else r
         state_fingerprint = state_fingerprint or self.build_state_fingerprint(pair_id, prewarm_data)
         if pair_id in self.filters:
             cached_fingerprint = self.filter_fingerprints.get(pair_id)

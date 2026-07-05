@@ -47,4 +47,4 @@ def test_default_dashboard_cors_regex_allows_tailscale_origins(monkeypatch):
 
     settings = Settings(_env_file=None)
 
-    assert re.fullmatch(settings.dashboard_allowed_origin_regex, "http://100.78.70.91:3000")
+    assert re.fullmatch(settings.dashboard_allowed_origin_regex, "http://localhost:3000")

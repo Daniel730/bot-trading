@@ -9,7 +9,13 @@ Covers:
 """
 
 import pytest
-from src.monitor_helpers import compute_entry_zscore, is_crypto_pair, resolve_pair_sector
+from src.monitor_helpers import (
+    compute_entry_zscore,
+    is_crypto_pair,
+    resolve_hedge_ratio,
+    resolve_kalman_pair_id,
+    resolve_pair_sector,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +198,33 @@ class TestComputeEntryZscore:
             scaling_cap=1.0,
         )
         assert result == pytest.approx(2.5)
+
+
+# ---------------------------------------------------------------------------
+# resolve_kalman_pair_id / resolve_hedge_ratio
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_kalman_pair_id_prefers_active_ordering():
+    known = {"MSFT_AAPL", "KO_PEP"}
+    assert resolve_kalman_pair_id("AAPL", "MSFT", known_ids=known) == "MSFT_AAPL"
+    assert resolve_kalman_pair_id("KO", "PEP", known_ids=known) == "KO_PEP"
+
+
+def test_resolve_kalman_pair_id_falls_back_to_primary():
+    assert resolve_kalman_pair_id("AAPL", "MSFT", known_ids={"KO_PEP"}) == "AAPL_MSFT"
+
+
+class TestResolveHedgeRatio:
+    def test_prefers_kalman_beta_over_static_hedge(self):
+        pair = {"hedge_ratio": 1.0, "dynamic_beta": 1.2}
+        assert resolve_hedge_ratio(pair, kalman_beta=1.85) == pytest.approx(1.85)
+
+    def test_falls_back_to_dynamic_beta_then_static(self):
+        pair = {"hedge_ratio": 1.1, "dynamic_beta": 1.4}
+        assert resolve_hedge_ratio(pair) == pytest.approx(1.4)
+        assert resolve_hedge_ratio({"hedge_ratio": 1.1}) == pytest.approx(1.1)
+
+    def test_invalid_values_fall_back_to_one(self):
+        assert resolve_hedge_ratio({}) == 1.0
+        assert resolve_hedge_ratio({"hedge_ratio": 0.0, "dynamic_beta": -1.0}) == 1.0

@@ -34,7 +34,13 @@ from src.services.trade_math import build_pair_legs, cap_pair_notional, estimate
 import uuid
 import pytz
 import inspect
-from src.monitor_helpers import is_crypto_pair, resolve_pair_sector, compute_entry_zscore
+from src.monitor_helpers import (
+    is_crypto_pair,
+    resolve_pair_sector,
+    resolve_kalman_pair_id,
+    resolve_hedge_ratio,
+    compute_entry_zscore,
+)
 from src.monitor_scan_helpers import (
     build_candidate_pairs,
     build_scan_pairs,
@@ -1233,7 +1239,11 @@ class ArbitrageMonitor:
                     self._crypto_snapshot_pair_prices.pop(pair["id"], None)
 
             # Feature 007: Kalman Filter Update
-            kf = await arbitrage_service.get_or_create_filter(pair['id'])
+            kf = await arbitrage_service.get_or_create_filter(
+                pair["id"],
+                delta=settings.KALMAN_DELTA,
+                r=settings.KALMAN_R,
+            )
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
                 return skip("kalman_unavailable")
@@ -1399,7 +1409,9 @@ class ArbitrageMonitor:
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
                 final_confidence = float(decision_state["final_confidence"])
-                hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+                hedge_ratio = resolve_hedge_ratio(pair, kalman_beta=float(state_vec[1]))
+                pair["hedge_ratio"] = hedge_ratio
+                pair["dynamic_beta"] = hedge_ratio
                 final_verdict = str(decision_state.get("final_verdict") or "")
                 orchestrator_vetoed = "VETO" in final_verdict.upper()
 
@@ -1776,7 +1788,10 @@ class ArbitrageMonitor:
             logger.info("Sized pair notional is below MIN_TRADE_VALUE. Skipping trade.")
             return execution_result(False, "below_min_trade_value")
 
-        hedge_ratio = float(pair.get("hedge_ratio", 1.0))
+        pair_id = pair.get("id") or f"{t_a}_{t_b}"
+        kalman_filter = arbitrage_service.filters.get(pair_id)
+        kalman_beta = float(kalman_filter.state[1]) if kalman_filter is not None else None
+        hedge_ratio = resolve_hedge_ratio(pair, kalman_beta=kalman_beta)
         legs = build_pair_legs(
             price_a=price_a,
             price_b=price_b,
@@ -2595,6 +2610,14 @@ class ArbitrageMonitor:
         if not unmanaged_symbols:
             return True
 
+        if getattr(settings, 'IGNORE_UNMANAGED_POSITIONS', True):
+            msg = (
+                f"Broker has unmanaged position(s): {', '.join(sorted(unmanaged_symbols))}. "
+                "Ignoring due to IGNORE_UNMANAGED_POSITIONS=True."
+            )
+            logger.warning(msg)
+            return True
+
         await persistence_service.set_system_state(
             "operational_status",
             "PAUSED_REQUIRES_MANUAL_REVIEW",
@@ -2930,12 +2953,21 @@ class ArbitrageMonitor:
             return
 
         # 2. Statistical Stop Loss / Take profit
-        pair_id = f"{t_a}_{t_b}"
-        kf = await arbitrage_service.get_or_create_filter(pair_id)
-        if not kf: return
+        known_pair_ids = set(arbitrage_service.filters.keys()) | {
+            p["id"] for p in self.active_pairs
+        }
+        pair_id = resolve_kalman_pair_id(t_a, t_b, known_ids=known_pair_ids)
+        kf = await arbitrage_service.get_or_create_filter(
+            pair_id,
+            delta=settings.KALMAN_DELTA,
+            r=settings.KALMAN_R,
+        )
+        if not kf:
+            return
 
-        # Calculate current dynamic z-score based on latest price
-        spread, z_score = kf.calculate_spread_and_zscore(p_a, p_b)
+        # Prior-state z-score for the latest prices (do not absorb the tick here;
+        # process_pair performs the single Kalman update during the scan pass).
+        _spread, z_score = kf.calculate_spread_and_zscore(p_a, p_b)
 
         # Statistical Take Profit (Mean Reversion complete)
         if abs(z_score) <= settings.TAKE_PROFIT_ZSCORE:

@@ -16,6 +16,40 @@ def resolve_pair_sector(
     return pair_sectors.get(pair_id, pair_sectors.get(f"{ticker_b}_{ticker_a}", "Unassigned"))
 
 
+def resolve_hedge_ratio(
+    pair: Mapping[str, object],
+    *,
+    kalman_beta: float | None = None,
+) -> float:
+    """Prefer live Kalman beta; fall back to pair's stored hedge ratio."""
+    for candidate in (kalman_beta, pair.get("dynamic_beta"), pair.get("hedge_ratio")):
+        try:
+            value = float(candidate)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return 1.0
+
+
+def resolve_kalman_pair_id(
+    ticker_a: str,
+    ticker_b: str,
+    *,
+    known_ids: set[str] | frozenset[str] | None = None,
+) -> str:
+    """Return the canonical Kalman/Redis pair id for two tickers."""
+    primary = f"{ticker_a}_{ticker_b}"
+    if not known_ids:
+        return primary
+    if primary in known_ids:
+        return primary
+    alternate = f"{ticker_b}_{ticker_a}"
+    if alternate in known_ids:
+        return alternate
+    return primary
+
+
 def compute_entry_zscore(
     base_entry_zscore: float,
     *,

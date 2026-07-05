@@ -166,6 +166,10 @@ class Settings(BaseSettings):
         default=False,
         validation_alias="ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM",
     )
+    IGNORE_UNMANAGED_POSITIONS: bool = Field(
+        default=True,
+        validation_alias="IGNORE_UNMANAGED_POSITIONS",
+    )
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     DASHBOARD_ALLOWED_ORIGINS: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGINS")
     DASHBOARD_ALLOWED_ORIGIN_REGEX: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGIN_REGEX")
