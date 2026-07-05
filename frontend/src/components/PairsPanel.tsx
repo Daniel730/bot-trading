@@ -66,6 +66,18 @@ interface PairRowProps {
   p: PairInfo;
 }
 
+const pairStatusLabel = (isCointegrated: boolean | null) => {
+  if (isCointegrated === true) return 'COINT';
+  if (isCointegrated === false) return 'BROKEN';
+  return 'PENDING';
+};
+
+const pairStatusBadgeClass = (isCointegrated: boolean | null) => {
+  if (isCointegrated === true) return 'badge-green';
+  if (isCointegrated === false) return 'badge-red';
+  return 'badge-blue';
+};
+
 const PairRow: React.FC<PairRowProps> = ({ p }) => {
   const [expanded, setExpanded] = useState(false);
 
@@ -102,12 +114,8 @@ const PairRow: React.FC<PairRowProps> = ({ p }) => {
         </span>
 
         <div className="pair-col-badge">
-          <span
-            className={`badge ${
-              p.is_cointegrated ? 'badge-green' : 'badge-red'
-            }`}
-          >
-            {p.is_cointegrated ? 'COINT' : 'BROKEN'}
+          <span className={`badge ${pairStatusBadgeClass(p.is_cointegrated)}`}>
+            {pairStatusLabel(p.is_cointegrated)}
           </span>
         </div>
 
@@ -215,7 +223,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
     if (filter === 'crypto') list = list.filter((p) => p.is_crypto);
     else if (filter === 'stocks') list = list.filter((p) => !p.is_crypto);
     else if (filter === 'coint') list = list.filter((p) => p.is_cointegrated === true);
-    else if (filter === 'broken') list = list.filter((p) => p.is_cointegrated !== true);
+    else if (filter === 'broken') list = list.filter((p) => p.is_cointegrated === false);
     // Sort: cointegrated pairs first, then by |z-score| descending so the
     // most actionable signals bubble to the top. Pairs without a z-score
     // (Kalman still warming up) sort to the bottom of their group.
@@ -247,12 +255,15 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
   const stockCount = activePairs.filter((p) => !p.is_crypto).length;
   const cryptoCount = activePairs.filter((p) => p.is_crypto).length;
   const cointCount = activePairs.filter((p) => p.is_cointegrated === true).length;
-  const brokenCount = activePairs.filter((p) => p.is_cointegrated !== true).length;
+  const brokenCount = activePairs.filter((p) => p.is_cointegrated === false).length;
   const allEquityTickers = useMemo(() => {
     const tickers: string[] = [];
     for (const pair of activePairs) {
-      if (!tickers.includes(pair.ticker_a)) tickers.push(pair.ticker_a);
-      if (!tickers.includes(pair.ticker_b)) tickers.push(pair.ticker_b);
+      if (pair.is_crypto) continue;
+      for (const ticker of [pair.ticker_a, pair.ticker_b]) {
+        if (isCryptoTicker(ticker) || tickers.includes(ticker)) continue;
+        tickers.push(ticker);
+      }
     }
     return tickers;
   }, [activePairs]);
@@ -351,7 +362,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
     }
 
     if (allEquityTickers.length === 0) {
-      setWalletError('No tickers are active.');
+      setWalletError('No equity tickers are active.');
       return;
     }
 

@@ -177,14 +177,13 @@ describe('SidebarNav page change', () => {
 describe('SidebarNav footer stats', () => {
   it('shows activeSignalsCount when summary is null', () => {
     render(<SidebarNav {...defaultProps({ summary: null, activeSignalsCount: 7 })} />);
-    // There should be a strong element containing "7" under the Signals stat
-    const signalsStat = screen.getByText('Signals').closest('.mini-stat');
+    const signalsStat = screen.getByText('Open Signals').closest('.mini-stat');
     expect(signalsStat?.querySelector('strong')?.textContent).toBe('7');
   });
 
   it('shows positionsCount when summary is null', () => {
     render(<SidebarNav {...defaultProps({ summary: null, positionsCount: 3 })} />);
-    const positionsStat = screen.getByText('Positions').closest('.mini-stat');
+    const positionsStat = screen.getByText('Open Positions').closest('.mini-stat');
     expect(positionsStat?.querySelector('strong')?.textContent).toBe('3');
   });
 
@@ -198,7 +197,7 @@ describe('SidebarNav footer stats', () => {
         })}
       />,
     );
-    const signalsStat = screen.getByText('Signals').closest('.mini-stat');
+    const signalsStat = screen.getByText('Open Signals').closest('.mini-stat');
     expect(signalsStat?.querySelector('strong')?.textContent).toBe('12');
   });
 
@@ -212,7 +211,7 @@ describe('SidebarNav footer stats', () => {
         })}
       />,
     );
-    const positionsStat = screen.getByText('Positions').closest('.mini-stat');
+    const positionsStat = screen.getByText('Open Positions').closest('.mini-stat');
     expect(positionsStat?.querySelector('strong')?.textContent).toBe('5');
   });
 
@@ -225,7 +224,7 @@ describe('SidebarNav footer stats', () => {
         })}
       />,
     );
-    const signalsStat = screen.getByText('Signals').closest('.mini-stat');
+    const signalsStat = screen.getByText('Open Signals').closest('.mini-stat');
     expect(signalsStat?.querySelector('strong')?.textContent).toBe('6');
   });
 });

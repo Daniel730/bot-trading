@@ -61,8 +61,6 @@ describe('LoginView static content', () => {
 
   it('renders a password input for the token field', () => {
     render(<LoginView {...defaultProps()} />);
-    const passwordInput = screen.getByDisplayValue('');
-    // The password field has type="password"
     const inputs = document.querySelectorAll('input[type="password"]');
     expect(inputs.length).toBe(1);
   });

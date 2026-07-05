@@ -66,11 +66,11 @@ export default function SidebarNav({
 
       <div className="sidebar-footer">
         <div className="mini-stat">
-          <span>Signals</span>
+          <span>Open Signals</span>
           <strong>{summary?.open_signals ?? activeSignalsCount}</strong>
         </div>
         <div className="mini-stat">
-          <span>Positions</span>
+          <span>Open Positions</span>
           <strong>{summary?.open_positions ?? positionsCount}</strong>
         </div>
       </div>

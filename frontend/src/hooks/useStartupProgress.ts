@@ -73,6 +73,7 @@ export function useStartupProgress(input: StartupProgressInput) {
     setStartupProgress((current) => {
       if (startupReady) return 100;
       if (current > startupTargetProgress) return startupTargetProgress;
+      if (current < startupTargetProgress) return startupTargetProgress;
       return current;
     });
   }, [isAuthenticated, startupReady, startupTargetProgress]);
