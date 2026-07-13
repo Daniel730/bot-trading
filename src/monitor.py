@@ -202,6 +202,12 @@ class ArbitrageMonitor:
         self.bumped_pairs_today: dict = {}
         self.kalman_quarantined_pairs: set[str] = set()
         self._kalman_quarantine_reload_requested = False
+        # Pairs whose one-shot historical rebuild has already been attempted.
+        # Prevents structurally-untradeable pairs (e.g. hedge ratio beyond the
+        # beta clip) from being re-quarantined and triggering a full pair reload
+        # every scan cycle — which otherwise resets the dashboard stage back to
+        # "pre_warming" forever and re-fetches 30d history on a loop.
+        self._kalman_rebuild_attempted: set[str] = set()
         self._crypto_snapshot_pair_prices: dict[str, tuple[tuple[float, float], int]] = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
@@ -1319,14 +1325,29 @@ class ArbitrageMonitor:
                     innovation_value,
                     spread_value,
                 )
-                if not already_quarantined:
+                if not already_quarantined and pair['id'] not in self._kalman_rebuild_attempted:
                     self._kalman_quarantine_reload_requested = True
+                    self._kalman_rebuild_attempted.add(pair['id'])
                     logger.warning(
                         "KALMAN QUARANTINE [%s/%s]: queued historical rebuild after this scan.",
                         t_a,
                         t_b,
                     )
+                elif pair['id'] in self._kalman_rebuild_attempted:
+                    # Rebuild already tried and the state is still invalid (e.g. an
+                    # extreme price-ratio pair pinned at the beta clip). Leave it
+                    # quarantined and skip it, but do NOT trigger another reload —
+                    # that would reset the dashboard stage and re-warm on a loop.
+                    logger.debug(
+                        "KALMAN QUARANTINE [%s/%s]: rebuild already attempted; skipping without reload.",
+                        t_a,
+                        t_b,
+                    )
                 return skip("kalman_state_invalid")
+
+            # Valid state this scan: allow a fresh one-shot rebuild if this pair
+            # ever goes transiently invalid again in the future.
+            self._kalman_rebuild_attempted.discard(pair['id'])
 
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
