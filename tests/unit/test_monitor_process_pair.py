@@ -90,6 +90,46 @@ async def test_quarantined_kalman_state_requests_post_scan_rebuild(monitor):
 
 
 @pytest.mark.asyncio
+async def test_quarantine_does_not_reload_repeatedly_after_rebuild(monitor):
+    """A structurally-invalid pair must trigger the historical rebuild only ONCE.
+
+    Regression: an extreme price-ratio pair (beta pinned at the clip) was
+    re-quarantined every scan, and each quarantine re-requested a full pair
+    reload — which reset the dashboard stage to 'pre_warming' forever and
+    re-fetched 30d history on a loop.
+    """
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "LTC-USD", "id": "BTC-USD_LTC-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "LTC-USD": 85.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock), \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock):
+
+        mock_kf = MagicMock()
+        # beta pinned at the clip minimum -> invalid_kalman_state every call.
+        mock_kf.update.return_value = ([0.0, 0.001], 0.1, 3.0, 0.5)
+        mock_kf_get.return_value = mock_kf
+
+        first = await monitor.process_pair(pair, latest_prices)
+        assert first["reason"] == "kalman_state_invalid"
+        assert monitor._kalman_quarantine_reload_requested is True
+        assert pair["id"] in monitor._kalman_rebuild_attempted
+
+        # Simulate the post-scan rebuild running: it clears the quarantine set and
+        # resets the reload flag, but the pair remains invalid on the next scan.
+        monitor._kalman_quarantine_reload_requested = False
+        monitor.kalman_quarantined_pairs.discard(pair["id"])
+
+        second = await monitor.process_pair(pair, latest_prices)
+
+    assert second["reason"] == "kalman_state_invalid"
+    # The key assertion: no second reload is requested, so the stage/warm loop stops.
+    assert monitor._kalman_quarantine_reload_requested is False
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_veto(monitor):
     """
     S-07: Test orchestrator veto path in process_pair.
