@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
+from starlette.requests import HTTPConnection
 import uvicorn
 
 from src.config import save_pairs_override, save_settings_override, settings, validate_runtime_settings_update
@@ -767,9 +768,13 @@ class DashboardAuthMiddleware:
         if scope["type"] not in ("http", "websocket"):
             return await self.app(scope, receive, send)
 
-        request = Request(scope)
-        token_marker = _dashboard_auth_token.set(_bearer_token(request.headers.get("authorization")))
-        session_marker = _dashboard_auth_session.set(request.headers.get("x-dashboard-session"))
+        # Use HTTPConnection (base of both Request and WebSocket) so header
+        # extraction works for websocket scopes too. starlette.Request asserts
+        # scope["type"] == "http" and would raise AssertionError on the
+        # /ws/telemetry handshake, crashing the ASGI app on every WS connect.
+        connection = HTTPConnection(scope)
+        token_marker = _dashboard_auth_token.set(_bearer_token(connection.headers.get("authorization")))
+        session_marker = _dashboard_auth_session.set(connection.headers.get("x-dashboard-session"))
         try:
             return await self.app(scope, receive, send)
         finally:
