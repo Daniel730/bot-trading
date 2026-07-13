@@ -74,6 +74,27 @@ No Gradle wrapper is committed; use a standalone Gradle 8.10.x. Build with
 `gradle generateProto shadowJar --no-daemon`, then run the shaded jar with `DRY_RUN=true`. `gradle test`
 uses Testcontainers and therefore requires Docker (not installed by default here).
 
+### Broker-connected Alpaca paper mode (real orders, paper money)
+
+To validate against Alpaca's paper endpoint (submits real orders to a paper account,
+not the internal shadow service), set in `.env`:
+
+- `PAPER_TRADING=false` (routes fills to the broker instead of the shadow service)
+- `LIVE_CAPITAL_DANGER=true` (required by the config guard whenever `PAPER_TRADING=false`)
+- `DEV_MODE=false` (real market data + real market hours)
+- `BROKERAGE_PROVIDER=ALPACA`, `ALPACA_BASE_URL=https://paper-api.alpaca.markets`
+- `IGNORE_UNMANAGED_POSITIONS=true` (tolerate positions in the paper account outside the bot ledger)
+- Real `ALPACA_API_KEY` / `ALPACA_API_SECRET` from an Alpaca **paper** account (provide as Cursor secrets;
+  injected env vars override the `.env` placeholders).
+
+This resolves to runtime mode `ALPACA_PAPER` (`broker_paper_trading=true`). The monitor detects the
+paper endpoint and automatically **skips** the live L2-entropy-baseline gate even though
+`LIVE_CAPITAL_DANGER=true`, so no entropy seeding is needed. In production (non-DEV) mode the scanner
+reserves active slots for crypto pairs and scans them 24/7 (equity pairs are skipped when the US market
+is closed), so crypto pairs like `BTC-USD/ETH-USD` produce activity off-hours. Market data works via
+yfinance fallback if `POLYGON_API_KEY` is absent; the AI agent ensemble degrades gracefully without
+`OPENAI_API_KEY`/`GEMINI_API_KEY` but is higher-fidelity with them.
+
 ### Tests
 
 - Backend: `PYTHONPATH=/workspace .venv/bin/python -m pytest tests/ -q --asyncio-mode=auto`
