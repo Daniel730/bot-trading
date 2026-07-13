@@ -45,10 +45,12 @@ class ArbitrageService:
         initial_covariance: list = None,
         prewarm_data: Optional[pd.DataFrame] = None,
         state_fingerprint: Optional[str] = None,
+        r_relative: Optional[float] = None,
     ) -> KalmanFilter:
         """Retrieves or initializes a Kalman filter for a specific pair, reloading from Redis if possible."""
         delta = settings.KALMAN_DELTA if delta is None else delta
         r = settings.KALMAN_R if r is None else r
+        r_relative = settings.KALMAN_R_RELATIVE if r_relative is None else r_relative
         state_fingerprint = state_fingerprint or self.build_state_fingerprint(pair_id, prewarm_data)
         if pair_id in self.filters:
             cached_fingerprint = self.filter_fingerprints.get(pair_id)
@@ -76,7 +78,7 @@ class ArbitrageService:
                     initial_state = saved_state['x']
                     initial_covariance = saved_state['P']
                     logger.info(f"[ArbitrageService] Warm start successful for {pair_id}. State recovered from Redis.")
-                    kf = KalmanFilter(delta=delta, r=r, initial_state=initial_state, initial_covariance=initial_covariance)
+                    kf = KalmanFilter(delta=delta, r=r, initial_state=initial_state, initial_covariance=initial_covariance, r_relative=r_relative)
                     # Restore innovation_variance so z-scores are valid immediately on first scan
                     kf.innovation_variance = saved_state.get('innovation_variance', 0.0)
                     self.filters[pair_id] = kf
@@ -84,7 +86,7 @@ class ArbitrageService:
                     return kf
 
             if initial_state is None and initial_covariance is None:
-                kf = KalmanFilter(delta=delta, r=r)
+                kf = KalmanFilter(delta=delta, r=r, r_relative=r_relative)
                 # D.1 Kalman Pre-Warming
                 try:
                     from src.services.data_service import DataService
@@ -119,7 +121,8 @@ class ArbitrageService:
             delta=delta, 
             r=r, 
             initial_state=initial_state,
-            initial_covariance=initial_covariance
+            initial_covariance=initial_covariance,
+            r_relative=r_relative,
         )
         self.filter_fingerprints[pair_id] = state_fingerprint
         return self.filters[pair_id]

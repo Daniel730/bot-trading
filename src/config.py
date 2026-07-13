@@ -261,6 +261,14 @@ class Settings(BaseSettings):
 
     KALMAN_DELTA: float = 1e-5
     KALMAN_R: float = 0.001
+    # Relative measurement-noise std as a fraction of price A. The Kalman filter
+    # runs on raw price levels, so a fixed absolute KALMAN_R makes it wildly
+    # overconfident for high-priced assets (e.g. BTC ~ $60k): a normal 0.2% move
+    # is reported as an ~800-sigma z-score and the pair is permanently
+    # quarantined. Scaling the measurement variance by (KALMAN_R_RELATIVE*price)^2
+    # keeps z-scores dimensionless/comparable across assets priced from cents to
+    # tens of thousands. 0.0 preserves the legacy absolute-only behavior.
+    KALMAN_R_RELATIVE: float = Field(default=0.02, validation_alias="KALMAN_R_RELATIVE")
     MONITOR_ENTRY_ZSCORE: float = Field(default=2.0, validation_alias="MONITOR_ENTRY_ZSCORE")
     MONITOR_MIN_AI_CONFIDENCE: float = Field(default=0.5, validation_alias="MONITOR_MIN_AI_CONFIDENCE")
     ELITE_ROTATION_SORTINO_THRESHOLD: float = Field(
