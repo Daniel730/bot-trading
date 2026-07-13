@@ -15,14 +15,19 @@ const fmt = (val: number | null | undefined, decimals = 2): string => {
 const PositionsPanel: React.FC<PositionsPanelProps> = ({ token, sessionToken }) => {
   const [positions, setPositions] = useState<OpenPosition[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
       const data = await fetchOpenPositions(token, sessionToken);
       setPositions(data.positions || []);
+      setError(null);
     } catch (err) {
+      // Surface the failure instead of silently rendering "No open positions",
+      // which is indistinguishable from a genuinely empty book.
       console.error('Failed to fetch positions:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load positions');
     } finally {
       setLoading(false);
     }
@@ -50,7 +55,12 @@ const PositionsPanel: React.FC<PositionsPanelProps> = ({ token, sessionToken }) 
         </button>
       </div>
       <div className="panel-body">
-        {positions.length === 0 ? (
+        {error && positions.length === 0 ? (
+          <div className="empty-state">
+            <Briefcase size={28} style={{ opacity: 0.3 }} />
+            <span style={{ color: 'var(--red)' }}>Could not load positions: {error}</span>
+          </div>
+        ) : positions.length === 0 ? (
           <div className="empty-state">
             <Briefcase size={28} style={{ opacity: 0.3 }} />
             <span>{loading ? 'Loading positions…' : 'No open positions'}</span>

@@ -533,6 +533,7 @@ function App() {
             positions={positions}
             risk={risk}
             recentThoughts={recentThoughts}
+            marketRegime={data?.market_regime?.regime ?? null}
             marketRegimeConfidence={data?.market_regime?.confidence}
             globalAccuracy={data?.global_accuracy ?? null}
           />

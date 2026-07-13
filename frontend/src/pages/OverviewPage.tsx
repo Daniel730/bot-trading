@@ -11,6 +11,7 @@ interface OverviewPageProps {
   positions: OpenPosition[];
   risk: TelemetryRisk | null;
   recentThoughts: TelemetryThought[];
+  marketRegime?: string | null;
   marketRegimeConfidence?: number | null;
   globalAccuracy?: number | null;
 }
@@ -21,6 +22,7 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
   positions,
   risk,
   recentThoughts,
+  marketRegime,
   marketRegimeConfidence,
   globalAccuracy,
 }) => {
@@ -28,12 +30,15 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
     <>
       <SectionHeader title="Real-Time Overview" subtitle="Core trading and runtime indicators." />
       
-      {/* Intelligence Hub integration */}
-      {risk && (
+      {/* Intelligence Hub integration. Show the actual market regime from the
+          SSE stream (TRENDING_UP/DOWN, VOLATILE, SIDEWAYS, STABLE) rather than
+          the volatility status, and render as soon as either regime or risk
+          telemetry is available. */}
+      {(marketRegime || risk) && (
         <IntelligenceHub 
-          regime={risk.volatility_status || 'SIDEWAYS'} 
-          confidence={marketRegimeConfidence ?? 0}
-          accuracy={globalAccuracy ?? 0}
+          regime={marketRegime ?? 'STABLE'} 
+          confidence={marketRegimeConfidence}
+          accuracy={globalAccuracy}
         />
       )}
 

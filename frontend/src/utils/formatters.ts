@@ -1,9 +1,12 @@
 export function formatCurrency(value: number | null | undefined) {
   if (value === null || value === undefined) return '—';
+  // Always show cents: crypto/paper P&L is frequently sub-dollar, and rounding
+  // to whole dollars made real gains/losses display as "$0".
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
   }).format(value);
 }
 
