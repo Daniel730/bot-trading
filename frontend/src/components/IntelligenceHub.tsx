@@ -4,8 +4,8 @@ import { Brain, TrendingUp, TrendingDown, RefreshCw, Activity, Shield } from 'lu
 
 interface IntelligenceHubProps {
   regime: string;
-  confidence: number;
-  accuracy: number;
+  confidence: number | null | undefined;
+  accuracy: number | null | undefined;
 }
 
 const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, accuracy }) => {
@@ -19,7 +19,15 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
     }
   };
 
-  const accuracyColor = accuracy > 0.7 ? 'var(--success)' : accuracy < 0.4 ? 'var(--secondary)' : 'var(--primary)';
+  // Confidence/accuracy can be null before telemetry arrives — show "—" rather
+  // than a misleading 0%.
+  const accuracyValue = accuracy ?? 0;
+  const accuracyColor = accuracyValue > 0.7 ? 'var(--success)' : accuracyValue < 0.4 ? 'var(--secondary)' : 'var(--primary)';
+  const confidenceLabel = confidence == null ? '—' : `${(confidence * 100).toFixed(1)}%`;
+  const accuracyLabel = accuracy == null ? '—' : `${(accuracy * 100).toFixed(1)}%`;
+  const accuracyState = accuracy == null
+    ? '—'
+    : accuracy > 0.6 ? 'OPTIMAL' : accuracy < 0.4 ? 'CAUTION: PENALTY ACTIVE' : 'NOMINAL';
 
   return (
     <div className="intelligence-hub" style={{ marginTop: '20px' }}>
@@ -43,10 +51,10 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
             {getRegimeIcon()}
           </div>
           <div className="metric-value" style={{ fontSize: '1.1rem', letterSpacing: '1px' }}>
-            {regime.replace('_', ' ')}
+            {regime.replace(/_/g, ' ')}
           </div>
           <div style={{ fontSize: '0.6rem', color: 'var(--text-dim)', marginTop: '5px' }}>
-            CLASSIFICATION_CONFIDENCE: {(confidence * 100).toFixed(1)}%
+            CLASSIFICATION_CONFIDENCE: {confidenceLabel}
           </div>
         </motion.div>
 
@@ -62,14 +70,14 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
             <motion.div 
               style={{ position: 'absolute', top: 0, left: 0, height: '100%', background: accuracyColor, boxShadow: `0 0 10px ${accuracyColor}` }}
               initial={{ width: 0 }}
-              animate={{ width: `${accuracy * 100}%` }}
+              animate={{ width: `${accuracyValue * 100}%` }}
               transition={{ duration: 1.5, ease: "easeOut" }}
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '0.9rem', fontWeight: 'bold' }}>
-            <span style={{ color: accuracyColor }}>{(accuracy * 100).toFixed(1)}%</span>
+            <span style={{ color: accuracyColor }}>{accuracyLabel}</span>
             <span style={{ fontSize: '0.6rem', color: 'var(--text-dim)', alignSelf: 'center' }}>
-                {accuracy > 0.6 ? 'OPTIMAL' : accuracy < 0.4 ? 'CAUTION: PENALTY ACTIVE' : 'NOMINAL'}
+                {accuracyState}
             </span>
           </div>
         </motion.div>
