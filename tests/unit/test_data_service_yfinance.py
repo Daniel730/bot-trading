@@ -303,7 +303,12 @@ async def test_get_bid_ask_missing_quote_does_not_fallback_to_zero_spread():
             "previousClose": 150.0,
         }
 
-    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()):
+    # Also stub the Alpaca snapshot fallback so the test is hermetic: with no
+    # quote from any source it must return (0.0, 0.0) rather than fabricating a
+    # spread. Without this stub the test depends on whether Alpaca credentials
+    # happen to be configured (real quotes leak in and break the assertion).
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}):
         bid, ask = await service.get_bid_ask("MSFT")
 
     assert (bid, ask) == (0.0, 0.0)
