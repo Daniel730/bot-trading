@@ -10,13 +10,20 @@ class KalmanFilter:
     Observation y = Price_A
     H = [1, Price_B]
     """
-    def __init__(self, delta=1e-4, r=1e-3, initial_state=None, initial_covariance=None):
+    def __init__(self, delta=1e-4, r=1e-3, initial_state=None, initial_covariance=None, r_relative=0.0):
         """
         Initialize the filter.
         :param delta: Process noise parameter (Q = delta / (1-delta) * I)
-        :param r: Measurement noise (R)
+        :param r: Measurement noise (R), an absolute variance floor on the observation (price A)
         :param initial_state: Initial [alpha, beta]
         :param initial_covariance: Initial P matrix
+        :param r_relative: Relative measurement-noise std as a fraction of price A.
+            The effective measurement variance becomes ``R + (r_relative * price_a)**2``.
+            This keeps the innovation variance (and therefore the z-score) scale-invariant:
+            without it, a fixed tiny absolute ``r`` makes the filter wildly overconfident for
+            high-priced assets (e.g. BTC ~ $60k), so a normal 0.2% price deviation is reported
+            as a ~800-sigma move and the pair is permanently quarantined. Defaults to 0.0 so
+            existing callers/tests keep the previous absolute-only behavior.
         """
         self.initial_state = np.array(initial_state if initial_state is not None else [0.0, 1.0])
         self.initial_covariance = np.array(initial_covariance if initial_covariance is not None else np.eye(2) * 10.0)
@@ -35,11 +42,22 @@ class KalmanFilter:
         self._q_inflation_total = 0
         self._q_inflation_factor = 1.0
         
-        # Measurement noise variance R
+        # Measurement noise variance R (absolute floor)
         self.R = r
+        # Relative measurement-noise std as a fraction of price A. Scales R with
+        # the observation magnitude so z-scores stay dimensionless across assets
+        # priced from cents to tens of thousands of dollars.
+        self.r_relative = max(0.0, float(r_relative))
         
         # For Z-score calculation
         self.innovation_variance = 0.0
+
+    def _effective_r(self, price_a: float) -> float:
+        """Measurement variance combining the absolute floor and price-relative noise."""
+        if self.r_relative <= 0.0:
+            return self.R
+        rel_var = (self.r_relative * float(price_a)) ** 2
+        return self.R + rel_var
 
     def update(self, price_a, price_b):
         """
@@ -61,8 +79,9 @@ class KalmanFilter:
             y = price_a
             spread = float(y - np.dot(H, self.state).item())
             
-            # 4. Residual Covariance S = H * P_minus * H^T + R
-            S = np.dot(H, np.dot(P_minus, H.T)) + self.R
+            # 4. Residual Covariance S = H * P_minus * H^T + R_eff
+            # R_eff scales with price A so z-scores are dimensionless across price scales.
+            S = np.dot(H, np.dot(P_minus, H.T)) + self._effective_r(price_a)
             self.innovation_variance = float(S.item())
             
             # Z-score (Prior)
