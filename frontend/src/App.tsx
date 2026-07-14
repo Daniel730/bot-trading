@@ -7,6 +7,7 @@ import './App.css';
 import PairsPanel from './components/PairsPanel';
 import WalletPanel from './components/WalletPanel';
 import PositionsPanel from './components/PositionsPanel';
+import BrokerPositionsPanel from './components/BrokerPositionsPanel';
 import {
   ApiError,
   type Signal,
@@ -564,7 +565,10 @@ function App() {
         )}
 
         {page === 'positions' && (
-          <PositionsPanel token={securityToken} sessionToken={sessionToken} />
+          <div className="card-grid two-up">
+            <PositionsPanel token={securityToken} sessionToken={sessionToken} />
+            <BrokerPositionsPanel token={securityToken} sessionToken={sessionToken} />
+          </div>
         )}
 
         {page === 'trades' && (
