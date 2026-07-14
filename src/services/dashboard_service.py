@@ -2680,6 +2680,51 @@ async def buy_wallet_recommendations(
     return await dashboard_service.buy_wallet_recommendations(request)
 
 
+@app.get("/api/broker/positions")
+async def list_broker_positions(token: str = Query(None), session: str = Query(None)):
+    """Live positions held in the brokerage account (e.g. Alpaca), independent of
+    the bot's own signal ledger. This surfaces holdings the bot did not open
+    (manual trades, prior runs, unmanaged positions) so the account state is not
+    silently hidden — the ledger `/api/positions` endpoint only shows managed
+    pair trades.
+    """
+    verify_token(token, session)
+    result: dict = {"positions": [], "provider": settings.BROKERAGE_PROVIDER, "total_market_value": 0.0}
+    try:
+        raw = await brokerage_service.get_positions()
+    except Exception as exc:  # broker unreachable / auth / network
+        logger.warning("DASHBOARD: Failed to fetch broker positions: %s", exc)
+        result["error"] = str(exc)
+        return result
+
+    positions = []
+    total_mv = 0.0
+    for p in raw or []:
+        qty = _safe_float(p.get("quantity"))
+        avg = _safe_float(p.get("averagePrice"))
+        cur = _safe_float(p.get("currentPrice"))
+        mv = _safe_float(p.get("marketValue"))
+        upl = (cur - avg) * qty if (cur is not None and avg is not None and qty is not None) else None
+        cost = (avg * qty) if (avg is not None and qty is not None) else None
+        upl_pct = (upl / cost) if (upl is not None and cost not in (None, 0)) else None
+        if mv:
+            total_mv += mv
+        positions.append({
+            "ticker": p.get("ticker"),
+            "quantity": qty,
+            "avg_price": avg,
+            "current_price": cur,
+            "market_value": mv,
+            "unrealized_pl": upl,
+            "unrealized_pl_pct": upl_pct,
+        })
+
+    positions.sort(key=lambda x: x.get("market_value") or 0.0, reverse=True)
+    result["positions"] = positions
+    result["total_market_value"] = total_mv
+    return result
+
+
 @app.get("/api/positions")
 async def list_open_positions(token: str = Query(None), session: str = Query(None)):
     verify_token(token, session)

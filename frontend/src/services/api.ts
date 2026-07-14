@@ -700,6 +700,26 @@ export const buyWalletRecommendations = async (
 export const fetchOpenPositions = async (token: string | null, sessionToken?: string | null): Promise<{ positions: OpenPosition[] }> =>
   requestJson('/api/positions', token, undefined, sessionToken);
 
+export interface BrokerPosition {
+  ticker: string | null;
+  quantity: number | null;
+  avg_price: number | null;
+  current_price: number | null;
+  market_value: number | null;
+  unrealized_pl: number | null;
+  unrealized_pl_pct: number | null;
+}
+
+export interface BrokerPositionsResponse {
+  positions: BrokerPosition[];
+  provider: string;
+  total_market_value: number;
+  error?: string;
+}
+
+export const fetchBrokerPositions = async (token: string | null, sessionToken?: string | null): Promise<BrokerPositionsResponse> =>
+  requestJson('/api/broker/positions', token, undefined, sessionToken);
+
 export interface SettingsData {
   approval_threshold: number;
 }
