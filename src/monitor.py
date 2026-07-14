@@ -1375,7 +1375,16 @@ class ArbitrageMonitor:
             if pair['id'] in [p['id'] for p in self.active_pairs[:5]]:
                  logger.debug(f"DEBUG [{t_a}/{t_b}] spread={spread:.6f} inv_var={innovation_var:.6f}")
 
-            if abs(z_score) > entry_zscore:
+            # Only enter inside the tradeable band: beyond the stop-loss z-score a
+            # fresh entry would already be in stop-out territory, so the profit
+            # guard always vetoes it. Skipping here avoids a full (and pointless)
+            # AI orchestration + risk pass on every scan for a persistently
+            # dislocated pair.
+            stop_loss_zscore = settings.STOP_LOSS_ZSCORE
+            in_entry_band = abs(z_score) > entry_zscore and abs(z_score) < stop_loss_zscore
+            beyond_stop = entry_zscore < stop_loss_zscore and abs(z_score) >= stop_loss_zscore
+
+            if in_entry_band:
                 signal_id = str(uuid.uuid4())
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
@@ -1611,6 +1620,10 @@ class ArbitrageMonitor:
                             )
 
                 diagnostic["confidence"] = final_confidence
+            elif beyond_stop:
+                # Past the stop-loss band — un-enterable. Surface it without an AI call.
+                await self._remove_active_signal(t_a, t_b)
+                skip("beyond_stop_threshold")
             else:
                 # Cleanup inactive signals
                 await self._remove_active_signal(t_a, t_b)
