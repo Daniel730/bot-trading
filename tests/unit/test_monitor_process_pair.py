@@ -130,6 +130,30 @@ async def test_quarantine_does_not_reload_repeatedly_after_rebuild(monitor):
 
 
 @pytest.mark.asyncio
+async def test_beyond_stop_zscore_skips_without_ai(monitor):
+    """A signal already past the stop-loss z-score must be skipped before the
+    (expensive) AI orchestration, since the profit guard would always veto it."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "BCH-USD", "id": "BTC-USD_BCH-USD"}
+    latest_prices = {"BTC-USD": 62000.0, "BCH-USD": 234.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch.object(monitor, "is_market_open", return_value=True):
+
+        mock_kf = MagicMock()
+        # Valid Kalman state (beta ok, innovation > 0) but z = 4.5 > STOP_LOSS_ZSCORE (3.5).
+        mock_kf.update.return_value = ([0.0, 1.0], 0.1, 4.5, 0.5)
+        mock_kf_get.return_value = mock_kf
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+    assert diagnostic["reason"] == "beyond_stop_threshold"
+    mock_orchestrator.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_veto(monitor):
     """
     S-07: Test orchestrator veto path in process_pair.
