@@ -594,7 +594,7 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
                 "filled_qty": 0.5,
                 "filled_avg_price": 150.0,
                 "order_status": OrderStatus.PARTIAL_EXPOSURE.value,
-                "fill_snapshot": {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
+                "fill_snapshot": {"status": "partially_filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
             },
         )
         mock_update_status.assert_any_await(
