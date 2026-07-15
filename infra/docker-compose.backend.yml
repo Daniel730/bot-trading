@@ -41,6 +41,8 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
+      # Survives image pulls / recreates: 2FA, dashboard overrides, pairs, SQLite auth state.
+      - bot_data:/app/data
     environment:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
@@ -67,6 +69,7 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
+      - bot_data:/app/data
     environment:
       REDIS_HOST: redis
     restart: "no"
@@ -119,6 +122,7 @@ services:
       - ${APP_ENV_FILE:-../.env}
     volumes:
       - ${APP_ENV_FILE:-../.env}:/app/.env:ro
+      - bot_data:/app/data
     environment:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
@@ -136,4 +140,7 @@ volumes:
     external: true
   postgres_data:
     name: trading-bot_postgres_data
+    external: true
+  bot_data:
+    name: trading-bot_bot_data
     external: true

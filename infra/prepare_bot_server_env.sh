@@ -31,6 +31,7 @@ fi
 
 docker volume create trading-bot_redis_data >/dev/null
 docker volume create trading-bot_postgres_data >/dev/null
+docker volume create trading-bot_bot_data >/dev/null
 echo "VOLUMES_OK"
 
 python3 - <<'PY'
