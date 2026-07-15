@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, EnvSettingsSource, PydanticBaseSettingsSource, SettingsConfigDict
 from pydantic import AliasChoices, Field, model_validator
@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     IGNORE_UNMANAGED_POSITIONS: bool = Field(
         default=True,
         validation_alias="IGNORE_UNMANAGED_POSITIONS",
+    )
+    # None = auto: enabled for PAPER_TRADING or Alpaca paper API URL; disabled for live URLs.
+    AUTO_RECONCILE_FLAT_ORPHANS: Optional[bool] = Field(
+        default=None,
+        validation_alias="AUTO_RECONCILE_FLAT_ORPHANS",
     )
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     DASHBOARD_ALLOWED_ORIGINS: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGINS")
@@ -764,6 +769,14 @@ class Settings(BaseSettings):
     @property
     def is_t212_demo(self) -> bool:
         return self.TRADING_212_MODE.lower() == "demo"
+
+    @property
+    def auto_reconcile_flat_orphans(self) -> bool:
+        if self.AUTO_RECONCILE_FLAT_ORPHANS is not None:
+            return bool(self.AUTO_RECONCILE_FLAT_ORPHANS)
+        if self.PAPER_TRADING:
+            return True
+        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
 
     @property
     def web3_enabled(self) -> bool:

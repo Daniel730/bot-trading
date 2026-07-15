@@ -94,6 +94,26 @@ def test_validate_deploy_env_blocks_paper_trading_false(tmp_path):
     assert "PAPER_TRADING must be true" in result.stdout
 
 
+def test_validate_deploy_env_allows_paper_trading_false_on_alpaca_paper_api(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POSTGRES_PASSWORD=strong-postgres-secret",
+                "DASHBOARD_TOKEN=strong-dashboard-token",
+                "PAPER_TRADING=false",
+                "ALPACA_BASE_URL=https://paper-api.alpaca.markets",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_validator(env_file)
+
+    assert result.returncode == 0
+    assert "Deploy environment OK" in result.stdout
+
+
 def test_validate_deploy_env_blocks_template_alpaca_credentials(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(

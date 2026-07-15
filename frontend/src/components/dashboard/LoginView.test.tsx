@@ -15,10 +15,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import LoginView from './LoginView';
 
-// ---------------------------------------------------------------------------
-// Helper: minimal default props
-// ---------------------------------------------------------------------------
-
 function defaultProps(overrides: Record<string, unknown> = {}) {
   return {
     loginToken: '',
@@ -33,10 +29,6 @@ function defaultProps(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-
-// ---------------------------------------------------------------------------
-// Static rendering
-// ---------------------------------------------------------------------------
 
 describe('LoginView static content', () => {
   it('renders the application title', () => {
@@ -54,8 +46,15 @@ describe('LoginView static content', () => {
     expect(screen.getByText('Security Token')).toBeInTheDocument();
   });
 
-  it('renders an Authenticator / Backup Code label', () => {
+  it('hides OTP field until requested', () => {
     render(<LoginView {...defaultProps()} />);
+    expect(screen.queryByText('Authenticator / Backup Code')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /use otp instead/i })).toBeInTheDocument();
+  });
+
+  it('shows OTP field after Use OTP instead is clicked', () => {
+    render(<LoginView {...defaultProps()} />);
+    fireEvent.click(screen.getByRole('button', { name: /use otp instead/i }));
     expect(screen.getByText('Authenticator / Backup Code')).toBeInTheDocument();
   });
 
@@ -70,10 +69,6 @@ describe('LoginView static content', () => {
     expect(screen.getByRole('button', { name: /login/i })).toBeInTheDocument();
   });
 });
-
-// ---------------------------------------------------------------------------
-// Conditional banners
-// ---------------------------------------------------------------------------
 
 describe('LoginView banners', () => {
   it('renders loginNotice when provided', () => {
@@ -105,10 +100,6 @@ describe('LoginView banners', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Input binding
-// ---------------------------------------------------------------------------
-
 describe('LoginView input interactions', () => {
   it('calls setLoginToken when security token input changes', () => {
     const setLoginToken = vi.fn();
@@ -120,8 +111,7 @@ describe('LoginView input interactions', () => {
 
   it('calls setLoginOtp when OTP input changes', () => {
     const setLoginOtp = vi.fn();
-    render(<LoginView {...defaultProps({ setLoginOtp })} />);
-    // OTP field is not password type and has autocomplete="one-time-code"
+    render(<LoginView {...defaultProps({ setLoginOtp, loginOtp: ' ' })} />);
     const otpInput = document.querySelector('input[autocomplete="one-time-code"]') as HTMLInputElement;
     fireEvent.change(otpInput, { target: { value: '123456' } });
     expect(setLoginOtp).toHaveBeenCalledWith('123456');
@@ -140,10 +130,6 @@ describe('LoginView input interactions', () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Button state
-// ---------------------------------------------------------------------------
-
 describe('LoginView button state', () => {
   it('button is enabled by default', () => {
     render(<LoginView {...defaultProps()} />);
@@ -153,13 +139,13 @@ describe('LoginView button state', () => {
 
   it('button is disabled when isBusy is true', () => {
     render(<LoginView {...defaultProps({ isBusy: true })} />);
-    const btn = screen.getByRole('button');
+    const btn = screen.getByRole('button', { name: /login/i });
     expect(btn).toBeDisabled();
   });
 
   it('button is disabled when loginChallengeId is set', () => {
     render(<LoginView {...defaultProps({ loginChallengeId: 'challenge-abc' })} />);
-    const btn = screen.getByRole('button');
+    const btn = screen.getByRole('button', { name: /waiting approval/i });
     expect(btn).toBeDisabled();
   });
 
@@ -170,14 +156,17 @@ describe('LoginView button state', () => {
 
   it('button is disabled when both isBusy and loginChallengeId are set', () => {
     render(<LoginView {...defaultProps({ isBusy: true, loginChallengeId: 'ch-1' })} />);
-    const btn = screen.getByRole('button');
+    const btn = screen.getByRole('button', { name: /waiting approval/i });
     expect(btn).toBeDisabled();
   });
-});
 
-// ---------------------------------------------------------------------------
-// Form submission
-// ---------------------------------------------------------------------------
+  it('renders cancel when pending approval and handler provided', () => {
+    const onCancelApproval = vi.fn();
+    render(<LoginView {...defaultProps({ loginChallengeId: 'challenge-abc', onCancelApproval })} />);
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(onCancelApproval).toHaveBeenCalledOnce();
+  });
+});
 
 describe('LoginView form submission', () => {
   it('calls onSubmit when form is submitted', () => {

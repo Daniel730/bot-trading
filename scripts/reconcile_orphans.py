@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 import logging
 import sys
 from datetime import datetime, timezone
@@ -11,6 +10,14 @@ sys.path.append(str(project_root))
 
 from src.services.persistence_service import persistence_service, OrderStatus, TradeLedger
 from src.services.brokerage_service import BrokerageService
+from src.services.ledger_reconcile_service import (
+    _maybe_await,
+    broker_qty_for_ticker,
+    matching_orders,
+    normalize_symbol,
+    position_quantity,
+    symbols_match,
+)
 from sqlalchemy import select
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -19,41 +26,11 @@ logger = logging.getLogger("reconcile_orphans")
 def _enum_value(value):
     return getattr(value, "value", value)
 
-def _normalize_symbol(symbol: str) -> str:
-    return str(symbol or "").upper().replace("/", "-").replace("_", "-")
-
-def _symbols_match(left: str, right: str) -> bool:
-    left_norm = _normalize_symbol(left)
-    right_norm = _normalize_symbol(right)
-    return left_norm == right_norm or left_norm.replace("-", "") == right_norm.replace("-", "")
-
-def _position_quantity(position: dict) -> float:
-    value = (
-        position.get("quantityAvailableForTrading")
-        or position.get("availableQuantity")
-        or position.get("tradableQuantity")
-        or position.get("quantity")
-        or position.get("qty")
-        or 0.0
-    )
-    return float(value or 0.0)
-
-def _matching_orders(row, pending_orders: list[dict]) -> list[dict]:
-    row_order_id = str(row.order_id or "")
-    matches = []
-    for order in pending_orders:
-        order_ids = {
-            str(order.get("id") or ""),
-            str(order.get("order_id") or ""),
-            str(order.get("client_order_id") or ""),
-            str(order.get("clientOrderId") or ""),
-        }
-        if row_order_id and row_order_id in order_ids:
-            matches.append(order)
-            continue
-        if _symbols_match(order.get("ticker") or order.get("symbol"), row.ticker):
-            matches.append(order)
-    return matches
+# Shared symbol/qty helpers live in ledger_reconcile_service (keep aliases for readability).
+_normalize_symbol = normalize_symbol
+_symbols_match = symbols_match
+_position_quantity = position_quantity
+_matching_orders = matching_orders
 
 def _order_ids(orders: list[dict]) -> list[str]:
     return [
@@ -61,11 +38,6 @@ def _order_ids(orders: list[dict]) -> list[str]:
         for order in orders
         if order.get("id") or order.get("order_id")
     ]
-
-async def _maybe_await(value):
-    if inspect.isawaitable(value):
-        return await value
-    return value
 
 async def reconcile_orphans(
     dry_run: bool = True,

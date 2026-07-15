@@ -1300,6 +1300,51 @@ th {
   gap: 10px;
 }
 
+.twofa-qr-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.twofa-qr-card {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(9, 17, 28, 0.6);
+}
+
+.twofa-qr-card img {
+  border-radius: 8px;
+  background: #fff;
+}
+
+.terminal-command-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--teal, #5eead4);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  font: inherit;
+}
+
+@media (max-width: 720px) {
+  .twofa-qr-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .block-code,
 .code-grid code,
 .log-feed code {

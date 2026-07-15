@@ -545,6 +545,7 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
          patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock, create=True) as mock_update_fill, \
+         patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close_trade, \
          patch("src.services.notification_service.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
@@ -553,7 +554,8 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock) as mock_sleep, \
-         patch.object(settings, "PAPER_TRADING", False):
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 0.0):
 
         mock_bid_ask.return_value = (150.0, 150.1)
         mock_validate_trade.return_value = {
@@ -572,8 +574,9 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
             {"status": "success", "order_id": "close-a"},
         ])
 
-        await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+        result = await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
+        assert result["reason"] == "leg_a_unwound"
         assert monitor.brokerage.place_value_order.await_count == 2
         close_call = monitor.brokerage.place_value_order.await_args_list[1]
         assert close_call.args[0] == "AAPL"
@@ -583,27 +586,10 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
         mock_await_fill.assert_any_await("leg-a", timeout=30)
         mock_await_fill.assert_any_await("close-a", timeout=30)
         mock_sleep.assert_not_awaited()
-        assert mock_log_trade.await_count == 1
         mock_log_journal.assert_not_awaited()
-        mock_update_fill.assert_awaited_once_with(
-            uuid.UUID(signal_id),
-            "leg-a",
-            filled_quantity=0.5,
-            fill_price=150.0,
-            metadata_updates={
-                "filled_qty": 0.5,
-                "filled_avg_price": 150.0,
-                "order_status": OrderStatus.PARTIAL_EXPOSURE.value,
-                "fill_snapshot": {"status": "partially_filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
-            },
-        )
-        mock_update_status.assert_any_await(
-            uuid.UUID(signal_id),
-            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
-        )
-        mock_notify.assert_awaited_once()
-        assert "filled_qty=0.5" in mock_notify.await_args.args[0]
-        assert "expected_qty=" in mock_notify.await_args.args[0]
+        mock_close_trade.assert_awaited_once()
+        mock_update_status.assert_any_await(uuid.UUID(signal_id), OrderStatus.CLOSED)
+        mock_notify.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -672,6 +658,7 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fill_rejects_afte
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close_trade, \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
@@ -680,7 +667,8 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fill_rejects_afte
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
-         patch.object(settings, "PAPER_TRADING", False):
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 0.0):
 
         mock_bid_ask.return_value = (150.0, 150.1)
         mock_validate_trade.return_value = {
@@ -716,8 +704,10 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fill_rejects_afte
             uuid.UUID(signal_id),
             OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
         )
-        assert mock_log_trade.await_count == 2
+        mock_close_trade.assert_awaited_once()
+        assert mock_close_trade.await_args.args[0] == uuid.UUID(signal_id)
         mock_notify.assert_not_awaited()
+        assert mock_log_trade.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -918,7 +908,8 @@ async def test_execute_trade_paper_logs_entry_journal_before_shadow(monitor):
          patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
          patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
-         patch.object(settings, "PAPER_TRADING", True):
+         patch.object(settings, "PAPER_TRADING", True), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 0.0):
 
         mock_bid_ask.return_value = (150.0, 150.1)
         mock_validate_trade.return_value = {

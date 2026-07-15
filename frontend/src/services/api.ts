@@ -596,6 +596,13 @@ export const completeLogin = async (challengeId: string): Promise<AuthLoginRespo
     body: JSON.stringify({ challenge_id: challengeId }),
   });
 
+export const cancelLogin = async (challengeId: string): Promise<{ status: string }> =>
+  requestJson<{ status: string }>('/api/auth/login/cancel/', null, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ challenge_id: challengeId }),
+  });
+
 export const logout = async (token: string | null, sessionToken: string | null) =>
   requestJson<{ status: string }>('/api/auth/logout', token, { method: 'POST' }, sessionToken);
 
@@ -605,6 +612,42 @@ export const sendTerminalCommand = async (command: string, token: string | null,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ command, metadata }),
   }, sessionToken);
+
+export interface PendingApproval {
+  correlation_id: string;
+  summary: string;
+  type?: string;
+}
+
+export const fetchPendingApprovals = async (
+  token: string | null,
+  sessionToken?: string | null,
+): Promise<{ pending: PendingApproval[] }> =>
+  requestJson('/api/approvals/pending', token, undefined, sessionToken);
+
+export const approvePendingTrade = async (
+  token: string | null,
+  sessionToken: string | null,
+  correlationId: string,
+) =>
+  requestJson<{ status: string; message?: string }>(
+    `/api/approvals/${encodeURIComponent(correlationId)}/approve`,
+    token,
+    { method: 'POST' },
+    sessionToken,
+  );
+
+export const rejectPendingTrade = async (
+  token: string | null,
+  sessionToken: string | null,
+  correlationId: string,
+) =>
+  requestJson<{ status: string; message?: string }>(
+    `/api/approvals/${encodeURIComponent(correlationId)}/reject`,
+    token,
+    { method: 'POST' },
+    sessionToken,
+  );
 
 export const fetchPairs = async (token: string | null, sessionToken?: string | null): Promise<PairsResponse> =>
   requestJson<PairsResponse>('/api/pairs', token, undefined, sessionToken);
@@ -719,20 +762,6 @@ export interface BrokerPositionsResponse {
 
 export const fetchBrokerPositions = async (token: string | null, sessionToken?: string | null): Promise<BrokerPositionsResponse> =>
   requestJson('/api/broker/positions', token, undefined, sessionToken);
-
-export interface SettingsData {
-  approval_threshold: number;
-}
-
-export const fetchSettings = async (token: string | null, sessionToken?: string | null): Promise<SettingsData> =>
-  requestJson('/api/settings', token, undefined, sessionToken);
-
-export const updateSettings = async (token: string | null, sessionToken: string | null, approval_threshold: number) =>
-  requestJson<{ status: string; approval_threshold: number }>('/api/settings', token, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ approval_threshold }),
-  }, sessionToken);
 
 export const fetchSummary = async (token: string | null, sessionToken?: string | null): Promise<SummaryResponse> =>
   requestJson('/api/stats/summary', token, undefined, sessionToken);

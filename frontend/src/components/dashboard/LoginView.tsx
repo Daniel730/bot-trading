@@ -1,5 +1,5 @@
 import { Shield } from 'lucide-react';
-import React from 'react';
+import React, { useState } from 'react';
 
 interface LoginViewProps {
   loginToken: string;
@@ -11,6 +11,7 @@ interface LoginViewProps {
   isBusy: boolean;
   loginChallengeId: string | null;
   onSubmit: (event: React.FormEvent) => Promise<void>;
+  onCancelApproval?: () => void;
 }
 
 export default function LoginView(props: LoginViewProps) {
@@ -24,7 +25,9 @@ export default function LoginView(props: LoginViewProps) {
     isBusy,
     loginChallengeId,
     onSubmit,
+    onCancelApproval,
   } = props;
+  const [showOtpField, setShowOtpField] = useState(Boolean(loginOtp));
 
   return (
     <div className="login-screen">
@@ -46,20 +49,44 @@ export default function LoginView(props: LoginViewProps) {
             onChange={(event) => setLoginToken(event.target.value)}
             autoComplete="current-password"
             required
+            disabled={Boolean(loginChallengeId)}
           />
         </label>
-        <label className="setting-field">
-          <span>Authenticator / Backup Code</span>
-          <input
-            value={loginOtp}
-            onChange={(event) => setLoginOtp(event.target.value)}
-            autoComplete="one-time-code"
-          />
-        </label>
-        <button className="primary-btn" disabled={isBusy || Boolean(loginChallengeId)} type="submit">
-          <Shield size={14} />
-          {loginChallengeId ? 'Waiting Approval' : 'Login'}
-        </button>
+        {showOtpField ? (
+          <label className="setting-field">
+            <span>Authenticator / Backup Code</span>
+            <input
+              value={loginOtp}
+              onChange={(event) => setLoginOtp(event.target.value)}
+              autoComplete="one-time-code"
+              disabled={Boolean(loginChallengeId)}
+              placeholder="Required when Telegram approval is unavailable"
+            />
+          </label>
+        ) : (
+          <p className="muted">
+            After submitting the token, approve via Telegram when prompted.
+            {' '}
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => setShowOtpField(true)}
+            >
+              Use OTP instead
+            </button>
+          </p>
+        )}
+        <div className="inline-actions">
+          <button className="primary-btn" disabled={isBusy || Boolean(loginChallengeId)} type="submit">
+            <Shield size={14} />
+            {loginChallengeId ? 'Waiting Approval' : 'Login'}
+          </button>
+          {loginChallengeId && onCancelApproval ? (
+            <button type="button" className="ghost-btn" disabled={isBusy} onClick={onCancelApproval}>
+              Cancel
+            </button>
+          ) : null}
+        </div>
       </form>
     </div>
   );

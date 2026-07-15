@@ -20,6 +20,7 @@ import {
   type SummaryResponse,
   type TradeHistoryResponse,
   type TwoFactorInitiateResponse,
+  cancelLogin,
   completeLogin,
   controlBot,
   discoverPairs,
@@ -33,6 +34,7 @@ import {
   initiateTwoFactor,
   login,
   logout,
+  sendTerminalCommand,
   updateConfig,
   useDashboardStream,
   verifyTwoFactor,
@@ -47,7 +49,7 @@ import {
 import { useTelemetry } from './hooks/useTelemetry';
 import { useAutoDismiss } from './hooks/useAutoDismiss';
 import { useStartupProgress } from './hooks/useStartupProgress';
-import { NAV_ITEMS, type Page } from './constants/navigation';
+import { NAV_ITEMS, isPage, type Page } from './constants/navigation';
 import LoginView from './components/dashboard/LoginView';
 import SidebarNav from './components/dashboard/SidebarNav';
 
@@ -82,7 +84,18 @@ function App() {
   const { data, error } = useDashboardStream(isAuthenticated ? authToken : null, sessionToken);
   const { isConnected, risk, thoughts, botState } = useTelemetry(isAuthenticated ? authToken : null, sessionToken);
 
-  const [page, setPage] = useState<Page>('overview');
+  const [page, setPageState] = useState<Page>(() => {
+    const hash = window.location.hash.replace(/^#\/?/, '');
+    return isPage(hash) ? hash : 'overview';
+  });
+
+  const setPage = useCallback((next: Page) => {
+    setPageState(next);
+    const nextHash = `#/${next}`;
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}${nextHash}`);
+    }
+  }, []);
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [profitChart, setProfitChart] = useState<ChartResponse | null>(null);
   const [winLossChart, setWinLossChart] = useState<ChartResponse | null>(null);
@@ -148,6 +161,15 @@ function App() {
     currentUrl.searchParams.delete('token');
     currentUrl.searchParams.delete('session');
     window.history.replaceState({}, document.title, currentUrl.toString());
+  }, []);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const hash = window.location.hash.replace(/^#\/?/, '');
+      if (isPage(hash)) setPageState(hash);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
   const refreshDashboard = async () => {
@@ -299,6 +321,34 @@ function App() {
       if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to start pair discovery.');
     } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleTerminalCommand = async (command: string) => {
+    setSystemError(null);
+    setSystemMessage(null);
+    try {
+      const result = await sendTerminalCommand(command, securityToken, sessionToken);
+      setSystemMessage(result.message || `Command sent: ${command}`);
+    } catch (err: any) {
+      if (handleAuthFailure(err)) return;
+      setSystemError(err.message || 'Failed to send terminal command.');
+      throw err;
+    }
+  };
+
+  const handleCancelLoginApproval = async () => {
+    if (!loginChallengeId) return;
+    setIsBusy(true);
+    try {
+      await cancelLogin(loginChallengeId);
+    } catch {
+      // Local cancel still clears pending UI state.
+    } finally {
+      setLoginChallengeId(null);
+      setLoginNotice(null);
+      setLoginError(null);
       setIsBusy(false);
     }
   };
@@ -466,6 +516,7 @@ function App() {
       isBusy={isBusy}
       loginChallengeId={loginChallengeId}
       onSubmit={handleLogin}
+      onCancelApproval={handleCancelLoginApproval}
     />;
   }
 
@@ -530,7 +581,6 @@ function App() {
         {page === 'overview' && (
           <OverviewPage
             summary={summary}
-            profitChart={profitChart}
             positions={positions}
             risk={risk}
             recentThoughts={recentThoughts}
@@ -597,6 +647,12 @@ function App() {
             handleDiscoverPairs={handleDiscoverPairs}
             terminalMessages={terminalMessages}
             logs={logs}
+            token={securityToken}
+            sessionToken={sessionToken}
+            onSendTerminalCommand={handleTerminalCommand}
+            onAuthFailure={handleAuthFailure}
+            onMessage={setSystemMessage}
+            onError={setSystemError}
           />
         )}
 
