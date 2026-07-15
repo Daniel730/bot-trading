@@ -564,7 +564,7 @@ async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(mo
         }
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
         mock_await_fill.side_effect = [
-            {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
+            {"status": "partially_filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
             {"status": "filled", "filled_qty": 0.5, "filled_avg_price": 150.0},
         ]
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
@@ -1064,3 +1064,82 @@ async def test_execute_trade_crypto_budget_cap_applied(monitor):
         assert mock_await_fill.await_count == 2
         assert mock_validate_trade.call_count == 1
         assert mock_validate_trade.call_args.kwargs["total_portfolio_cash"] == 1200.0
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
+    """Notional fills often deliver slightly less qty than the mid-price plan."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
+         patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock), \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock) as mock_regime, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
+
+        mock_bid_ask.return_value = (100.0, 100.05)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 100.0,
+        }
+        mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 0.00070, "filled_avg_price": 65000.0},
+            {"status": "filled", "filled_qty": 0.015, "filled_avg_price": 3200.0},
+        ]
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "leg-a"},
+            {"status": "success", "order_id": "leg-b"},
+        ])
+        monitor.brokerage.get_positions = AsyncMock(return_value=[{
+            "quantity": 1.0,
+            "quantityAvailableForTrading": 1.0,
+            "marketValue": 50_000.0,
+        }])
+
+        result = await monitor.execute_trade(pair, "Long-Short", 65000.0, 3200.0, signal_id)
+
+        assert result["executed"] is True
+        assert monitor.brokerage.place_value_order.await_count == 2
+        assert mock_await_fill.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_rejects_crypto_sell_without_inventory(monitor):
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    signal_id = str(uuid.uuid4())
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
+
+        mock_bid_ask.return_value = (100.0, 100.05)
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 100.0,
+        }
+        monitor.brokerage.get_positions = AsyncMock(return_value=[])
+        monitor.brokerage.place_value_order = AsyncMock()
+
+        result = await monitor.execute_trade(pair, "Short-Long", 65000.0, 3200.0, signal_id)
+
+        assert result["executed"] is False
+        assert result["reason"] == "insufficient_sell_inventory"
+        monitor.brokerage.place_value_order.assert_not_awaited()

@@ -54,9 +54,52 @@ def cap_pair_notional(
     available_cash: float,
     *,
     min_trade_value: float,
+    max_gross_notional: float = 0.0,
 ) -> float:
     capped = min(_positive(desired_notional), _positive(available_cash))
+    max_gross = _positive(max_gross_notional)
+    if max_gross > 0:
+        capped = min(capped, max_gross)
     return capped if capped >= min_trade_value else 0.0
+
+
+def is_broker_fill_complete(
+    *,
+    status: str,
+    filled_qty: float,
+    expected_qty: float = 0.0,
+    fill_price: float = 0.0,
+    expected_notional: float = 0.0,
+    qty_tolerance: float = 0.05,
+    notional_tolerance: float = 0.05,
+) -> bool:
+    """Accept terminal broker fills even when planned mid-price qty drifts.
+
+    Notional/market orders often fill a slightly different quantity than the
+    pre-trade estimate. Treating that as PARTIAL causes false emergency closes.
+    """
+    status_norm = str(status or "").lower()
+    filled = _positive(filled_qty)
+    if filled <= 0:
+        return False
+    if status_norm in ("partially_filled", "partial_fill"):
+        return False
+    if status_norm != "filled":
+        return False
+
+    expected = _positive(expected_qty)
+    if expected > 0 and filled + 1e-12 >= expected * max(0.0, 1.0 - qty_tolerance):
+        return True
+
+    notion_expected = _positive(expected_notional)
+    price = _positive(fill_price)
+    if notion_expected > 0 and price > 0:
+        filled_notional = filled * price
+        if filled_notional + 1e-9 >= notion_expected * max(0.0, 1.0 - notional_tolerance):
+            return True
+
+    # Broker reported a complete market fill — trust it over the pre-trade estimate.
+    return True
 
 
 def build_pair_legs(

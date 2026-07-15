@@ -71,5 +71,14 @@ def monitor(monkeypatch):
         monitor_instance.brokerage.get_account_cash.return_value = 10000.0
         monitor_instance.brokerage.get_account_equity.return_value = 10000.0
         monitor_instance.brokerage.get_account_buying_power.return_value = 10000.0
+        monitor_instance.brokerage.get_positions = AsyncMock(
+            return_value=[
+                {
+                    "quantity": 1_000_000.0,
+                    "quantityAvailableForTrading": 1_000_000.0,
+                    "marketValue": 1_000_000.0,
+                }
+            ]
+        )
         monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
         return monitor_instance

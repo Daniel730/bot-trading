@@ -90,6 +90,27 @@ def test_pair_leg_sizing_splits_gross_notional_by_hedge_ratio():
 def test_pair_notional_is_capped_by_available_budget():
     assert cap_pair_notional(1500.0, 900.0, min_trade_value=1.0) == pytest.approx(900.0)
     assert cap_pair_notional(1500.0, 0.50, min_trade_value=1.0) == 0.0
+    assert cap_pair_notional(1500.0, 900.0, min_trade_value=1.0, max_gross_notional=100.0) == pytest.approx(100.0)
+    assert cap_pair_notional(50.0, 900.0, min_trade_value=1.0, max_gross_notional=100.0) == pytest.approx(50.0)
+
+
+def test_is_broker_fill_complete_accepts_notional_qty_drift():
+    from src.services.trade_math import is_broker_fill_complete
+
+    # Real Alpaca case: planned 0.184 BTC from mid, filled 0.1806 after slip — status filled.
+    assert is_broker_fill_complete(
+        status="filled",
+        filled_qty=0.18060253,
+        expected_qty=0.184303,
+        fill_price=66100.0,
+        expected_notional=11946.08,
+    )
+    assert not is_broker_fill_complete(
+        status="partially_filled",
+        filled_qty=0.09,
+        expected_qty=0.184303,
+    )
+    assert not is_broker_fill_complete(status="filled", filled_qty=0.0, expected_qty=0.1)
 
 
 def test_expected_profit_uses_spread_capture_and_full_pair_friction():

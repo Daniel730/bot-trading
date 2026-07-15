@@ -258,6 +258,9 @@ class Settings(BaseSettings):
     )
 
     TARGET_CASH_PER_LEG: float = Field(default=0.0, validation_alias="TARGET_CASH_PER_LEG")
+    # Hard ceiling on gross pair notional (both legs). Keeps paper/small accounts
+    # from sizing off large equity (e.g. Alpaca paper ~$1M) into unaffordable sells.
+    MAX_PAIR_GROSS_NOTIONAL_USD: float = Field(default=100.0, validation_alias="MAX_PAIR_GROSS_NOTIONAL_USD")
 
     KALMAN_DELTA: float = 1e-5
     KALMAN_R: float = 0.001

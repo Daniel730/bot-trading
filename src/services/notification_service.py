@@ -72,7 +72,8 @@ class NotificationService:
         configure_telegram_log_redaction()
         self.token = settings.TELEGRAM_BOT_TOKEN
         self.chat_id = settings.TELEGRAM_CHAT_ID
-        self.pending_approvals = {} # correlation_id -> asyncio.Future
+        self.pending_approvals = {}  # correlation_id -> asyncio.Future
+        self.pending_approval_summaries = {}  # correlation_id -> trade summary text
         self._telegram_enabled = False
         self.app = None
 
@@ -351,6 +352,7 @@ class NotificationService:
         
         if correlation_id in self.pending_approvals:
             future = self.pending_approvals.pop(correlation_id)
+            self.pending_approval_summaries.pop(correlation_id, None)
             if not future.done():
                 future.set_result(action == "approve")
                 try:
@@ -515,7 +517,7 @@ class NotificationService:
 
         # Threshold auto-approval fast path. In live mode this is only allowed
         # after the operator's approval channel has been configured.
-        if not force_manual and trade_value is not None and trade_value < settings.APPROVAL_THRESHOLD:
+        if not force_manual and trade_value is not None and trade_value <= settings.APPROVAL_THRESHOLD:
             self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
             return True
             
@@ -531,6 +533,7 @@ class NotificationService:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self.pending_approvals[correlation_id] = future
+        self.pending_approval_summaries[correlation_id] = trade_summary
 
         try:
             text = f"🚨 APPROVAL REQUIRED\n{trade_summary}"
@@ -550,10 +553,12 @@ class NotificationService:
             return await asyncio.wait_for(future, timeout=300)
         except asyncio.TimeoutError:
             self.pending_approvals.pop(correlation_id, None)
+            self.pending_approval_summaries.pop(correlation_id, None)
             logger.warning("TELEGRAM: Timeout waiting for approval %s", correlation_id)
             return False
         except Exception as e:
             self.pending_approvals.pop(correlation_id, None)
+            self.pending_approval_summaries.pop(correlation_id, None)
             logger.warning("TELEGRAM ERROR: %s", self._redact_sensitive_text(e))
             try:
                 from src.services.dashboard_service import dashboard_service
@@ -566,6 +571,35 @@ class NotificationService:
                     self._redact_sensitive_text(pause_exc),
                 )
             return False
+
+    def list_pending_approvals(self) -> list:
+        """Return open trade-approval CIDs for dashboard/agent pollers."""
+        out = []
+        for cid, future in list(self.pending_approvals.items()):
+            if future.done():
+                continue
+            out.append({
+                "correlation_id": cid,
+                "summary": self.pending_approval_summaries.get(cid, ""),
+                "type": "approval",
+            })
+        return out
+
+    def resolve_pending_approval(self, correlation_id: str, approved: bool) -> dict:
+        """Resolve a pending approval future. Used by dashboard / agent APIs."""
+        cid = str(correlation_id or "").strip()
+        future = self.pending_approvals.pop(cid, None)
+        self.pending_approval_summaries.pop(cid, None)
+        if future is None:
+            return {"status": "error", "message": "Invalid or expired correlation ID"}
+        if not future.done():
+            future.set_result(bool(approved))
+        return {
+            "status": "success",
+            "message": "Approval processed" if approved else "Rejection processed",
+            "correlation_id": cid,
+            "approved": bool(approved),
+        }
 
     async def handle_dashboard_command(self, command: str, metadata: dict = None):
         """Processes a command sent from the dashboard terminal."""
@@ -585,16 +619,19 @@ class NotificationService:
             # Format: /approve correlation_id
             parts = command.split()
             cid = parts[1] if len(parts) > 1 else (metadata.get("correlation_id") if metadata else None)
-            
-            if cid in self.pending_approvals:
-                future = self.pending_approvals.pop(cid)
-                if not future.done():
-                    future.set_result(True)
-                    await self.send_message(f"✅ Dashboard Approval received for {cid}")
-                return {"status": "success", "message": "Approval processed"}
+            result = self.resolve_pending_approval(cid, approved=True)
+            if result.get("status") == "success":
+                await self.send_message(f"✅ Dashboard Approval received for {cid}")
             else:
                 print(f"TERMINAL: Approval failed. CID '{cid}' not found in {list(self.pending_approvals.keys())}")
-                return {"status": "error", "message": "Invalid or expired correlation ID"}
+            return result
+        if command.startswith("/reject"):
+            parts = command.split()
+            cid = parts[1] if len(parts) > 1 else (metadata.get("correlation_id") if metadata else None)
+            result = self.resolve_pending_approval(cid, approved=False)
+            if result.get("status") == "success":
+                await self.send_message(f"❌ Dashboard Rejection received for {cid}")
+            return result
         
         elif command == "/status":
             from src.services.dashboard_service import dashboard_service
