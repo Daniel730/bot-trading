@@ -97,6 +97,11 @@ services:
       DRY_RUN: "true"
       LIVE_CAPITAL_DANGER: "false"
     restart: "no"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
     # dependent services (bot, mcp-server) start sending gRPC calls.
     healthcheck:
