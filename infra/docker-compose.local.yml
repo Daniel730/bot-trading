@@ -1,13 +1,8 @@
 # Local-dev override for docker-compose.yml.
 #
-# The default infra/docker-compose.yml pulls images from GHCR
-# (ghcr.io/daniel730/...) which are published only for linux/arm64 (the
-# Raspberry Pi production target). On a linux/amd64 host (WSL2, Mac, x86 Linux)
-# the pull fails with:
-#   "no matching manifest for linux/amd64 in the manifest list entries"
-#
-# This file adds `build:` directives so Compose builds the same images
-# locally for the host's architecture instead of pulling.
+# Use this when you want Compose to build images locally for the host arch
+# instead of pulling from GHCR. Production deploys to bot-server publish
+# linux/amd64 images via GitHub Actions.
 #
 # Usage:
 #   cd <repo root>
