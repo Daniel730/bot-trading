@@ -30,7 +30,12 @@ from src.services.pair_eligibility_service import filter_pair_universe
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service, dashboard_state
 from src.services.background_task_watchdog import background_task_watchdog
-from src.services.trade_math import build_pair_legs, cap_pair_notional, estimate_pair_profit
+from src.services.trade_math import (
+    build_pair_legs,
+    cap_pair_notional,
+    estimate_pair_profit,
+    is_broker_fill_complete,
+)
 import uuid
 import pytz
 import inspect
@@ -633,7 +638,11 @@ class ArbitrageMonitor:
         US1: Enforce mandatory startup check against Redis L2 entropy baselines.
         Refuses to boot if baselines are missing for any active pair when LIVE_CAPITAL_DANGER=True.
         """
-        logger.info(f"VALIDATING L2 ENTROPY BASELINES FOR {len(pairs)} PAIRS (LIVE_CAPITAL_DANGER=True)...")
+        logger.info(
+            "VALIDATING L2 ENTROPY BASELINES FOR %s PAIRS (LIVE_CAPITAL_DANGER=%s)...",
+            len(pairs),
+            settings.LIVE_CAPITAL_DANGER,
+        )
 
         # Extract unique tickers to minimize Redis calls
         unique_tickers = set()
@@ -1034,6 +1043,97 @@ class ArbitrageMonitor:
         except Exception as e:
             logger.warning(f"Failed to fetch sizing base from brokerage: {e}. Falling back to default.")
             return settings.PAPER_TRADING_STARTING_CASH
+
+    async def _sellable_notional(self, ticker: str, mark_price: float) -> float:
+        """Return USD notional available to sell for *ticker* (0 if none)."""
+        price = float(mark_price or 0.0)
+        if price <= 0:
+            return 0.0
+        try:
+            maybe_positions = self.brokerage.get_positions(ticker)
+            positions = await maybe_positions if inspect.isawaitable(maybe_positions) else maybe_positions
+        except Exception as exc:
+            logger.warning("Inventory read failed for %s: %s", ticker, exc)
+            return 0.0
+        if not positions:
+            return 0.0
+        pos = positions[0]
+        qty = float(
+            pos.get("quantityAvailableForTrading")
+            if pos.get("quantityAvailableForTrading") is not None
+            else pos.get("quantity")
+            or 0.0
+        )
+        if qty <= 0:
+            return 0.0
+        mv = float(pos.get("marketValue") or 0.0)
+        # Prefer market value when present; otherwise qty * mark.
+        if mv > 0:
+            return max(0.0, mv)
+        return max(0.0, qty * price)
+
+    async def _scale_legs_to_sellable_inventory(
+        self,
+        legs,
+        *,
+        ticker_a: str,
+        ticker_b: str,
+        price_a: float,
+        price_b: float,
+        hedge_ratio: float,
+        direction: str,
+        crypto_pair: bool,
+    ):
+        """Scale pair gross down so SELL legs fit current holdings.
+
+        For crypto (spot, no short), missing inventory force-scales or rejects.
+        For equities we still cap when holdings are known; unconstrained shorts
+        keep the original plan when no position record exists.
+        """
+        if legs.gross_notional <= 0:
+            return None
+
+        limit_gross = float(legs.gross_notional)
+        for ticker, side, notional, price in (
+            (ticker_a, legs.side_a, legs.notional_a, price_a),
+            (ticker_b, legs.side_b, legs.notional_b, price_b),
+        ):
+            if side != "SELL" or notional <= 0 or legs.gross_notional <= 0:
+                continue
+            sellable = await self._sellable_notional(ticker, price)
+            if sellable <= 0:
+                if crypto_pair:
+                    logger.warning(
+                        "INVENTORY GUARD: No sellable inventory for crypto %s (%s leg).",
+                        ticker, side,
+                    )
+                    return None
+                # Equity may be shortable without a long position — leave uncapped.
+                continue
+            # Preserve hedge ratio by scaling whole pair from the constrained sell share.
+            sell_share = notional / legs.gross_notional
+            if sell_share <= 0:
+                continue
+            # Keep a 2% buffer for price drift between size and submit.
+            max_gross_for_leg = (sellable * 0.98) / sell_share
+            if max_gross_for_leg < limit_gross:
+                logger.info(
+                    "INVENTORY GUARD: Scaling %s/%s gross $%.2f -> $%.2f (sellable %s=$%.2f)",
+                    ticker_a, ticker_b, limit_gross, max_gross_for_leg, ticker, sellable,
+                )
+                limit_gross = max_gross_for_leg
+
+        if limit_gross + 1e-9 < settings.MIN_TRADE_VALUE:
+            return None
+        if abs(limit_gross - legs.gross_notional) < 1e-6:
+            return legs
+        return build_pair_legs(
+            price_a=price_a,
+            price_b=price_b,
+            hedge_ratio=hedge_ratio,
+            gross_notional=limit_gross,
+            direction=direction,
+        )
 
     def _write_trade_decision_report(
         self,
@@ -1477,6 +1577,7 @@ class ArbitrageMonitor:
                     float(risk_res["final_amount"]),
                     effective_sizing_base,
                     min_trade_value=settings.MIN_TRADE_VALUE,
+                    max_gross_notional=settings.MAX_PAIR_GROSS_NOTIONAL_USD,
                 )
                 if settings.TARGET_CASH_PER_LEG > 0:
                     desired_notional = min(desired_notional, settings.TARGET_CASH_PER_LEG * 2.0)
@@ -1572,7 +1673,11 @@ class ArbitrageMonitor:
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
                     )
-                    approved = await notification_service.request_approval(trade_summary)
+                    approved = await notification_service.request_approval(
+                        trade_summary,
+                        trade_value=float(legs.gross_notional),
+                        force_manual=True,
+                    )
                     if approved:
                         direction = "Short-Long" if z_score > 0 else "Long-Short"
                         execution_result = await self.execute_trade(
@@ -1814,6 +1919,7 @@ class ArbitrageMonitor:
             float(risk_res["final_amount"]),
             effective_cash,
             min_trade_value=settings.MIN_TRADE_VALUE,
+            max_gross_notional=settings.MAX_PAIR_GROSS_NOTIONAL_USD,
         )
         if settings.TARGET_CASH_PER_LEG > 0:
             desired_notional = min(desired_notional, settings.TARGET_CASH_PER_LEG * 2.0)
@@ -1833,14 +1939,36 @@ class ArbitrageMonitor:
             gross_notional=desired_notional,
             direction=direction,
         )
+
+        # Spot crypto (and any long-only venue path) cannot invent short inventory.
+        # Scale gross down to what sellable qty can support before placing Leg A.
+        inventory_scaled = await self._scale_legs_to_sellable_inventory(
+            legs,
+            ticker_a=t_a,
+            ticker_b=t_b,
+            price_a=price_a,
+            price_b=price_b,
+            hedge_ratio=hedge_ratio,
+            direction=direction,
+            crypto_pair=crypto_pair,
+        )
+        if inventory_scaled is None:
+            logger.warning(
+                "INVENTORY GUARD: Rejecting %s/%s %s — sell leg exceeds sellable holdings "
+                "and cannot be scaled above MIN_TRADE_VALUE.",
+                t_a, t_b, direction,
+            )
+            return execution_result(False, "insufficient_sell_inventory")
+        legs = inventory_scaled
+
         size_a = legs.quantity_a
         size_b = legs.quantity_b
         target_cash_a = legs.notional_a
         target_cash_b = legs.notional_b
 
         logger.info(
-            "RISK APPROVED SIZE: Gross=$%.2f, LegA=$%.2f, LegB=$%.2f for %s/%s (Hedge: %.4f, Kelly: %.4f, Base: $%.2f, MaxCap: $%.2f)",
-            legs.gross_notional, target_cash_a, target_cash_b, t_a, t_b, hedge_ratio, risk_res["kelly_fraction"], sizing_base, risk_res["max_allowed_fiat"]
+            "RISK APPROVED SIZE: Gross=$%.2f, LegA=$%.2f, LegB=$%.2f for %s/%s (Hedge: %.4f, Kelly: %.4f, Base: $%.2f, MaxCap: $%.2f, CashCap: $%.2f)",
+            legs.gross_notional, target_cash_a, target_cash_b, t_a, t_b, hedge_ratio, risk_res["kelly_fraction"], sizing_base, risk_res["max_allowed_fiat"], effective_cash
         )
 
         # Feature 008 - Sector Cluster Guard (prospective, race-condition-safe).
@@ -2013,13 +2141,24 @@ class ArbitrageMonitor:
         filled_qty_a = float(fill_a.get("filled_qty") or 0.0)
         fill_price_a = float(fill_a.get("filled_avg_price") or 0.0)
         expected_qty_a = float(size_a)
-        leg_a_fully_filled = filled_qty_a + 1e-9 >= expected_qty_a
+        leg_a_fully_filled = is_broker_fill_complete(
+            status=status_raw_a,
+            filled_qty=filled_qty_a,
+            expected_qty=expected_qty_a,
+            fill_price=fill_price_a,
+            expected_notional=target_cash_a,
+        )
         if status_raw_a in ("partially_filled", "partial_fill"):
             status_a = OrderStatus.LEG_A_PARTIAL
         elif status_raw_a in ("rejected", "canceled", "cancelled", "expired"):
             status_a = OrderStatus.LEG_A_REJECTED
-        elif status_raw_a == "filled" and filled_qty_a > 0 and leg_a_fully_filled:
+        elif leg_a_fully_filled:
             status_a = OrderStatus.LEG_A_FILLED
+            if expected_qty_a > 0 and filled_qty_a + 1e-9 < expected_qty_a:
+                logger.info(
+                    "Leg A (%s) filled with qty variance filled=%.8f expected=%.8f — accepting broker fill",
+                    exec_t_a, filled_qty_a, expected_qty_a,
+                )
         else:
             status_a = OrderStatus.NEEDS_MANUAL_RECONCILIATION
 
