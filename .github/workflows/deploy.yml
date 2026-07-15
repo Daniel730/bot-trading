@@ -1,16 +1,9 @@
-name: Deploy to Raspberry Pi
+name: Deploy to bot-server (Mini PC)
 
 on:
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - "**.md"
-      - "docs/**"
-      - "specs/**"
-      - ".gemini/**"
-      - ".vscode/**"
-      - ".specify/**"
+  # Automatic production deploys happen when a GitHub Release is published.
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       force_all:
@@ -30,16 +23,17 @@ on:
         type: boolean
         default: false
 
-# Keep full workflow runs ordered on the Pi. Individual deploy jobs are also
+# Keep full workflow runs ordered on the mini PC. Individual deploy jobs are also
 # chained below so they do not run docker compose against the same project at
 # the same time.
 concurrency:
-  group: deploy-${{ github.ref }}
+  group: deploy-bot-server
   cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_TAG: latest
+  # Release tags (v1.2.3) become image tags; manual runs publish :latest.
+  IMAGE_TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || 'latest' }}
 
 jobs:
   detect_changes:
@@ -66,6 +60,7 @@ jobs:
           fetch-depth: 0
 
       - name: Detect changed paths
+        if: ${{ github.event_name != 'release' }}
         uses: dorny/paths-filter@v3
         id: changes
         with:
@@ -103,6 +98,10 @@ jobs:
           force_python='${{ inputs.force_python }}'
           force_java='${{ inputs.force_java }}'
           force_frontend='${{ inputs.force_frontend }}'
+          # Published releases always rebuild and redeploy the full stack.
+          if [ '${{ github.event_name }}' = 'release' ]; then
+            force_all='true'
+          fi
 
           python_image='${{ steps.changes.outputs.python_image }}'
           python_tests='${{ steps.changes.outputs.python_tests }}'
@@ -111,6 +110,15 @@ jobs:
           proto='${{ steps.changes.outputs.proto }}'
           backend_compose='${{ steps.changes.outputs.backend_compose }}'
           frontend_compose='${{ steps.changes.outputs.frontend_compose }}'
+
+          # paths-filter is skipped on release; treat missing outputs as false.
+          python_image="${python_image:-false}"
+          python_tests="${python_tests:-false}"
+          java_image="${java_image:-false}"
+          frontend_image="${frontend_image:-false}"
+          proto="${proto:-false}"
+          backend_compose="${backend_compose:-false}"
+          frontend_compose="${frontend_compose:-false}"
 
           if [ "$force_all" = "true" ] || [ "$force_python" = "true" ]; then
             python_image='true'
@@ -345,11 +353,6 @@ jobs:
       - name: Compute lowercase image owner
         run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
-      - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -365,13 +368,14 @@ jobs:
         with:
           context: .
           file: infra/Dockerfile
-          platforms: linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache-amd64
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-bot-base:buildcache-amd64,mode=max
 
   build_java:
     needs:
@@ -395,11 +399,6 @@ jobs:
       - name: Compute lowercase image owner
         run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
-      - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -415,13 +414,14 @@ jobs:
         with:
           context: ./execution-engine
           file: ./execution-engine/Dockerfile
-          platforms: linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache-amd64
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/execution-engine:buildcache-amd64,mode=max
 
   build_frontend:
     needs:
@@ -445,11 +445,6 @@ jobs:
       - name: Compute lowercase image owner
         run: echo "IMAGE_OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
 
-      - name: Set up QEMU (arm64 emulation)
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -465,13 +460,14 @@ jobs:
         with:
           context: ./frontend
           file: ./frontend/Dockerfile
-          platforms: linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:latest
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache-amd64
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/trading-frontend:buildcache-amd64,mode=max
 
   deploy_frontend:
     needs:
@@ -486,14 +482,14 @@ jobs:
           needs.build_frontend.result == 'success'
         )
       }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 10
     permissions:
       contents: read
       packages: read
     env:
-      APP_ENV_FILE: /home/danrasp3/.env.trading
-      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+      APP_ENV_FILE: /home/daniel/.env.trading
+      DEPLOY_ENV_FILE: /home/daniel/.env.trading
       COMPOSE_IGNORE_ORPHANS: "true"
     steps:
       - name: Checkout code
@@ -543,14 +539,14 @@ jobs:
           needs.build_java.result == 'success'
         )
       }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 10
     permissions:
       contents: read
       packages: read
     env:
-      APP_ENV_FILE: /home/danrasp3/.env.trading
-      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+      APP_ENV_FILE: /home/daniel/.env.trading
+      DEPLOY_ENV_FILE: /home/daniel/.env.trading
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -599,14 +595,14 @@ jobs:
           needs.build_python.result == 'success'
         )
       }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 15
     permissions:
       contents: read
       packages: read
     env:
-      APP_ENV_FILE: /home/danrasp3/.env.trading
-      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+      APP_ENV_FILE: /home/daniel/.env.trading
+      DEPLOY_ENV_FILE: /home/daniel/.env.trading
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -670,14 +666,14 @@ jobs:
           needs.deploy_execution_engine.result == 'success'
         )
       }}
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 15
     permissions:
       contents: read
       packages: read
     env:
-      APP_ENV_FILE: /home/danrasp3/.env.trading
-      DEPLOY_ENV_FILE: /home/danrasp3/.env.trading
+      APP_ENV_FILE: /home/daniel/.env.trading
+      DEPLOY_ENV_FILE: /home/daniel/.env.trading
       COMPOSE_IGNORE_ORPHANS: "true"
     steps:
       - name: Checkout code

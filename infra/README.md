@@ -60,7 +60,7 @@ IMAGE_OWNER=my-ghcr-owner IMAGE_TAG=my-tag docker compose -f infra/docker-compos
 | Service | Internal port | Host port | Notes |
 |---|---:|---:|---|
 | `frontend` | `80` | `3000` | nginx static app and API proxy |
-| `bot` | `8080` | `8080` | monitor process plus dashboard API |
+| `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | monitor process plus dashboard API |
 | `mcp-server` | `8000` | `8000` | FastMCP SSE server when launched via compose command |
 | `execution-engine` | `50051` | `50051` | Java gRPC server |
 | `redis` | `6379` | `6379` | telemetry, Kalman state, idempotency |
