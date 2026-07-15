@@ -16,6 +16,27 @@ This directory contains the container and deployment wiring for the full bot sta
 | `redeploy.sh` | File watcher/redeploy helper |
 | `trading-bot.service` | systemd service template |
 
+## Persistent data
+
+Named volumes survive image pulls and container recreates:
+
+| Volume | Mount | Contents |
+|---|---|---|
+| `trading-bot_redis_data` | redis `/data` | Redis AOF |
+| `trading-bot_postgres_data` | postgres data dir | Ledger / audit DB |
+| `trading-bot_bot_data` | `/app/data` on bot, mcp-server, sec-worker | Dashboard overrides (`bot_settings.json`, `pairs.json`), SQLite (`trading_bot.db` incl. 2FA), local bot state |
+
+Create them once on a fresh host:
+
+```bash
+docker volume create trading-bot_redis_data
+docker volume create trading-bot_postgres_data
+docker volume create trading-bot_bot_data
+```
+
+Never run `docker compose down -v` on production unless you intentionally wipe state.
+Secrets and broker URLs also stay in the bind-mounted env file (`APP_ENV_FILE`, e.g. `/home/daniel/.env.trading`).
+
 ## Production Compose
 
 From the repository root:

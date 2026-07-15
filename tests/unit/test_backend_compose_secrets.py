@@ -96,6 +96,18 @@ def test_sec_worker_uses_compose_redis_host():
     assert environment["REDIS_HOST"] == "redis"
 
 
+def test_bot_python_services_mount_persistent_data_volume():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    for service_name in ("bot", "mcp-server", "sec-worker"):
+        volumes = services[service_name].get("volumes") or []
+        assert "bot_data:/app/data" in volumes
+
+    assert compose["volumes"]["bot_data"]["name"] == "trading-bot_bot_data"
+    assert compose["volumes"]["bot_data"]["external"] is True
+
+
 def test_sec_worker_uses_compose_postgres_host():
     compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
     environment = compose["services"]["sec-worker"]["environment"]
