@@ -293,7 +293,13 @@ class ArbitrageMonitor:
                 if not (s["ticker_a"] == ticker_a and s["ticker_b"] == ticker_b)
             ]
 
-    async def _has_active_pair_or_pending_order(self, ticker_a: str, ticker_b: str) -> bool:
+    async def _has_active_pair_or_pending_order(
+        self,
+        ticker_a: str,
+        ticker_b: str,
+        *,
+        notify: bool = True,
+    ) -> bool:
         pair_symbols = {
             self._canonical_position_symbol(ticker_a),
             self._canonical_position_symbol(ticker_b),
@@ -306,7 +312,8 @@ class ArbitrageMonitor:
                 f"open ledger positions ({exc})."
             )
             logger.critical(msg)
-            await notification_service.send_message(msg)
+            if notify:
+                await notification_service.send_message(msg)
             return True
 
         for signal in open_signals or []:
@@ -321,7 +328,8 @@ class ArbitrageMonitor:
                     f"active ledger signal {signal.get('signal_id')} already covers this pair."
                 )
                 logger.warning(msg)
-                await notification_service.send_message(msg)
+                if notify:
+                    await notification_service.send_message(msg)
                 return True
 
         if settings.PAPER_TRADING:
@@ -335,7 +343,8 @@ class ArbitrageMonitor:
                 f"pending broker orders ({exc})."
             )
             logger.critical(msg)
-            await notification_service.send_message(msg)
+            if notify:
+                await notification_service.send_message(msg)
             return True
 
         for order in pending_orders or []:
@@ -351,7 +360,8 @@ class ArbitrageMonitor:
                     f"pending broker order exists for {raw_symbol}."
                 )
                 logger.warning(msg)
-                await notification_service.send_message(msg)
+                if notify:
+                    await notification_service.send_message(msg)
                 return True
 
         return False
@@ -1665,6 +1675,21 @@ class ArbitrageMonitor:
                 )
 
                 if final_confidence > settings.MONITOR_MIN_AI_CONFIDENCE:
+                    # Gate before Telegram/dashboard approval — avoid spam when already open.
+                    if await self._has_active_pair_or_pending_order(t_a, t_b, notify=False):
+                        await self._upsert_active_signal(
+                            t_a,
+                            t_b,
+                            z_score=z_score,
+                            status="ALREADY_OPEN",
+                            confidence=final_confidence,
+                            hedge_ratio=hedge_ratio,
+                        )
+                        diagnostic["verdict"] = "SKIPPED"
+                        diagnostic["confidence"] = final_confidence
+                        diagnostic["reason"] = "already_open_or_pending"
+                        return diagnostic
+
                     await self._upsert_active_signal(
                         t_a,
                         t_b,
@@ -2231,8 +2256,14 @@ class ArbitrageMonitor:
                         close_fill = await self._await_order_fill(close_order_id, timeout=30)
                         close_status_raw = str((close_fill or {}).get("status", "")).lower()
                         close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
-                        close_qty_short = close_filled_qty + 1e-9 < filled_qty_a
-                        if close_status_raw != "filled" or close_filled_qty <= 0 or close_qty_short:
+                        close_ok = is_broker_fill_complete(
+                            status=close_status_raw,
+                            filled_qty=close_filled_qty,
+                            expected_qty=filled_qty_a,
+                            fill_price=float((close_fill or {}).get("filled_avg_price") or close_price_a),
+                            expected_notional=close_notional_a,
+                        )
+                        if not close_ok:
                             orphan_msg = (
                                 f"CRITICAL - PARTIAL LEG A CLOSE UNCONFIRMED\n"
                                 f"Signal: {signal_id}\n"
@@ -2262,7 +2293,26 @@ class ArbitrageMonitor:
                                     "expected_qty": filled_qty_a,
                                 },
                             })
+                        else:
+                            logger.info(
+                                "PARTIAL LEG A CLOSE SUCCESS: %s unwind filled "
+                                "[order_id=%s filled_qty=%s]. Marking signal CLOSED.",
+                                exec_t_a, close_order_id, close_filled_qty,
+                            )
+                            await persistence_service.close_trade(
+                                uuid.UUID(signal_id),
+                                exit_prices={exec_t_a: close_price_a},
+                                pnl=0.0,
+                                exit_reason=ExitReason.MANUAL,
+                            )
+                            blocked_status = OrderStatus.CLOSED
             await persistence_service.update_signal_status(uuid.UUID(signal_id), blocked_status)
+            if blocked_status == OrderStatus.CLOSED:
+                logger.info(
+                    "Leg A (%s) incomplete fill was unwound and ledger closed. signal_id=%s",
+                    exec_t_a, signal_id,
+                )
+                return execution_result(False, "leg_a_unwound")
             alert = (
                 f"Leg A ({exec_t_a}) was not confirmed as a full fill. "
                 f"Leg B NOT placed. status={status_raw_a or 'unknown'} "
@@ -2393,8 +2443,14 @@ class ArbitrageMonitor:
                 close_status_raw = str((close_fill or {}).get("status", "")).lower()
                 close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
                 expected_close_qty = filled_qty_a if filled_qty_a > 0 else size_a
-                close_qty_short = close_filled_qty + 1e-9 < expected_close_qty
-                if close_status_raw != "filled" or close_filled_qty <= 0 or close_qty_short:
+                close_ok = is_broker_fill_complete(
+                    status=close_status_raw,
+                    filled_qty=close_filled_qty,
+                    expected_qty=expected_close_qty,
+                    fill_price=float((close_fill or {}).get("filled_avg_price") or price_a),
+                    expected_notional=target_cash_a,
+                )
+                if not close_ok:
                     orphan_msg = (
                         f"CRITICAL - EMERGENCY CLOSE UNCONFIRMED\n"
                         f"Signal: {signal_id}\n"
@@ -2427,7 +2483,13 @@ class ArbitrageMonitor:
                 else:
                     logger.info(
                         f"EMERGENCY CLOSE SUCCESS: Orphaned {exec_t_a} position closed "
-                        f"[order_id={close_order_id}]."
+                        f"[order_id={close_order_id}]. Marking signal CLOSED."
+                    )
+                    await persistence_service.close_trade(
+                        uuid.UUID(signal_id),
+                        exit_prices={exec_t_a: price_a},
+                        pnl=0.0,
+                        exit_reason=ExitReason.MANUAL,
                     )
 
         if status_b == OrderStatus.LEG_B_REJECTED:
@@ -2630,6 +2692,22 @@ class ArbitrageMonitor:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
     async def _fail_fast_on_unresolved_execution_state(self) -> bool:
+        if settings.auto_reconcile_flat_orphans:
+            try:
+                from src.services.ledger_reconcile_service import auto_close_flat_orphans
+
+                summary = await auto_close_flat_orphans(brokerage=self.brokerage, dry_run=False)
+                if summary.get("closed"):
+                    logger.info(
+                        "Startup auto-reconcile closed %s flat orphan/failed ledger row(s) "
+                        "(examined=%s blocked=%s).",
+                        summary.get("closed"),
+                        summary.get("examined"),
+                        summary.get("blocked"),
+                    )
+            except Exception as exc:
+                logger.warning("Startup auto-reconcile failed (continuing with fail-fast): %s", exc)
+
         unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
         if unresolved_count <= 0:
             return True

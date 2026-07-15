@@ -2197,6 +2197,19 @@ async def login_complete(request: DashboardLoginCompleteRequest):
     return {**result, "two_factor": dashboard_service.totp.public_status()}
 
 
+@app.options("/api/auth/login/cancel")
+@app.options("/api/auth/login/cancel/")
+async def login_cancel_preflight():
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/login/cancel")
+@app.post("/api/auth/login/cancel/")
+async def login_cancel(request: DashboardLoginCompleteRequest):
+    login_challenge_manager.discard(request.challenge_id)
+    return {"status": "cancelled", "challenge_id": request.challenge_id}
+
+
 @app.options("/api/auth/logout")
 @app.options("/api/auth/logout/")
 async def logout_preflight():
@@ -2321,17 +2334,23 @@ async def terminal_command(request: CommandRequest, token: str = Query(None), se
 
 
 @app.get("/api/approvals/pending")
-async def list_pending_approvals(token: str = Query(None)):
-    """Agent/operator poller: DASHBOARD_TOKEN only (no browser session / 2FA)."""
-    verify_security_token(token)
+async def list_pending_approvals(token: str = Query(None), session: str = Query(None)):
+    """Pending trade approvals for dashboard (session) or agent pollers (token)."""
+    if token:
+        verify_security_token(token)
+    else:
+        verify_token(token, session)
     from src.services.notification_service import notification_service
 
     return {"pending": notification_service.list_pending_approvals()}
 
 
 @app.post("/api/approvals/{correlation_id}/approve")
-async def approve_pending_trade(correlation_id: str, token: str = Query(None)):
-    verify_security_token(token)
+async def approve_pending_trade(correlation_id: str, token: str = Query(None), session: str = Query(None)):
+    if token:
+        verify_security_token(token)
+    else:
+        verify_token(token, session)
     from src.services.notification_service import notification_service
 
     result = notification_service.resolve_pending_approval(correlation_id, approved=True)
@@ -2339,15 +2358,18 @@ async def approve_pending_trade(correlation_id: str, token: str = Query(None)):
         raise HTTPException(status_code=404, detail=result.get("message"))
     await dashboard_state.add_message(
         "SYSTEM",
-        f"Agent approved trade {correlation_id}",
+        f"Approved trade {correlation_id}",
         metadata={"correlation_id": correlation_id, "type": "approval_resolved", "approved": True},
     )
     return result
 
 
 @app.post("/api/approvals/{correlation_id}/reject")
-async def reject_pending_trade(correlation_id: str, token: str = Query(None)):
-    verify_security_token(token)
+async def reject_pending_trade(correlation_id: str, token: str = Query(None), session: str = Query(None)):
+    if token:
+        verify_security_token(token)
+    else:
+        verify_token(token, session)
     from src.services.notification_service import notification_service
 
     result = notification_service.resolve_pending_approval(correlation_id, approved=False)
@@ -2355,7 +2377,7 @@ async def reject_pending_trade(correlation_id: str, token: str = Query(None)):
         raise HTTPException(status_code=404, detail=result.get("message"))
     await dashboard_state.add_message(
         "SYSTEM",
-        f"Agent rejected trade {correlation_id}",
+        f"Rejected trade {correlation_id}",
         metadata={"correlation_id": correlation_id, "type": "approval_resolved", "approved": False},
     )
     return result

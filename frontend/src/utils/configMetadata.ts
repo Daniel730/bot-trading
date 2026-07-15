@@ -21,7 +21,10 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
   'FINANCIAL_KILL_SWITCH_PCT': { label: 'Hard Kill Switch %', description: 'Percentage loss on a single trade that triggers an immediate exit.' },
 
   // --- Strategy & Execution ---
-  'APPROVAL_THRESHOLD': { label: 'AI Approval Score', description: 'Minimum confidence score required from the agent ensemble to fire a signal.' },
+  'APPROVAL_THRESHOLD': {
+    label: 'Auto-Approve Threshold (USD)',
+    description: 'Live trades at or below this notional auto-approve after Telegram is configured. Pair signals still force manual approval.',
+  },
   'MONITOR_ENTRY_ZSCORE': { label: 'Entry Z-Score', description: 'Statistical threshold for pair divergence. Higher means more conservative entries.' },
   'TAKE_PROFIT_ZSCORE': { label: 'Take Profit Z-Score', description: 'The z-score target where the bot will close a profitable position.' },
   'STOP_LOSS_ZSCORE': { label: 'Stop Loss Z-Score', description: 'The z-score target where the bot will exit a losing position.' },

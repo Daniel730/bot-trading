@@ -72,7 +72,10 @@ const SystemHealthPage: React.FC<SystemHealthPageProps> = ({
         </section>
       </div>
       <section className="panel">
-        <SectionHeader title="Recent Events" subtitle={logs?.file ? `Log source: ${logs.file}` : 'SQLite event feed'} />
+        <SectionHeader
+          title="Structured Health Events"
+          subtitle={logs?.file ? `Event feed (${logs.file}) — live terminal is under Bot Control` : 'Structured event feed — live terminal is under Bot Control'}
+        />
         <div className="feed">
           {logs?.events?.length ? logs.events.slice(0, 10).map((event, index) => (
             <div className="feed-item" key={`${event.timestamp}-${index}`}>

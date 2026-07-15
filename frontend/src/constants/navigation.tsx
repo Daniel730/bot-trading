@@ -3,6 +3,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  Briefcase,
   Cpu,
   Gauge,
   History,
@@ -39,8 +40,14 @@ export const NAV_ITEMS: NavItem[] = [
   { key: 'wallet', label: 'Wallet', icon: <Wallet size={16} />, category: 'TRADING' },
   { key: 'pairs', label: 'Pairs', icon: <Layers size={16} />, category: 'TRADING' },
   { key: 'signals', label: 'Signals', icon: <Activity size={16} />, category: 'TRADING' },
-  { key: 'positions', label: 'Positions', icon: <History size={16} />, category: 'TRADING' },
+  { key: 'positions', label: 'Positions', icon: <Briefcase size={16} />, category: 'TRADING' },
   { key: 'control', label: 'Bot Control', icon: <Bot size={16} />, category: 'SYSTEM' },
   { key: 'settings', label: 'Settings', icon: <SettingsIcon size={16} />, category: 'SYSTEM' },
   { key: 'health', label: 'System Health', icon: <Cpu size={16} />, category: 'SYSTEM' },
 ];
+
+const PAGE_KEYS = new Set<string>(NAV_ITEMS.map((item) => item.key));
+
+export function isPage(value: string): value is Page {
+  return PAGE_KEYS.has(value);
+}

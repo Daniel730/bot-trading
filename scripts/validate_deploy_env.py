@@ -66,7 +66,16 @@ def validate(values: dict[str, str]) -> list[str]:
             errors.append(f"{key} is still a template placeholder.")
 
     paper_trading = values.get("PAPER_TRADING", "")
-    if paper_trading and paper_trading.lower() != "true":
+    alpaca_base = (
+        values.get("ALPACA_BASE_URL")
+        or values.get("APCA_API_BASE_URL")
+        or ""
+    ).lower()
+    alpaca_broker_paper = "paper-api.alpaca.markets" in alpaca_base
+    # PAPER_TRADING=false is allowed only when routing to Alpaca's paper API
+    # (real paper fills, not internal shadow). Live money URLs still require
+    # PAPER_TRADING=true for deploy gating.
+    if paper_trading and paper_trading.lower() != "true" and not alpaca_broker_paper:
         errors.append("PAPER_TRADING must be true for paper-trading startup validation.")
 
     for key in JSON_OBJECT_KEYS:

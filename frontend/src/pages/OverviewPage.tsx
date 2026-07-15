@@ -1,13 +1,12 @@
 import React from 'react';
-import type { SummaryResponse, ChartResponse, OpenPosition } from '../services/api';
+import type { SummaryResponse, OpenPosition } from '../services/api';
 import type { TelemetryRisk, TelemetryThought } from '../hooks/useTelemetry';
-import { LineMiniChart, SectionHeader } from '../components/UIHelpers';
+import { SectionHeader } from '../components/UIHelpers';
 import { formatCompact, formatCurrency, formatDateTime, formatPercent, getTrendClass } from '../utils/formatters';
 import IntelligenceHub from '../components/IntelligenceHub';
 
 interface OverviewPageProps {
   summary: SummaryResponse | null;
-  profitChart: ChartResponse | null;
   positions: OpenPosition[];
   risk: TelemetryRisk | null;
   recentThoughts: TelemetryThought[];
@@ -18,7 +17,6 @@ interface OverviewPageProps {
 
 const OverviewPage: React.FC<OverviewPageProps> = ({
   summary,
-  profitChart,
   positions,
   risk,
   recentThoughts,
@@ -28,15 +26,11 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
 }) => {
   return (
     <>
-      <SectionHeader title="Real-Time Overview" subtitle="Core trading and runtime indicators." />
-      
-      {/* Intelligence Hub integration. Show the actual market regime from the
-          SSE stream (TRENDING_UP/DOWN, VOLATILE, SIDEWAYS, STABLE) rather than
-          the volatility status, and render as soon as either regime or risk
-          telemetry is available. */}
+      <SectionHeader title="Real-Time Overview" subtitle="Status strip and recent activity. Charts live under Analytics." />
+
       {(marketRegime || risk) && (
-        <IntelligenceHub 
-          regime={marketRegime ?? 'STABLE'} 
+        <IntelligenceHub
+          regime={marketRegime ?? 'STABLE'}
           confidence={marketRegimeConfidence}
           accuracy={globalAccuracy}
         />
@@ -63,22 +57,19 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
           <strong>{summary?.system_uptime_human ?? '—'}</strong>
           <small>{summary?.cpu_pct?.toFixed(1) ?? '—'}% CPU · {summary?.memory_pct?.toFixed(1) ?? '—'}% memory</small>
         </div>
+        <div className="metric-card">
+          <span>Profit Today</span>
+          <strong className={getTrendClass(summary?.profit_today)}>{formatCurrency(summary?.profit_today)}</strong>
+          <small>See Analytics for cumulative P&L</small>
+        </div>
+        <div className="metric-card">
+          <span>Open Positions</span>
+          <strong>{summary?.open_positions ?? positions.length}</strong>
+          <small>{summary?.open_signals ?? 0} open signals</small>
+        </div>
       </div>
 
       <div className="card-grid two-up">
-        <section className="panel">
-          <SectionHeader title="Profit Trajectory" subtitle="Cumulative realized profit from closed trades." />
-          {profitChart?.points?.length ? (
-            <LineMiniChart points={profitChart.points} color="var(--emerald)" />
-          ) : (
-            <div className="empty">No chart data yet.</div>
-          )}
-          <div className="panel-footer">
-            <span className={getTrendClass(summary?.profit_today)}>{formatCurrency(summary?.profit_today)}</span>
-            <span>Today’s realized P&L</span>
-          </div>
-        </section>
-
         <section className="panel">
           <SectionHeader title="Open Positions" subtitle="Live mark-to-market snapshot." />
           <div className="list">
@@ -95,9 +86,7 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
             )) : <div className="empty">No open positions.</div>}
           </div>
         </section>
-      </div>
 
-      <div className="card-grid two-up">
         <section className="panel">
           <SectionHeader title="Risk Telemetry" subtitle="Live guardrails from the telemetry stream." />
           <div className="risk-grid">
@@ -107,20 +96,20 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
             <div><span>Volatility</span><strong>{risk?.volatility_status ?? '—'}</strong></div>
           </div>
         </section>
-
-        <section className="panel">
-          <SectionHeader title="Agent Reasoning" subtitle="Most recent model-side commentary." />
-          <div className="feed">
-            {recentThoughts.length ? recentThoughts.map((thought, index) => (
-              <div className="feed-item" key={`${thought.signal_id ?? 'thought'}-${index}`}>
-                <strong>{thought.agent_name}</strong>
-                <span>{thought.verdict}</span>
-                <p>{thought.thought}</p>
-              </div>
-            )) : <div className="empty">No recent reasoning events.</div>}
-          </div>
-        </section>
       </div>
+
+      <section className="panel">
+        <SectionHeader title="Agent Reasoning" subtitle="Most recent model-side commentary." />
+        <div className="feed">
+          {recentThoughts.length ? recentThoughts.map((thought, index) => (
+            <div className="feed-item" key={`${thought.signal_id ?? 'thought'}-${index}`}>
+              <strong>{thought.agent_name}</strong>
+              <span>{thought.verdict}</span>
+              <p>{thought.thought}</p>
+            </div>
+          )) : <div className="empty">No recent reasoning events.</div>}
+        </div>
+      </section>
     </>
   );
 };

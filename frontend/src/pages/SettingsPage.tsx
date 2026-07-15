@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { Eye, EyeOff } from 'lucide-react';
 import type { ConfigResponse, TwoFactorInitiateResponse } from '../services/api';
 import { SectionHeader } from '../components/UIHelpers';
+import TotpSetupPanel from '../components/TotpSetupPanel';
 import { formatDateTime } from '../utils/formatters';
 import { getConfigMetadata } from '../utils/configMetadata';
 
@@ -141,7 +143,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 style={{ padding: '4px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: '1.2rem', color: 'var(--text)' }}
                                 title={visibleFields.has(item.key) ? "Hide value" : "Show value"}
                               >
-                                {visibleFields.has(item.key) ? '🙈' : '👁️'}
+                                {visibleFields.has(item.key) ? <EyeOff size={14} /> : <Eye size={14} />}
                               </button>
                             )}
                           </div>
@@ -168,26 +170,29 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             <div><span>Backup Codes Left</span><strong>{config?.two_factor.backup_codes_remaining ?? 0}</strong></div>
           </div>
           <div className="inline-actions">
-            <button className="ghost-btn" disabled={isBusy} onClick={handleInitiate2FA}>Generate Setup Secret</button>
+            <button
+              className="ghost-btn"
+              disabled={isBusy}
+              onClick={() => {
+                if (config?.two_factor.enabled && !window.confirm('2FA is already enabled. Generate a new secret and invalidate the old one?')) {
+                  return;
+                }
+                handleInitiate2FA();
+              }}
+            >
+              {config?.two_factor.enabled ? 'Rotate 2FA Secret' : 'Generate Setup Secret'}
+            </button>
           </div>
           {twoFactorSetup ? (
-            <div className="twofa-setup" style={{ marginTop: '20px' }}>
-              <p>Secret: <code>{twoFactorSetup.secret}</code></p>
-              <p>otpauth URI:</p>
-              <code className="block-code">{twoFactorSetup.otpauth_url}</code>
-              <p>Backup codes:</p>
-              <div className="code-grid">
-                {twoFactorSetup.backup_codes.map((code) => <code key={code}>{code}</code>)}
-              </div>
-              <div className="inline-actions" style={{ marginTop: '12px' }}>
-                <input
-                  value={twoFactorCode}
-                  onChange={(event) => setTwoFactorCode(event.target.value)}
-                  placeholder="Enter authenticator code"
-                />
-                <button className="primary-btn" disabled={isBusy} onClick={handleVerify2FA}>Verify & Enable</button>
-              </div>
-            </div>
+            <TotpSetupPanel
+              secret={twoFactorSetup.secret}
+              otpauthUrl={twoFactorSetup.otpauth_url}
+              backupCodes={twoFactorSetup.backup_codes}
+              code={twoFactorCode}
+              onCodeChange={setTwoFactorCode}
+              onVerify={handleVerify2FA}
+              isBusy={isBusy}
+            />
           ) : null}
         </section>
       )}

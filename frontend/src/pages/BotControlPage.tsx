@@ -1,7 +1,8 @@
-import React from 'react';
-import { Play, Square, RefreshCw } from 'lucide-react';
+import React, { useState } from 'react';
+import { Play, Square, RefreshCw, Send } from 'lucide-react';
 import type { LogsResponse, TerminalMessage } from '../services/api';
 import { SectionHeader } from '../components/UIHelpers';
+import PendingApprovalsPanel from '../components/PendingApprovalsPanel';
 import { formatDateTime } from '../utils/formatters';
 
 interface BotControlPageProps {
@@ -14,6 +15,12 @@ interface BotControlPageProps {
   handleDiscoverPairs: () => void;
   terminalMessages: TerminalMessage[];
   logs: LogsResponse | null;
+  token: string | null;
+  sessionToken: string | null;
+  onSendTerminalCommand: (command: string) => Promise<void>;
+  onAuthFailure?: (err: unknown) => boolean;
+  onMessage?: (message: string) => void;
+  onError?: (message: string) => void;
 }
 
 const BotControlPage: React.FC<BotControlPageProps> = ({
@@ -25,9 +32,17 @@ const BotControlPage: React.FC<BotControlPageProps> = ({
   handleBotAction,
   handleDiscoverPairs,
   terminalMessages,
-  logs
+  logs,
+  token,
+  sessionToken,
+  onSendTerminalCommand,
+  onAuthFailure,
+  onMessage,
+  onError,
 }) => {
   const [pendingAction, setPendingAction] = React.useState<'start' | 'stop' | 'restart' | null>(null);
+  const [command, setCommand] = useState('');
+  const [commandBusy, setCommandBusy] = useState(false);
 
   React.useEffect(() => {
     if (pendingAction === 'start' && currentBotState === 'RUNNING') setPendingAction(null);
@@ -38,13 +53,25 @@ const BotControlPage: React.FC<BotControlPageProps> = ({
   const onActionClick = (action: 'start' | 'stop' | 'restart') => {
     setPendingAction(action);
     handleBotAction(action);
-    // Timeout to clear pending state if backend doesn't update
     setTimeout(() => setPendingAction(null), 10000);
+  };
+
+  const submitCommand = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const trimmed = command.trim();
+    if (!trimmed) return;
+    setCommandBusy(true);
+    try {
+      await onSendTerminalCommand(trimmed);
+      setCommand('');
+    } finally {
+      setCommandBusy(false);
+    }
   };
 
   return (
     <>
-      <SectionHeader title="Bot Control" subtitle="Operational state, restart queueing, and recent terminal activity." />
+      <SectionHeader title="Bot Control" subtitle="Operational state, approvals, and live terminal commands." />
       <div className="card-grid metrics">
         <div className="metric-card">
           <span>Bot Status</span>
@@ -81,19 +108,41 @@ const BotControlPage: React.FC<BotControlPageProps> = ({
           Search & Update Eligibles
         </button>
       </div>
+
+      <PendingApprovalsPanel
+        token={token}
+        sessionToken={sessionToken}
+        onAuthFailure={onAuthFailure}
+        onMessage={onMessage}
+        onError={onError}
+      />
+
       <div className="card-grid two-up">
         <section className="panel">
-          <SectionHeader title="Terminal Feed" subtitle="Most recent dashboard terminal messages." />
+          <SectionHeader title="Live Terminal" subtitle="Commands: /approve, /reject, /status, /set_threshold." />
           <div className="terminal-feed">
             {terminalMessages.length ? terminalMessages.map((message, index) => (
               <TerminalLine key={`${message.timestamp}-${index}`} message={message} />
             )) : <div className="empty">No terminal activity yet.</div>}
           </div>
+          <form className="terminal-command-form" onSubmit={submitCommand}>
+            <input
+              value={command}
+              onChange={(event) => setCommand(event.target.value)}
+              placeholder="/approve <cid> · /reject <cid> · /status · /set_threshold 50"
+              disabled={isBusy || commandBusy}
+              aria-label="Terminal command"
+            />
+            <button type="submit" className="primary-btn" disabled={isBusy || commandBusy || !command.trim()}>
+              <Send size={14} />
+              Send
+            </button>
+          </form>
         </section>
         <section className="panel">
-          <SectionHeader title="Recent Logs" subtitle="Latest file-backed log lines." />
+          <SectionHeader title="Recent File Logs" subtitle="Short tail for debugging; full health snapshot is under System Health." />
           <div className="log-feed">
-            {logs?.lines?.length ? logs.lines.slice(-12).map((line, index) => (
+            {logs?.lines?.length ? logs.lines.slice(-8).map((line, index) => (
               <code key={`${line}-${index}`}>{line}</code>
             )) : <div className="empty">No recent log lines.</div>}
           </div>
