@@ -1066,7 +1066,12 @@ async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     signal_id = str(uuid.uuid4())
 
-    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+    async def bid_ask_for(ticker, *args, **kwargs):
+        if "BTC" in str(ticker).upper():
+            return (65000.0, 65001.0)
+        return (3200.0, 3201.0)
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock, side_effect=bid_ask_for) as mock_bid_ask, \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
@@ -1080,7 +1085,6 @@ async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
          patch.object(settings, "PAPER_TRADING", False), \
          patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
 
-        mock_bid_ask.return_value = (100.0, 100.05)
         mock_validate_trade.return_value = {
             "is_acceptable": True,
             "final_amount": 100.0,
@@ -1088,15 +1092,18 @@ async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
             "max_allowed_fiat": 100.0,
         }
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
+        # Planned ≈ 0.001467 BTC / 0.001467 ETH at $100 gross; ~2% under is accepted.
         mock_await_fill.side_effect = [
-            {"status": "filled", "filled_qty": 0.00070, "filled_avg_price": 65000.0},
-            {"status": "filled", "filled_qty": 0.015, "filled_avg_price": 3200.0},
+            {"status": "filled", "filled_qty": 0.001438, "filled_avg_price": 65000.0},
+            {"status": "filled", "filled_qty": 0.001438, "filled_avg_price": 3200.0},
         ]
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
             {"status": "success", "order_id": "leg-a"},
             {"status": "success", "order_id": "leg-b"},
         ])
         monitor.brokerage.get_positions = AsyncMock(return_value=[{
+            "ticker": "ETH-USD",
+            "symbol": "ETH-USD",
             "quantity": 1.0,
             "quantityAvailableForTrading": 1.0,
             "marketValue": 50_000.0,
@@ -1107,6 +1114,7 @@ async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
         assert result["executed"] is True
         assert monitor.brokerage.place_value_order.await_count == 2
         assert mock_await_fill.await_count == 2
+        assert mock_bid_ask.await_count >= 1
 
 
 @pytest.mark.asyncio
