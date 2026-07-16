@@ -198,12 +198,13 @@ Useful ports:
 
 | Setting | Effect |
 |---|---|
-| `PAPER_TRADING=true` | Uses shadow execution and does not submit live broker orders |
+| `PAPER_TRADING=true` | Uses shadow execution and does not submit live broker orders; auto-approves trades |
+| `PAPER_TRADING=false` + paper-api URL | Broker Alpaca paper orders (paper money); auto-approves without Telegram |
 | `BROKERAGE_PROVIDER=ALPACA` | Required active brokerage provider; unsupported values fail startup |
 | `DEV_MODE=true` | Uses crypto test pairs, bypasses equity market hours, and enables development behavior |
 | `DRY_RUN=true` | Keeps the Java engine in mock-broker mode |
-| `LIVE_CAPITAL_DANGER=true` | Refuses startup unless Redis L2 entropy baselines exist |
-| `ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM=false` | Requires Telegram approval wiring for live approvals |
+| `LIVE_CAPITAL_DANGER=true` | Required when `PAPER_TRADING=false`; live URL also gates on L2 entropy baselines |
+| `ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM=false` | Unused for real-money live (always fail-closed); Alpaca paper uses `should_auto_approve_trades` |
 
 ## Test Commands
 

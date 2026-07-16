@@ -87,12 +87,15 @@ not the internal shadow service), set in `.env`:
 - Real `ALPACA_API_KEY` / `ALPACA_API_SECRET` from an Alpaca **paper** account (provide as Cursor secrets;
   injected env vars override the `.env` placeholders).
 
-This resolves to runtime mode `ALPACA_PAPER` (`broker_paper_trading=true`). The monitor detects the
-paper endpoint and automatically **skips** the live L2-entropy-baseline gate even though
-`LIVE_CAPITAL_DANGER=true`, so no entropy seeding is needed. In production (non-DEV) mode the scanner
-reserves active slots for crypto pairs and scans them 24/7 (equity pairs are skipped when the US market
-is closed), so crypto pairs like `BTC-USD/ETH-USD` produce activity off-hours. Market data works via
-yfinance fallback if `POLYGON_API_KEY` is absent; the AI agent ensemble degrades gracefully without
+This resolves to runtime mode `ALPACA_PAPER` (`broker_paper_trading=true`). Trade approvals
+auto-accept via `settings.should_auto_approve_trades` (same as shadow paper) — Telegram is
+optional for visibility only. Real-money live (`api.alpaca.markets`) still requires human
+approval. The monitor detects the paper endpoint and automatically **skips** the live
+L2-entropy-baseline gate even though `LIVE_CAPITAL_DANGER=true`, so no entropy seeding is
+needed. In production (non-DEV) mode the scanner reserves active slots for crypto pairs and
+scans them 24/7 (equity pairs are skipped when the US market is closed), so crypto pairs like
+`BTC-USD/ETH-USD` produce activity off-hours. Market data works via yfinance fallback if
+`POLYGON_API_KEY` is absent; the AI agent ensemble degrades gracefully without
 `OPENAI_API_KEY`/`GEMINI_API_KEY` but is higher-fidelity with them.
 
 ### Tests

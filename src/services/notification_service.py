@@ -496,20 +496,23 @@ class NotificationService:
     async def request_approval(self, trade_summary: str, trade_value: float = None, force_manual: bool = False) -> bool:
         """Gate a trade on operator approval.
 
-        In live mode: sends inline-button Telegram message and waits for
+        In live (real-money) mode: sends inline-button Telegram message and waits for
         the operator to click Approve/Reject (5 min timeout -> False).
 
-        In paper mode (settings.PAPER_TRADING=True): returns True in
-        under 100ms and dispatches a fire-and-forget notification so the
-        operator still has visibility (spec FR-001..FR-003).
+        Auto-approve fast path (under 100ms + fire-and-forget notify) when
+        settings.should_auto_approve_trades is true — i.e. shadow paper
+        (PAPER_TRADING) or broker Alpaca paper (is_broker_paper_trading).
+        Real-money live capital never uses this path (spec FR-001..FR-003).
         """
-        # Paper-mode fast path.
-        if settings.PAPER_TRADING:
+        # Shadow paper + Alpaca paper broker: unattended auto-approve.
+        if settings.should_auto_approve_trades:
             self._schedule_paper_notify(trade_summary)
             return True
 
         if not self._telegram_enabled:
-            # Live mode must fail-closed when human approval is required but unavailable.
+            # Live real-money mode must fail-closed when human approval is required
+            # but unavailable. ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM is intentionally
+            # not honored here — real capital stays gated.
             logger.warning(
                 "[APPROVAL] Telegram approval channel unavailable. Pausing live trading for manual review: %s",
                 trade_summary,

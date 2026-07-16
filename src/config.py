@@ -785,12 +785,35 @@ class Settings(BaseSettings):
         return self.TRADING_212_MODE.lower() == "demo"
 
     @property
+    def is_alpaca_paper_endpoint(self) -> bool:
+        """True when ALPACA_BASE_URL points at Alpaca's paper API host."""
+        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
+
+    @property
+    def is_broker_paper_trading(self) -> bool:
+        """Broker-connected Alpaca paper (real orders, paper money) — not shadow, not DEV.
+
+        Matches dashboard runtime `broker_paper_trading` / mode `ALPACA_PAPER`:
+        PAPER_TRADING=false, DEV_MODE=false, ALPACA provider, paper-api URL.
+        """
+        if self.PAPER_TRADING or self.DEV_MODE:
+            return False
+        if (self.BROKERAGE_PROVIDER or "").upper() != "ALPACA":
+            return False
+        return self.is_alpaca_paper_endpoint
+
+    @property
+    def should_auto_approve_trades(self) -> bool:
+        """Shadow paper or Alpaca paper broker — never real-money live capital."""
+        return bool(self.PAPER_TRADING or self.is_broker_paper_trading)
+
+    @property
     def auto_reconcile_flat_orphans(self) -> bool:
         if self.AUTO_RECONCILE_FLAT_ORPHANS is not None:
             return bool(self.AUTO_RECONCILE_FLAT_ORPHANS)
         if self.PAPER_TRADING:
             return True
-        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
+        return self.is_alpaca_paper_endpoint
 
     @property
     def auto_reconcile_broker_confirmed_pairs(self) -> bool:
@@ -798,7 +821,7 @@ class Settings(BaseSettings):
             return bool(self.AUTO_RECONCILE_BROKER_CONFIRMED_PAIRS)
         if self.PAPER_TRADING:
             return True
-        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
+        return self.is_alpaca_paper_endpoint
 
     @property
     def web3_enabled(self) -> bool:

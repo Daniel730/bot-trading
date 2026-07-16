@@ -127,8 +127,9 @@ The dashboard removes old `token`/`session` query params from the URL. API auth 
 
 | Mode | Settings | Notes |
 |---|---|---|
-| Paper | `PAPER_TRADING=true` | Shadow service simulates entries/exits and persists auditable rows. |
-| Live broker | `PAPER_TRADING=false` | Python brokerage dispatcher submits live orders through Alpaca. Confirm all secrets and approvals first. |
+| Paper (shadow) | `PAPER_TRADING=true` | Shadow service simulates entries/exits; approvals auto-accept. |
+| Alpaca paper | `PAPER_TRADING=false`, `LIVE_CAPITAL_DANGER=true`, `ALPACA_BASE_URL=https://paper-api.alpaca.markets`, `DEV_MODE=false` | Real orders on Alpaca paper money; approvals auto-accept without Telegram (`should_auto_approve_trades`). |
+| Live broker | `PAPER_TRADING=false` + live Alpaca URL (`api.alpaca.markets`) | Real money. Telegram/dashboard approval required; never unattended auto-approve. |
 | Broker selection | `BROKERAGE_PROVIDER=ALPACA` | Alpaca is the only active brokerage provider; unsupported values fail startup. |
 | Dev | `DEV_MODE=true` | Crypto test universe, 24/7 scan, equity-hour bypass. Do not use for production decisions. |
 | Java dry run | `DRY_RUN=true` | Required. The Java engine rejects live-broker mode today. |
@@ -141,7 +142,8 @@ The dashboard removes old `token`/`session` query params from the URL. API auth 
 - Confirm pair rejections are expected when eligibility filtering is enabled.
 - Watch `/api/system/health` or the System Health dashboard page for CPU/memory pressure.
 - In paper mode, verify `signal_id` joins across reasoning, journal, and trade ledger.
-- In live mode, confirm Telegram approval, active broker connectivity, and sell-inventory preflight before enabling unattended execution.
+- In Alpaca paper mode, confirm dashboard shows `ALPACA_PAPER` / `broker_paper_trading=true` (unattended auto-approve is expected).
+- In live real-money mode, confirm Telegram/dashboard approval, active broker connectivity, and sell-inventory preflight before enabling execution.
 
 ## Telegram And Dashboard Commands
 

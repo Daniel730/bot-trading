@@ -229,8 +229,56 @@ def test_httpx_telegram_request_logs_redact_bot_token(caplog):
 
 
 @pytest.mark.asyncio
+async def test_request_approval_alpaca_paper_auto_approves_without_telegram():
+    """Broker Alpaca paper: auto-approve even when Telegram is down."""
+    originals = {
+        "PAPER_TRADING": settings.PAPER_TRADING,
+        "DEV_MODE": settings.DEV_MODE,
+        "LIVE_CAPITAL_DANGER": settings.LIVE_CAPITAL_DANGER,
+        "BROKERAGE_PROVIDER": settings.BROKERAGE_PROVIDER,
+        "ALPACA_BASE_URL": settings.ALPACA_BASE_URL,
+    }
+    original_telegram_enabled = notification_service._telegram_enabled
+    notification_service.pending_approvals.clear()
+
+    try:
+        settings.PAPER_TRADING = False
+        settings.DEV_MODE = False
+        settings.LIVE_CAPITAL_DANGER = True
+        settings.BROKERAGE_PROVIDER = "ALPACA"
+        settings.ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+        notification_service._telegram_enabled = False
+
+        assert settings.is_broker_paper_trading is True
+        assert settings.should_auto_approve_trades is True
+
+        broken_send = AsyncMock(side_effect=RuntimeError("network down"))
+        with patch.object(notification_service, "_paper_notify", broken_send):
+            start = time.perf_counter()
+            result = await notification_service.request_approval(
+                "alpaca paper trade summary",
+                trade_value=500.0,
+                force_manual=True,
+            )
+            elapsed_ms = (time.perf_counter() - start) * 1000
+
+        assert result is True
+        assert elapsed_ms < 100
+        assert notification_service.pending_approvals == {}
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    finally:
+        for key, value in originals.items():
+            setattr(settings, key, value)
+        notification_service._telegram_enabled = original_telegram_enabled
+        notification_service.pending_approvals.clear()
+
+
+@pytest.mark.asyncio
 async def test_request_approval_live_without_telegram_fails_closed():
     original_paper = settings.PAPER_TRADING
+    original_dev = settings.DEV_MODE
+    original_url = settings.ALPACA_BASE_URL
     original_override = settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM
     original_threshold = settings.APPROVAL_THRESHOLD
     original_telegram_enabled = notification_service._telegram_enabled
@@ -238,9 +286,15 @@ async def test_request_approval_live_without_telegram_fails_closed():
 
     try:
         settings.PAPER_TRADING = False
+        settings.DEV_MODE = False
+        # Real-money live host — must NOT hit Alpaca-paper auto-approve.
+        settings.ALPACA_BASE_URL = "https://api.alpaca.markets"
         settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = False
         settings.APPROVAL_THRESHOLD = 1000.0
         notification_service._telegram_enabled = False
+
+        assert settings.is_broker_paper_trading is False
+        assert settings.should_auto_approve_trades is False
 
         pause_update = AsyncMock()
         set_state = AsyncMock()
@@ -269,6 +323,8 @@ async def test_request_approval_live_without_telegram_fails_closed():
         assert notification_service.pending_approvals == {}
     finally:
         settings.PAPER_TRADING = original_paper
+        settings.DEV_MODE = original_dev
+        settings.ALPACA_BASE_URL = original_url
         settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = original_override
         settings.APPROVAL_THRESHOLD = original_threshold
         notification_service._telegram_enabled = original_telegram_enabled
@@ -278,6 +334,8 @@ async def test_request_approval_live_without_telegram_fails_closed():
 @pytest.mark.asyncio
 async def test_request_approval_live_without_telegram_pauses_for_manual_review_even_with_override():
     original_paper = settings.PAPER_TRADING
+    original_dev = settings.DEV_MODE
+    original_url = settings.ALPACA_BASE_URL
     original_override = settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM
     original_threshold = settings.APPROVAL_THRESHOLD
     original_telegram_enabled = notification_service._telegram_enabled
@@ -285,9 +343,13 @@ async def test_request_approval_live_without_telegram_pauses_for_manual_review_e
 
     try:
         settings.PAPER_TRADING = False
+        settings.DEV_MODE = False
+        settings.ALPACA_BASE_URL = "https://api.alpaca.markets"
         settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = True
         settings.APPROVAL_THRESHOLD = 1000.0
         notification_service._telegram_enabled = False
+
+        assert settings.should_auto_approve_trades is False
 
         with patch("src.services.dashboard_service.dashboard_service.update", new=AsyncMock()) as pause_update, \
              patch("src.services.persistence_service.persistence_service.set_system_state", new=AsyncMock()) as set_state:
@@ -305,6 +367,8 @@ async def test_request_approval_live_without_telegram_pauses_for_manual_review_e
         assert notification_service.pending_approvals == {}
     finally:
         settings.PAPER_TRADING = original_paper
+        settings.DEV_MODE = original_dev
+        settings.ALPACA_BASE_URL = original_url
         settings.ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM = original_override
         settings.APPROVAL_THRESHOLD = original_threshold
         notification_service._telegram_enabled = original_telegram_enabled
