@@ -2695,11 +2695,35 @@ class ArbitrageMonitor:
         """Ordered startup repair before fail-fast counting.
 
         1. CLOSING → NEEDS_MANUAL (avoid duplicate close orders)
-        2. Restore broker-confirmed filled pair legs to OPEN_PAIR
-        3. Close flat orphan/failed rows when broker is flat
-        4. Log signal-level reconciliation plans (read-only audit)
+        2. Ledger-close signals whose broker close orders are already filled
+        3. Restore broker-confirmed filled pair legs to OPEN_PAIR
+        4. Close flat orphan/failed rows when broker is flat
+        5. Log signal-level reconciliation plans (read-only audit)
         """
         await persistence_service.convert_closing_signals_for_startup()
+
+        try:
+            from src.services.ledger_reconcile_service import (
+                auto_reconcile_broker_confirmed_closes,
+            )
+
+            close_summary = await auto_reconcile_broker_confirmed_closes(
+                brokerage=self.brokerage,
+                dry_run=False,
+            )
+            if close_summary.get("closed"):
+                logger.info(
+                    "Startup auto-reconcile closed %s signal(s) with broker-confirmed close fills "
+                    "(examined=%s blocked=%s).",
+                    close_summary.get("closed"),
+                    close_summary.get("signals_examined"),
+                    close_summary.get("blocked"),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Startup broker-confirmed close reconcile failed (continuing with fail-fast): %s",
+                exc,
+            )
 
         if settings.auto_reconcile_broker_confirmed_pairs:
             try:
@@ -3414,10 +3438,13 @@ class ArbitrageMonitor:
                     close_status_raw = str(close_fill.get("status", "")).lower()
                     close_filled_qty = float(close_fill.get("filled_qty") or 0.0)
                     expected_close_qty = float(order["quantity"])
-                    if (
-                        close_status_raw != "filled"
-                        or close_filled_qty <= 0
-                        or close_filled_qty + 1e-9 < expected_close_qty
+                    expected_close_notional = float(order["quantity"] * order["price"])
+                    if not is_broker_fill_complete(
+                        status=close_status_raw,
+                        filled_qty=close_filled_qty,
+                        expected_qty=expected_close_qty,
+                        fill_price=float(close_fill.get("filled_avg_price") or order["price"] or 0.0),
+                        expected_notional=expected_close_notional,
                     ):
                         msg = (
                             f"Close order ended without a full fill for {sig_id_str}: {order['display_ticker']} "
@@ -3455,6 +3482,17 @@ class ArbitrageMonitor:
                         return
 
                     if abs(remaining_qty) > 1e-9:
+                        if getattr(settings, "IGNORE_UNMANAGED_POSITIONS", True):
+                            logger.warning(
+                                "Close fill confirmed for %s %s but broker still reports "
+                                "%.6f remaining %s; continuing ledger close because "
+                                "IGNORE_UNMANAGED_POSITIONS=True.",
+                                sig_id_str,
+                                order["side"],
+                                remaining_qty,
+                                order["display_ticker"],
+                            )
+                            continue
                         msg = (
                             f"Close position verification failed for {sig_id_str}: broker still reports "
                             f"{remaining_qty:.6f} remaining {order['display_ticker']} after confirmed close fills. "
