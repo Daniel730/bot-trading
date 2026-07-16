@@ -443,16 +443,10 @@ class PersistenceService:
         )
         return await self.mark_startup_unsafe_signals_needs_reconciliation()
 
-    async def mark_startup_unsafe_signals_needs_reconciliation(self) -> int:
-        """Fail-closed startup recovery for ambiguous execution state.
+    async def convert_closing_signals_for_startup(self) -> int:
+        """Convert ambiguous CLOSING rows to manual reconciliation before auto-repair."""
+        from sqlalchemy import update
 
-        CLOSING rows may represent close orders already sent to the broker before
-        a crash. Reopening them can duplicate close orders, so they are converted
-        to manual reconciliation and counted with existing unresolved states.
-        """
-        from sqlalchemy import update, select, func
-
-        unresolved_statuses = self._startup_unresolved_statuses()
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 stmt = (
@@ -461,16 +455,18 @@ class PersistenceService:
                     .where(TradeLedger.closed_at.is_(None))
                     .values(status=OrderStatus.NEEDS_MANUAL_RECONCILIATION)
                 )
-                await session.execute(stmt)
+                result = await session.execute(stmt)
+                return int(getattr(result, "rowcount", 0) or 0)
 
-                count_stmt = (
-                    select(func.count())
-                    .select_from(TradeLedger)
-                    .where(TradeLedger.status.in_(unresolved_statuses))
-                    .where(TradeLedger.closed_at.is_(None))
-                )
-                result = await session.execute(count_stmt)
-                return int(result.scalar() or 0)
+    async def mark_startup_unsafe_signals_needs_reconciliation(self) -> int:
+        """Fail-closed startup recovery for ambiguous execution state.
+
+        CLOSING rows may represent close orders already sent to the broker before
+        a crash. Reopening them can duplicate close orders, so they are converted
+        to manual reconciliation and counted with existing unresolved states.
+        """
+        await self.convert_closing_signals_for_startup()
+        return await self.count_startup_reconciliation_rows()
 
     @staticmethod
     def _startup_unresolved_statuses() -> tuple[OrderStatus, ...]:

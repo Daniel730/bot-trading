@@ -175,6 +175,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="AUTO_RECONCILE_FLAT_ORPHANS",
     )
+    AUTO_RECONCILE_BROKER_CONFIRMED_PAIRS: Optional[bool] = Field(
+        default=None,
+        validation_alias="AUTO_RECONCILE_BROKER_CONFIRMED_PAIRS",
+    )
     SEC_USER_AGENT: str = Field(default="ArbitrageBot/1.0 (admin@example.com)", validation_alias="SEC_USER_AGENT")
     DASHBOARD_ALLOWED_ORIGINS: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGINS")
     DASHBOARD_ALLOWED_ORIGIN_REGEX: str = Field(default="", validation_alias="DASHBOARD_ALLOWED_ORIGIN_REGEX")
@@ -774,6 +778,14 @@ class Settings(BaseSettings):
     def auto_reconcile_flat_orphans(self) -> bool:
         if self.AUTO_RECONCILE_FLAT_ORPHANS is not None:
             return bool(self.AUTO_RECONCILE_FLAT_ORPHANS)
+        if self.PAPER_TRADING:
+            return True
+        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
+
+    @property
+    def auto_reconcile_broker_confirmed_pairs(self) -> bool:
+        if self.AUTO_RECONCILE_BROKER_CONFIRMED_PAIRS is not None:
+            return bool(self.AUTO_RECONCILE_BROKER_CONFIRMED_PAIRS)
         if self.PAPER_TRADING:
             return True
         return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
