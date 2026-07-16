@@ -39,21 +39,24 @@ def test_backend_compose_requires_postgres_password_without_default():
     )
 
 
-def test_backend_compose_does_not_auto_restart_trading_services():
+def test_backend_compose_restart_policies():
     compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
     services = compose["services"]
 
     assert services["redis"]["restart"] == "always"
     assert services["postgres"]["restart"] == "always"
 
-    for service_name in ("bot", "mcp-server", "execution-engine", "sec-worker"):
+    # Trading Python workers stay manual-restart so a crash stays visible.
+    for service_name in ("bot", "mcp-server", "sec-worker"):
         assert services[service_name]["restart"] == "no"
+    # Dry-run sidecar may recover without operator intervention.
+    assert services["execution-engine"]["restart"] == "unless-stopped"
 
 
-def test_frontend_compose_does_not_auto_restart():
+def test_frontend_compose_restarts_unless_stopped():
     compose = yaml.safe_load(FRONTEND_COMPOSE.read_text(encoding="utf-8"))
 
-    assert compose["services"]["frontend"]["restart"] == "no"
+    assert compose["services"]["frontend"]["restart"] == "unless-stopped"
 
 
 def test_execution_engine_uses_compose_dependency_hosts():
