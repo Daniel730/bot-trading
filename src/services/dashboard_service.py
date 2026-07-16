@@ -249,10 +249,7 @@ class DashboardState:
             mode = "DEV"
         elif settings.PAPER_TRADING:
             mode = "PAPER"
-        elif (
-            settings.BROKERAGE_PROVIDER == "ALPACA"
-            and alpaca_endpoint_class == "paper"
-        ):
+        elif settings.is_broker_paper_trading:
             mode = "ALPACA_PAPER"
         else:
             mode = "LIVE"
@@ -260,7 +257,7 @@ class DashboardState:
             "mode": mode,
             "execution_mode": mode,
             "paper_trading": settings.PAPER_TRADING,
-            "broker_paper_trading": mode == "ALPACA_PAPER",
+            "broker_paper_trading": settings.is_broker_paper_trading,
             "alpaca_endpoint_class": alpaca_endpoint_class,
             "dev_mode": settings.DEV_MODE,
             "live_capital_danger": settings.LIVE_CAPITAL_DANGER,
