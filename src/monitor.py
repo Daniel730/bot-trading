@@ -30,6 +30,7 @@ from src.services.pair_eligibility_service import filter_pair_universe
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service, dashboard_state
 from src.services.background_task_watchdog import background_task_watchdog
+from src.services.decision_trace_service import decision_recorder
 from src.services.trade_math import (
     build_pair_legs,
     cap_pair_notional,
@@ -1256,9 +1257,17 @@ class ArbitrageMonitor:
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
         try:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
+            decision_recorder.set_pair_id(pair.get("id") or f"{t_a}_{t_b}")
+            decision_recorder.set_signal_id(None)
 
-            def skip(reason: str) -> dict:
+            def skip(reason: str, stage: str = "pre_signal", **inputs) -> dict:
                 diagnostic["reason"] = reason
+                decision_recorder.record(
+                    stage=stage,
+                    outcome="skip",
+                    reason=reason,
+                    inputs=inputs or None,
+                )
                 logger.info("PAIR SKIP [%s/%s]: %s", t_a, t_b, reason)
                 return diagnostic
 
@@ -1301,7 +1310,7 @@ class ArbitrageMonitor:
                         t_b,
                         "; ".join(invalid_prices),
                     )
-                    return skip("price_sanity_invalid")
+                    return skip("price_sanity_invalid", details="; ".join(invalid_prices))
 
                 price_sources = getattr(data_service, "last_price_sources", {})
                 source_a = price_sources.get(t_a)
@@ -1327,7 +1336,7 @@ class ArbitrageMonitor:
                             t_a,
                             t_b,
                         )
-                        return skip("stale_price_snapshot")
+                        return skip("stale_price_snapshot", stage="price_guard")
 
                     previous_marker, repeat_count = self._crypto_snapshot_pair_prices.get(
                         pair["id"],
@@ -1350,7 +1359,11 @@ class ArbitrageMonitor:
                             pair_marker,
                             repeat_count,
                         )
-                        return skip("stale_price_snapshot")
+                        return skip(
+                            "stale_price_snapshot",
+                            stage="price_guard",
+                            repeat_count=repeat_count,
+                        )
                 else:
                     self._crypto_snapshot_pair_prices.pop(pair["id"], None)
 
@@ -1362,7 +1375,7 @@ class ArbitrageMonitor:
             )
             if kf is None:
                 logger.warning("Kalman filter unavailable for pair %s — skipping tick.", pair['id'])
-                return skip("kalman_unavailable")
+                return skip("kalman_unavailable", stage="kalman")
 
             # Spec 037: Session-boundary Q/P adjustment applied BEFORE this
             # tick's update so the inflated noise is in effect for the very
@@ -1453,7 +1466,12 @@ class ArbitrageMonitor:
                         t_a,
                         t_b,
                     )
-                return skip("kalman_state_invalid")
+                return skip(
+                    "kalman_state_invalid",
+                    stage="kalman",
+                    beta=beta,
+                    z_score=z_score_value,
+                )
 
             # Valid state this scan: allow a fresh one-shot rebuild if this pair
             # ever goes transiently invalid again in the future.
@@ -1496,6 +1514,18 @@ class ArbitrageMonitor:
 
             if in_entry_band:
                 signal_id = str(uuid.uuid4())
+                decision_recorder.set_signal_id(signal_id)
+                decision_recorder.record(
+                    stage="signal",
+                    outcome="continue",
+                    reason="entry_band",
+                    inputs={
+                        "z_score": float(z_score),
+                        "entry_zscore": float(entry_zscore),
+                        "signal_id": signal_id,
+                    },
+                    signal_id=signal_id,
+                )
                 logger.info(f"SIGNAL [{t_a}/{t_b}] z={z_score:.3f} beta={state_vec[1]:.4f} — running AI validation")
 
                 # Update Active Signals for Dashboard
@@ -1545,6 +1575,13 @@ class ArbitrageMonitor:
                         float(settings.ORCHESTRATOR_TIMEOUT_SECONDS),
                     )
                     diagnostic["reason"] = "orchestrator_timeout"
+                    decision_recorder.record(
+                        stage="orchestrator",
+                        outcome="anomaly",
+                        reason="orchestrator_timeout",
+                        inputs={"timeout_s": float(settings.ORCHESTRATOR_TIMEOUT_SECONDS)},
+                        signal_id=signal_id,
+                    )
                     return diagnostic
                 await audit_service.log_thought_process(signal_id, decision_state)
                 logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] confidence={decision_state['final_confidence']:.3f} verdict={decision_state['final_verdict']}")
@@ -1571,6 +1608,16 @@ class ArbitrageMonitor:
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
                     diagnostic["reason"] = "orchestrator_veto" if orchestrator_vetoed else "confidence_below_threshold"
+                    decision_recorder.record(
+                        stage="orchestrator",
+                        outcome="veto",
+                        reason=diagnostic["reason"],
+                        inputs={
+                            "confidence": final_confidence,
+                            "verdict": final_verdict[:200],
+                        },
+                        signal_id=signal_id,
+                    )
                     return diagnostic
 
                 # Calculate expected profit/loss from the same gross pair
@@ -1604,6 +1651,13 @@ class ArbitrageMonitor:
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
                     diagnostic["reason"] = "sizing_below_minimum"
+                    decision_recorder.record(
+                        stage="risk",
+                        outcome="veto",
+                        reason="sizing_below_minimum",
+                        inputs={"desired_notional": desired_notional},
+                        signal_id=signal_id,
+                    )
                     return diagnostic
 
                 direction = "Short-Long" if z_score > 0 else "Long-Short"
@@ -1660,6 +1714,16 @@ class ArbitrageMonitor:
                     diagnostic["confidence"] = final_confidence
                     diagnostic["reason"] = "unprofitable"
                     diagnostic.update(profit_guard_details)
+                    decision_recorder.record(
+                        stage="profit_guard",
+                        outcome="veto",
+                        reason="unprofitable",
+                        inputs={
+                            "net_profit": preview.net_profit,
+                            "friction_pct": est_friction_pct,
+                        },
+                        signal_id=signal_id,
+                    )
                     return diagnostic
 
                 trade_summary = (
@@ -1688,6 +1752,12 @@ class ArbitrageMonitor:
                         diagnostic["verdict"] = "SKIPPED"
                         diagnostic["confidence"] = final_confidence
                         diagnostic["reason"] = "already_open_or_pending"
+                        decision_recorder.record(
+                            stage="approval_gate",
+                            outcome="skip",
+                            reason="already_open_or_pending",
+                            signal_id=signal_id,
+                        )
                         return diagnostic
 
                     await self._upsert_active_signal(
@@ -1733,6 +1803,13 @@ class ArbitrageMonitor:
                             )
                             diagnostic["verdict"] = "EXECUTED"
                             diagnostic["reason"] = execution_result.get("reason", "executed")
+                            decision_recorder.record(
+                                stage="execute",
+                                outcome="execute",
+                                reason=diagnostic["reason"],
+                                inputs={"direction": direction},
+                                signal_id=signal_id,
+                            )
                         else:
                             await self._upsert_active_signal(
                                 t_a,
@@ -1748,22 +1825,41 @@ class ArbitrageMonitor:
                                 if execution_result
                                 else "execution_blocked"
                             )
+                            decision_recorder.record(
+                                stage="execute",
+                                outcome="anomaly",
+                                reason=diagnostic["reason"],
+                                signal_id=signal_id,
+                            )
+                    else:
+                        decision_recorder.record(
+                            stage="approval",
+                            outcome="veto",
+                            reason="approval_denied",
+                            signal_id=signal_id,
+                        )
 
                 diagnostic["confidence"] = final_confidence
             elif beyond_stop:
                 # Past the stop-loss band — un-enterable. Surface it without an AI call.
                 await self._remove_active_signal(t_a, t_b)
-                skip("beyond_stop_threshold")
+                skip("beyond_stop_threshold", stage="zscore_gate", z_score=float(z_score))
             else:
                 # Cleanup inactive signals
                 await self._remove_active_signal(t_a, t_b)
-                skip("below_entry_threshold")
+                skip("below_entry_threshold", stage="zscore_gate", z_score=float(z_score))
 
             return diagnostic
 
         except Exception as e:
             logger.error(f"Error processing pair {pair.get('ticker_a')}: {e}")
             diagnostic["reason"] = "exception"
+            decision_recorder.record(
+                stage="process_pair",
+                outcome="anomaly",
+                reason="exception",
+                inputs={"error_type": type(e).__name__},
+            )
             return diagnostic
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id, entry_context: dict | None = None):
@@ -3202,6 +3298,17 @@ class ArbitrageMonitor:
                     results = []
                     # Fetch sizing base once per iteration to avoid API spam in process_pair
                     current_sizing_base = await self._get_sizing_base()
+                    scan_id = decision_recorder.begin_scan()
+                    decision_recorder.record(
+                        stage="scan",
+                        outcome="continue",
+                        reason="scan_started",
+                        inputs={
+                            "pairs": len(scan_pairs),
+                            "scan_id": scan_id,
+                        },
+                        scan_id=scan_id,
+                    )
 
                     for i, pair in enumerate(scan_pairs):
                         progress.update(scan_task, description=f"Scanning [magenta]{pair['ticker_a']}/{pair['ticker_b']}[/]", completed=i)

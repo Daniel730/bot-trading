@@ -178,3 +178,19 @@ Dashboard terminal handlers include:
 | No equity scans | Check market hours and `DEV_MODE`; crypto pairs run 24/7, equity pairs are gated. |
 | Many pairs rejected | Review `BLOCK_CROSS_CURRENCY_PAIRS`, `BLOCK_LSE_PAIRS_FOR_SHORT_HOLD`, `PAIR_MAX_ROUND_TRIP_COST_PCT`, and `ALLOW_EU_CONTINENTAL_OVERLAP`. |
 | Live sell leg rejected before broker | The preflight inventory guard found insufficient available shares. |
+
+## Decision Flight Recorder (incident packs)
+
+Compact decision trails are recorded in-memory at typed skip / veto / execute / anomaly branch points (`DECISION_TRACE_LEVEL=compact|verbose|off`, default `compact`). They join existing journals via `signal_id` — they do **not** duplicate AgentReasoning / TradeJournal rows.
+
+Export a pack for Cursor/Hermes:
+
+```bash
+PYTHONPATH=. python scripts/export_incident_pack.py --last-anomaly
+PYTHONPATH=. python scripts/export_incident_pack.py --signal-id <uuid>
+PYTHONPATH=. python scripts/export_incident_pack.py --scan-id scan-<id>
+```
+
+Packs land under `data/incident_packs/<timestamp>_<label>/` with `manifest.json`, `trail.jsonl`, `summary.md`, and `AGENT_HINT.md`.
+
+Note: the ring buffer lives in the running monitor process. The CLI seeds a demo trail when the buffer is empty so pack layout can be validated offline; for a live incident, export from the same process that ran the scan (or restart is not required if you call `decision_recorder.export_pack` in-process).

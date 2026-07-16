@@ -145,6 +145,16 @@ class Settings(BaseSettings):
 
     DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
     LOG_LEVEL: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    # Spec 039: Decision Flight Recorder — compact branch-point trails (not printf-everything).
+    DECISION_TRACE_LEVEL: Literal["compact", "verbose", "off"] = Field(
+        default="compact",
+        validation_alias="DECISION_TRACE_LEVEL",
+    )
+    DECISION_TRACE_RING_SIZE: int = Field(default=2000, validation_alias="DECISION_TRACE_RING_SIZE")
+    DECISION_TRACE_INPUT_MAX_CHARS: int = Field(
+        default=500,
+        validation_alias="DECISION_TRACE_INPUT_MAX_CHARS",
+    )
     REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")
 
     DB_PATH: str = Field(default="data/trading_bot.db", validation_alias="DB_PATH")

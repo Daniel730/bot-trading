@@ -11,6 +11,7 @@ from src.agents.macro_economic_agent import macro_economic_agent
 from src.services.redis_service import redis_service
 from src.services.telemetry_service import telemetry_service
 from src.services.persistence_service import persistence_service
+from src.services.decision_trace_service import decision_recorder
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,12 @@ class Orchestrator:
         if operational_status == "DEGRADED_MODE":
             state["final_confidence"] = 0.0
             state["final_verdict"] = "VETO: DEGRADED_MODE active due to consecutive API failures. Entry blocked."
+            decision_recorder.record(
+                stage="orchestrator",
+                outcome="veto",
+                reason="degraded_mode",
+                signal_id=state["signal_context"].get("signal_id"),
+            )
             return state
 
         ticker_a = state['signal_context']['ticker_a']
@@ -112,6 +119,14 @@ class Orchestrator:
             msg = f"CRITICAL VETO: Sector Leader {beacon} is {regime}. Aborting analysis to protect capital."
             logger.warning("[ORCHESTRATOR] %s - %s", pair_id, msg)
             telemetry_service.broadcast("orchestrator_veto", {"pair": pair_id, "reason": msg})
+            decision_recorder.record(
+                stage="orchestrator_macro",
+                outcome="veto",
+                reason="macro_extreme_volatility",
+                inputs={"beacon": beacon, "regime": regime, "pair_id": pair_id},
+                pair_id=pair_id,
+                signal_id=state["signal_context"].get("signal_id"),
+            )
             return {"final_confidence": 0.0, "final_verdict": msg, "signal_context": state['signal_context']}
 
         logger.info("[ORCHESTRATOR] %s - Macro Regime OK (%s). Starting Agent Swarm...", pair_id, regime)
@@ -458,6 +473,14 @@ class Orchestrator:
                 if regime == "EXTREME_VOLATILITY":
                     state["final_confidence"] = 0.0
                     state["final_verdict"] = f"CRITICAL VETO: Sector Leader {beacon} in Flash Crash! Aborting trade for {ticker}."
+                    decision_recorder.record(
+                        stage="orchestrator_beacon",
+                        outcome="veto",
+                        reason="beacon_flash_crash",
+                        inputs={"beacon": beacon, "ticker": ticker},
+                        pair_id=pair_id,
+                        signal_id=state["signal_context"].get("signal_id"),
+                    )
                     break
 
         return state
