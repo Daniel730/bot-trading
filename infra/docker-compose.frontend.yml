@@ -3,4 +3,4 @@ services:
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-frontend:${IMAGE_TAG:-latest}
     ports:
       - "3000:80"
-    restart: "no"
+    restart: unless-stopped
