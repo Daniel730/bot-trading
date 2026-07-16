@@ -122,33 +122,88 @@ class AlpacaProvider(AbstractBrokerageProvider):
             )
         )
 
+    @staticmethod
+    def _is_duplicate_client_order_exception(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "client_order_id must be unique" in message
+            or "client order id must be unique" in message
+            or ("client_order_id" in message and "unique" in message)
+        )
+
+    async def _lookup_order_by_client_order_id(
+        self, client_order_id: str
+    ) -> Optional[Any]:
+        get_by_client_id = getattr(self.api, "get_order_by_client_order_id", None)
+        if not get_by_client_id:
+            return None
+        return await asyncio.to_thread(get_by_client_id, client_order_id)
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> Dict[str, Any]:
+        """Fetch a single order by client_order_id, including fill fields."""
+        order = await self._lookup_order_by_client_order_id(client_order_id)
+        if not order:
+            raise LookupError(f"No Alpaca order for client_order_id={client_order_id}")
+        normalized = self._normalize_order(order)
+        normalized["filled_qty"] = float(getattr(order, "filled_qty", 0.0) or 0.0)
+        normalized["filled_avg_price"] = float(getattr(order, "filled_avg_price", 0.0) or 0.0)
+        return normalized
+
     async def _reconcile_ambiguous_submit(
         self,
         broker_symbol: str,
         client_order_id: Optional[str],
         exc: Exception,
     ) -> Optional[Dict[str, Any]]:
-        if not client_order_id or not self._is_ambiguous_submit_exception(exc):
+        if not client_order_id:
             return None
 
-        get_by_client_id = getattr(self.api, "get_order_by_client_order_id", None)
-        if get_by_client_id:
-            try:
-                order = await asyncio.to_thread(get_by_client_id, client_order_id)
-                if order:
-                    logger.warning(
-                        "Alpaca submit for %s was ambiguous but reconciled by client_order_id=%s",
-                        broker_symbol,
-                        client_order_id,
-                    )
-                    return self._order_success_result(order)
-            except Exception as reconcile_exc:
-                logger.error(
-                    "Alpaca submit for %s is ambiguous and reconciliation by client_order_id=%s failed: %s",
+        is_duplicate = self._is_duplicate_client_order_exception(exc)
+        is_ambiguous = self._is_ambiguous_submit_exception(exc)
+        if not is_duplicate and not is_ambiguous:
+            return None
+
+        try:
+            order = await self._lookup_order_by_client_order_id(client_order_id)
+            if order:
+                logger.warning(
+                    "Alpaca submit for %s reconciled existing client_order_id=%s "
+                    "(duplicate=%s ambiguous=%s)",
                     broker_symbol,
                     client_order_id,
-                    reconcile_exc,
+                    is_duplicate,
+                    is_ambiguous,
                 )
+                return self._order_success_result(order)
+        except Exception as reconcile_exc:
+            logger.error(
+                "Alpaca submit for %s could not reconcile client_order_id=%s: %s",
+                broker_symbol,
+                client_order_id,
+                reconcile_exc,
+            )
+            if is_duplicate:
+                # Duplicate means the id is taken; do not fall through to a second submit.
+                return {
+                    "status": "error",
+                    "message": (
+                        f"client_order_id {client_order_id} already exists but could not "
+                        f"be loaded for reconciliation: {reconcile_exc}"
+                    ),
+                    "broker": "ALPACA",
+                    "client_order_id": client_order_id,
+                }
+
+        if is_duplicate:
+            return {
+                "status": "error",
+                "message": (
+                    f"client_order_id {client_order_id} already exists but no order "
+                    f"snapshot was returned"
+                ),
+                "broker": "ALPACA",
+                "client_order_id": client_order_id,
+            }
 
         return {
             "status": "unknown",

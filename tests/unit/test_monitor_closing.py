@@ -143,6 +143,7 @@ async def test_close_position_does_not_close_ledger_when_broker_reports_residual
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch.object(settings, "PAPER_TRADING", False), \
          patch.object(settings, "DEV_MODE", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", False), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill:
 
         mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
@@ -169,6 +170,46 @@ async def test_close_position_does_not_close_ledger_when_broker_reports_residual
         )
         mock_notify.assert_awaited_once()
         assert "broker still reports 0.250000 remaining AAPL" in mock_notify.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_close_position_closes_ledger_when_residual_ignored(monitor):
+    signal_id = str(uuid.uuid4())
+    signal = {
+        "signal_id": signal_id,
+        "legs": [
+            {"ticker": "BTC-USD", "quantity": 0.000732, "side": "BUY", "price": 65000.0},
+            {"ticker": "ETH-USD", "quantity": 0.026762, "side": "SELL", "price": 1900.0},
+        ],
+        "total_cost_basis": 100.0,
+    }
+
+    with patch("src.monitor.persistence_service") as mock_persistence, \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "DEV_MODE", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", True), \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill:
+
+        mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+        mock_persistence.close_trade = AsyncMock()
+        mock_persistence.update_signal_status = AsyncMock()
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {"status": "success", "order_id": "close-btc"},
+            {"status": "success", "order_id": "close-eth"},
+        ])
+        # Unmanaged residual inventory remains after managed close fills.
+        monitor.brokerage.get_available_quantity.side_effect = [0.17, 0.06]
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 0.000732, "filled_avg_price": 65000.0},
+            {"status": "filled", "filled_qty": 0.026216601, "filled_avg_price": 1900.0},
+        ]
+
+        await monitor._close_position(signal, 65000.0, 1900.0, ExitReason.TAKE_PROFIT)
+
+        mock_persistence.close_trade.assert_awaited_once()
+        mock_persistence.update_signal_status.assert_not_awaited()
+        mock_notify.assert_not_awaited()
 
 
 @pytest.mark.asyncio

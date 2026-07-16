@@ -839,3 +839,143 @@ async def auto_reconcile_broker_confirmed_pairs(
             "broker_ok": True,
         }
 
+
+CLOSE_CONFIRMED_RECONCILE_STATUSES = (
+    OrderStatus.CLOSE_FAILED,
+    OrderStatus.CLOSING,
+    OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+)
+
+
+def _close_client_order_id(signal_id: str, ticker: str) -> str:
+    return f"{signal_id}-CLOSE-{ticker}"
+
+
+def _is_close_confirmed_status(row: TradeLedger) -> bool:
+    status = row.status
+    status_value = status.value if isinstance(status, OrderStatus) else str(status)
+    return status in CLOSE_CONFIRMED_RECONCILE_STATUSES or status_value in {
+        s.value for s in CLOSE_CONFIRMED_RECONCILE_STATUSES
+    }
+
+
+async def auto_reconcile_broker_confirmed_closes(
+    *,
+    brokerage,
+    dry_run: bool = False,
+) -> dict:
+    """Ledger-close stuck close-path signals when broker close orders are already filled.
+
+    Uses stable client_order_id ``{signal_id}-CLOSE-{ticker}``. Safe when every leg of a
+    two-leg signal has a terminal filled close order (idempotent retry / crash recovery).
+    """
+    async with persistence_service.AsyncSessionLocal() as session:
+        rows = (
+            await session.execute(
+                select(TradeLedger)
+                .where(TradeLedger.status.in_(CLOSE_CONFIRMED_RECONCILE_STATUSES))
+                .where(TradeLedger.closed_at.is_(None))
+            )
+        ).scalars().all()
+
+        if not rows:
+            return {
+                "examined": 0,
+                "closed": 0,
+                "blocked": 0,
+                "signals_examined": 0,
+                "broker_ok": True,
+            }
+
+        getter = getattr(brokerage, "get_order_by_client_order_id", None)
+        if getter is None:
+            return {
+                "examined": len(rows),
+                "closed": 0,
+                "blocked": len(rows),
+                "signals_examined": 0,
+                "broker_ok": False,
+                "error": "brokerage missing get_order_by_client_order_id",
+            }
+
+        grouped = _group_rows_by_signal(list(rows))
+        closed = 0
+        blocked = 0
+        signals_examined = 0
+        now = datetime.now(timezone.utc)
+
+        for signal_id, legs in grouped.items():
+            signals_examined += 1
+            if not signal_id or len(legs) != 2:
+                blocked += len(legs)
+                continue
+            if not all(_is_close_confirmed_status(leg) for leg in legs):
+                blocked += len(legs)
+                continue
+
+            broker_orders: list[dict] = []
+            client_ids: list[str] = []
+            lookup_ok = True
+            for leg in legs:
+                client_id = _close_client_order_id(signal_id, str(leg.ticker))
+                client_ids.append(client_id)
+                try:
+                    order = await _maybe_await(getter(client_id))
+                except Exception as exc:
+                    lookup_ok = False
+                    logger.info(
+                        "Close-confirm reconcile skip signal_id=%s client_order_id=%s: %s",
+                        signal_id,
+                        client_id,
+                        exc,
+                    )
+                    break
+                broker_orders.append(order or {})
+
+            if not lookup_ok or not all(_order_is_filled(o) for o in broker_orders):
+                blocked += len(legs)
+                continue
+
+            if dry_run:
+                closed += 1
+                continue
+
+            for leg, broker_order, client_id in zip(legs, broker_orders, client_ids):
+                meta = dict(leg.metadata_json or {})
+                meta["auto_reconciliation"] = {
+                    "method": "auto_reconcile_broker_confirmed_closes",
+                    "reconciled_at": now.isoformat(),
+                    "close_client_order_id": client_id,
+                    "broker_order_id": broker_order.get("id") or broker_order.get("order_id"),
+                    "broker_status": str(broker_order.get("status")),
+                    "broker_filled_qty": float(broker_order.get("filled_qty") or 0.0),
+                    "broker_filled_avg_price": float(broker_order.get("filled_avg_price") or 0.0),
+                    "previous_status": (
+                        leg.status.value if isinstance(leg.status, OrderStatus) else str(leg.status)
+                    ),
+                }
+                meta["pair_status"] = OrderStatus.CLOSED.value
+                leg.status = OrderStatus.CLOSED
+                leg.closed_at = now
+                leg.metadata_json = meta
+                session.add(leg)
+
+            closed += 1
+            logger.info(
+                "Auto-reconcile CLOSED signal_id=%s after broker-confirmed close fills "
+                "client_order_ids=%s",
+                signal_id,
+                client_ids,
+            )
+
+        if not dry_run and closed:
+            await session.commit()
+
+        return {
+            "examined": len(rows),
+            "closed": closed,
+            "blocked": blocked,
+            "signals_examined": signals_examined,
+            "broker_ok": True,
+        }
+
