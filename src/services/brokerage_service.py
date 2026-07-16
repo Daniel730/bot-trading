@@ -169,6 +169,14 @@ class BrokerageService:
             return await self.provider.get_order(order_id)
         return {}
 
+    async def get_order_by_client_order_id(self, client_order_id: str) -> Dict[str, Any]:
+        getter = getattr(self.provider, "get_order_by_client_order_id", None)
+        if getter is None:
+            raise AttributeError(
+                f"{type(self.provider).__name__} does not support get_order_by_client_order_id"
+            )
+        return await getter(client_order_id)
+
     async def is_ticker_owned(self, ticker: str) -> bool:
         portfolio = await self.get_portfolio()
         return any(pos.get('ticker') == ticker for pos in portfolio)
@@ -334,6 +342,9 @@ class _LazyBrokerageService:
 
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         return await self._get_instance().get_order(order_id)
+
+    async def get_order_by_client_order_id(self, client_order_id: str) -> Dict[str, Any]:
+        return await self._get_instance().get_order_by_client_order_id(client_order_id)
 
     async def is_ticker_owned(self, ticker: str) -> bool:
         return await self._get_instance().is_ticker_owned(ticker)

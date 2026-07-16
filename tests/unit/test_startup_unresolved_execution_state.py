@@ -55,7 +55,8 @@ async def test_startup_blocks_when_unresolved_execution_state_exists(
     startup_monitor_factory,
 ):
     monitor = startup_monitor_factory()
-    mock_persistence.mark_startup_unsafe_signals_needs_reconciliation = AsyncMock(return_value=2)
+    monitor._run_startup_auto_reconciliation = AsyncMock()
+    mock_persistence.count_startup_reconciliation_rows = AsyncMock(return_value=2)
     mock_persistence.get_startup_reconciliation_rows = AsyncMock(
         return_value=[
             {
@@ -79,7 +80,8 @@ async def test_startup_blocks_when_unresolved_execution_state_exists(
     should_continue = await monitor._fail_fast_on_unresolved_execution_state()
 
     assert should_continue is False
-    mock_persistence.mark_startup_unsafe_signals_needs_reconciliation.assert_awaited_once()
+    monitor._run_startup_auto_reconciliation.assert_awaited_once()
+    mock_persistence.count_startup_reconciliation_rows.assert_awaited_once()
     mock_persistence.set_system_state.assert_awaited_once_with(
         "operational_status",
         "PAUSED_REQUIRES_MANUAL_REVIEW",

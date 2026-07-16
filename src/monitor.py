@@ -2691,7 +2691,65 @@ class ArbitrageMonitor:
         except Exception as e:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
-    async def _fail_fast_on_unresolved_execution_state(self) -> bool:
+    async def _run_startup_auto_reconciliation(self) -> None:
+        """Ordered startup repair before fail-fast counting.
+
+        1. CLOSING → NEEDS_MANUAL (avoid duplicate close orders)
+        2. Ledger-close signals whose broker close orders are already filled
+        3. Restore broker-confirmed filled pair legs to OPEN_PAIR
+        4. Close flat orphan/failed rows when broker is flat
+        5. Log signal-level reconciliation plans (read-only audit)
+        """
+        await persistence_service.convert_closing_signals_for_startup()
+
+        try:
+            from src.services.ledger_reconcile_service import (
+                auto_reconcile_broker_confirmed_closes,
+            )
+
+            close_summary = await auto_reconcile_broker_confirmed_closes(
+                brokerage=self.brokerage,
+                dry_run=False,
+            )
+            if close_summary.get("closed"):
+                logger.info(
+                    "Startup auto-reconcile closed %s signal(s) with broker-confirmed close fills "
+                    "(examined=%s blocked=%s).",
+                    close_summary.get("closed"),
+                    close_summary.get("signals_examined"),
+                    close_summary.get("blocked"),
+                )
+        except Exception as exc:
+            logger.warning(
+                "Startup broker-confirmed close reconcile failed (continuing with fail-fast): %s",
+                exc,
+            )
+
+        if settings.auto_reconcile_broker_confirmed_pairs:
+            try:
+                from src.services.ledger_reconcile_service import (
+                    auto_reconcile_broker_confirmed_pairs,
+                )
+
+                summary = await auto_reconcile_broker_confirmed_pairs(
+                    brokerage=self.brokerage,
+                    dry_run=False,
+                )
+                if summary.get("restored"):
+                    logger.info(
+                        "Startup auto-reconcile restored %s broker-confirmed pair leg(s) "
+                        "(signals_examined=%s examined=%s blocked=%s).",
+                        summary.get("restored"),
+                        summary.get("signals_examined"),
+                        summary.get("examined"),
+                        summary.get("blocked"),
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Startup broker-confirmed auto-reconcile failed (continuing with fail-fast): %s",
+                    exc,
+                )
+
         if settings.auto_reconcile_flat_orphans:
             try:
                 from src.services.ledger_reconcile_service import auto_close_flat_orphans
@@ -2706,9 +2764,29 @@ class ArbitrageMonitor:
                         summary.get("blocked"),
                     )
             except Exception as exc:
-                logger.warning("Startup auto-reconcile failed (continuing with fail-fast): %s", exc)
+                logger.warning(
+                    "Startup flat-orphan auto-reconcile failed (continuing with fail-fast): %s",
+                    exc,
+                )
 
-        unresolved_count = await persistence_service.mark_startup_unsafe_signals_needs_reconciliation()
+        try:
+            from src.services.ledger_reconcile_service import (
+                log_signal_reconciliation_plans,
+                plan_signal_level_reconciliation,
+            )
+
+            planner_result = await plan_signal_level_reconciliation(brokerage=self.brokerage)
+            log_signal_reconciliation_plans(planner_result)
+        except Exception as exc:
+            logger.warning("Signal reconciliation planner failed (continuing with fail-fast): %s", exc)
+
+    async def _fail_fast_on_unresolved_execution_state(self) -> bool:
+        try:
+            await self._run_startup_auto_reconciliation()
+        except Exception as exc:
+            logger.warning("Startup auto-reconciliation pipeline failed: %s", exc)
+
+        unresolved_count = await persistence_service.count_startup_reconciliation_rows()
         if unresolved_count <= 0:
             return True
 
@@ -2911,17 +2989,17 @@ class ArbitrageMonitor:
             logger.error(msg)
             await notification_service.send_message(msg)
             return
+
+        # Start dashboard + Telegram BEFORE pair init so /api/approvals and
+        # health polling work during the long historical-data warm-up.
+        dashboard_service.attach_monitor(self)
+        await dashboard_service.start()
+        await notification_service.start_listening()
+
         await self.initialize_pairs()
         if not self.active_pairs:
             logger.warning("Startup loaded zero active pairs. Retrying pair initialization once before entering the scan loop.")
             await self.reload_pairs()
-        # Make this monitor instance discoverable by dashboard endpoints
-        # (so /api/pairs can hot-reload, etc).
-        dashboard_service.attach_monitor(self)
-        await dashboard_service.start()
-
-        # Sprint J: Start Telegram Listener (Async)
-        await notification_service.start_listening()
 
         # Sprint C: Startup Health Checks
         logger.info("Running System Health Checks...")
@@ -2965,9 +3043,32 @@ class ArbitrageMonitor:
         await notification_service.send_message("System Health: All Checks Passed.\n\nMode: Continuous Scan initiated for " + f"{len(self.active_pairs)}" + " pairs.")
 
         if not await self._fail_fast_on_unresolved_execution_state():
-            return
-        if not await self._fail_fast_on_broker_ledger_mismatch():
-            return
+            # Keep dashboard/approvals/Telegram alive while capital state is reviewed.
+            logger.critical(
+                "Startup fail-fast blocked the scan loop; holding process alive for dashboard/approvals."
+            )
+            while True:
+                await asyncio.sleep(60)
+                try:
+                    unresolved = await persistence_service.count_startup_reconciliation_rows()
+                except Exception as exc:
+                    logger.warning("Paused-mode unresolved recount failed: %s", exc)
+                    continue
+                if unresolved <= 0:
+                    logger.info("Startup reconciliation rows cleared; leaving pause hold.")
+                    break
+            if not await self._fail_fast_on_broker_ledger_mismatch():
+                logger.critical(
+                    "Broker/ledger mismatch still blocking scan loop; holding for dashboard/approvals."
+                )
+                while True:
+                    await asyncio.sleep(60)
+        elif not await self._fail_fast_on_broker_ledger_mismatch():
+            logger.critical(
+                "Broker/ledger mismatch blocked the scan loop; holding process alive for dashboard/approvals."
+            )
+            while True:
+                await asyncio.sleep(60)
 
         # Reset circuit breaker on clean startup so a stale DEGRADED_MODE
         # from a previous crashed session doesn't silently block all signals.
@@ -3337,10 +3438,13 @@ class ArbitrageMonitor:
                     close_status_raw = str(close_fill.get("status", "")).lower()
                     close_filled_qty = float(close_fill.get("filled_qty") or 0.0)
                     expected_close_qty = float(order["quantity"])
-                    if (
-                        close_status_raw != "filled"
-                        or close_filled_qty <= 0
-                        or close_filled_qty + 1e-9 < expected_close_qty
+                    expected_close_notional = float(order["quantity"] * order["price"])
+                    if not is_broker_fill_complete(
+                        status=close_status_raw,
+                        filled_qty=close_filled_qty,
+                        expected_qty=expected_close_qty,
+                        fill_price=float(close_fill.get("filled_avg_price") or order["price"] or 0.0),
+                        expected_notional=expected_close_notional,
                     ):
                         msg = (
                             f"Close order ended without a full fill for {sig_id_str}: {order['display_ticker']} "
@@ -3378,6 +3482,17 @@ class ArbitrageMonitor:
                         return
 
                     if abs(remaining_qty) > 1e-9:
+                        if getattr(settings, "IGNORE_UNMANAGED_POSITIONS", True):
+                            logger.warning(
+                                "Close fill confirmed for %s %s but broker still reports "
+                                "%.6f remaining %s; continuing ledger close because "
+                                "IGNORE_UNMANAGED_POSITIONS=True.",
+                                sig_id_str,
+                                order["side"],
+                                remaining_qty,
+                                order["display_ticker"],
+                            )
+                            continue
                         msg = (
                             f"Close position verification failed for {sig_id_str}: broker still reports "
                             f"{remaining_qty:.6f} remaining {order['display_ticker']} after confirmed close fills. "

@@ -368,14 +368,22 @@ class NotificationService:
         if not self._telegram_enabled:
             print("TELEGRAM: Listener not started (Telegram disabled). Bot is running in console-only mode.")
             return
-        await self.app.initialize()
-        await self.app.start()
-        # drop_pending_updates=True is CRITICAL to avoid processing old clicks after restart
-        await self.app.updater.start_polling(drop_pending_updates=True)
-        print("TELEGRAM: Listener active (cleared pending updates).")
+        try:
+            await self.app.initialize()
+            await self.app.start()
+            # drop_pending_updates=True is CRITICAL to avoid processing old clicks after restart
+            await self.app.updater.start_polling(drop_pending_updates=True)
+            print("TELEGRAM: Listener active (cleared pending updates).")
 
-        # Sprint J: Heartbeat Startup Message
-        await self.send_message("🚀 *Arbitrage Bot Online*\n\nMonitoring active. All health checks passed. System is in `Ready` mode.")
+            # Sprint J: Heartbeat Startup Message
+            await self.send_message("🚀 *Arbitrage Bot Online*\n\nMonitoring active. All health checks passed. System is in `Ready` mode.")
+        except Exception as exc:
+            # Never take down dashboard/uvicorn because Telegram/DNS timed out.
+            logger.error(
+                "TELEGRAM: Listener failed to start (%s). Continuing with dashboard approvals only.",
+                self._redact_sensitive_text(exc),
+            )
+            print(f"TELEGRAM: Listener failed ({exc}); dashboard/API approvals remain available.")
 
     async def send_message(self, message: str):
         """Sends a plain text message to the Telegram chat and dashboard."""
@@ -538,18 +546,26 @@ class NotificationService:
         try:
             text = f"🚨 APPROVAL REQUIRED\n{trade_summary}"
 
-            # 1. Send to Telegram
-            await self.app.bot.send_message(
-                chat_id=self.chat_id,
-                text=text,
-                reply_markup=reply_markup
-            )
+            # 1. Telegram delivery is best-effort. If it times out (DNS/network),
+            # keep the Future alive so dashboard /api/approvals can still resolve it.
+            try:
+                await self.app.bot.send_message(
+                    chat_id=self.chat_id,
+                    text=text,
+                    reply_markup=reply_markup
+                )
+            except Exception as tg_exc:
+                logger.warning(
+                    "TELEGRAM: approval notify failed for %s (%s); waiting on dashboard/API approve",
+                    correlation_id,
+                    self._redact_sensitive_text(tg_exc),
+                )
 
-            # 2. Send to Dashboard
+            # 2. Always surface on Dashboard (Pending Approvals panel + terminal)
             from src.services.dashboard_service import dashboard_state
             await dashboard_state.add_message("BOT", text, metadata={"correlation_id": correlation_id, "type": "approval"})
 
-            # Wait for user response (max 5 minutes)
+            # Wait for user response (max 5 minutes) via Telegram callback or dashboard/API
             return await asyncio.wait_for(future, timeout=300)
         except asyncio.TimeoutError:
             self.pending_approvals.pop(correlation_id, None)
@@ -559,7 +575,7 @@ class NotificationService:
         except Exception as e:
             self.pending_approvals.pop(correlation_id, None)
             self.pending_approval_summaries.pop(correlation_id, None)
-            logger.warning("TELEGRAM ERROR: %s", self._redact_sensitive_text(e))
+            logger.warning("APPROVAL WORKFLOW ERROR: %s", self._redact_sensitive_text(e))
             try:
                 from src.services.dashboard_service import dashboard_service
                 from src.services.persistence_service import persistence_service
