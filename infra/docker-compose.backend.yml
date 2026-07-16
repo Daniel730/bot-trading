@@ -99,7 +99,7 @@ services:
       POSTGRES_PORT: "5432"
       DRY_RUN: "true"
       LIVE_CAPITAL_DANGER: "false"
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
