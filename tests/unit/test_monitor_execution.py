@@ -727,7 +727,8 @@ async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_am
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
-         patch.object(settings, "PAPER_TRADING", False):
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 0.0):
 
         mock_bid_ask.return_value = (150.0, 150.1)
         mock_validate_trade.return_value = {
@@ -788,7 +789,8 @@ async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_fi
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
-         patch.object(settings, "PAPER_TRADING", False):
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 0.0):
 
         mock_bid_ask.return_value = (150.0, 150.1)
         mock_validate_trade.return_value = {
@@ -846,7 +848,8 @@ async def test_execute_trade_marks_manual_reconciliation_when_emergency_close_pa
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
-         patch.object(settings, "PAPER_TRADING", False):
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 0.0):
 
         mock_bid_ask.return_value = (150.0, 150.1)
         mock_validate_trade.return_value = {
