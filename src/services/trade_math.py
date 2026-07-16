@@ -98,7 +98,12 @@ def is_broker_fill_complete(
         if filled_notional + 1e-9 >= notion_expected * max(0.0, 1.0 - notional_tolerance):
             return True
 
-    # Broker reported a complete market fill — trust it over the pre-trade estimate.
+    # Broker said "filled" but we have size expectations that were not met.
+    # Do not treat a severe shortfall as complete (e.g. 0.5 vs expected 1.0).
+    if expected > 0 or notion_expected > 0:
+        return False
+
+    # No usable expectation to compare — trust the broker filled label.
     return True
 
 

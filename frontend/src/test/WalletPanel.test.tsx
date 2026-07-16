@@ -218,11 +218,11 @@ describe('WalletPanel confirm dialog', () => {
   it('confirm dialog title is "confirm broker buy"', async () => {
     mockFetchRecs.mockResolvedValue(makePlanResponse());
 
-    render(<WalletPanel token={TOKEN} sessionToken={SESSION} />);
+    render(<WalletPanel token={TOKEN} sessionToken={SESSION} paperTrading={false} />);
 
-    // Wait for the plan to render, then click the Buy Selected button
+    // Wait until selections are hydrated so Buy Selected is enabled.
     await waitFor(() => {
-      expect(screen.getByText('Buy Selected')).toBeInTheDocument();
+      expect(screen.getByText('Buy Selected')).not.toBeDisabled();
     });
     fireEvent.click(screen.getByText('Buy Selected'));
 

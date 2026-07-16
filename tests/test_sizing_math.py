@@ -111,6 +111,14 @@ def test_is_broker_fill_complete_accepts_notional_qty_drift():
         expected_qty=0.184303,
     )
     assert not is_broker_fill_complete(status="filled", filled_qty=0.0, expected_qty=0.1)
+    # Status "filled" with a severe shortfall must not be trusted as complete.
+    assert not is_broker_fill_complete(
+        status="filled",
+        filled_qty=0.5,
+        expected_qty=1.0,
+        fill_price=150.0,
+        expected_notional=150.0,
+    )
 
 
 def test_expected_profit_uses_spread_capture_and_full_pair_friction():
