@@ -114,6 +114,19 @@ docker compose -f infra/docker-compose.yml logs -f execution-engine
 docker compose -f infra/docker-compose.yml logs -f frontend
 ```
 
+## Pytest In Docker
+
+`tests/unit/test_backend_compose_secrets.py` reads compose files from the repo `infra/` directory. If you run the full pytest suite inside a container whose workdir is only `/app` source without `infra/`, those tests fail with a false negative.
+
+Mount the compose tree (or copy it into the image) before running Dockerized pytest, for example:
+
+```bash
+docker run --rm -v "$PWD:/app" -v "$PWD/infra:/app/infra" -w /app <test-image> \
+  pytest tests/unit/test_backend_compose_secrets.py -q --asyncio-mode=auto
+```
+
+Local pytest from the repo root does not need this mount.
+
 ## Dashboard Login
 
 1. Open `http://localhost:3000` in Docker or the Vite dev URL locally.

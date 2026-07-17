@@ -98,3 +98,9 @@ docker compose -f infra/docker-compose.yml down
 ```
 
 `redeploy.sh --watch` tracks Python, frontend, and Java source changes, including `execution-engine/src/` and `execution-engine/build.gradle.kts`, and rebuilds the affected service.
+
+## Resource limits
+
+Compose services declare `mem_limit` / `cpus` so the trading stack cannot unbounded-grow on a shared host (for example bot-server alongside other workloads). Tune in `infra/docker-compose.backend.yml` and `infra/docker-compose.frontend.yml` if the host profile changes.
+
+Host-only ops scripts (HDD, Pi edge, Minecraft limits) may live under `infra/host/` on the operator machine; they are not required to run the bot.

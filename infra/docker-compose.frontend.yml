@@ -4,3 +4,5 @@ services:
     ports:
       - "3000:80"
     restart: unless-stopped
+    mem_limit: 64m
+    cpus: 0.25

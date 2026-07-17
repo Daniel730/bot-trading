@@ -10,7 +10,7 @@ Alpha Arbitrage is a statistical-arbitrage bot with:
 - a React operations console;
 - a Java gRPC dry-run execution sidecar;
 - Redis, PostgreSQL, and SQLite state;
-- Trading 212, Alpaca, and Web3 brokerage paths from Python;
+- Alpaca as the active Python brokerage path (Trading 212 and Web3 remain in-repo but fail startup / legacy-disabled);
 - Telegram/dashboard approval and audit paths.
 
 Default to paper mode while changing execution logic.
@@ -21,7 +21,7 @@ Default to paper mode while changing execution logic.
 |---|---|
 | `src/monitor.py` | Main scan loop and execution coordination |
 | `src/config.py` | Pydantic settings, pair universe, runtime overrides |
-| `src/services/` | Brokerage, risk, dashboard, persistence, telemetry, data, Web3 |
+| `src/services/` | Brokerage (Alpaca active), risk, dashboard, persistence, telemetry, data |
 | `src/agents/` | Signal validation ensemble |
 | `src/daemons/` | Background workers |
 | `frontend/` | React dashboard |
@@ -92,7 +92,6 @@ docker compose \
 - Keep `DRY_RUN=true` for the Java engine; `DRY_RUN=false` intentionally fails startup.
 - Do not hardcode venue checks outside `BrokerageService.get_venue()`.
 - Do not bypass the dashboard/session/2FA model when adding operator controls.
-- Do not submit a live Trading 212 sell leg without the available-share preflight.
 - Preserve `signal_id` through reasoning, journal, shadow/live ledger rows, and close paths.
 - Use service singletons in `src/services/` where existing code already does.
 
@@ -101,11 +100,11 @@ docker compose \
 1. Pair universe is loaded and filtered by `pair_eligibility_service`.
 2. Historical data warms Kalman filters and checks cointegration.
 3. `process_pair()` updates Kalman state and compares z-score threshold.
-4. The orchestrator validates signals with macro, bull/bear, SEC cache, whale watcher, portfolio, and accuracy logic.
+4. The orchestrator validates signals with macro, bull/bear, SEC cache, whale watcher (currently `INACTIVE`), portfolio, and accuracy logic.
 5. Approval is requested.
-6. Paper mode uses `shadow_service`.
-7. Live mode uses Python `BrokerageService` for T212/Alpaca/Web3.
-8. Java gRPC is available for dry-run execution/audit paths.
+6. Paper/shadow mode uses `shadow_service`; broker Alpaca paper uses `BrokerageService` with auto-approve on the paper API.
+7. Live real-money mode uses Python `BrokerageService` with Alpaca only (`BROKERAGE_PROVIDER=ALPACA`).
+8. Java gRPC is available for dry-run execution/audit paths (`DRY_RUN=true` required).
 
 ## Documentation Pointers
 

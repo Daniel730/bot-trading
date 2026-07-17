@@ -12,8 +12,8 @@ Responsibilities:
 - performs macro beacon fail-fast checks;
 - runs bull, bear, fundamental-cache, and whale watcher reads concurrently;
 - broadcasts intermediate thoughts to telemetry;
-- applies fundamental hard vetoes;
-- applies whale watcher veto or multiplier;
+- applies fundamental hard vetoes (live fail-closed on unknown scores; paper keeps default score);
+- records whale watcher as `INACTIVE` in the active runtime (legacy agent code remains; not a live veto today);
 - adjusts confidence with portfolio logic and global strategy accuracy;
 - resets `DEGRADED_MODE` back to normal after successful agent loops.
 
@@ -53,13 +53,9 @@ Evaluates whether a signal improves the portfolio from an allocation/risk perspe
 
 `src/agents/whale_watcher_agent.py`
 
-Crypto/context risk filter that reads cached flow summaries and can:
+**Runtime status: inactive.** The orchestrator emits `verdict: INACTIVE` and does not apply whale veto/multiplier on the hot path today. Legacy agent code and `WHALE_WATCHER_*` settings remain for a future cache-backed reactivation (see GitHub #91).
 
-- veto conflicting flow;
-- reduce confidence;
-- slightly support signals when flow aligns.
-
-Config is controlled by `WHALE_WATCHER_*` settings.
+When re-enabled, the intended behavior is a crypto/context risk filter that reads cached flow summaries and can veto conflicting flow, reduce confidence, or slightly support aligned flow.
 
 ## Fundamental Analyst And SEC Worker
 

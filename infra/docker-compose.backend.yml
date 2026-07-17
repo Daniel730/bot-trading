@@ -7,6 +7,8 @@ services:
     volumes:
       - redis_data:/data
     restart: always
+    mem_limit: 128m
+    cpus: 0.50
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -24,6 +26,8 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
+    mem_limit: 512m
+    cpus: 1.0
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot_admin} -d ${POSTGRES_DB:-trading_bot}"]
       interval: 10s
@@ -48,6 +52,8 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
     restart: "no"
+    mem_limit: 1280m
+    cpus: 1.50
     depends_on:
       redis:
         condition: service_healthy
@@ -73,6 +79,8 @@ services:
     environment:
       REDIS_HOST: redis
     restart: "no"
+    mem_limit: 384m
+    cpus: 0.75
     depends_on:
       redis:
         condition: service_healthy
@@ -100,6 +108,8 @@ services:
       DRY_RUN: "true"
       LIVE_CAPITAL_DANGER: "false"
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.75
     depends_on:
       redis:
         condition: service_healthy
@@ -128,6 +138,8 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
     restart: "no"
+    mem_limit: 640m
+    cpus: 0.75
     depends_on:
       redis:
         condition: service_healthy
