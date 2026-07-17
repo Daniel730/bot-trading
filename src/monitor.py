@@ -27,6 +27,7 @@ from src.services.risk_service import risk_service
 from src.services.market_regime_service import market_regime_service
 from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
+from src.services.venue_metadata import estimate_round_trip_cost_pct
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service, dashboard_state
 from src.services.background_task_watchdog import background_task_watchdog
@@ -3430,8 +3431,25 @@ class ArbitrageMonitor:
 
         # Statistical Take Profit (Mean Reversion complete)
         if abs(z_score) <= settings.TAKE_PROFIT_ZSCORE:
-            logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
-            await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
+            gross_notional = sum(
+                abs(float(leg["quantity"]) * prices_by_ticker[leg["ticker"]])
+                for leg in legs
+            )
+            friction_pct = estimate_round_trip_cost_pct(t_a, t_b)
+            estimated_friction = gross_notional * friction_pct
+            if directional_pnl <= estimated_friction:
+                logger.info(
+                    "TAKE PROFIT z-threshold met for %s/%s (Z=%.2f) but gross PnL "
+                    "($%.2f) would not clear est. round-trip friction ($%.2f); holding.",
+                    t_a,
+                    t_b,
+                    z_score,
+                    directional_pnl,
+                    estimated_friction,
+                )
+            else:
+                logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
+                await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)
         elif abs(z_score) >= settings.STOP_LOSS_ZSCORE:

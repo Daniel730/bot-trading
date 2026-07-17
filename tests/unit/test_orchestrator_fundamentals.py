@@ -397,3 +397,73 @@ async def test_low_global_accuracy_does_not_drag_pair_confidence_below_execution
     assert "GLOBAL ACCURACY WARNING" in state["final_verdict"]
     assert state["final_confidence"] == pytest.approx(0.65)
     assert state["final_confidence"] > settings.MONITOR_MIN_AI_CONFIDENCE
+
+
+@pytest.mark.asyncio
+async def test_crypto_pair_skips_macro_beacon_fetch(monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+
+    orchestrator = Orchestrator()
+    input_data = {
+        "signal_context": {
+            "signal_id": "crypto_macro_skip_1",
+            "ticker_a": "BTC-USD",
+            "ticker_b": "ETH-USD",
+            "hedge_ratio": 1.0,
+            "z_score": 2.5,
+        }
+    }
+
+    async def mock_get_system_state(key, default=None):
+        values = {
+            "operational_status": "NORMAL",
+            "consecutive_api_timeouts": "0",
+            "global_strategy_accuracy": "0.75",
+        }
+        return values.get(key, default)
+
+    with patch(
+        "src.agents.orchestrator.macro_economic_agent.get_ticker_regime",
+        new_callable=AsyncMock,
+    ) as mock_regime, patch(
+        "src.agents.orchestrator.bull_agent.evaluate",
+        new_callable=AsyncMock,
+        return_value={"confidence": 0.8, "reasoning": "bullish"},
+    ), patch(
+        "src.agents.orchestrator.bear_agent.evaluate",
+        new_callable=AsyncMock,
+        return_value={"confidence": 0.2, "reasoning": "not bearish"},
+    ), patch(
+        "src.agents.orchestrator.redis_service.get_fundamental_score",
+        new_callable=AsyncMock,
+    ), patch(
+        "src.agents.orchestrator.whale_watcher_agent.evaluate",
+        new_callable=AsyncMock,
+        return_value={
+            "confidence_delta": 0.0,
+            "confidence_multiplier": 1.0,
+            "veto": False,
+            "whale_score": 0.0,
+            "reasoning": "neutral",
+        },
+    ), patch(
+        "src.agents.orchestrator.portfolio_manager_agent.get_optimization_advice",
+        new_callable=AsyncMock,
+        return_value={"is_recommended": True, "improvement": 0.0},
+    ), patch(
+        "src.agents.orchestrator.persistence_service.get_system_state",
+        new=mock_get_system_state,
+    ), patch(
+        "src.agents.orchestrator.persistence_service.set_system_state",
+        new_callable=AsyncMock,
+    ), patch(
+        "src.agents.orchestrator.persistence_service.get_agent_metrics",
+        new_callable=AsyncMock,
+        return_value=(1, 1),
+    ), patch(
+        "src.agents.orchestrator.telemetry_service.broadcast",
+        return_value=None,
+    ):
+        await orchestrator.ainvoke(input_data)
+
+    mock_regime.assert_not_awaited()

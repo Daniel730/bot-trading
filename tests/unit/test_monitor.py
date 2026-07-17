@@ -319,3 +319,61 @@ async def test_financial_kill_switch_uses_directional_pair_pnl(monitor):
             prices_by_ticker={"AAPL": 120.0, "MSFT": 100.0},
         )
         mock_filter.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_take_profit_holds_when_friction_exceeds_gross_pnl(monitor):
+    signal = {
+        "signal_id": str(uuid.uuid4()),
+        "legs": [
+            {"ticker": "BTC-USD", "quantity": 0.01, "side": "BUY", "price": 60000.0},
+            {"ticker": "ETH-USD", "quantity": 0.2, "side": "SELL", "price": 3000.0},
+        ],
+        "total_cost_basis": 1200.0,
+    }
+
+    with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
+         patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
+         patch("src.monitor.estimate_round_trip_cost_pct", return_value=0.01), \
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close:
+
+        mock_prices.return_value = {"BTC-USD": 60100.0, "ETH-USD": 2990.0}
+        kf = MagicMock()
+        kf.calculate_spread_and_zscore.return_value = (0.0, 0.3)
+        mock_filter.return_value = kf
+
+        await monitor._evaluate_exit_conditions(signal)
+
+        mock_close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_take_profit_closes_when_gross_pnl_covers_friction(monitor):
+    signal = {
+        "signal_id": str(uuid.uuid4()),
+        "legs": [
+            {"ticker": "BTC-USD", "quantity": 0.01, "side": "BUY", "price": 60000.0},
+            {"ticker": "ETH-USD", "quantity": 0.2, "side": "SELL", "price": 3000.0},
+        ],
+        "total_cost_basis": 1200.0,
+    }
+
+    with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
+         patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
+         patch("src.monitor.estimate_round_trip_cost_pct", return_value=0.001), \
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close:
+
+        mock_prices.return_value = {"BTC-USD": 61000.0, "ETH-USD": 2900.0}
+        kf = MagicMock()
+        kf.calculate_spread_and_zscore.return_value = (0.0, 0.3)
+        mock_filter.return_value = kf
+
+        await monitor._evaluate_exit_conditions(signal)
+
+        mock_close.assert_awaited_once_with(
+            signal,
+            61000.0,
+            2900.0,
+            reason=ExitReason.TAKE_PROFIT,
+            prices_by_ticker={"BTC-USD": 61000.0, "ETH-USD": 2900.0},
+        )

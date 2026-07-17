@@ -82,6 +82,6 @@ async def test_reflection_reward_logic_failure():
         
         await reflection_agent.reflect_on_trade(signal_id)
         
-        mock_update.assert_any_call("BULL_AGENT", True)
-        mock_update.assert_any_call("BEAR_AGENT", False)
+        mock_update.assert_any_call("BULL_AGENT", False)
+        mock_update.assert_any_call("BEAR_AGENT", True)
         mock_update.assert_any_call("SEC_AGENT", False)

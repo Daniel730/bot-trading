@@ -113,7 +113,12 @@ class Orchestrator:
         # R3 fix (2026-04-19): get_ticker_regime returns a bare string literal
         # ("BULLISH" | "BEARISH" | "EXTREME_VOLATILITY"), not a dict. Previously
         # calling .get() on a string raised AttributeError on every signal.
-        regime = await macro_economic_agent.get_ticker_regime(beacon)
+        # Crypto pairs trade 24/7 off equity macro; SPY/NVDA beacon fetches are slow
+        # and can exhaust ORCHESTRATOR_TIMEOUT_SECONDS during off-hours scans.
+        if crypto_pair:
+            regime = "BULLISH"
+        else:
+            regime = await macro_economic_agent.get_ticker_regime(beacon)
 
         if regime == "EXTREME_VOLATILITY":
             msg = f"CRITICAL VETO: Sector Leader {beacon} is {regime}. Aborting analysis to protect capital."
@@ -466,9 +471,11 @@ class Orchestrator:
             "PEP": "KO", "PG": "KO",
         }
 
-        for ticker in [ticker_a, ticker_b]:
-            beacon = TICKER_BEACONS.get(ticker)
-            if beacon:
+        if not crypto_pair:
+            for ticker in [ticker_a, ticker_b]:
+                beacon = TICKER_BEACONS.get(ticker)
+                if not beacon:
+                    continue
                 regime = await macro_economic_agent.get_ticker_regime(beacon)
                 if regime == "EXTREME_VOLATILITY":
                     state["final_confidence"] = 0.0

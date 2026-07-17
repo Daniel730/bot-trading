@@ -27,7 +27,7 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
   const accuracyLabel = accuracy == null ? '—' : `${(accuracy * 100).toFixed(1)}%`;
   const accuracyState = accuracy == null
     ? '—'
-    : accuracy > 0.6 ? 'OPTIMAL' : accuracy < 0.4 ? 'CAUTION: PENALTY ACTIVE' : 'NOMINAL';
+    : accuracy > 0.6 ? 'OPTIMAL' : accuracy < 0.4 ? 'LOW ACCURACY WARNING' : 'NOMINAL';
 
   return (
     <div className="intelligence-hub" style={{ marginTop: '20px' }}>

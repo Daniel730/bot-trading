@@ -136,8 +136,8 @@ class ReflectionAgent:
                         await self._update_global_agent_performance(is_success)
                     except Exception as e:
                         logger.warning(f"ReflectionAgent: global performance update failed: {e}")
-                await persistence_service.update_agent_metrics("BULL_AGENT", True)
-                await persistence_service.update_agent_metrics("BEAR_AGENT", False)
+                await persistence_service.update_agent_metrics("BULL_AGENT", is_success)
+                await persistence_service.update_agent_metrics("BEAR_AGENT", not is_success)
                 await persistence_service.update_agent_metrics("SEC_AGENT", is_success)
 
                 logger.info(f"ReflectionAgent: Completed reflection for trade {signal_id_str}: {reflection_note}")

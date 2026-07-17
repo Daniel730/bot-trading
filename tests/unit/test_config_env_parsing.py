@@ -48,3 +48,10 @@ def test_default_dashboard_cors_regex_allows_tailscale_origins(monkeypatch):
     settings = Settings(_env_file=None)
 
     assert re.fullmatch(settings.dashboard_allowed_origin_regex, "http://localhost:3000")
+
+
+def test_guard_monitor_entry_zscore_clamps_dangerous_override():
+    from src.config import _guard_monitor_entry_zscore
+
+    assert _guard_monitor_entry_zscore(0.5) == 1.0
+    assert _guard_monitor_entry_zscore(2.0) == 2.0

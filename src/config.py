@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -12,6 +13,18 @@ load_dotenv()
 PAIRS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "pairs.json"
 BOT_SETTINGS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "bot_settings.json"
 ACTIVE_BROKERAGE_PROVIDER = "ALPACA"
+_logger = logging.getLogger(__name__)
+
+def _guard_monitor_entry_zscore(value: Any) -> float:
+    """Clamp dangerously low entry z-score overrides from bot_settings.json."""
+    z = float(value)
+    if z < 1.0:
+        _logger.warning(
+            "MONITOR_ENTRY_ZSCORE override %.2f is below safe minimum 1.0; clamping to 1.0",
+            z,
+        )
+        return 1.0
+    return z
 
 def _load_settings_override():
     try:
@@ -28,6 +41,11 @@ def _load_settings_override():
 def save_settings_override(new_settings: dict) -> None:
     BOT_SETTINGS_OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
     existing = _load_settings_override() or {}
+    if "MONITOR_ENTRY_ZSCORE" in new_settings:
+        new_settings = dict(new_settings)
+        new_settings["MONITOR_ENTRY_ZSCORE"] = _guard_monitor_entry_zscore(
+            new_settings["MONITOR_ENTRY_ZSCORE"]
+        )
     existing.update(new_settings)
     with BOT_SETTINGS_OVERRIDE_PATH.open("w", encoding="utf-8") as fh:
         json.dump(existing, fh, indent=2)
@@ -884,6 +902,8 @@ if _override:
 _settings_override = _load_settings_override()
 if _settings_override:
     for _key, _value in _settings_override.items():
+        if _key == "MONITOR_ENTRY_ZSCORE":
+            _value = _guard_monitor_entry_zscore(_value)
         if hasattr(settings, _key):
             setattr(settings, _key, _value)
     try:
@@ -898,6 +918,8 @@ def validate_runtime_settings_update(updates: dict[str, Any]) -> None:
     """Validate dashboard/runtime settings updates against the full Settings guardrail set."""
     originals = {}
     for key, value in updates.items():
+        if key == "MONITOR_ENTRY_ZSCORE":
+            value = _guard_monitor_entry_zscore(value)
         if hasattr(settings, key):
             originals[key] = getattr(settings, key)
             setattr(settings, key, value)
