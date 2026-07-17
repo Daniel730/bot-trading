@@ -104,3 +104,15 @@ docker compose -f infra/docker-compose.yml down
 Compose services declare `mem_limit` / `cpus` so the trading stack cannot unbounded-grow on a shared host (for example bot-server alongside other workloads). Tune in `infra/docker-compose.backend.yml` and `infra/docker-compose.frontend.yml` if the host profile changes.
 
 Host-only ops scripts (HDD, Pi edge, Minecraft limits) may live under `infra/host/` on the operator machine; they are not required to run the bot.
+
+## Production deploy (bot-server)
+
+Full checklist, smoke tests, rollback, and common bugs: [`docs/OPERATIONS.md`](../docs/OPERATIONS.md#production-deploy-bot-server).
+
+Quick trigger from dev machine after `git push origin master`:
+
+```bash
+gh workflow run "Deploy to bot-server (Mini PC)" --ref master
+```
+
+Post-deploy smoke on bot-server: `bash scripts/post_deploy_smoke.sh`

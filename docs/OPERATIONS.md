@@ -180,6 +180,176 @@ Dashboard terminal handlers include:
 | `/set_threshold <amount>` | Update auto-trade approval threshold |
 | `/exposure` | Dashboard exposure summary |
 
+## Production Deploy (bot-server)
+
+Production runs on **bot-server** (`daniel@bot-server`) via GitHub Actions and GHCR images.
+The self-hosted runner applies compose with project name `trading-bot` and env file
+`/home/daniel/.env.trading`. Dashboard/API is on **http://bot-server:8082** (`BOT_HOST_PORT=8082`).
+
+Workflow definition: [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)
+
+### Pre-flight checklist
+
+Run from your dev machine **before** pushing:
+
+```bash
+# 1. Tests green on the commits you are about to deploy
+PYTHONPATH=. .venv/bin/python -m pytest tests/unit/test_monitor.py \
+  tests/unit/test_orchestrator_fundamentals.py tests/unit/test_reflection_mab.py \
+  tests/unit/test_config_env_parsing.py -q --asyncio-mode=auto
+
+# 2. No secrets in the diff
+git diff --stat origin/master..HEAD
+```
+
+On **bot-server**, confirm env is valid (prints errors only, never secret values):
+
+```bash
+python3 scripts/validate_deploy_env.py /home/daniel/.env.trading
+```
+
+Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
+
+| Key | Expected on bot-server | Why |
+|---|---|---|
+| `BOT_HOST_PORT` | `8082` | Avoids SearXNG on `:8080` |
+| `ORCHESTRATOR_TIMEOUT_SECONDS` | `60` (or unset → code default 60) | Agent swarm budget |
+| `MONITOR_ENTRY_ZSCORE` | `2.0` (never `0.5`) | Entry threshold; code clamps below 1.0 |
+| `IMAGE_OWNER` | `daniel730` | GHCR namespace |
+| `POSTGRES_PASSWORD`, `DASHBOARD_TOKEN` | non-default, ≥16 chars for token | Startup guards |
+
+**Do not** set `MONITOR_ENTRY_ZSCORE=0.5` in env or `data/bot_settings.json` — the runtime
+clamps to 1.0 and logs a warning, but the intent is wrong and hides misconfiguration.
+
+Named volumes must exist (survive image pulls; hold 2FA, pairs, SQLite):
+
+```bash
+docker volume create trading-bot_redis_data
+docker volume create trading-bot_postgres_data
+docker volume create trading-bot_bot_data
+```
+
+First-time host prep: `infra/prepare_bot_server_env.sh` (sets `BOT_HOST_PORT=8082`, creates volumes).
+
+### Deploy steps (standard path)
+
+1. **Push** commits to `origin/master` (CI builds on GitHub-hosted runners, deploys on bot-server runner).
+
+```bash
+git push origin master
+```
+
+2. **Trigger** the workflow (from dev machine with `gh` CLI):
+
+```bash
+# Normal: only rebuild/deploy lanes that changed since last commit
+gh workflow run "Deploy to bot-server (Mini PC)" --ref master
+
+# When you touched Python + frontend (or want to be sure):
+gh workflow run "Deploy to bot-server (Mini PC)" --ref master \
+  -f force_python=true -f force_frontend=true
+
+# Full stack (release-like):
+gh workflow run "Deploy to bot-server (Mini PC)" --ref master -f force_all=true
+```
+
+3. **Watch** the run:
+
+```bash
+gh run watch   # pick the latest "Deploy to bot-server" run
+gh run view --log-failed   # if something breaks
+```
+
+Pipeline order: quality gates → build & push GHCR (`:latest` + commit SHA) → deploy frontend →
+execution-engine (if Java changed) → sec-worker → bot + mcp-server. Deploy jobs are **serialized**
+(`concurrency: deploy-bot-server`) so two compose applies never race.
+
+Images pulled on bot-server:
+
+- `ghcr.io/daniel730/trading-bot-base:latest`
+- `ghcr.io/daniel730/trading-frontend:latest`
+- `ghcr.io/daniel730/execution-engine:latest` (or pinned tag if unchanged)
+
+Env file is bind-mounted read-only; changing env requires **container recreate**, not just restart:
+
+```bash
+# On bot-server — after editing /home/daniel/.env.trading
+docker compose --env-file /home/daniel/.env.trading -p trading-bot \
+  -f ~/actions-runner/_work/bot-trading/bot-trading/infra/docker-compose.backend.yml \
+  up -d --no-deps bot mcp-server sec-worker
+```
+
+### Post-deploy smoke tests
+
+On bot-server (copy script or run from repo checkout):
+
+```bash
+bash scripts/post_deploy_smoke.sh
+```
+
+From a workstation over SSH:
+
+```bash
+ssh daniel@bot-server 'bash -s' < scripts/post_deploy_smoke.sh
+```
+
+Manual spot checks:
+
+```bash
+# Containers up, bot on :8082
+docker ps --filter name=trading-bot
+
+# Scan loop active (expect SCAN [pair] lines within ~15 min of boot)
+docker logs trading-bot-bot-1 --since 15m 2>&1 | grep 'SCAN \[' | tail -5
+
+# Runtime settings inside the running image
+docker exec trading-bot-bot-1 python3 -c \
+  "from src.config import settings; print(settings.ORCHESTRATOR_TIMEOUT_SECONDS, settings.MONITOR_ENTRY_ZSCORE)"
+```
+
+Health endpoint returns **401** without dashboard auth — that is correct (fail-closed).
+
+### Rollback
+
+If a deploy misbehaves, re-deploy the previous image tag without wiping volumes:
+
+```bash
+# On bot-server — pin to a known-good SHA tag from GHCR
+export IMAGE_TAG=<previous-commit-sha>
+docker compose --env-file /home/daniel/.env.trading -p trading-bot \
+  -f ~/actions-runner/_work/bot-trading/bot-trading/infra/docker-compose.backend.yml \
+  pull bot mcp-server sec-worker
+docker compose --env-file /home/daniel/.env.trading -p trading-bot \
+  -f ~/actions-runner/_work/bot-trading/bot-trading/infra/docker-compose.backend.yml \
+  up -d --no-deps bot mcp-server sec-worker
+unset IMAGE_TAG
+```
+
+Or re-run the GitHub workflow on the previous `master` commit via `workflow_dispatch` after
+`git revert` and push. **Never** `docker compose down -v` on production unless intentionally
+wiping Redis, Postgres, and dashboard 2FA state.
+
+### Common deploy bugs (and fixes)
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Bot crash-loops on boot | Default `POSTGRES_PASSWORD` / `DASHBOARD_TOKEN` | Set real secrets; run `validate_deploy_env.py` |
+| Bot on wrong port / dashboard 502 | `BOT_HOST_PORT` not 8082 | `infra/prepare_bot_server_env.sh` or set `BOT_HOST_PORT=8082`, recreate bot |
+| Trades never fire, z always low | `MONITOR_ENTRY_ZSCORE=0.5` in env or `bot_settings.json` | Remove override; use `2.0`; check clamp warning in logs |
+| Orchestrator timeouts on crypto | Old image without crypto macro bypass | Redeploy Python image (`force_python=true`) |
+| Env change ignored | Only restarted container | `docker compose up -d` recreate bot/mcp-server |
+| Stale code after deploy | Pulled image but old container name | Workflow removes legacy names; run workflow deploy job again |
+| Lost 2FA / pairs after deploy | `docker compose down -v` | Restore from backup; volumes are `trading-bot_*` externals |
+| Java fix not live | Java path not in redeploy watcher | Re-run workflow with `force_java=true` or touch `execution-engine/` |
+| `DEV_MODE=true` in production | Dashboard open, wrong universe | Set `DEV_MODE=false` in env, recreate bot |
+| GHCR pull 401 on server | Runner token expired | Re-login on runner host or re-run deploy job (workflow logs in) |
+
+### Deploy log (recent)
+
+| Date | Commits | Workflow | Notes |
+|---|---|---|---|
+| 2026-07-17 | `7e6f7b3`, `a5c5b63` | [run 29569493017](https://github.com/Daniel730/bot-trading/actions/runs/29569493017) | Profitability fixes: MAB, crypto orchestrator bypass, z-score clamp, take-profit guard, UI label. `force_python` + `force_frontend`. Smoke OK. |
+
 ## Troubleshooting
 
 | Symptom | Check |
