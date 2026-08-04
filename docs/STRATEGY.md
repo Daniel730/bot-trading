@@ -103,7 +103,7 @@ Multi-armed bandit weights cover bull, bear, and SEC agents only — whale is no
 | Live sell preflight | Blocks sell legs when available shares are insufficient. |
 | Atomic leg guard | Aborts after leg A failure; emergency-closes leg A when leg B fails. |
 | Kill switch | Closes positions when current value breaches `FINANCIAL_KILL_SWITCH_PCT`. |
-| Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE`; stop loss at `STOP_LOSS_ZSCORE`. |
+| Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE` (friction hold until fees clear, or force exit at `TAKE_PROFIT_FORCE_EXIT_ZSCORE`); stop loss at `STOP_LOSS_ZSCORE`. |
 
 ## Execution Direction
 

@@ -55,6 +55,9 @@ from src.monitor_helpers import (
 from src.monitor_scan_helpers import (
     build_candidate_pairs,
     build_scan_pairs,
+    gather_bounded,
+    normalize_scan_results,
+    open_signal_tickers,
     summarize_scan_iteration,
     build_close_orders,
     calculate_realized_pnl,
@@ -227,6 +230,10 @@ class ArbitrageMonitor:
         self._crypto_snapshot_pair_prices: dict[str, tuple[tuple[float, float], int]] = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
+        # Serialize heavy daily cointegration history pulls on shared Mini PC hosts.
+        self._coint_recheck_sem = asyncio.Semaphore(
+            max(1, int(settings.SCAN_COINT_RECHECK_CONCURRENCY))
+        )
         self.trade_decision_report_path = Path("logs") / "trade_decision_reports.jsonl"
 
     async def _await_order_fill(self, order_id: str, timeout: float = 30) -> dict | None:
@@ -3145,6 +3152,10 @@ class ArbitrageMonitor:
         """
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         pair_id = str(pair.get("id") or f"{t_a}_{t_b}")
+        async with self._coint_recheck_sem:
+            await self._recheck_cointegration_body(pair, pair_id=pair_id, t_a=t_a, t_b=t_b)
+
+    async def _recheck_cointegration_body(self, pair: dict, *, pair_id: str, t_a: str, t_b: str):
         try:
             hist_data = await data_service.get_historical_data_async([t_a, t_b], "30d", "1h")
             if hist_data is None or hist_data.empty:
@@ -3426,6 +3437,8 @@ class ArbitrageMonitor:
         canonical_symbol: str,
         quantity: float,
         matched_signal_ids: list[str],
+        *,
+        ignore_unmanaged: bool = False,
     ) -> str:
         available_quantity = self._broker_position_float(
             position,
@@ -3437,11 +3450,13 @@ class ArbitrageMonitor:
         market_value = self._broker_position_float(position, "marketValue", "market_value")
         ledger_match = "yes" if matched_signal_ids else "no"
         signal_ids = ",".join(matched_signal_ids) if matched_signal_ids else "none"
-        suggested_action = (
-            "VERIFY_LEDGER_MATCH"
-            if matched_signal_ids
-            else "IMPORT_OR_CLOSE_MANUALLY_BEFORE_RESTART"
-        )
+        if matched_signal_ids:
+            suggested_action = "VERIFY_LEDGER_MATCH"
+        elif ignore_unmanaged:
+            # Flag allows scan to continue — never imply overnight auto-flatten.
+            suggested_action = "IMPORT_OR_CLOSE_MANUALLY_NO_AUTO_FLATTEN"
+        else:
+            suggested_action = "IMPORT_OR_CLOSE_MANUALLY_BEFORE_RESTART"
         return (
             f"broker_symbol={raw_symbol} canonical_symbol={canonical_symbol} "
             f"quantity={quantity} available_quantity={available_quantity} "
@@ -3449,6 +3464,47 @@ class ArbitrageMonitor:
             f"ledger_match={ledger_match} signal_ids={signal_ids} "
             f"suggested_action={suggested_action}"
         )
+
+    async def _alert_ignored_unmanaged_positions(
+        self,
+        unmanaged_symbols: list[str],
+        audit_lines: list[str],
+    ) -> None:
+        """Surface ignored foreign broker inventory without pausing or flattening."""
+        symbols = ", ".join(sorted(unmanaged_symbols))
+        msg = (
+            f"RISK ALERT: Broker has unmanaged position(s) outside the bot ledger: {symbols}. "
+            "Continuing because IGNORE_UNMANAGED_POSITIONS=True — NOT auto-flattening overnight. "
+            "Import into the ledger or close manually. "
+            "Set IGNORE_UNMANAGED_POSITIONS=false before unattended live execution."
+        )
+        if audit_lines:
+            msg = f"{msg} Broker/ledger reconciliation audit: {'; '.join(audit_lines)}"
+
+        # Live real-money (non paper-api) is critical; broker-paper still warrants error.
+        live_real_money = bool(
+            settings.LIVE_CAPITAL_DANGER and not settings.is_broker_paper_trading
+        )
+        if live_real_money:
+            logger.critical(msg)
+        else:
+            logger.error(msg)
+
+        unmanaged_audit = [line for line in audit_lines if "ledger_match=no" in line]
+        state_payload = {
+            "ignored": True,
+            "auto_flatten": False,
+            "count": len(unmanaged_symbols),
+            "symbols": sorted(unmanaged_symbols),
+            "audit": unmanaged_audit,
+        }
+        await persistence_service.set_system_state(
+            "unmanaged_broker_positions",
+            json.dumps(state_payload, separators=(",", ":"))[:4000],
+        )
+        # Do not set operational_status to PAUSED — ignore means continue scanning.
+        await notification_service.send_message(msg)
+        await dashboard_service.update("UNMANAGED_POSITIONS_IGNORED", msg)
 
     async def _fail_fast_on_broker_ledger_mismatch(self) -> bool:
         if settings.PAPER_TRADING:
@@ -3471,6 +3527,7 @@ class ArbitrageMonitor:
             await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
             return False
 
+        ignore_unmanaged = bool(getattr(settings, "IGNORE_UNMANAGED_POSITIONS", True))
         ledger_matches = {}
         for signal in open_signals:
             signal_id = str(signal.get("signal_id") or "unknown")
@@ -3502,20 +3559,18 @@ class ArbitrageMonitor:
                         canonical_symbol,
                         quantity,
                         matched_signal_ids,
+                        ignore_unmanaged=ignore_unmanaged,
                     )
                 )
             if canonical_symbol and canonical_symbol not in ledger_symbols:
                 unmanaged_symbols.append(str(raw_symbol))
 
         if not unmanaged_symbols:
+            await persistence_service.set_system_state("unmanaged_broker_positions", "")
             return True
 
-        if getattr(settings, 'IGNORE_UNMANAGED_POSITIONS', True):
-            msg = (
-                f"Broker has unmanaged position(s): {', '.join(sorted(unmanaged_symbols))}. "
-                "Ignoring due to IGNORE_UNMANAGED_POSITIONS=True."
-            )
-            logger.warning(msg)
+        if ignore_unmanaged:
+            await self._alert_ignored_unmanaged_positions(unmanaged_symbols, audit_lines)
             return True
 
         await persistence_service.set_system_state(
@@ -3701,24 +3756,22 @@ class ArbitrageMonitor:
                         logger.error(f"Error pushing metrics to dashboard: {e}")
                         await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
 
-                    # Exit Strategy Loop - M-06: run all exit evaluations concurrently
+                    # Exit + scan share one price fetch; concurrency is semaphore-capped
+                    # so Mini PC CPU/RAM cannot be saturated by gather storms. Every open
+                    # signal and every scannable pair still runs each cycle.
                     open_signals = []
                     try:
-                        progress.update(scan_task, description="Checking open positions...")
+                        progress.update(scan_task, description="Loading open positions...")
                         open_signals = await persistence_service.get_open_signals()
-                        if open_signals:
-                            await asyncio.gather(
-                                *[self._evaluate_exit_conditions(signal) for signal in open_signals],
-                                return_exceptions=True  # one signal failing doesn't block the rest
-                            )
                     except Exception as e:
-                        logger.error(f"Error evaluating open signals for exits: {e}")
+                        logger.error(f"Error loading open signals for exits: {e}")
+                        open_signals = []
 
                     if not self.active_pairs:
                         logger.warning("No active pairs loaded; attempting pair reload before scanning.")
                         await self.reload_pairs()
                         progress.update(scan_task, total=len(self.active_pairs), completed=0)
-                        if not self.active_pairs:
+                        if not self.active_pairs and not open_signals:
                             await dashboard_service.update(
                                 "NO_ACTIVE_PAIRS",
                                 "No active pairs are loaded. Check pair initialization logs and configured crypto pairs.",
@@ -3731,6 +3784,36 @@ class ArbitrageMonitor:
                         self.active_pairs,
                         is_market_open=self.is_market_open,
                     )
+                    exit_tickers = open_signal_tickers(open_signals)
+                    price_tickers = list(dict.fromkeys([*all_tickers, *exit_tickers]))
+
+                    latest_prices: dict = {}
+                    if price_tickers:
+                        progress.update(
+                            scan_task,
+                            description=f"Fetching prices for {len(price_tickers)} tickers...",
+                            completed=0,
+                            total=max(len(scan_pairs), 1),
+                        )
+                        latest_prices = await data_service.get_latest_price_async(price_tickers)
+
+                    if open_signals:
+                        progress.update(scan_task, description="Checking open positions...")
+                        try:
+                            await gather_bounded(
+                                (
+                                    self._evaluate_exit_conditions(
+                                        signal,
+                                        latest_prices=latest_prices,
+                                    )
+                                    for signal in open_signals
+                                ),
+                                limit=settings.SCAN_EXIT_CONCURRENCY,
+                                return_exceptions=True,
+                            )
+                        except Exception as e:
+                            logger.error(f"Error evaluating open signals for exits: {e}")
+
                     if not scan_pairs:
                         msg = (
                             f"No active pairs are currently scannable "
@@ -3747,13 +3830,6 @@ class ArbitrageMonitor:
                         await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
                         continue
 
-                    progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
-                    latest_prices = (
-                        await data_service.get_latest_price_async(list(dict.fromkeys(all_tickers)))
-                        if all_tickers
-                        else {}
-                    )
-
                     # Daily Global Reset
                     today = datetime.now().date()
                     if self.current_day != today:
@@ -3762,7 +3838,7 @@ class ArbitrageMonitor:
                         self.bumped_pairs_today = {} # Reset Kalman bumps for the new day
 
 
-                    # Daily cointegration re-validation
+                    # Daily cointegration re-validation (tasks queue behind _coint_recheck_sem)
                     today = datetime.now().date()
                     for pair in self.active_pairs:
                         if self.last_cointegration_check.get(pair['id']) != today:
@@ -3773,10 +3849,10 @@ class ArbitrageMonitor:
                             )
                             self.last_cointegration_check[pair['id']] = today
 
-                    results = []
                     # Fetch sizing base once per iteration to avoid API spam in process_pair
                     current_sizing_base = await self._get_sizing_base()
                     scan_id = decision_recorder.begin_scan()
+                    pair_concurrency = max(1, int(settings.SCAN_PAIR_CONCURRENCY))
                     decision_recorder.record(
                         stage="scan",
                         outcome="continue",
@@ -3784,19 +3860,37 @@ class ArbitrageMonitor:
                         inputs={
                             "pairs": len(scan_pairs),
                             "scan_id": scan_id,
+                            "pair_concurrency": pair_concurrency,
+                            "exit_concurrency": max(1, int(settings.SCAN_EXIT_CONCURRENCY)),
                         },
                         scan_id=scan_id,
                     )
 
-                    for i, pair in enumerate(scan_pairs):
-                        progress.update(scan_task, description=f"Scanning [magenta]{pair['ticker_a']}/{pair['ticker_b']}[/]", completed=i)
-                        res = await self.process_pair(pair, latest_prices, sizing_base=current_sizing_base)
-                        results.append(res)
-                        # Small delay between pairs to spread out API load
-                        if i < len(scan_pairs) - 1:
-                            # Use a sub-task for the delay so it's visible? Or just update description.
-                            progress.update(scan_task, description=f"Waiting 2s... ([dim]{pair['ticker_a']}/{pair['ticker_b']} done[/])")
-                            await asyncio.sleep(2.0)
+                    progress.update(
+                        scan_task,
+                        description=(
+                            f"Scanning {len(scan_pairs)} pairs "
+                            f"(concurrency={pair_concurrency})..."
+                        ),
+                        completed=0,
+                        total=len(scan_pairs),
+                    )
+                    raw_results = await gather_bounded(
+                        (
+                            self.process_pair(
+                                pair,
+                                latest_prices,
+                                sizing_base=current_sizing_base,
+                            )
+                            for pair in scan_pairs
+                        ),
+                        limit=pair_concurrency,
+                        return_exceptions=True,
+                    )
+                    for item in raw_results:
+                        if isinstance(item, Exception):
+                            logger.error("Scan pair task failed: %s", item)
+                    results = normalize_scan_results(raw_results)
 
                     progress.update(scan_task, completed=len(scan_pairs), description="Scan iteration complete")
 
@@ -3851,7 +3945,11 @@ class ArbitrageMonitor:
             await redis_service.client.aclose()
             logger.info("Service shutdown complete.")
 
-    async def _evaluate_exit_conditions(self, signal: dict):
+    async def _evaluate_exit_conditions(
+        self,
+        signal: dict,
+        latest_prices: dict | None = None,
+    ):
         """Monitors open positions for Take Profit or Stop Loss."""
         sig_id = signal["signal_id"]
         legs = signal.get("legs", [])
@@ -3860,8 +3958,10 @@ class ArbitrageMonitor:
         leg_a, leg_b = legs[0], legs[1]
         t_a, t_b = leg_a["ticker"], leg_b["ticker"]
 
-        # Get real-time prices
-        prices = await data_service.get_latest_price_async([t_a, t_b])
+        # Prefer the scan-loop shared snapshot to avoid N concurrent price storms.
+        prices = latest_prices if latest_prices is not None else {}
+        if t_a not in prices or t_b not in prices:
+            prices = await data_service.get_latest_price_async([t_a, t_b])
         if t_a not in prices or t_b not in prices: return
 
         p_a, p_b = prices[t_a], prices[t_b]
@@ -4129,15 +4229,15 @@ class ArbitrageMonitor:
 
                     if abs(remaining_qty) > 1e-9:
                         if getattr(settings, "IGNORE_UNMANAGED_POSITIONS", True):
-                            logger.warning(
-                                "Close fill confirmed for %s %s but broker still reports "
-                                "%.6f remaining %s; continuing ledger close because "
-                                "IGNORE_UNMANAGED_POSITIONS=True.",
-                                sig_id_str,
-                                order["side"],
-                                remaining_qty,
-                                order["display_ticker"],
+                            msg = (
+                                f"Close fill confirmed for {sig_id_str}: {order['display_ticker']} "
+                                f"{order['side']} but broker still reports {remaining_qty:.6f} remaining; "
+                                "continuing ledger close because IGNORE_UNMANAGED_POSITIONS=True. "
+                                "Residual NOT auto-flattened — manual broker reconciliation required "
+                                "for unmanaged inventory."
                             )
+                            logger.error(msg)
+                            await notification_service.send_message(msg)
                             continue
                         msg = (
                             f"Close position verification failed for {sig_id_str}: broker still reports "

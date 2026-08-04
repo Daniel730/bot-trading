@@ -440,6 +440,39 @@ async def test_take_profit_friction_hold_skips_spread_guard_bid_ask(monitor):
 
 
 @pytest.mark.asyncio
+async def test_stop_loss_closes_when_z_exceeds_threshold(monitor):
+    signal = {
+        "signal_id": str(uuid.uuid4()),
+        "legs": [
+            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
+            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0},
+        ],
+        "total_cost_basis": 3000.0,
+    }
+
+    with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
+         patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close, \
+         patch("src.monitor.settings.STOP_LOSS_ZSCORE", 3.5), \
+         patch("src.monitor.risk_service.check_financial_kill_switch", return_value=False):
+
+        mock_prices.return_value = {"AAPL": 140.0, "MSFT": 320.0}
+        kf = MagicMock()
+        kf.calculate_spread_and_zscore.return_value = (0.0, 3.8)
+        mock_filter.return_value = kf
+
+        await monitor._evaluate_exit_conditions(signal)
+
+        mock_close.assert_awaited_once_with(
+            signal,
+            140.0,
+            320.0,
+            reason=ExitReason.STOP_LOSS,
+            prices_by_ticker={"AAPL": 140.0, "MSFT": 320.0},
+        )
+
+
+@pytest.mark.asyncio
 async def test_initialize_pairs_benches_denylisted_both_orders(monitor, monkeypatch):
     benched: list[str] = []
 

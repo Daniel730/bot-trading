@@ -232,6 +232,48 @@ class TestResolveHedgeRatio:
         assert resolve_hedge_ratio({"hedge_ratio": 0.0, "dynamic_beta": -1.0}) == 1.0
 
 
+def test_should_take_profit_exit_covers_friction():
+    from src.monitor_helpers import should_take_profit_exit
+
+    ok, reason = should_take_profit_exit(
+        abs_z_score=0.3,
+        take_profit_zscore=0.5,
+        directional_pnl=20.0,
+        estimated_friction=10.0,
+        force_exit_zscore=0.25,
+    )
+    assert ok is True
+    assert reason == "covers_friction"
+
+
+def test_should_take_profit_exit_force_mean_reversion():
+    from src.monitor_helpers import should_take_profit_exit
+
+    ok, reason = should_take_profit_exit(
+        abs_z_score=0.1,
+        take_profit_zscore=0.5,
+        directional_pnl=1.0,
+        estimated_friction=12.0,
+        force_exit_zscore=0.25,
+    )
+    assert ok is True
+    assert reason == "force_mean_reversion"
+
+
+def test_should_take_profit_exit_friction_hold():
+    from src.monitor_helpers import should_take_profit_exit
+
+    ok, reason = should_take_profit_exit(
+        abs_z_score=0.3,
+        take_profit_zscore=0.5,
+        directional_pnl=1.0,
+        estimated_friction=12.0,
+        force_exit_zscore=0.25,
+    )
+    assert ok is False
+    assert reason == "friction_hold"
+
+
 # ---------------------------------------------------------------------------
 # executable bid/ask + profit-guard friction floor
 # ---------------------------------------------------------------------------

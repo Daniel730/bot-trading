@@ -248,6 +248,11 @@ class Settings(BaseSettings):
     IGNORE_UNMANAGED_POSITIONS: bool = Field(
         default=True,
         validation_alias="IGNORE_UNMANAGED_POSITIONS",
+        description=(
+            "When True, broker positions outside the bot ledger do not block startup; "
+            "alerts still fire with a full reconciliation audit and positions are never "
+            "auto-flattened. Set False before unattended live execution."
+        ),
     )
     # None = auto: enabled for PAPER_TRADING or Alpaca paper API URL; disabled for live URLs.
     AUTO_RECONCILE_FLAT_ORPHANS: Optional[bool] = Field(
@@ -369,11 +374,51 @@ class Settings(BaseSettings):
     ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=60.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
     MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=45.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
     MARKET_DATA_BATCH_SIZE: int = Field(default=30, validation_alias="MARKET_DATA_BATCH_SIZE")
-    MARKET_DATA_BATCH_CONCURRENCY: int = Field(default=3, validation_alias="MARKET_DATA_BATCH_CONCURRENCY")
+    MARKET_DATA_BATCH_CONCURRENCY: int = Field(
+        default=3,
+        validation_alias="MARKET_DATA_BATCH_CONCURRENCY",
+        ge=1,
+        le=8,
+    )
     SPREAD_GUARD_MAX_PCT: float = Field(default=0.003, validation_alias="SPREAD_GUARD_MAX_PCT")
     TAKE_PROFIT_ZSCORE: float = Field(default=0.5, validation_alias="TAKE_PROFIT_ZSCORE")
+    # When |z| is at/below this floor inside the TP band, exit even if gross PnL
+    # would not clear estimated round-trip friction (mean reversion is done).
+    TAKE_PROFIT_FORCE_EXIT_ZSCORE: float = Field(
+        default=0.25,
+        validation_alias="TAKE_PROFIT_FORCE_EXIT_ZSCORE",
+    )
     STOP_LOSS_ZSCORE: float = Field(default=3.5, validation_alias="STOP_LOSS_ZSCORE")
-    SCAN_INTERVAL_SECONDS: int = Field(default=15, validation_alias="SCAN_INTERVAL_SECONDS")
+    # Idle gap between full scan iterations. Floor avoids busy-spin; ceiling avoids
+    # multi-minute blind spots on kill-switch / stop-loss exits.
+    SCAN_INTERVAL_SECONDS: int = Field(
+        default=15,
+        validation_alias="SCAN_INTERVAL_SECONDS",
+        ge=5,
+        le=300,
+    )
+    # Cap concurrent process_pair work inside one scan iteration. Every scannable
+    # pair still runs each cycle; only parallelism is bounded (Mini PC: keep ≤2).
+    SCAN_PAIR_CONCURRENCY: int = Field(
+        default=2,
+        validation_alias="SCAN_PAIR_CONCURRENCY",
+        ge=1,
+        le=8,
+    )
+    # Cap concurrent open-position exit evaluations (kill-switch / TP / SL).
+    SCAN_EXIT_CONCURRENCY: int = Field(
+        default=2,
+        validation_alias="SCAN_EXIT_CONCURRENCY",
+        ge=1,
+        le=8,
+    )
+    # Cap concurrent daily cointegration rechecks (each pulls 30d history).
+    SCAN_COINT_RECHECK_CONCURRENCY: int = Field(
+        default=1,
+        validation_alias="SCAN_COINT_RECHECK_CONCURRENCY",
+        ge=1,
+        le=4,
+    )
     RISK_DRAWDOWN_ZERO_PCT: float = Field(default=0.15, validation_alias="RISK_DRAWDOWN_ZERO_PCT")
     RISK_SHARPE_FLOOR: float = Field(default=0.5, validation_alias="RISK_SHARPE_FLOOR")
     RISK_MULTIPLIER_CAP_LOW_SHARPE: float = Field(default=0.1, validation_alias="RISK_MULTIPLIER_CAP_LOW_SHARPE")
@@ -1000,6 +1045,21 @@ class Settings(BaseSettings):
             raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
+        # Force-exit must sit inside the TP band; values above TAKE_PROFIT collapse
+        # friction-hold into always-exit and burn fees on every mean-reversion touch.
+        if self.TAKE_PROFIT_FORCE_EXIT_ZSCORE < 0:
+            _logger.warning(
+                "TAKE_PROFIT_FORCE_EXIT_ZSCORE %.4f is negative; clamping to 0.0",
+                self.TAKE_PROFIT_FORCE_EXIT_ZSCORE,
+            )
+            self.TAKE_PROFIT_FORCE_EXIT_ZSCORE = 0.0
+        if self.TAKE_PROFIT_FORCE_EXIT_ZSCORE > self.TAKE_PROFIT_ZSCORE:
+            _logger.warning(
+                "TAKE_PROFIT_FORCE_EXIT_ZSCORE %.4f exceeds TAKE_PROFIT_ZSCORE %.4f; clamping",
+                self.TAKE_PROFIT_FORCE_EXIT_ZSCORE,
+                self.TAKE_PROFIT_ZSCORE,
+            )
+            self.TAKE_PROFIT_FORCE_EXIT_ZSCORE = self.TAKE_PROFIT_ZSCORE
         return self
 
 settings = Settings()
