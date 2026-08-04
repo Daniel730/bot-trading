@@ -3745,11 +3745,13 @@ class ArbitrageMonitor:
                         p_metrics = await performance_service.get_portfolio_metrics()
                         await dashboard_service.update_metrics(p_metrics)
 
-                        pnl = await persistence_service.get_total_pnl()
+                        # Lifetime closed PnL → total_revenue (via update's pnl arg).
+                        # Do not confuse with daily_profit; _poll_metrics owns that field.
+                        total_pnl = await persistence_service.get_total_pnl()
                         await dashboard_service.update(
                             stage="Monitoring",
                             details=f"Scanning {len(self.active_pairs)} pairs...",
-                            pnl=pnl,
+                            pnl=total_pnl,
                             active_signals=self.active_signals
                         )
                     except Exception as e:

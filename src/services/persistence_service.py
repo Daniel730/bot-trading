@@ -838,10 +838,15 @@ class PersistenceService:
             first = sorted_legs[0]
             tickers = [leg.ticker for leg in sorted_legs]
             pnl = None
+            closed_at = None
             for leg in sorted_legs:
                 if leg.metadata_json and "pnl" in leg.metadata_json:
                     pnl = float(leg.metadata_json["pnl"])
                     break
+            for leg in sorted_legs:
+                if getattr(leg, "closed_at", None) is not None:
+                    if closed_at is None or leg.closed_at > closed_at:
+                        closed_at = leg.closed_at
             total_notional = sum(float(leg.quantity) * float(leg.price) for leg in sorted_legs)
             items.append(
                 {
@@ -850,6 +855,7 @@ class PersistenceService:
                     "venue": first.venue,
                     "status": first.status.value,
                     "opened_at": first.execution_timestamp.isoformat() if first.execution_timestamp else None,
+                    "closed_at": closed_at.isoformat() if closed_at else None,
                     "legs": [
                         {
                             "ticker": leg.ticker,
@@ -912,10 +918,12 @@ class PersistenceService:
             return {"metric": metric, "points": points}
 
         if metric_key in {"win_loss", "wins", "losses"}:
-            history = await self.get_trade_history(page=1, page_size=500)
+            # Bucket by close date (realized PnL day), matching profit charts --
+            # not opened_at, which misattributes wins/losses to entry day.
+            history = await self.get_trade_history(page=1, page_size=500, status="CLOSED")
             buckets: Dict[str, Dict[str, float]] = {}
             for trade in history["items"]:
-                day = (trade.get("opened_at") or "")[:10]
+                day = (trade.get("closed_at") or trade.get("opened_at") or "")[:10]
                 if not day:
                     continue
                 bucket = buckets.setdefault(day, {"wins": 0.0, "losses": 0.0})

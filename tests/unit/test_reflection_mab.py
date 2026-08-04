@@ -87,6 +87,42 @@ async def test_reflection_reward_logic_failure():
         mock_update.assert_any_call("SEC_AGENT", False)
 
 
+@pytest.mark.asyncio
+async def test_reflection_does_not_double_count_leg_pnl():
+    """Both legs store identical signal-level pnl; success must use it once."""
+    signal_id = str(uuid.uuid4())
+    leg_a = MagicMock()
+    leg_a.side = OrderSide.BUY
+    leg_a.metadata_json = {"pnl": 50.0}
+    leg_b = MagicMock()
+    leg_b.side = OrderSide.SELL
+    leg_b.metadata_json = {"pnl": 50.0}
+
+    with patch(
+        "src.services.persistence_service.persistence_service.update_agent_metrics",
+        new_callable=AsyncMock,
+    ) as mock_update, patch(
+        "src.services.persistence_service.persistence_service.AsyncSessionLocal"
+    ) as mock_session_factory:
+        mock_scalar_result = MagicMock()
+        mock_scalar_result.all.return_value = [leg_a, leg_b]
+        mock_ledger_result = MagicMock()
+        mock_ledger_result.scalars.return_value = mock_scalar_result
+        mock_journal_result = MagicMock()
+        mock_journal_result.scalar_one_or_none.return_value = None
+
+        mock_session_context = MagicMock()
+        mock_session_context.execute = AsyncMock(
+            side_effect=[mock_ledger_result, mock_journal_result]
+        )
+        mock_session_factory.return_value.__aenter__.return_value = mock_session_context
+
+        await reflection_agent.reflect_on_trade(signal_id)
+
+        assert mock_update.call_count == 3
+        mock_update.assert_any_call("BULL_AGENT", True)
+
+
 def test_exit_reason_from_ledger_prefers_metadata():
     from src.agents.reflection_agent import ReflectionAgent
     from src.services.persistence_service import ExitReason

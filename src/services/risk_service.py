@@ -85,8 +85,12 @@ class RiskService:
         perf_metrics = performance_service.get_portfolio_metrics()
         if inspect.isawaitable(perf_metrics):
             perf_metrics = await perf_metrics
-        sharpe = perf_metrics.get("sharpe_ratio", 1.0)
-        drawdown = perf_metrics.get("max_drawdown", 0.0)
+        # Default 0.0 (not 1.0): missing/empty history must not look like a healthy Sharpe
+        # and must engage the low-Sharpe Kelly cap until real sample days exist.
+        sharpe_raw = perf_metrics.get("sharpe_ratio")
+        sharpe = 0.0 if sharpe_raw is None else float(sharpe_raw)
+        drawdown_raw = perf_metrics.get("max_drawdown")
+        drawdown = 0.0 if drawdown_raw is None else float(drawdown_raw)
 
         # SC-001: Position size scales linearly with drawdown: 0% at 15% drawdown
         risk_multiplier = 1.0
