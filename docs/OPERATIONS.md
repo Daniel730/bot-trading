@@ -39,7 +39,9 @@ This repairs only non-secret paper startup keys, validates the env file, and fai
 If it reports already-running app containers, stop them first:
 
 ```bash
-docker stop infra-bot-1 infra-execution-engine-1 infra-mcp-server-1 infra-sec-worker-1 infra-frontend-1
+docker stop infra-bot-1 infra-sec-worker-1 infra-frontend-1
+# Optional profile sidecars (only if previously started with --profile optional):
+# docker stop infra-execution-engine-1 infra-mcp-server-1
 ```
 
 ## Local Run
@@ -309,14 +311,16 @@ gh run view --log-failed   # if something breaks
 ```
 
 Pipeline order: quality gates → build & push GHCR (`:latest` + commit SHA) → deploy frontend →
-execution-engine (if Java changed) → sec-worker → bot + mcp-server. Deploy jobs are **serialized**
-(`concurrency: deploy-bot-server`) so two compose applies never race.
+execution-engine (optional profile, if Java changed) → sec-worker → bot. Deploy jobs are **serialized**
+(`concurrency: deploy-bot-server`) so two compose applies never race. Default runtime stack is
+postgres, redis, bot, sec-worker, frontend; `mcp-server` / `execution-engine` stay behind
+`--profile optional`.
 
 Images pulled on bot-server:
 
 - `ghcr.io/daniel730/trading-bot-base:latest`
 - `ghcr.io/daniel730/trading-frontend:latest`
-- `ghcr.io/daniel730/execution-engine:latest` (or pinned tag if unchanged)
+- `ghcr.io/daniel730/execution-engine:latest` (optional sidecar; only when Java lane deploys)
 
 Env file is bind-mounted read-only; changing env requires **container recreate**, not just restart:
 
@@ -324,7 +328,9 @@ Env file is bind-mounted read-only; changing env requires **container recreate**
 # On bot-server — after editing /home/daniel/.env.trading
 docker compose --env-file /home/daniel/.env.trading -p trading-bot \
   -f ~/actions-runner/_work/bot-trading/bot-trading/infra/docker-compose.backend.yml \
-  up -d --no-deps bot mcp-server sec-worker
+  up -d --no-deps bot sec-worker
+# Optional sidecars (only if you want them):
+# docker compose ... --profile optional up -d --no-deps mcp-server execution-engine
 ```
 
 ### Post-deploy smoke tests
@@ -366,10 +372,10 @@ If a deploy misbehaves, re-deploy the previous image tag without wiping volumes:
 export IMAGE_TAG=<previous-commit-sha>
 docker compose --env-file /home/daniel/.env.trading -p trading-bot \
   -f ~/actions-runner/_work/bot-trading/bot-trading/infra/docker-compose.backend.yml \
-  pull bot mcp-server sec-worker
+  pull bot sec-worker
 docker compose --env-file /home/daniel/.env.trading -p trading-bot \
   -f ~/actions-runner/_work/bot-trading/bot-trading/infra/docker-compose.backend.yml \
-  up -d --no-deps bot mcp-server sec-worker
+  up -d --no-deps bot sec-worker
 unset IMAGE_TAG
 ```
 
@@ -385,7 +391,7 @@ wiping Redis, Postgres, and dashboard 2FA state.
 | Bot on wrong port / dashboard 502 | `BOT_HOST_PORT` not 8082 | `infra/prepare_bot_server_env.sh` or set `BOT_HOST_PORT=8082`, recreate bot |
 | Trades never fire, z always low | `MONITOR_ENTRY_ZSCORE=0.5` in env or `bot_settings.json` | Remove override; use `2.0`; check clamp warning in logs |
 | Orchestrator timeouts on crypto | Old image without crypto macro bypass | Redeploy Python image (`force_python=true`) |
-| Env change ignored | Only restarted container | `docker compose up -d` recreate bot/mcp-server |
+| Env change ignored | Only restarted container | `docker compose up -d` recreate bot/sec-worker |
 | Stale code after deploy | Pulled image but old container name | Workflow removes legacy names; run workflow deploy job again |
 | Lost 2FA / pairs after deploy | `docker compose down -v` | Restore from backup; volumes are `trading-bot_*` externals |
 | Java fix not live | Java path not in redeploy watcher | Re-run workflow with `force_java=true` or touch `execution-engine/` |
@@ -396,7 +402,7 @@ wiping Redis, Postgres, and dashboard 2FA state.
 
 | Date | Commits | Workflow | Notes |
 |---|---|---|---|
-| 2026-08-04 | `81e65b2` + claim/intent/broker-test fixes | Deploy after Phase 4–5 merge | (1) claim fail-closed broke approval-denied unit test → paper/auto-approve local+WAL fallback. (2) exactly-once race UniqueViolation → `ON CONFLICT DO NOTHING`. (3) integration `test_brokerage_service_places_alpaca_market_order` hit new `_pre_submit_gate` under CI `PAPER_TRADING=true` → test now opts into broker-paper path like unit dispatcher tests. |
+| 2026-08-04 | `42031a4` (via `8c7df2c`, `9b0bac7`) | [run 30916391994](https://github.com/Daniel730/bot-trading/actions/runs/30916391994) | Phase 4–5 to bot-server. Quality fixes: paper claim fallback; race-safe `begin_intent` ON CONFLICT; brokerage integration test opts into `_pre_submit_gate`. Smoke OK; ~50m soak clean (Restart=0, no CRITICAL/Traceback, Alpaca paper). |
 | 2026-07-17 | `7e6f7b3`, `a5c5b63` | [run 29569493017](https://github.com/Daniel730/bot-trading/actions/runs/29569493017) | Profitability fixes: MAB, crypto orchestrator bypass, z-score clamp, take-profit guard, UI label. `force_python` + `force_frontend`. Smoke OK. |
 
 ## Host Memory / OOM (bot-server)
