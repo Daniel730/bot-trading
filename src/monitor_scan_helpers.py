@@ -68,8 +68,11 @@ def normalize_scan_results(raw_results: Iterable[object]) -> list[dict]:
     return normalized
 
 
-def _pair_key(pair: dict) -> tuple[str, str]:
-    return (str(pair["ticker_a"]).upper(), str(pair["ticker_b"]).upper())
+def _pair_key(pair: dict) -> frozenset[str]:
+    """Order-independent key so BTC/ETH and ETH/BTC collapse to one slot."""
+    return frozenset(
+        (str(pair["ticker_a"]).upper(), str(pair["ticker_b"]).upper())
+    )
 
 
 def build_candidate_pairs(
@@ -84,8 +87,9 @@ def build_candidate_pairs(
 
     Crypto pairs run 24/7, so production mode must not let a full saved equity
     universe crowd them out. The returned list is capped at max_active_pairs.
+    Reverse-oriented duplicates (ETH/BTC vs BTC/ETH) share one slot.
     """
-    seen_crypto: set[tuple[str, str]] = set()
+    seen_crypto: set[frozenset[str]] = set()
     crypto_pairs: list[dict] = []
     for pair in [*base_pairs, *configured_crypto_pairs]:
         if not is_crypto_pair(pair["ticker_a"], pair["ticker_b"]):
@@ -106,7 +110,7 @@ def build_candidate_pairs(
     selected_crypto = crypto_pairs[:effective_limit]
     equity_slots = max(0, effective_limit - len(selected_crypto))
 
-    seen_equity: set[tuple[str, str]] = set()
+    seen_equity: set[frozenset[str]] = set()
     equity_pairs: list[dict] = []
     if equity_slots > 0:
         for pair in base_pairs:

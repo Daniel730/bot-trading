@@ -117,15 +117,25 @@ class ArbitrageService:
                         )
                     
                     if df is not None and not df.empty:
-                        for i in range(len(df)):
-                            # Find columns that match ticker names
-                            col_a = next((c for c in df.columns if t_a in str(c)), None)
-                            col_b = next((c for c in df.columns if t_b in str(c)), None)
-                            if not col_a or not col_b: continue
+                        from src.monitor_helpers import (
+                            normalize_history_close_frame,
+                            resolve_history_column,
+                        )
 
+                        df = normalize_history_close_frame(df)
+                        if df is None or df.empty:
+                            raise ValueError(f"empty close frame for {pair_id}")
+                        col_a = resolve_history_column(df.columns, t_a)
+                        col_b = resolve_history_column(df.columns, t_b)
+                        if not col_a or not col_b:
+                            raise ValueError(
+                                f"columns not found for {pair_id}: have={list(df.columns)}"
+                            )
+                        for i in range(len(df)):
                             price_a = float(df[col_a].iloc[i])
                             price_b = float(df[col_b].iloc[i])
-                            if pd.isna(price_a) or pd.isna(price_b): continue
+                            if pd.isna(price_a) or pd.isna(price_b):
+                                continue
                             kf.update(price_a, price_b)
 
                     self.filters[pair_id] = kf

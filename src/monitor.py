@@ -46,6 +46,8 @@ import inspect
 from src.monitor_helpers import (
     is_crypto_pair,
     is_executable_bid_ask,
+    normalize_history_close_frame,
+    resolve_history_column,
     resolve_pair_sector,
     resolve_kalman_pair_id,
     resolve_hedge_ratio,
@@ -904,28 +906,14 @@ class ArbitrageMonitor:
                     logger.warning(f"SKIP {ticker_a}/{ticker_b}: No historical data returned.")
                     continue
 
-                # Normalise: if yfinance returned a MultiIndex DataFrame, flatten to
-                # a simple ticker→price DataFrame so column matching is consistent.
-                if isinstance(hist_data.columns, pd.MultiIndex):
-                    # Level 0 is the price field (Close/Open/…), level 1 is ticker.
-                    # Drop down to just the Close slice if available.
-                    if "Close" in hist_data.columns.get_level_values(0):
-                        hist_data = hist_data["Close"]
-                    else:
-                        # Keep the last level (tickers) as column names.
-                        hist_data.columns = hist_data.columns.get_level_values(-1)
+                # Flatten MultiIndex and exact-match columns (GOOG must not bind GOOGL).
+                hist_data = normalize_history_close_frame(hist_data)
+                if hist_data is None or hist_data.empty:
+                    logger.warning(f"SKIP {ticker_a}/{ticker_b}: No usable close columns.")
+                    continue
 
-                # Case-insensitive substring match so 'BTC-USD' matches 'BTC-USD' column.
-                col_a = next(
-                    (c for c in hist_data.columns
-                     if ticker_a.upper() in str(c).upper()),
-                    None,
-                )
-                col_b = next(
-                    (c for c in hist_data.columns
-                     if ticker_b.upper() in str(c).upper()),
-                    None,
-                )
+                col_a = resolve_history_column(hist_data.columns, ticker_a)
+                col_b = resolve_history_column(hist_data.columns, ticker_b)
 
                 if not col_a or not col_b:
                     logger.warning(
@@ -1377,13 +1365,8 @@ class ArbitrageMonitor:
     @staticmethod
     def _normalize_pair_history_frame(hist_data: pd.DataFrame) -> pd.DataFrame:
         """Flatten MultiIndex yfinance frames to a ticker->close DataFrame."""
-        if isinstance(hist_data.columns, pd.MultiIndex):
-            if "Close" in hist_data.columns.get_level_values(0):
-                return hist_data["Close"]
-            normalized = hist_data.copy()
-            normalized.columns = normalized.columns.get_level_values(-1)
-            return normalized
-        return hist_data
+        normalized = normalize_history_close_frame(hist_data)
+        return hist_data if normalized is None else normalized
 
     async def _rebuild_quarantined_kalman_pair(self, pair: dict) -> bool:
         """Re-warm a single quarantined pair without reloading the whole universe.
@@ -1411,14 +1394,8 @@ class ArbitrageMonitor:
             return False
 
         hist_data = self._normalize_pair_history_frame(hist_data)
-        col_a = next(
-            (c for c in hist_data.columns if ticker_a.upper() in str(c).upper()),
-            None,
-        )
-        col_b = next(
-            (c for c in hist_data.columns if ticker_b.upper() in str(c).upper()),
-            None,
-        )
+        col_a = resolve_history_column(hist_data.columns, ticker_a)
+        col_b = resolve_history_column(hist_data.columns, ticker_b)
         if not col_a or not col_b:
             logger.warning(
                 "KALMAN QUARANTINE: targeted rebuild for %s failed -- columns missing (%s).",
@@ -3531,8 +3508,11 @@ class ArbitrageMonitor:
             if hist_data is None or hist_data.empty:
                 return
 
-            col_a = next((c for c in hist_data.columns if t_a in c), None)
-            col_b = next((c for c in hist_data.columns if t_b in c), None)
+            hist_data = normalize_history_close_frame(hist_data)
+            if hist_data is None or hist_data.empty:
+                return
+            col_a = resolve_history_column(hist_data.columns, t_a)
+            col_b = resolve_history_column(hist_data.columns, t_b)
             if not col_a or not col_b:
                 return
 

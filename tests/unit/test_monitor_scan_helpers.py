@@ -54,8 +54,8 @@ class TestBuildCandidatePairs:
         assert [(p["ticker_a"], p["ticker_b"]) for p in candidates] == [
             ("AAPL", "MSFT"),
             ("KO", "PEP"),
+            ("JPM", "BAC"),
             ("BTC-USD", "ETH-USD"),
-            ("ETH-USD", "BTC-USD"),
         ]
 
     def test_merges_configured_crypto_when_saved_pairs_are_equity_only(self):
@@ -65,9 +65,9 @@ class TestBuildCandidatePairs:
         candidates = build_candidate_pairs(saved_pairs, crypto, max_active_pairs=18, dev_mode=False)
 
         assert len(candidates) == 18
-        assert candidates[-2]["ticker_a"] == "BTC-USD"
-        assert candidates[-1]["ticker_a"] == "ETH-USD"
-        assert len([p for p in candidates if not p["ticker_a"].endswith("-USD")]) == 16
+        assert candidates[-1]["ticker_a"] == "BTC-USD"
+        assert candidates[-1]["ticker_b"] == "ETH-USD"
+        assert len([p for p in candidates if not p["ticker_a"].endswith("-USD")]) == 17
 
     def test_deduplicates_crypto_already_present_in_saved_pairs(self):
         saved_pairs = [_pair("AAPL", "MSFT"), _pair("BTC-USD", "ETH-USD")]
@@ -88,7 +88,6 @@ class TestBuildCandidatePairs:
 
         assert [(p["ticker_a"], p["ticker_b"]) for p in candidates] == [
             ("BTC-USD", "ETH-USD"),
-            ("ETH-USD", "BTC-USD"),
         ]
 
     def test_non_positive_limit_keeps_configured_crypto_as_minimum_universe(self):

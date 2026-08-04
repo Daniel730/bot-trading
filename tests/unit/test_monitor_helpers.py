@@ -13,7 +13,9 @@ from src.monitor_helpers import (
     compute_entry_zscore,
     is_crypto_pair,
     is_executable_bid_ask,
+    normalize_history_close_frame,
     resolve_hedge_ratio,
+    resolve_history_column,
     resolve_kalman_pair_id,
     resolve_pair_sector,
     resolve_profit_guard_friction_pct,
@@ -52,6 +54,36 @@ class TestIsCryptoPair:
     def test_equity_pair_with_dash_not_crypto(self):
         # BRK-B style equity should NOT match
         assert is_crypto_pair("BRK-B", "JPM") is False
+
+
+# ---------------------------------------------------------------------------
+# resolve_history_column / normalize_history_close_frame
+# ---------------------------------------------------------------------------
+
+
+class TestResolveHistoryColumn:
+    def test_exact_match_case_insensitive(self):
+        assert resolve_history_column(["btc-usd", "ETH-USD"], "BTC-USD") == "btc-usd"
+
+    def test_goog_does_not_bind_googl(self):
+        columns = ["GOOGL", "GOOG"]
+        assert resolve_history_column(columns, "GOOG") == "GOOG"
+        assert resolve_history_column(columns, "GOOGL") == "GOOGL"
+
+    def test_substring_false_positive_rejected(self):
+        # Legacy bug: "GOOG" in "GOOGL" would falsely bind the dual-class share.
+        assert resolve_history_column(["GOOGL"], "GOOG") is None
+
+
+class TestNormalizeHistoryCloseFrame:
+    def test_flattens_multiindex_close(self):
+        import pandas as pd
+
+        arrays = [["Close", "Close"], ["GOOGL", "GOOG"]]
+        cols = pd.MultiIndex.from_arrays(arrays)
+        df = pd.DataFrame([[1.0, 2.0], [1.1, 2.1]], columns=cols)
+        out = normalize_history_close_frame(df)
+        assert list(out.columns) == ["GOOGL", "GOOG"]
 
 
 # ---------------------------------------------------------------------------
