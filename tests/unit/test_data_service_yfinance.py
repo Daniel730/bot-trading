@@ -400,6 +400,56 @@ async def test_get_bid_ask_falls_back_to_yfinance_when_alpaca_crypto_raises():
     yf_ticker.assert_called_once_with("BTC-USD")
 
 
+@pytest.mark.asyncio
+async def test_get_bid_ask_skips_crossed_alpaca_crypto_and_falls_back():
+    """Crossed Alpaca books must not poison the spread guard — try yfinance next."""
+    service = DataService()
+
+    class FakeTicker:
+        def __init__(self):
+            self.info = {
+                "bid": 90000.0,
+                "ask": 90015.0,
+            }
+
+    class FakeQuote:
+        bp = 90010.0
+        ap = 90000.0  # crossed
+
+    class FakeSnapshot:
+        latest_quote = FakeQuote()
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()) as yf_ticker, \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             return_value={"BTC/USD": FakeSnapshot()},
+         ):
+        bid, ask = await service.get_bid_ask("BTC-USD")
+
+    assert (bid, ask) == (90000.0, 90015.0)
+    yf_ticker.assert_called_once_with("BTC-USD")
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_does_not_cache_crossed_yfinance_quote():
+    service = DataService()
+
+    class FakeTicker:
+        def __init__(self):
+            self.info = {
+                "bid": 100.0,
+                "ask": 99.5,  # crossed
+            }
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}):
+        bid, ask = await service.get_bid_ask("AAPL")
+
+    assert (bid, ask) == (0.0, 0.0)
+    assert service._yf_quote_cache.get("AAPL") is None
+
+
 def test_get_latest_price_crypto_snapshot_does_not_require_exchange_kwarg():
     service = DataService()
 

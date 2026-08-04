@@ -44,10 +44,13 @@ import pytz
 import inspect
 from src.monitor_helpers import (
     is_crypto_pair,
+    is_executable_bid_ask,
     resolve_pair_sector,
     resolve_kalman_pair_id,
     resolve_hedge_ratio,
+    resolve_profit_guard_friction_pct,
     compute_entry_zscore,
+    should_take_profit_exit,
 )
 from src.monitor_scan_helpers import (
     build_candidate_pairs,
@@ -1811,9 +1814,13 @@ class ArbitrageMonitor:
                     gross_notional=desired_notional,
                     direction=direction,
                 )
-                est_friction_pct = max(
-                    float(risk_res["fee_status"].get("total_friction_percent", 0.0)),
-                    float(pair.get("estimated_cost_pct") or 0.0),
+                est_friction_pct = resolve_profit_guard_friction_pct(
+                    fee_friction_pct=float(
+                        risk_res["fee_status"].get("total_friction_percent", 0.0) or 0.0
+                    ),
+                    pair_estimated_cost_pct=float(pair.get("estimated_cost_pct") or 0.0),
+                    gross_notional=float(legs.gross_notional),
+                    flat_order_friction_usd=float(settings.FLAT_ORDER_FRICTION_USD),
                 )
                 preview = estimate_pair_profit(
                     quantity_a=legs.quantity_a,
@@ -2036,7 +2043,11 @@ class ArbitrageMonitor:
             ask_a = float(ask_a)
             bid_b = float(bid_b)
             ask_b = float(ask_b)
-            valid_bid_ask = bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0
+            # Crossed quotes (ask < bid) previously produced a negative leg spread
+            # and failed open under the combined threshold — reject them.
+            valid_bid_ask = is_executable_bid_ask(bid_a, ask_a) and is_executable_bid_ask(
+                bid_b, ask_b
+            )
         except (TypeError, ValueError):
             valid_bid_ask = False
 
@@ -3904,18 +3915,33 @@ class ArbitrageMonitor:
             )
             friction_pct = estimate_round_trip_cost_pct(t_a, t_b)
             estimated_friction = gross_notional * friction_pct
-            if directional_pnl <= estimated_friction:
+            should_close, tp_reason = should_take_profit_exit(
+                abs_z_score=abs(float(z_score)),
+                take_profit_zscore=settings.TAKE_PROFIT_ZSCORE,
+                directional_pnl=float(directional_pnl),
+                estimated_friction=float(estimated_friction),
+                force_exit_zscore=settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE,
+            )
+            if not should_close:
                 logger.info(
                     "TAKE PROFIT z-threshold met for %s/%s (Z=%.2f) but gross PnL "
-                    "($%.2f) would not clear est. round-trip friction ($%.2f); holding.",
+                    "($%.2f) would not clear est. round-trip friction ($%.2f); holding "
+                    "(%s).",
                     t_a,
                     t_b,
                     z_score,
                     directional_pnl,
                     estimated_friction,
+                    tp_reason,
                 )
             else:
-                logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
+                logger.info(
+                    "TAKE PROFIT reached for %s/%s (Z-Score: %.2f, reason=%s).",
+                    t_a,
+                    t_b,
+                    z_score,
+                    tp_reason,
+                )
                 await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)

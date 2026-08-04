@@ -1057,7 +1057,9 @@ class DataService:
 
                     bid_value = read_float(bid_fields)
                     ask_value = read_float(ask_fields)
-                    if bid_value <= 0.0 or ask_value <= 0.0:
+                    # Crossed books are not executable; treat as missing so callers
+                    # fail closed (or fall through to another quote source).
+                    if bid_value <= 0.0 or ask_value <= 0.0 or ask_value < bid_value:
                         return 0.0, 0.0
                     return bid_value, ask_value
 
