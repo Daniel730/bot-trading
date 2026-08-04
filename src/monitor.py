@@ -4203,7 +4203,9 @@ class ArbitrageMonitor:
 
     @staticmethod
     def _canonical_position_symbol(symbol: str) -> str:
-        return str(symbol or "").upper().replace("/", "").replace("-", "")
+        from src.services.portfolio_book_guards import canonical_book_symbol
+
+        return canonical_book_symbol(symbol)
 
     @staticmethod
     def _broker_position_quantity(position: dict) -> float:

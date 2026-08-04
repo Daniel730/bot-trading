@@ -12,20 +12,44 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
-from src.services.ledger_reconcile_service import normalize_symbol, position_quantity, symbols_match
+from src.services.ledger_reconcile_service import position_quantity, symbols_match
 from src.services.persistence_service import persistence_service
+from src.services.portfolio_book_guards import canonical_book_symbol
 
 logger = logging.getLogger(__name__)
 
 ACK_STATE_KEY = "unmanaged_positions_acknowledged"
+ALERT_STATE_KEY = "unmanaged_broker_positions"
 
 
 def _canonical(symbol: str) -> str:
-    return normalize_symbol(symbol)
+    """Match monitor / Alpaca ledger keys (BTC-USD and BTCUSD -> BTCUSD)."""
+    return canonical_book_symbol(symbol)
 
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _canonicalize_ack_symbols(symbols: dict[str, Any]) -> dict[str, Any]:
+    """Re-key ack map under stripped canonical forms; keep latest meta on collision."""
+    out: dict[str, Any] = {}
+    for raw_key, meta in (symbols or {}).items():
+        canonical = _canonical(str(raw_key))
+        if not canonical:
+            continue
+        entry = dict(meta) if isinstance(meta, dict) else {"symbol": raw_key}
+        entry.setdefault("symbol", raw_key)
+        entry["canonical"] = canonical
+        # Prefer the richer / newer entry when aliases collide.
+        prev = out.get(canonical)
+        if prev is None:
+            out[canonical] = entry
+            continue
+        prev_ts = str(prev.get("acknowledged_at") or "")
+        new_ts = str(entry.get("acknowledged_at") or "")
+        out[canonical] = entry if new_ts >= prev_ts else prev
+    return out
 
 
 def parse_acknowledgements(raw: str | None) -> dict[str, Any]:
@@ -40,7 +64,7 @@ def parse_acknowledgements(raw: str | None) -> dict[str, Any]:
     if not isinstance(symbols, dict):
         return {"symbols": {}, "updated_at": None}
     return {
-        "symbols": symbols,
+        "symbols": _canonicalize_ack_symbols(symbols),
         "updated_at": payload.get("updated_at"),
         "actor": payload.get("actor"),
         "note": payload.get("note"),
@@ -53,9 +77,41 @@ async def load_acknowledgements() -> dict[str, Any]:
 
 
 async def save_acknowledgements(payload: dict[str, Any]) -> None:
+    """Persist full ack payload (no mid-JSON truncation — that wiped acks silently)."""
+    symbols = _canonicalize_ack_symbols(payload.get("symbols") or {})
+    to_store = {
+        "symbols": symbols,
+        "updated_at": payload.get("updated_at"),
+        "actor": payload.get("actor"),
+        "note": payload.get("note"),
+    }
+    encoded = json.dumps(to_store, separators=(",", ":"), default=str)
+    if len(encoded) > 200_000:
+        logger.error(
+            "Unmanaged ack payload unusually large (%d bytes, %d symbols); still persisting.",
+            len(encoded),
+            len(symbols),
+        )
+    await persistence_service.set_system_state(ACK_STATE_KEY, encoded)
+
+
+async def sync_alert_state_after_ack(acknowledgements: dict[str, Any]) -> None:
+    """Replace stale RISK ALERT snapshot with acknowledged-only operator state."""
+    symbols = sorted((acknowledgements or {}).get("symbols") or {})
+    if not symbols:
+        await persistence_service.set_system_state(ALERT_STATE_KEY, "")
+        return
+    payload = {
+        "ignored": True,
+        "auto_flatten": False,
+        "acknowledged_only": True,
+        "count": len(symbols),
+        "symbols": symbols,
+        "updated_at": (acknowledgements or {}).get("updated_at") or _utc_now_iso(),
+    }
     await persistence_service.set_system_state(
-        ACK_STATE_KEY,
-        json.dumps(payload, separators=(",", ":"))[:8000],
+        ALERT_STATE_KEY,
+        json.dumps(payload, separators=(",", ":"), default=str),
     )
 
 
@@ -187,6 +243,7 @@ async def acknowledge_symbols(
         "note": note or "operator_acknowledged_unmanaged",
     }
     await save_acknowledgements(payload)
+    await sync_alert_state_after_ack(payload)
     logger.info(
         "Acknowledged %d unmanaged broker symbol(s): %s (actor=%s)",
         len(acknowledged_now),
@@ -201,11 +258,20 @@ async def clear_acknowledgements(*, symbols: Optional[list[str]] = None) -> dict
     if not symbols:
         empty = {"symbols": {}, "updated_at": _utc_now_iso(), "actor": None, "note": "cleared"}
         await save_acknowledgements(empty)
+        await sync_alert_state_after_ack(empty)
         return empty
 
     symbols_map = dict(current.get("symbols") or {})
     for raw in symbols:
-        symbols_map.pop(_canonical(raw), None)
+        canonical = _canonical(raw)
+        # Drop exact canonical key and any alias that symbols_match would treat as equal.
+        drop_keys = [
+            key
+            for key in list(symbols_map.keys())
+            if key == canonical or symbols_match(str(raw), key)
+        ]
+        for key in drop_keys:
+            symbols_map.pop(key, None)
     payload = {
         "symbols": symbols_map,
         "updated_at": _utc_now_iso(),
@@ -213,6 +279,7 @@ async def clear_acknowledgements(*, symbols: Optional[list[str]] = None) -> dict
         "note": "partial_clear",
     }
     await save_acknowledgements(payload)
+    await sync_alert_state_after_ack(payload)
     return payload
 
 
@@ -225,5 +292,6 @@ unmanaged_positions_service = type(
         "clear_acknowledgements": staticmethod(clear_acknowledgements),
         "classify_broker_positions": staticmethod(classify_broker_positions),
         "filter_unacked_symbols": staticmethod(filter_unacked_symbols),
+        "sync_alert_state_after_ack": staticmethod(sync_alert_state_after_ack),
     },
 )()

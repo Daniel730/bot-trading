@@ -489,8 +489,11 @@ PYTHONPATH=. python scripts/acknowledge_unmanaged_positions.py --list
 PYTHONPATH=. python scripts/acknowledge_unmanaged_positions.py --all --note alpaca_paper_inventory
 ```
 
-Live real-money acknowledge still requires step-up `otp_token` when 2FA is enrolled.
+Acknowledgements live in Postgres `system_state.unmanaged_positions_acknowledged`
+(not ephemeral container FS). Symbol keys are canonicalized to the stripped form
+(`BTC-USD` ↔ `BTCUSD`) so restarts and reconciles do not re-alert reviewed inventory.
 Clear acknowledgements with `POST /api/broker/unmanaged/clear` if you need the alert again.
+Live real-money acknowledge still requires step-up `otp_token` when 2FA is enrolled.
 Set `IGNORE_UNMANAGED_POSITIONS=false` only after inventory is closed or acknowledged and you want fail-closed startup.
 
 Neighbor soft caps (AdGuard / Odysseus / NPM / Nextcloud) are applied with `infra/ops_apply_host_soft_limits.sh` via `docker update` (survives until those containers are recreated; re-run after their stack redeploys).

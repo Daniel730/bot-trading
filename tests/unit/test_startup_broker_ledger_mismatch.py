@@ -291,3 +291,37 @@ async def test_startup_skips_alert_for_operator_acknowledged_unmanaged(
     payload = json.loads(state_calls[0].args[1])
     assert payload["acknowledged_only"] is True
     assert payload["symbols"] == ["BTC-USD"]
+
+
+@pytest.mark.asyncio
+@patch("src.monitor.notification_service")
+@patch("src.monitor.persistence_service")
+@patch("src.monitor.dashboard_service")
+async def test_startup_skips_alert_when_ack_key_is_btcusd_alias(
+    mock_dashboard,
+    mock_persistence,
+    mock_notify,
+    startup_monitor_factory,
+):
+    """Ack store may use stripped Alpaca form BTCUSD while broker returns BTC-USD."""
+    monitor = startup_monitor_factory()
+    monitor.brokerage.get_portfolio = AsyncMock(
+        return_value=[{"ticker": "BTC-USD", "quantity": 0.1, "quantityAvailableForTrading": 0.1}]
+    )
+    mock_persistence.get_open_signals = AsyncMock(return_value=[])
+    mock_persistence.set_system_state = AsyncMock()
+    mock_persistence.get_system_state = AsyncMock(
+        return_value=json.dumps(
+            {"symbols": {"BTCUSD": {"note": "paper_ack", "provenance": "broker_foreign_holding"}}}
+        )
+    )
+    mock_notify.send_message = AsyncMock()
+    mock_dashboard.update = AsyncMock()
+
+    with patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", True):
+        should_continue = await monitor._fail_fast_on_broker_ledger_mismatch()
+
+    assert should_continue is True
+    mock_notify.send_message.assert_not_awaited()
+    mock_dashboard.update.assert_not_awaited()
