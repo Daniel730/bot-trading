@@ -2,34 +2,37 @@
 
 ## What shipped (2026-08-04)
 
-1. **Full-day local SHADOW soak** + harness (`scripts/full_day_audit_*`, longwatch).
-2. **Phase-1 adversarial audit** (`docs/AUDIT_TECHNICAL_2026-08-04.md`) and remediations F-001…F-010 (subset).
-3. **Phase-2 independent audit** (`docs/AUDIT_PHASE2.md`) proving path gaps and closing them.
-4. **Phase-3 production-readiness** (`docs/AUDIT_PHASE3.md`) — closed F-015, F-020, Telegram LIVE trade auth gap, F-023, F-025; attempted to break each fix.
+1. **Full-day local SHADOW soak** + harness.
+2. **Phase-1** adversarial audit + remediations (`docs/AUDIT_TECHNICAL_2026-08-04.md`).
+3. **Phase-2** independent audit (`docs/AUDIT_PHASE2.md`).
+4. **Phase-3** production-readiness blockers F-015/F-020/Telegram/F-023/F-025 (`docs/AUDIT_PHASE3.md`).
+5. **Phase-4** distributed safety — R-301/R-302/R-303, exactly-once, broker SoT, LIVE gate (`docs/AUDIT_PHASE4.md`).
 
-## Phase-3 remediations (high level)
+## Phase-4 remediations (high level)
 
-- Open-slot reservation + checksummed intent WAL before approval (F-015/F-020).
-- SQLite WAL + atomic budget increment (F-020).
-- LIVE Telegram trade Approve / `/invest` / DCA schedule refused; login Approve preserved.
-- Pairs update + discover step-up 2FA (F-023); UI OTP prompts.
-- TOTP Fernet AEAD + salted backup hashes with legacy migration (F-025).
+- Postgres advisory lock + unique constraints for open-slot reservation (R-301).
+- `execution_intents` exactly-once before Leg A/B.
+- Automatic Leg-A orphan recovery (R-302).
+- Equity high-water-mark drawdown halt (R-303).
+- Continuous broker reconciliation (broker = source of truth).
+- Automatic LIVE readiness checklist (fail-closed).
+- Chaos/replay/soak harness (`scripts/phase4_soak_chaos.py`).
 
 ## Verdict
 
-**READY FOR PAPER TRADING ONLY**
+**READY FOR LIMITED LIVE CAPITAL**
 
-Not limited/full LIVE: multi-process reservation (R-301), Leg B crash orphans (R-302), realized-PnL-only drawdown (R-303) remain open failure classes.
+Gated by automatic checklist; small capital + intense monitoring; run 48h soak on bot-server before scale. Not full live deployment.
 
-## Scores (Phase-3)
+## Scores (Phase-4)
 
 | Security | Reliability | Trading Safety | Recoverability | Observability | Determinism | Maintainability |
 |---|---|---|---|---|---|---|
-| 7.8 | 7.8 | 8.0 | 7.5 | 7.0 | 6.5 | 7.5 |
+| 8.2 | 8.5 | 8.6 | 8.4 | 7.5 | 7.8 | 7.6 |
 
 ## Verification
 
-- Backend Phase-3 unit: **pass** (`tests/unit/test_audit_phase3_remediations.py`).
-- Related Phase-1/2 + security/budget: **pass**.
-- Frontend PairsPanel: **pass**.
+- Phase-4 unit: **13 passed** (`tests/unit/test_audit_phase4_distributed.py`).
+- Phase-3 unit: still green.
+- Lite soak harness exercised.
 - PR: https://github.com/Daniel730/bot-trading/pull/116

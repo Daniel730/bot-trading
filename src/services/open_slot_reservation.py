@@ -150,19 +150,41 @@ class TradeIntentWAL:
 
 
 class OpenSlotReservationService:
-    """Process-local + durable reservations for in-flight opens (F-015)."""
+    """Reservation facade: PostgreSQL distributed store is authority (Phase-4).
+
+    In-process state is a non-authoritative cache for fast local reads only.
+    ``claim`` / ``release`` always go through ``DistributedReservationStore``
+    when available — never a Python mutex as the safety boundary.
+    """
 
     def __init__(
         self,
         *,
         wal: TradeIntentWAL | None = None,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
+        distributed=None,
+        prefer_distributed: bool = True,
     ):
         self.wal = wal or TradeIntentWAL()
         self.ttl_seconds = float(ttl_seconds)
-        self._lock = asyncio.Lock()
+        self._lock = asyncio.Lock()  # local cache only — NOT the safety lock
         self._by_signal: dict[str, Reservation] = {}
+        self.prefer_distributed = prefer_distributed
+        self._distributed = distributed
         self._replay_from_wal()
+
+    @property
+    def distributed(self):
+        if self._distributed is not None:
+            return self._distributed
+        if not self.prefer_distributed:
+            return None
+        try:
+            from src.services.distributed_reservation import distributed_reservation_store
+
+            return distributed_reservation_store
+        except Exception:  # noqa: BLE001
+            return None
 
     def _replay_from_wal(self) -> None:
         active: dict[str, Reservation] = {}
@@ -205,12 +227,33 @@ class OpenSlotReservationService:
                 logger.warning("OpenSlotReservationService: WAL release failed: %s", exc)
 
     def active_as_open_signals(self) -> list[dict[str, Any]]:
+        """Sync cache view — prefer ``active_as_open_signals_async`` for authority."""
         self._purge_expired_unlocked()
         return [res.to_open_signal_shape() for res in self._by_signal.values()]
+
+    async def active_as_open_signals_async(self) -> list[dict[str, Any]]:
+        dist = self.distributed
+        if dist is not None:
+            try:
+                return await dist.active_as_open_signals()
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "Distributed reservation read failed — fail-closed empty merge: %s",
+                    exc,
+                )
+                # Fail closed: treat as max contention rather than empty book.
+                raise
+        return self.active_as_open_signals()
 
     def reservation_count(self) -> int:
         self._purge_expired_unlocked()
         return len(self._by_signal)
+
+    async def reservation_count_async(self) -> int:
+        dist = self.distributed
+        if dist is not None:
+            return await dist.reservation_count()
+        return self.reservation_count()
 
     async def claim(
         self,
@@ -224,16 +267,89 @@ class OpenSlotReservationService:
         block_shared_legs: Optional[bool] = None,
         metadata: Optional[Mapping[str, Any]] = None,
     ) -> dict[str, Any]:
-        """Atomically claim a slot. Returns ``{ok, reason}``."""
+        """Claim via Postgres when available; else local+WAL fallback (tests/dev)."""
         sid = str(signal_id or "").strip()
         if not sid:
             return {"ok": False, "reason": "missing_signal_id"}
 
+        dist = self.distributed
+        if dist is not None:
+            try:
+                result = await dist.claim(
+                    signal_id=sid,
+                    ticker_a=ticker_a,
+                    ticker_b=ticker_b,
+                    open_signal_count=len(open_signals or []),
+                    open_signal_legs=open_signals,
+                    canonicalize=canonicalize,
+                    max_open_pairs=max_open_pairs,
+                    block_shared_legs=block_shared_legs,
+                    metadata=metadata,
+                )
+                if result.get("ok"):
+                    now = time.time()
+                    legs = (canonicalize(ticker_a), canonicalize(ticker_b))
+                    self._by_signal[sid] = Reservation(
+                        signal_id=sid,
+                        ticker_a=str(ticker_a),
+                        ticker_b=str(ticker_b),
+                        legs=legs,
+                        claimed_at=now,
+                        expires_at=now + self.ttl_seconds,
+                        metadata=dict(metadata or {}),
+                    )
+                    try:
+                        self.wal.append(
+                            "CLAIM",
+                            {
+                                "signal_id": sid,
+                                "ticker_a": ticker_a,
+                                "ticker_b": ticker_b,
+                                "legs": list(legs),
+                                "claimed_at": now,
+                                "expires_at": now + self.ttl_seconds,
+                                "metadata": dict(metadata or {}),
+                                "backend": "postgres",
+                            },
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("WAL mirror CLAIM failed: %s", exc)
+                return result
+            except Exception as exc:  # noqa: BLE001
+                logger.critical(
+                    "Distributed reservation unavailable — refusing claim (fail-closed): %s",
+                    exc,
+                )
+                return {"ok": False, "reason": "distributed_reservation_unavailable", "detail": str(exc)}
+
+        # Local fallback for unit tests without Postgres.
+        return await self._claim_local(
+            signal_id=sid,
+            ticker_a=ticker_a,
+            ticker_b=ticker_b,
+            open_signals=open_signals,
+            canonicalize=canonicalize,
+            max_open_pairs=max_open_pairs,
+            block_shared_legs=block_shared_legs,
+            metadata=metadata,
+        )
+
+    async def _claim_local(
+        self,
+        *,
+        signal_id: str,
+        ticker_a: str,
+        ticker_b: str,
+        open_signals: Sequence[Mapping[str, Any]] | None,
+        canonicalize=canonical_book_symbol,
+        max_open_pairs: Optional[int] = None,
+        block_shared_legs: Optional[bool] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> dict[str, Any]:
         async with self._lock:
             self._purge_expired_unlocked()
-            if sid in self._by_signal:
-                # Idempotent re-claim of the same signal.
-                return {"ok": True, "reason": "already_held", "reservation": self._by_signal[sid]}
+            if signal_id in self._by_signal:
+                return {"ok": True, "reason": "already_held", "reservation": self._by_signal[signal_id]}
 
             legs = (canonicalize(ticker_a), canonicalize(ticker_b))
             if not legs[0] or not legs[1] or legs[0] == legs[1]:
@@ -249,7 +365,6 @@ class OpenSlotReservationService:
             if not slot["allowed"]:
                 return {"ok": False, "reason": "max_open_pairs_guard", "detail": slot["reason"]}
 
-            # Exact pair already open or reserved.
             pair_symbols = {legs[0], legs[1]}
             for signal in combined:
                 existing_legs = {
@@ -285,7 +400,7 @@ class OpenSlotReservationService:
 
             now = time.time()
             res = Reservation(
-                signal_id=sid,
+                signal_id=signal_id,
                 ticker_a=str(ticker_a),
                 ticker_b=str(ticker_b),
                 legs=legs,
@@ -296,30 +411,47 @@ class OpenSlotReservationService:
             self.wal.append(
                 "CLAIM",
                 {
-                    "signal_id": sid,
+                    "signal_id": signal_id,
                     "ticker_a": res.ticker_a,
                     "ticker_b": res.ticker_b,
                     "legs": list(res.legs),
                     "claimed_at": res.claimed_at,
                     "expires_at": res.expires_at,
                     "metadata": res.metadata,
+                    "backend": "local",
                 },
             )
-            self._by_signal[sid] = res
+            self._by_signal[signal_id] = res
             return {"ok": True, "reason": "claimed", "reservation": res}
 
     async def release(self, signal_id: str, *, reason: str = "released") -> bool:
         sid = str(signal_id or "").strip()
+        dist = self.distributed
+        existed = False
+        if dist is not None:
+            try:
+                existed = await dist.release(sid, reason=reason)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Distributed release failed: %s", exc)
         async with self._lock:
-            existed = sid in self._by_signal
+            local_existed = sid in self._by_signal
             self._by_signal.pop(sid, None)
-            if existed:
-                self.wal.append("RELEASE", {"signal_id": sid, "reason": reason})
-            return existed
+            if existed or local_existed:
+                try:
+                    self.wal.append("RELEASE", {"signal_id": sid, "reason": reason})
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("WAL RELEASE failed: %s", exc)
+            return existed or local_existed
 
     def has(self, signal_id: str) -> bool:
         self._purge_expired_unlocked()
         return str(signal_id) in self._by_signal
+
+    async def has_async(self, signal_id: str) -> bool:
+        dist = self.distributed
+        if dist is not None:
+            return await dist.has(signal_id)
+        return self.has(signal_id)
 
 
 open_slot_reservation_service = OpenSlotReservationService()

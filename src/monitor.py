@@ -398,13 +398,21 @@ class ArbitrageMonitor:
                 await notification_service.send_message(msg)
             return True
 
-        # F-015: treat in-flight reservations as occupied slots.
+        # F-015 / Phase-4: treat in-flight reservations as occupied slots (Postgres authority).
         try:
             from src.services.open_slot_reservation import open_slot_reservation_service
 
-            open_signals = list(open_signals or []) + open_slot_reservation_service.active_as_open_signals()
+            open_signals = list(open_signals or []) + await open_slot_reservation_service.active_as_open_signals_async()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Could not load open-slot reservations: %s", exc)
+            logger.critical(
+                "Could not load distributed open-slot reservations (fail-closed): %s",
+                exc,
+            )
+            if notify:
+                await notification_service.send_message(
+                    f"Execution blocked for {ticker_a}/{ticker_b}: reservation store unavailable."
+                )
+            return True
 
         for signal in open_signals or []:
             leg_symbols = {
@@ -2485,6 +2493,31 @@ class ArbitrageMonitor:
             logger.error("CAPITAL HALT check failed open-fail-closed: %s", halt_exc)
             return execution_result(False, "capital_halt_check_failed")
 
+        # Phase-4: LIVE readiness checklist (paper/auto-approve lanes skip).
+        try:
+            from src.services.live_readiness import enforce_live_readiness_or_block
+
+            readiness = await enforce_live_readiness_or_block(
+                brokerage=self.brokerage,
+                persistence_service=persistence_service,
+            )
+            if not readiness.get("ready"):
+                logger.critical(
+                    "LIVE READINESS: refusing open %s/%s failed=%s",
+                    t_a,
+                    t_b,
+                    readiness.get("failed") or readiness.get("reason"),
+                )
+                return execution_result(
+                    False,
+                    "live_readiness_failed",
+                    readiness=readiness,
+                )
+        except Exception as ready_exc:
+            logger.error("LIVE readiness check failed open-fail-closed: %s", ready_exc)
+            if not settings.should_auto_approve_trades and settings.LIVE_CAPITAL_DANGER:
+                return execution_result(False, "live_readiness_check_failed")
+
         if await self._has_active_pair_or_pending_order(t_a, t_b):
             return execution_result(False, "active_pair_or_pending_order")
 
@@ -2783,12 +2816,13 @@ class ArbitrageMonitor:
             # Exclude *this* signal's reservation from the count/conflict set.
             reserved = [
                 s
-                for s in open_slot_reservation_service.active_as_open_signals()
+                for s in await open_slot_reservation_service.active_as_open_signals_async()
                 if str(s.get("signal_id")) != str(signal_id)
             ]
             open_for_lane = list(open_for_lane or []) + reserved
         except Exception as exc:  # noqa: BLE001
-            logger.warning("execute_trade: reservation merge failed: %s", exc)
+            logger.critical("execute_trade: reservation merge failed (fail-closed): %s", exc)
+            return execution_result(False, "reservation_store_unavailable")
 
         slot_check = check_max_open_pairs(len(open_for_lane or []), settings.MAX_OPEN_PAIRS)
         if not slot_check["allowed"]:
@@ -2913,7 +2947,29 @@ class ArbitrageMonitor:
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # F-007/F-016: persist ORDER_SUBMITTED with client_order_id BEFORE broker submit.
+        # Phase-4: exactly-once intent row (unique signal_id+leg / client_order_id).
         client_order_id_a = f"{signal_id}-A"
+        try:
+            from src.services.execution_intent_service import execution_intent_service
+
+            intent_a = await execution_intent_service.begin_intent(
+                signal_id=signal_id,
+                leg="A",
+                client_order_id=client_order_id_a,
+                metadata={"ticker": t_a, "side": side_a, "qty": size_a},
+            )
+            if not intent_a.get("ok"):
+                logger.critical(
+                    "EXACTLY-ONCE: refusing duplicate Leg A submit signal=%s reason=%s",
+                    signal_id,
+                    intent_a.get("reason"),
+                )
+                return execution_result(False, f"exactly_once:{intent_a.get('reason')}")
+        except Exception as intent_exc:
+            logger.critical("EXACTLY-ONCE intent failed open-fail-closed: %s", intent_exc)
+            if not settings.PAPER_TRADING:
+                return execution_result(False, "exactly_once_intent_unavailable")
+
         await persistence_service.log_trade({
             "order_id": client_order_id_a,
             "signal_id": uuid.UUID(signal_id),
@@ -2949,6 +3005,14 @@ class ArbitrageMonitor:
             intent="open",
         )
         order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or client_order_id_a
+        try:
+            from src.services.execution_intent_service import execution_intent_service
+
+            await execution_intent_service.mark_submitted(
+                client_order_id_a, broker_order_id=str(order_id_a)
+            )
+        except Exception as mark_exc:  # noqa: BLE001
+            logger.warning("Could not mark Leg A intent submitted: %s", mark_exc)
 
         if res_a.get("requires_reconciliation") or res_a.get("status") == "unknown":
             await persistence_service.attach_broker_order_id(
@@ -3196,15 +3260,53 @@ class ArbitrageMonitor:
         # Small delay between legs to avoid broker-side burst throttling.
         await asyncio.sleep(1.0)
 
-        # Leg B
-        res_b = await self.brokerage.place_value_order(
-            exec_t_b,
-            target_cash_b,
-            side_b,
-            price=price_b,
-            client_order_id=f"{signal_id}-B",
-        )
-        order_id_b = res_b.get("order_id") or res_b.get("orderId") or res_b.get("client_order_id") or str(uuid.uuid4())
+        # Leg B — exactly-once intent before submit
+        client_order_id_b = f"{signal_id}-B"
+        try:
+            from src.services.execution_intent_service import execution_intent_service
+
+            intent_b = await execution_intent_service.begin_intent(
+                signal_id=signal_id,
+                leg="B",
+                client_order_id=client_order_id_b,
+                metadata={"ticker": t_b, "side": side_b, "qty": size_b},
+            )
+            if not intent_b.get("ok"):
+                logger.critical(
+                    "EXACTLY-ONCE: refusing duplicate Leg B submit signal=%s reason=%s — "
+                    "emergency-closing Leg A",
+                    signal_id,
+                    intent_b.get("reason"),
+                )
+                # Fall through to existing Leg B failure emergency close path by
+                # synthesizing a rejection.
+                res_b = {
+                    "status": "error",
+                    "message": f"exactly_once:{intent_b.get('reason')}",
+                }
+                order_id_b = client_order_id_b
+            else:
+                res_b = await self.brokerage.place_value_order(
+                    exec_t_b,
+                    target_cash_b,
+                    side_b,
+                    price=price_b,
+                    client_order_id=client_order_id_b,
+                    intent="open",
+                )
+                order_id_b = (
+                    res_b.get("order_id")
+                    or res_b.get("orderId")
+                    or res_b.get("client_order_id")
+                    or client_order_id_b
+                )
+                await execution_intent_service.mark_submitted(
+                    client_order_id_b, broker_order_id=str(order_id_b)
+                )
+        except Exception as intent_b_exc:
+            logger.critical("Leg B intent/place failed: %s", intent_b_exc)
+            res_b = {"status": "error", "message": str(intent_b_exc)}
+            order_id_b = client_order_id_b
 
         if res_b.get("requires_reconciliation") or res_b.get("status") == "unknown":
             await persistence_service.log_trade({
@@ -3868,6 +3970,35 @@ class ArbitrageMonitor:
                     exc,
                 )
 
+        # Phase-4 R-302: automatic Leg-A orphan flatten (broker as SoT).
+        try:
+            from src.services.leg_orphan_recovery import recover_leg_a_orphans
+
+            orphan_summary = await recover_leg_a_orphans(
+                brokerage=self.brokerage, dry_run=False
+            )
+            if orphan_summary.get("recovered"):
+                logger.warning(
+                    "Startup Leg-A orphan recovery closed %s signal(s) "
+                    "(examined=%s skipped=%s).",
+                    orphan_summary.get("recovered"),
+                    orphan_summary.get("examined"),
+                    orphan_summary.get("skipped"),
+                )
+        except Exception as exc:
+            logger.warning("Startup Leg-A orphan recovery failed: %s", exc)
+
+        try:
+            from datetime import datetime, timezone
+
+            await persistence_service.set_system_state(
+                "last_broker_reconcile_at",
+                datetime.now(timezone.utc).isoformat(),
+            )
+            await persistence_service.set_system_state("last_broker_reconcile_ok", "true")
+        except Exception as exc:
+            logger.warning("Could not stamp last_broker_reconcile_at: %s", exc)
+
         try:
             from src.services.ledger_reconcile_service import (
                 log_signal_reconciliation_plans,
@@ -4227,6 +4358,21 @@ class ArbitrageMonitor:
             )
         else:
             logger.info("Pair discovery auto-scout loop not started (PAIR_DISCOVERY_ENABLED=false).")
+
+        # Phase-4: continuous broker reconciliation (broker = source of truth).
+        try:
+            from src.services.continuous_broker_reconcile import continuous_broker_reconciler
+
+            background_task_watchdog.create_task(
+                continuous_broker_reconciler.loop(self),
+                name="monitor:continuous_broker_reconcile",
+            )
+            logger.info(
+                "Continuous broker reconciler started (interval=%ss).",
+                continuous_broker_reconciler.interval_seconds,
+            )
+        except Exception as exc:
+            logger.warning("Could not start continuous broker reconciler: %s", exc)
 
         try:
             # Main Scan Loop with Rich Live UI

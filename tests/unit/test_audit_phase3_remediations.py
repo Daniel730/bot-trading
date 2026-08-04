@@ -32,7 +32,7 @@ from src.services.open_slot_reservation import (
 @pytest.mark.asyncio
 async def test_f015_concurrent_claims_only_one_wins(tmp_path: Path):
     wal = TradeIntentWAL(tmp_path / "slots.wal")
-    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120)
+    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120, prefer_distributed=False)
 
     async def attempt(sid: str):
         return await svc.claim(
@@ -55,7 +55,7 @@ async def test_f015_concurrent_claims_only_one_wins(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_f015_shared_leg_blocked(tmp_path: Path):
     wal = TradeIntentWAL(tmp_path / "slots.wal")
-    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120)
+    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120, prefer_distributed=False)
     first = await svc.claim(
         signal_id="a",
         ticker_a="AAPL",
@@ -76,7 +76,7 @@ async def test_f015_shared_leg_blocked(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_f015_max_open_pairs_under_concurrency(tmp_path: Path):
     wal = TradeIntentWAL(tmp_path / "cap.wal")
-    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120)
+    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120, prefer_distributed=False)
     # Pre-fill 2 "open" signals; max=3 → only one additional claim may succeed.
     open_signals = [
         {"signal_id": "o1", "legs": [{"ticker": "T1"}, {"ticker": "T2"}]},
@@ -100,7 +100,7 @@ async def test_f015_max_open_pairs_under_concurrency(tmp_path: Path):
 @pytest.mark.asyncio
 async def test_f015_release_idempotent(tmp_path: Path):
     wal = TradeIntentWAL(tmp_path / "rel.wal")
-    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120)
+    svc = OpenSlotReservationService(wal=wal, ttl_seconds=120, prefer_distributed=False)
     await svc.claim(signal_id="r1", ticker_a="A", ticker_b="B", open_signals=[])
     assert await svc.release("r1") is True
     assert await svc.release("r1") is False
@@ -112,7 +112,7 @@ async def test_f015_release_idempotent(tmp_path: Path):
 async def test_f020_wal_replay_restores_active_claims(tmp_path: Path):
     path = tmp_path / "intent.wal"
     wal1 = TradeIntentWAL(path)
-    svc1 = OpenSlotReservationService(wal=wal1, ttl_seconds=600)
+    svc1 = OpenSlotReservationService(wal=wal1, ttl_seconds=600, prefer_distributed=False)
     claim = await svc1.claim(
         signal_id="crash-me",
         ticker_a="BTC-USD",
@@ -122,12 +122,12 @@ async def test_f020_wal_replay_restores_active_claims(tmp_path: Path):
     assert claim["ok"]
     # Simulate process death + restart: new service, same WAL file.
     wal2 = TradeIntentWAL(path)
-    svc2 = OpenSlotReservationService(wal=wal2, ttl_seconds=600)
+    svc2 = OpenSlotReservationService(wal=wal2, ttl_seconds=600, prefer_distributed=False)
     assert svc2.has("crash-me")
     assert svc2.reservation_count() == 1
 
     await svc2.release("crash-me", reason="done")
-    svc3 = OpenSlotReservationService(wal=TradeIntentWAL(path), ttl_seconds=600)
+    svc3 = OpenSlotReservationService(wal=TradeIntentWAL(path), ttl_seconds=600, prefer_distributed=False)
     assert not svc3.has("crash-me")
     assert svc3.reservation_count() == 0
 
@@ -159,7 +159,7 @@ def test_f020_wal_replay_equals_original_state_property(tmp_path: Path):
 
     async def run():
         wal = TradeIntentWAL(path)
-        svc = OpenSlotReservationService(wal=wal, ttl_seconds=600)
+        svc = OpenSlotReservationService(wal=wal, ttl_seconds=600, prefer_distributed=False)
         for op, sid, a, b in ops:
             if op == "CLAIM":
                 r = await svc.claim(signal_id=sid, ticker_a=a, ticker_b=b, open_signals=[])
@@ -167,7 +167,9 @@ def test_f020_wal_replay_equals_original_state_property(tmp_path: Path):
             else:
                 await svc.release(sid)
         live = sorted(svc._by_signal.keys())
-        replayed = OpenSlotReservationService(wal=TradeIntentWAL(path), ttl_seconds=600)
+        replayed = OpenSlotReservationService(
+            wal=TradeIntentWAL(path), ttl_seconds=600, prefer_distributed=False
+        )
         assert sorted(replayed._by_signal.keys()) == live
 
     asyncio.run(run())
@@ -375,7 +377,7 @@ def test_f025_salted_backup_codes_and_legacy_sha(tmp_path: Path, monkeypatch):
 @pytest.mark.asyncio
 async def test_f015_fuzz_malformed_claims(tmp_path: Path):
     wal = TradeIntentWAL(tmp_path / "fuzz.wal")
-    svc = OpenSlotReservationService(wal=wal, ttl_seconds=60)
+    svc = OpenSlotReservationService(wal=wal, ttl_seconds=60, prefer_distributed=False)
     payloads = [
         {"signal_id": "", "ticker_a": "A", "ticker_b": "B"},
         {"signal_id": "ok", "ticker_a": "", "ticker_b": "B"},
