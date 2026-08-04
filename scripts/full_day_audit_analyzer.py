@@ -17,7 +17,11 @@ INTERVAL = 300  # 5 minutes
 
 
 def _strip(s: str) -> str:
-    return re.sub(r"\x1b\[[0-9;]*m", "", s)
+    # Color codes + Rich OSC-8 hyperlinks embedded in monitor logs.
+    s = re.sub(r"\x1b\[[0-9;]*m", "", s)
+    s = re.sub(r"\x1b\]8;[^\\]*\\", "", s)
+    s = s.replace("\x1b]8;;\x1b\\", "")
+    return s
 
 
 def analyze() -> dict:
@@ -27,11 +31,12 @@ def analyze() -> dict:
     i = 0
     while i < len(lines):
         line = lines[i]
-        m = re.search(r"PAIR SKIP \[([^\]]+)\]:\s*(\S+)?", line)
+        m = re.search(r"PAIR SKIP \[([^\]]+)\]:", line)
         if m:
-            reason = (m.group(2) or "").strip()
-            if not reason and i + 1 < len(lines):
-                # Rich console often wraps the reason onto the next indented line.
+            reason = ""
+            # Rich wraps the skip reason onto the next indented line and appends
+            # monitor.py:lineno on the PAIR SKIP line itself — ignore that suffix.
+            if i + 1 < len(lines):
                 nxt = lines[i + 1].strip()
                 if nxt and "PAIR SKIP" not in nxt and "SCAN [" not in nxt:
                     reason = nxt.split()[0]
