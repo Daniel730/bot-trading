@@ -20,12 +20,19 @@ Standing swarm ended ~09:00. bot-server stayed on **Alpaca paper**. Live `~/.env
 - Discovery still **false**; Redis AUTH + loopback OK
 - Equities intact after redeploy (no wipe / no soft-admit restore)
 
+## Post-09:00 follow-up (~09:25 WEST)
+
+- **SEC window:** worker had slept from a pre-04:00 ET check; one restart put it in-window. Full equity cycle cached `sec:integrity:{ELV,GOOG,GOOGL,MPC,UNH,VLO}` (6/6), then sleep 3600s. Gemini LLM debate returns 403 (blocked key) but scores still land (fallback 50).
+- **Live sanity:** discovery still `false`; Active = 3 equities + 4 crypto (all `is_cointegrated=true`); clean `docker diff`; Redis `127.0.0.1:6379` + AUTH PONG; bot RSS ~277 MiB / 1.25 GiB.
+- **Equity knobs:** still `COINTEGRATION_ROLLING_PASS_RATE=0.40`, `MAX_ACTIVE_PAIRS=30`; rollback backup `~/.env.trading.bak_equity_20260804_080557`; tracked in **#109** (#110 closed as duplicate).
+- **Discovery soak:** longer note on **#102** — keep OFF through US open.
+
 ## Residual risks (do not ignore)
 
 1. **Public ports** — confirm dashboard/API/gRPC stay loopback or Tailscale-only; re-run security probe after recreates.
 2. **Unmanaged positions** — broker RISK ALERT noise; paper continues via `IGNORE_UNMANAGED_POSITIONS=true` (informational, not auto-flatten).
 3. **RSS soak** — keep discovery OFF until RSS stays comfortably under ~700 MiB for 2–3h on the prune-valve image (**#102**).
-4. **SEC window** — integrity/SEC Redis keys may be empty outside the 04:00–09:15 EST worker window; re-check after open.
+4. **SEC LLM** — EDGAR path works; Gemini debate is 403-blocked (scores use fallback). Fix/rotate key when convenient — not blocking integrity cache.
 
 ## Do not flip yet
 
