@@ -50,24 +50,26 @@ POSTGRES_INDEXES: Sequence[str] = (
 )
 
 # Backfill first-class lane columns from legacy metadata JSON (no-op when already set).
+# Cast via ::jsonb: trade_ledger.metadata may be JSON (not JSONB) on older volumes;
+# the ? containment operator is jsonb-only and fails without the cast.
 POSTGRES_BACKFILLS: Sequence[str] = (
     """
     UPDATE trade_ledger
     SET is_shadow = CASE
-            WHEN metadata->>'is_shadow' IN ('true', 'True', '1') THEN TRUE
-            WHEN metadata->>'is_shadow' IN ('false', 'False', '0') THEN FALSE
+            WHEN metadata::jsonb->>'is_shadow' IN ('true', 'True', '1') THEN TRUE
+            WHEN metadata::jsonb->>'is_shadow' IN ('false', 'False', '0') THEN FALSE
             ELSE is_shadow
         END
     WHERE is_shadow IS NULL
       AND metadata IS NOT NULL
-      AND metadata ? 'is_shadow'
+      AND (metadata::jsonb ? 'is_shadow')
     """,
     """
     UPDATE trade_ledger
-    SET execution_lane = NULLIF(metadata->>'execution_lane', '')
+    SET execution_lane = NULLIF(metadata::jsonb->>'execution_lane', '')
     WHERE execution_lane IS NULL
       AND metadata IS NOT NULL
-      AND metadata ? 'execution_lane'
+      AND (metadata::jsonb ? 'execution_lane')
     """,
     """
     UPDATE trade_ledger

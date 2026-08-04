@@ -42,6 +42,18 @@ def test_postgres_migrations_cover_lane_and_signal_columns():
     assert POSTGRES_BACKFILLS  # legacy metadata → columns
 
 
+def test_postgres_lane_backfills_cast_metadata_to_jsonb():
+    """metadata may be JSON (not JSONB); ? / ->> must go through ::jsonb."""
+    joined = "\n".join(POSTGRES_BACKFILLS)
+    assert "metadata::jsonb ? 'is_shadow'" in joined
+    assert "metadata::jsonb ? 'execution_lane'" in joined
+    assert "metadata::jsonb->>'is_shadow'" in joined
+    assert "metadata::jsonb->>'execution_lane'" in joined
+    # Bare json ? would fail on older bot-server volumes.
+    assert "AND metadata ? " not in joined
+    assert "WHEN metadata->>" not in joined
+
+
 def test_trade_ledger_orm_exposes_lane_and_signal_columns():
     assert hasattr(TradeLedger, "signal_id")
     assert hasattr(TradeLedger, "execution_lane")
@@ -117,6 +129,8 @@ async def test_apply_postgres_migrations_emits_alter_for_lane_columns():
     assert "ADD COLUMN IF NOT EXISTS is_shadow" in joined
     assert "ADD COLUMN IF NOT EXISTS hedge_ratio" in joined
     assert "ALTER TYPE orderstatus ADD VALUE IF NOT EXISTS 'OPEN_PAIR'" in joined
+    assert "metadata::jsonb ?" in joined
+    assert "metadata::jsonb->>" in joined
 
 
 @pytest.mark.asyncio
