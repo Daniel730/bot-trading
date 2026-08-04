@@ -97,5 +97,4 @@ Sampler authenticates with dashboard token + TOTP (`data/audit/`).
 1. RSS / prune valve over multi-hour window (#102 evidence)
 2. Signal → orchestrator → shadow fill path when |z| ≥ entry (and beta sane)
 3. Equity re-admit behavior once US cash session is open (still yfinance-only here)
-4. Optional min-abs hedge floor (F7) — **done** (`PAIR_DISCOVERY_MIN_ABS_HEDGE=0.05`)
-5. Rotate Alpaca keys and re-run broker-paper soak
+4. Rotate Alpaca keys and re-run broker-paper soak
