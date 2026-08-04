@@ -11,6 +11,8 @@ Responsibilities:
 - blocks new entries while `operational_status=DEGRADED_MODE`;
 - performs macro beacon fail-fast checks;
 - runs bull, bear, fundamental-cache, and whale watcher reads concurrently;
+- labels bull/bear telemetry as `HEURISTIC` when theme agents are non-LLM stubs (does not paint fixed/heuristic confidence as AI BULLISH/BEARISH);
+- annotates `final_verdict` with a `THEME:` quality note (heuristic vs LLM);
 - broadcasts intermediate thoughts to telemetry;
 - applies fundamental hard vetoes (live fail-closed on unknown scores; paper keeps default score);
 - records whale watcher as `INACTIVE` in the active runtime (legacy agent code remains; not a live veto today);
@@ -21,15 +23,19 @@ The orchestrator is currently a direct async Python coordinator. It does not req
 
 ## Bull Agent
 
-`src/agents/bull_agent.py`
+`src/agents/bull_agent.py` (helpers in `src/agents/theme_agent_utils.py`)
 
 Looks for upside/mean-reversion support in the signal context and returns a confidence/verdict payload used by the orchestrator.
 
+**Runtime quality: heuristic stub by default (not LLM).** The old fixed `0.7` confidence was theater — it is replaced by a z-score-scaled heuristic labeled `source=heuristic_stub` / `quality=non_llm` / `llm_used=false`. Telemetry verdict is `HEURISTIC`, not AI `BULLISH`. Optional Gemini/OpenAI scoring is gated behind `BULL_BEAR_LLM_ENABLED` (default `false`) plus usable keys and process-local hourly/daily call caps (`BULL_BEAR_LLM_MAX_CALLS_PER_*`); exhausted budget or missing keys fall back to the heuristic without retry-spamming.
+
 ## Bear Agent
 
-`src/agents/bear_agent.py`
+`src/agents/bear_agent.py` (same theme helpers)
 
 Looks for downside, structural-break, and risk arguments against the signal. Its confidence is combined adversarially with the bull agent.
+
+Same quality contract as bull: default heuristic (formerly fixed `0.4` theater), optional capped LLM only when explicitly enabled. Orchestrator final verdicts append `THEME: heuristic stub (not LLM)` when both sides are non-LLM so operators do not read MAB weights as model-scored AI quality.
 
 ## Macro Economic Agent
 
@@ -53,18 +59,20 @@ Evaluates whether a signal improves the portfolio from an allocation/risk perspe
 
 `src/agents/whale_watcher_agent.py`
 
-**Runtime status: inactive.** The orchestrator emits `verdict: INACTIVE` and does not apply whale veto/multiplier on the hot path today. Legacy agent code and `WHALE_WATCHER_*` settings remain for a future cache-backed reactivation (see GitHub #91).
+**Runtime status: inactive (hard-dormant stub).** The orchestrator emits `verdict: INACTIVE` and applies whale veto/multiplier only when a verdict explicitly sets `active=True`. Today the stub always returns `active=False` with identity multipliers, and `WHALE_WATCHER_ENABLED` is ignored until a restored evaluator ships (GitHub #91). Whale is not a Thompson/MAB arm (only bull/bear/SEC). Legacy cache service code remains under `legacy/whale_watcher_service.py` and is not imported on the hot path.
 
-When re-enabled, the intended behavior is a crypto/context risk filter that reads cached flow summaries and can veto conflicting flow, reduce confidence, or slightly support aligned flow.
+When re-enabled, the intended behavior is a crypto/context risk filter that reads cached flow summaries and can veto conflicting flow, reduce confidence, or slightly support aligned flow. Re-enablement must: honor `WHALE_WATCHER_ENABLED`, set `active=True` only with fresh cache data, and add ingestion/veto/telemetry tests — do not flip the env flag alone.
 
 ## Fundamental Analyst And SEC Worker
 
 The hot path does not run slow SEC analysis directly. Instead:
 
-- `src/daemons/sec_fundamental_worker.py` refreshes structural/fundamental scores in the background.
-- The orchestrator reads cached scores from Redis.
+- `src/daemons/sec_fundamental_worker.py` refreshes structural/fundamental scores in the background (equity tickers only, pre-market window).
+- The orchestrator reads cached scores from Redis and treats missing, fallback, or stale entries (`ORCH_FUNDAMENTAL_MAX_AGE_SECONDS`) as unknown.
 - Cache misses default to `ORCH_FUNDAMENTAL_DEFAULT_SCORE` and emit high-priority telemetry.
+- Live mode (`PAPER_TRADING=false`) vetoes unknown fundamental state; paper mode keeps the default so SEC worker downtime does not block validation.
 - Scores below `ORCH_FUNDAMENTAL_VETO_SCORE` veto the signal.
+- When EDGAR is unreachable the worker circuit-breaks instead of caching neutral fallbacks or hammering every ticker.
 
 ## Reflection / Learning
 

@@ -96,15 +96,21 @@ class ReflectionAgent:
                 )
 
                 # 3. Analyze Performance
-                # Pair close writes the same signal-level pnl onto every leg —
-                # take once per signal, never sum legs (would double-count).
-                total_pnl = 0.0
-                for t in trades:
-                    if t.metadata_json and "pnl" in t.metadata_json:
-                        total_pnl = float(t.metadata_json["pnl"])
-                        break
+                # close_trade stamps the same signal-level realized PnL onto every
+                # leg. Take one value — never sum legs (that double-counts).
+                realized_pnl = self._signal_realized_pnl(trades)
+                trade_count = len(trades)
 
-                is_success = total_pnl > 0
+                if realized_pnl is None:
+                    logger.warning(
+                        "ReflectionAgent: No realized PnL in ledger for %s "
+                        "(%d legs). Skipping MAB / self-esteem updates.",
+                        signal_id_str,
+                        trade_count,
+                    )
+                    return
+
+                is_success = realized_pnl > 0
 
                 # 4. Generate Reflection Tone
                 reflection_note = ""
@@ -123,6 +129,8 @@ class ReflectionAgent:
                         reflection_note = "FAILED: Statistical stop hit. Hedge ratio might have drifted or cointegration broke."
                     elif exit_reason == "KILL_SWITCH":
                         reflection_note = "CAUTION: Financial kill switch triggered. Extreme downside volatility detected."
+                    elif realized_pnl == 0:
+                        reflection_note = "FLAT: Closed at breakeven; treated as non-win for learning."
                     else:
                         reflection_note = "FAILED: Performance below expectations."
                     efficiency = 0.2
@@ -162,9 +170,7 @@ class ReflectionAgent:
                     except Exception as e:
                         logger.warning(f"ReflectionAgent: journal update failed, continuing with agent metrics: {e}")
 
-                # 6. Adjust Agent Weights (Conceptual update to a summary table)
-                # In a real system, we'd update a Redis key or a weighted table
-                # that the Orchestrator reads to adjust confidence.
+                # 6. Adjust Agent Weights from realized PnL (not a hardcoded prior).
                 if not using_mock_session:
                     try:
                         await self._update_global_agent_performance(is_success)
@@ -174,14 +180,34 @@ class ReflectionAgent:
                 await persistence_service.update_agent_metrics("BEAR_AGENT", not is_success)
                 await persistence_service.update_agent_metrics("SEC_AGENT", is_success)
 
-                logger.info(f"ReflectionAgent: Completed reflection for trade {signal_id_str}: {reflection_note}")
+                logger.info(
+                    "ReflectionAgent: Completed reflection for trade %s "
+                    "(realized_pnl=%.4f): %s",
+                    signal_id_str,
+                    realized_pnl,
+                    reflection_note,
+                )
 
         except Exception as e:
             logger.error(f"Error in ReflectionAgent.reflect_on_trade: {e}")
 
+    @staticmethod
+    def _signal_realized_pnl(trades) -> float | None:
+        """Return signal-level realized PnL once (legs share the same stamp)."""
+        for t in trades:
+            meta = getattr(t, "metadata_json", None)
+            if not isinstance(meta, dict) or "pnl" not in meta:
+                continue
+            try:
+                return float(meta["pnl"])
+            except (TypeError, ValueError):
+                continue
+        return None
+
     async def _update_global_agent_performance(self, is_success: bool):
         """
-        Updates a global performance score that influences future trade confidence.
+        Updates closed-trade hit-rate EMA that influences future trade confidence
+        and the dashboard self-esteem meter.
         """
         current_perf_str = await persistence_service.get_system_state(
             "global_strategy_accuracy",
@@ -195,5 +221,17 @@ class ReflectionAgent:
         new_perf = (alpha * target) + (1 - alpha) * current_perf
 
         await persistence_service.set_system_state("global_strategy_accuracy", f"{new_perf:.4f}")
+        samples_str = await persistence_service.get_system_state(
+            "global_strategy_accuracy_samples",
+            "0",
+        )
+        try:
+            samples = int(samples_str or 0)
+        except (TypeError, ValueError):
+            samples = 0
+        await persistence_service.set_system_state(
+            "global_strategy_accuracy_samples",
+            str(samples + 1),
+        )
 
 reflection_agent = ReflectionAgent()

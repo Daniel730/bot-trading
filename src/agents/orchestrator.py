@@ -1,5 +1,6 @@
 from typing import TypedDict
 import asyncio
+import time
 import numpy as np
 import logging
 from types import SimpleNamespace
@@ -27,6 +28,76 @@ BEACON_ASSETS = {
 
 def _is_crypto_symbol(ticker: str) -> bool:
     return "-USD" in str(ticker or "").upper()
+
+
+def _fundamental_score_unknown(score_data) -> bool:
+    """True when Redis has no usable, fresh EDGAR-backed fundamental score."""
+    if score_data is None or isinstance(score_data, Exception):
+        return True
+    if not isinstance(score_data, dict):
+        return True
+    if score_data.get("available") is False:
+        return True
+    if score_data.get("source") in ("fallback", "unavailable"):
+        return True
+    if "score" not in score_data:
+        return True
+
+    max_age = int(getattr(settings, "ORCH_FUNDAMENTAL_MAX_AGE_SECONDS", 86400) or 0)
+    if max_age <= 0:
+        return False
+
+    ts = score_data.get("last_updated")
+    # Reject monotonic/legacy timestamps that cannot be compared across processes.
+    if not isinstance(ts, (int, float)) or ts < 1_000_000_000:
+        return True
+    return (time.time() - float(ts)) > max_age
+
+
+def _whale_effects_apply(verdict: dict | None) -> bool:
+    """Apply whale veto/boost only when the evaluator explicitly marks itself active.
+
+    The hot-path stub reports ``active=False`` / ``status=inactive``. Error
+    fallbacks omit ``active``, so effects stay fail-closed until a restored
+    evaluator opts in with ``active=True``.
+    """
+    if not isinstance(verdict, dict):
+        return False
+    if verdict.get("status") == "inactive" or verdict.get("active") is False:
+        return False
+    return verdict.get("active") is True
+
+
+def _theme_agent_telemetry_verdict(results, *, directional_label: str) -> str:
+    """Label bull/bear telemetry honestly: HEURISTIC vs directional LLM quality.
+
+    Fixed theater confidences (legacy 0.7/0.4) must not paint as AI BULLISH/BEARISH
+    simply because they cleared ``ORCH_AGENT_CONFIDENCE_THRESHOLD``.
+    """
+    from src.agents.theme_agent_utils import is_heuristic_theme_verdict
+
+    if isinstance(results, Exception):
+        return "NEUTRAL"
+    if is_heuristic_theme_verdict(results):
+        return "HEURISTIC"
+    if results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD:
+        return directional_label
+    return "NEUTRAL"
+
+
+def _theme_quality_note(bull_verdict: dict | None, bear_verdict: dict | None) -> str:
+    """Short final_verdict suffix so operators do not read heuristic stubs as LLM AI."""
+    from src.agents.theme_agent_utils import is_heuristic_theme_verdict
+
+    bull_h = is_heuristic_theme_verdict(bull_verdict)
+    bear_h = is_heuristic_theme_verdict(bear_verdict)
+    if bull_h and bear_h:
+        return "THEME: heuristic stub (not LLM)"
+    if bull_h:
+        return "THEME: bull heuristic / bear LLM"
+    if bear_h:
+        return "THEME: bull LLM / bear heuristic"
+    return "THEME: LLM"
 
 
 class AgentState(TypedDict):
@@ -158,21 +229,29 @@ class Orchestrator:
         telemetry_service.broadcast("thought", {
             "agent_name": "BULL_AGENT",
             "signal_id": sig_id,
-            "thought": str(bull_results.get("reasoning", "Analysis complete")) if not isinstance(bull_results, Exception) else f"Error: {bull_results}",
-            "verdict": "BULLISH"
-            if not isinstance(bull_results, Exception)
-            and bull_results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
-            else "NEUTRAL"
+            "thought": (
+                str(bull_results.get("reasoning") or bull_results.get("argument", "Analysis complete"))
+                if not isinstance(bull_results, Exception)
+                else f"Error: {bull_results}"
+            ),
+            "verdict": _theme_agent_telemetry_verdict(bull_results, directional_label="BULLISH"),
+            "source": None if isinstance(bull_results, Exception) else bull_results.get("source"),
+            "quality": None if isinstance(bull_results, Exception) else bull_results.get("quality"),
+            "llm_used": False if isinstance(bull_results, Exception) else bool(bull_results.get("llm_used")),
         })
 
         telemetry_service.broadcast("thought", {
             "agent_name": "BEAR_AGENT",
             "signal_id": sig_id,
-            "thought": str(bear_results.get("reasoning", "Analysis complete")) if not isinstance(bear_results, Exception) else f"Error: {bear_results}",
-            "verdict": "BEARISH"
-            if not isinstance(bear_results, Exception)
-            and bear_results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
-            else "NEUTRAL"
+            "thought": (
+                str(bear_results.get("reasoning") or bear_results.get("argument", "Analysis complete"))
+                if not isinstance(bear_results, Exception)
+                else f"Error: {bear_results}"
+            ),
+            "verdict": _theme_agent_telemetry_verdict(bear_results, directional_label="BEARISH"),
+            "source": None if isinstance(bear_results, Exception) else bear_results.get("source"),
+            "quality": None if isinstance(bear_results, Exception) else bear_results.get("quality"),
+            "llm_used": False if isinstance(bear_results, Exception) else bool(bear_results.get("llm_used")),
         })
 
         whale_inactive = (
@@ -231,6 +310,8 @@ class Orchestrator:
                 "confidence_multiplier": 1.0,
                 "veto": False,
                 "whale_score": 0.0,
+                "active": False,
+                "status": "inactive",
                 "error": str(whale_results),
             }
         else:
@@ -244,15 +325,15 @@ class Orchestrator:
             if isinstance(score_data_a, Exception):
                 logger.warning("Orchestrator Redis read failed for %s: %s", ticker_a, score_data_a)
                 unknown_fundamental_tickers.append(ticker_a)
-            elif score_data_a:
-                score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
-            else:
+            elif _fundamental_score_unknown(score_data_a):
                 logger.warning(
-                    "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                    "CRITICAL - Fundamental cache miss/stale for %s. Defaulting to %s.",
                     ticker_a, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
                 )
                 telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
                 unknown_fundamental_tickers.append(ticker_a)
+            else:
+                score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
 
         # Handle Fundamental Score B (Redis)
         score_b = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
@@ -260,15 +341,15 @@ class Orchestrator:
             if isinstance(score_data_b, Exception):
                 logger.warning("Orchestrator Redis read failed for %s: %s", ticker_b, score_data_b)
                 unknown_fundamental_tickers.append(ticker_b)
-            elif score_data_b:
-                score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
-            else:
+            elif _fundamental_score_unknown(score_data_b):
                 logger.warning(
-                    "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                    "CRITICAL - Fundamental cache miss/stale for %s. Defaulting to %s.",
                     ticker_b, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
                 )
                 telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
                 unknown_fundamental_tickers.append(ticker_b)
+            else:
+                score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
 
         # Paper mode must not fail-closed on SEC cache misses — operators validate
         # execution in shadow mode without the SEC worker. LIVE_CAPITAL_DANGER
@@ -362,7 +443,7 @@ class Orchestrator:
             state["final_confidence"] = 0.0
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason
-        elif state["whale_verdict"].get("veto"):
+        elif _whale_effects_apply(state["whale_verdict"]) and state["whale_verdict"].get("veto"):
             state["final_confidence"] = 0.0
             state["final_verdict"] = state["whale_verdict"].get(
                 "reasoning",
@@ -419,26 +500,29 @@ class Orchestrator:
                 state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
 
+            state["final_verdict"] += f" | {_theme_quality_note(state.get('bull_verdict'), state.get('bear_verdict'))}"
+
             if low_accuracy_warning:
                 state["final_verdict"] += (
                     f" | GLOBAL ACCURACY WARNING: {global_accuracy:.2f} below "
                     f"{settings.ORCH_ACCURACY_LOW_THRESHOLD:.2f}; no confidence penalty applied"
                 )
 
-            whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))
-            whale_delta = float(state["whale_verdict"].get("confidence_delta", 0.0))
-            whale_score = float(state["whale_verdict"].get("whale_score", 0.0))
-            if whale_multiplier != 1.0 or whale_delta != 0.0 or whale_score != 0.0:
-                final_conf *= whale_multiplier
-                state["final_verdict"] += (
-                    f" | WHALE score={whale_score:.2f} delta={whale_delta:+.2f}"
-                )
-                logger.info(
-                    "[ORCHESTRATOR] %s - Whale watcher multiplier applied: %.2f (score=%.2f)",
-                    pair_id,
-                    whale_multiplier,
-                    whale_score,
-                )
+            if _whale_effects_apply(state["whale_verdict"]):
+                whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))
+                whale_delta = float(state["whale_verdict"].get("confidence_delta", 0.0))
+                whale_score = float(state["whale_verdict"].get("whale_score", 0.0))
+                if whale_multiplier != 1.0 or whale_delta != 0.0 or whale_score != 0.0:
+                    final_conf *= whale_multiplier
+                    state["final_verdict"] += (
+                        f" | WHALE score={whale_score:.2f} delta={whale_delta:+.2f}"
+                    )
+                    logger.info(
+                        "[ORCHESTRATOR] %s - Whale watcher multiplier applied: %.2f (score=%.2f)",
+                        pair_id,
+                        whale_multiplier,
+                        whale_score,
+                    )
 
             state["final_confidence"] = max(0.0, min(1.0, final_conf))
 

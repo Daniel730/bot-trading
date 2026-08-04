@@ -65,7 +65,9 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
           animate={{ opacity: 1, x: 0 }}
           style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.05)' }}
         >
-          <div className="metric-label" style={{ marginBottom: '10px' }}>STRATEGY_SELF_ESTEEM (ACCURACY)</div>
+          <div className="metric-label" style={{ marginBottom: '10px' }}>
+            STRATEGY_SELF_ESTEEM (CLOSED-TRADE HIT-RATE EMA)
+          </div>
           <div style={{ position: 'relative', height: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', overflow: 'hidden' }}>
             <motion.div 
               style={{ position: 'absolute', top: 0, left: 0, height: '100%', background: accuracyColor, boxShadow: `0 0 10px ${accuracyColor}` }}
@@ -79,6 +81,9 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
             <span style={{ fontSize: '0.6rem', color: 'var(--text-dim)', alignSelf: 'center' }}>
                 {accuracyState}
             </span>
+          </div>
+          <div style={{ fontSize: '0.55rem', color: 'var(--text-dim)', marginTop: '6px' }}>
+            Not AI confidence — historical closed-trade EMA (null until measured)
           </div>
         </motion.div>
       </div>

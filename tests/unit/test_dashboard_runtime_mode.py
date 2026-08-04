@@ -15,6 +15,7 @@ def test_dashboard_runtime_identifies_alpaca_paper_broker_mode(monkeypatch):
 
     assert runtime["mode"] == "ALPACA_PAPER"
     assert runtime["execution_mode"] == "ALPACA_PAPER"
+    assert runtime["execution_lane"] == "BROKER_PAPER"
     assert runtime["paper_trading"] is False
     assert runtime["broker_paper_trading"] is True
     assert runtime["alpaca_endpoint_class"] == "paper"
@@ -55,6 +56,7 @@ def test_preflight_logs_sanitized_runtime_mode(monkeypatch, monitor):
     rendered = runtime_log.args[0] % runtime_log.args[1:]
 
     assert "execution_mode=ALPACA_PAPER" in rendered
+    assert "execution_lane=BROKER_PAPER" in rendered
     assert "broker_paper_trading=True" in rendered
     assert "alpaca_endpoint_class=paper" in rendered
     assert "paper-api.alpaca.markets" not in rendered

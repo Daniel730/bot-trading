@@ -6,6 +6,7 @@ import time
 
 import pandas as pd
 import pytest
+import requests
 
 from src.services.data_service import DataService
 
@@ -443,6 +444,56 @@ async def test_get_bid_ask_falls_back_to_yfinance_when_alpaca_crypto_raises():
     yf_ticker.assert_called_once_with("BTC-USD")
 
 
+@pytest.mark.asyncio
+async def test_get_bid_ask_skips_crossed_alpaca_crypto_and_falls_back():
+    """Crossed Alpaca books must not poison the spread guard — try yfinance next."""
+    service = DataService()
+
+    class FakeTicker:
+        def __init__(self):
+            self.info = {
+                "bid": 90000.0,
+                "ask": 90015.0,
+            }
+
+    class FakeQuote:
+        bp = 90010.0
+        ap = 90000.0  # crossed
+
+    class FakeSnapshot:
+        latest_quote = FakeQuote()
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()) as yf_ticker, \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             return_value={"BTC/USD": FakeSnapshot()},
+         ):
+        bid, ask = await service.get_bid_ask("BTC-USD")
+
+    assert (bid, ask) == (90000.0, 90015.0)
+    yf_ticker.assert_called_once_with("BTC-USD")
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_does_not_cache_crossed_yfinance_quote():
+    service = DataService()
+
+    class FakeTicker:
+        def __init__(self):
+            self.info = {
+                "bid": 100.0,
+                "ask": 99.5,  # crossed
+            }
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}):
+        bid, ask = await service.get_bid_ask("AAPL")
+
+    assert (bid, ask) == (0.0, 0.0)
+    assert service._yf_quote_cache.get("AAPL") is None
+
+
 def test_get_latest_price_crypto_snapshot_does_not_require_exchange_kwarg():
     service = DataService()
 
@@ -572,3 +623,267 @@ async def test_get_bid_ask_crypto_snapshot_does_not_require_exchange_kwarg():
         bid, ask = await service.get_bid_ask("BTC-USD")
 
     assert (bid, ask) == (90000.0, 90010.0)
+
+
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [
+        ("1d", "1Day"),
+        ("1D", "1Day"),
+        ("1h", "1Hour"),
+        ("1m", "1Min"),
+        ("5m", "5Min"),
+        ("unknown", "1Hour"),
+    ],
+)
+def test_alpaca_timeframe_maps_daily_and_intraday(interval, expected):
+    assert DataService._alpaca_timeframe(interval) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "usable"),
+    [
+        ("", False),
+        ("your_polygon_key", False),
+        ("YOUR_API_KEY", False),
+        ("real-polygon-secret", True),
+    ],
+)
+def test_has_usable_polygon_key_rejects_placeholders(key, usable):
+    assert DataService._has_usable_polygon_key(key) is usable
+
+
+def test_get_historical_data_uses_daily_alpaca_timeframe_not_1min():
+    """Equity 60d/1d regime fetches must not request minute bars (retry storms)."""
+    service = DataService()
+    timestamps = pd.date_range("2026-05-01", periods=3, freq="D", tz="UTC")
+    bars = pd.DataFrame(
+        {"close": [500.0, 501.0, 502.0], "symbol": ["SPY", "SPY", "SPY"]},
+        index=timestamps,
+    )
+    bars.index.name = "timestamp"
+
+    class FakeBars:
+        def __init__(self, frame):
+            self.df = frame
+
+    captured = {}
+
+    def fake_get_bars(symbols, timeframe, **kwargs):
+        captured["timeframe"] = timeframe
+        captured["symbols"] = symbols
+        return FakeBars(bars)
+
+    with patch.object(service.alpaca_client, "get_bars", side_effect=fake_get_bars), \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_bars",
+             side_effect=AssertionError("equity-only request"),
+         ), \
+         patch.object(service, "_download_yfinance", side_effect=AssertionError("no yfinance")):
+        result = service.get_historical_data(["SPY"], period="60d", interval="1d")
+
+    assert captured["timeframe"] == "1Day"
+    assert list(result.columns) == ["SPY"]
+    assert float(result.iloc[-1]["SPY"]) == 502.0
+
+
+def test_get_historical_data_crypto_bars_omit_invalid_exchange_kwarg():
+    """alpaca-trade-api accepts loc=, not exchange= — exchange TypeError forced yfinance."""
+    service = DataService()
+    timestamp = pd.Timestamp("2026-05-13 13:00", tz="UTC")
+    index = pd.MultiIndex.from_tuples(
+        [("BTC/USD", timestamp)],
+        names=["symbol", "timestamp"],
+    )
+    bars = pd.DataFrame({"close": [80000.0]}, index=index)
+
+    class FakeBars:
+        df = bars
+
+    def fake_get_crypto_bars(symbols, timeframe, **kwargs):
+        if "exchange" in kwargs:
+            raise TypeError(
+                "REST.get_crypto_bars() got an unexpected keyword argument 'exchange'"
+            )
+        assert symbols == ["BTC/USD"]
+        assert timeframe == "1Hour"
+        return FakeBars()
+
+    with patch.object(
+        service.alpaca_client,
+        "get_crypto_bars",
+        side_effect=fake_get_crypto_bars,
+    ), patch.object(
+        service.alpaca_client,
+        "get_bars",
+        side_effect=AssertionError("crypto-only request"),
+    ), patch.object(
+        service,
+        "_download_yfinance",
+        side_effect=AssertionError("Alpaca crypto should succeed"),
+    ):
+        result = service.get_historical_data(["BTC-USD"], period="30d", interval="1h")
+
+    assert list(result.columns) == ["BTC-USD"]
+    assert float(result.iloc[0]["BTC-USD"]) == 80000.0
+
+
+def test_get_historical_data_exhausted_fallback_does_not_retry_storm():
+    """ValueError after Alpaca+yfinance(+skipped Polygon) must not be tenacity-retried."""
+    service = DataService()
+    calls = {"alpaca_stock": 0, "alpaca_crypto": 0, "yfinance": 0, "polygon": 0}
+
+    def fake_get_bars(*_args, **_kwargs):
+        calls["alpaca_stock"] += 1
+        raise requests.HTTPError("alpaca stock down")
+
+    def fake_get_crypto_bars(*_args, **_kwargs):
+        calls["alpaca_crypto"] += 1
+        class Empty:
+            df = pd.DataFrame()
+        return Empty()
+
+    def fake_download(*_args, **_kwargs):
+        calls["yfinance"] += 1
+        return pd.DataFrame()
+
+    with patch.object(service.alpaca_client, "get_bars", side_effect=fake_get_bars), \
+         patch.object(service.alpaca_client, "get_crypto_bars", side_effect=fake_get_crypto_bars), \
+         patch.object(service, "_download_yfinance", side_effect=fake_download), \
+         patch.object(service, "_has_usable_polygon_key", return_value=False):
+        with pytest.raises(ValueError, match="No data returned"):
+            service.get_historical_data(["SPY", "BTC-USD"], period="30d", interval="1h")
+
+    assert calls["alpaca_stock"] == 1
+    assert calls["alpaca_crypto"] == 1
+    assert calls["yfinance"] == 1
+    assert calls["polygon"] == 0
+
+
+def test_get_latest_price_skips_placeholder_polygon_key():
+    service = DataService()
+
+    with patch("src.services.data_service.redis_service.get_price", return_value=None), \
+         patch.object(service, "_update_redis_cache"), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}), \
+         patch.object(service.alpaca_client, "get_crypto_snapshots", return_value={}), \
+         patch(
+             "src.services.data_service.settings.POLYGON_API_KEY",
+             "your_polygon_key",
+         ), \
+         patch.object(
+             service,
+             "_get_latest_price_polygon",
+             side_effect=AssertionError("placeholder polygon key must be skipped"),
+         ), \
+         patch.object(
+             service,
+             "_get_latest_price_yfinance_with_retry",
+             return_value={"AAPL": 150.0},
+         ):
+        prices = service.get_latest_price(["AAPL"])
+
+    assert prices == {"AAPL": 150.0}
+
+
+def test_download_yfinance_forces_threads_false():
+    """yfinance threads=True leaks ThreadPool workers under asyncio.to_thread storms."""
+    service = DataService()
+    captured = {}
+
+    def fake_download(*_args, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame({"Close": [1.0]})
+
+    with patch("src.services.data_service.yf.download", side_effect=fake_download):
+        service._download_yfinance("MSFT", period="1d", interval="1m", threads=True)
+
+    assert captured.get("threads") is False
+
+
+def test_clamp_history_window_caps_intraday_year():
+    period, days = DataService._clamp_history_window("1y", "1h")
+    assert period == "90d"
+    assert days == 90
+    period_d, days_d = DataService._clamp_history_window("1y", "1d")
+    assert period_d == "365d"
+    assert days_d == 365
+
+
+def test_trim_history_rows_caps_frame_length():
+    frame = pd.DataFrame(
+        {"SPY": range(DataService.HISTORY_ROW_CAP + 25)},
+        index=pd.date_range("2020-01-01", periods=DataService.HISTORY_ROW_CAP + 25, freq="h"),
+    )
+    trimmed = DataService._trim_history_rows(frame)
+    assert len(trimmed) == DataService.HISTORY_ROW_CAP
+    assert float(trimmed.iloc[-1]["SPY"]) == float(frame.iloc[-1]["SPY"])
+
+
+def test_yf_history_cache_avoids_repeat_download_storm():
+    service = DataService()
+    timestamps = pd.date_range("2026-05-01", periods=3, freq="h", tz="UTC")
+    close = pd.DataFrame({"Close": [100.0, 101.0, 102.0]}, index=timestamps)
+    calls = {"n": 0}
+
+    def fake_download(*_args, **_kwargs):
+        calls["n"] += 1
+        return close
+
+    with patch.object(service.alpaca_client, "get_bars", side_effect=Exception("alpaca down")), \
+         patch.object(service.alpaca_client, "get_crypto_bars", side_effect=Exception("alpaca down")), \
+         patch.object(service, "_download_yfinance", side_effect=fake_download), \
+         patch.object(service, "_has_usable_polygon_key", return_value=False):
+        first = service.get_historical_data(["MSFT"], period="30d", interval="1h")
+        second = service.get_historical_data(["MSFT"], period="30d", interval="1h")
+
+    assert calls["n"] == 1
+    assert float(first.iloc[-1]) == 102.0
+    assert float(second.iloc[-1]) == 102.0
+    assert len(service._yf_history_cache) == 1
+
+
+def test_price_metadata_is_bounded():
+    service = DataService()
+    service.PRICE_METADATA_MAX = 8
+    for idx in range(20):
+        service._update_price_metadata({f"T{idx}": "yfinance"})
+    assert len(service.last_price_sources) == 8
+    assert set(service.last_price_sources) == {f"T{idx}" for idx in range(12, 20)}
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_yfinance_quote_cache_avoids_repeat_ticker_info():
+    service = DataService()
+    calls = {"n": 0}
+
+    class FakeTicker:
+        def __init__(self, *_args, **_kwargs):
+            calls["n"] += 1
+            self.info = {"bid": 150.0, "ask": 150.1}
+
+    with patch("src.services.data_service.yf.Ticker", side_effect=FakeTicker), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}):
+        first = await service.get_bid_ask("MSFT")
+        second = await service.get_bid_ask("MSFT")
+
+    assert first == (150.0, 150.1)
+    assert second == (150.0, 150.1)
+    assert calls["n"] == 1
+
+
+def test_bounded_ttl_cache_evicts_lru_and_expires():
+    cache = __import__("src.services.data_service", fromlist=["_BoundedTTLCache"])._BoundedTTLCache(
+        maxsize=2,
+        ttl_seconds=0.05,
+    )
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.set("c", 3)
+    assert cache.get("a") is None
+    assert cache.get("b") == 2
+    assert cache.get("c") == 3
+    time.sleep(0.06)
+    assert cache.get("b") is None
+    assert cache.get("c") is None

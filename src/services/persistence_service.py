@@ -91,6 +91,9 @@ class TradeLedger(Base):
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, name="metadata")
     latency_rtt_ns: Mapped[Optional[int]] = mapped_column(Integer)
     clock_sync_status: Mapped[Optional[bool]] = mapped_column(Boolean)
+    # Dual-written with metadata_json so lane filters survive schema drift on old volumes.
+    execution_lane: Mapped[Optional[str]] = mapped_column(String(20), index=True)
+    is_shadow: Mapped[Optional[bool]] = mapped_column(Boolean, index=True)
 
 class FillAnalysis(Base):
     __tablename__ = "fill_analysis"
@@ -200,6 +203,9 @@ class UniverseCandidate(Base):
     expected_return: Mapped[float] = mapped_column(Numeric(10, 6)) # Projected annual return
     volatility: Mapped[float] = mapped_column(Numeric(10, 6))
     sortino: Mapped[float] = mapped_column(Numeric(10, 6))
+    # OLS / Engle-Granger hedge from scout; required so promotion does not
+    # write hedge_ratio=0 and so rotation can reject insane betas.
+    hedge_ratio: Mapped[float] = mapped_column(Numeric(20, 10), default=0.0)
     found_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 class PersistenceService:
@@ -224,25 +230,15 @@ class PersistenceService:
 
     async def init_db(self):
         """Initializes the database schema and performs necessary migrations."""
+        from src.services.schema_migrations import apply_postgres_migrations
+
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-
-            # Runtime Migration: Add columns if they don't exist
-            try:
-                from sqlalchemy import text
-                for status in OrderStatus:
-                    await conn.execute(
-                        text(
-                            "ALTER TYPE orderstatus ADD VALUE IF NOT EXISTS "
-                            f"'{status.value}'"
-                        )
-                    )
-                await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS venue VARCHAR(20) DEFAULT 'ALPACA'"))
-                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_ledger_venue ON trade_ledger (venue)"))
-                await conn.execute(text("ALTER TABLE trade_ledger ADD COLUMN IF NOT EXISTS closed_at TIMESTAMP WITH TIME ZONE"))
-                await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_trade_ledger_closed_at ON trade_ledger (closed_at)"))
-            except Exception as e:
-                logger.warning(f"PersistenceService: Migration notice: {e}")
+            # Additive IF NOT EXISTS migrations — never DROP / recreate volumes.
+            await apply_postgres_migrations(
+                conn,
+                order_status_values=(status.value for status in OrderStatus),
+            )
 
     async def log_trade(self, trade_data: dict):
         """Logs a trade execution to the ledger with automatic venue detection."""
@@ -253,6 +249,21 @@ class PersistenceService:
         if "venue" not in trade_data or not trade_data["venue"]:
             ticker = trade_data.get("ticker", "").upper()
             trade_data["venue"] = "ALPACA"
+
+        # Stamp a single execution lane so shadow vs broker paper never mix in closes/PnL.
+        from src.services.execution_lane import stamp_trade_metadata
+
+        trade_data["metadata_json"] = stamp_trade_metadata(
+            trade_data.get("metadata_json"),
+            execution_lane=settings.execution_lane,
+            broker_paper_trading=bool(settings.is_broker_paper_trading),
+        )
+        meta = trade_data["metadata_json"] if isinstance(trade_data.get("metadata_json"), dict) else {}
+        # Dual-write first-class columns (readers prefer these, fall back to metadata).
+        if trade_data.get("execution_lane") is None:
+            trade_data["execution_lane"] = meta.get("execution_lane")
+        if trade_data.get("is_shadow") is None:
+            trade_data["is_shadow"] = meta.get("is_shadow")
 
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
@@ -611,21 +622,38 @@ class PersistenceService:
             signals = {}
             for t in trades:
                 sig = str(t.signal_id)
+                meta = t.metadata_json if isinstance(t.metadata_json, dict) else {}
+                # Prefer first-class columns; fall back to stamped metadata for legacy rows.
+                if t.is_shadow is not None:
+                    leg_is_shadow = bool(t.is_shadow)
+                else:
+                    leg_is_shadow = bool(meta.get("is_shadow"))
+                leg_lane = t.execution_lane or meta.get("execution_lane")
                 if sig not in signals:
                     signals[sig] = {
                         "signal_id": sig,
                         "legs": [],
                         "total_cost_basis": 0.0,
-                        "venue": t.venue
+                        "venue": t.venue,
+                        "is_shadow": leg_is_shadow,
+                        "execution_lane": leg_lane,
                     }
                 signals[sig]["legs"].append({
                     "ticker": t.ticker,
                     "side": t.side.value,
                     "quantity": float(t.quantity),
                     "price": float(t.price),
-                    "execution_timestamp": t.execution_timestamp
+                    "execution_timestamp": t.execution_timestamp,
+                    "metadata": meta,
+                    "is_shadow": leg_is_shadow,
+                    "execution_lane": leg_lane,
                 })
                 signals[sig]["total_cost_basis"] += float(t.quantity * t.price)
+                if leg_is_shadow:
+                    signals[sig]["is_shadow"] = True
+                    signals[sig]["execution_lane"] = "SHADOW"
+                elif not signals[sig].get("execution_lane") and leg_lane:
+                    signals[sig]["execution_lane"] = leg_lane
 
             return list(signals.values())
 
@@ -1041,7 +1069,9 @@ class PersistenceService:
                     "pair_id": c.pair_id,
                     "sector": c.sector,
                     "sortino": float(c.sortino or 0.0),
-                    "p_value": float(c.p_value or 1.0)
+                    "p_value": float(c.p_value or 1.0),
+                    "correlation": float(c.correlation or 0.0),
+                    "hedge_ratio": float(getattr(c, "hedge_ratio", 0.0) or 0.0),
                 }
                 for c in candidates
             ]

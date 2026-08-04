@@ -22,17 +22,23 @@ class ShadowService:
             signal_id = uuid.uuid4()
         elif isinstance(signal_id, str):
             signal_id = uuid.UUID(signal_id)
+        shadow_meta = {
+            "is_shadow": True,
+            "execution_lane": "SHADOW",
+            "broker_paper_trading": False,
+            "direction": direction,
+        }
         await persistence_service.log_trade({
             "order_id": trade_id_a, "signal_id": signal_id, "ticker": t_a,
             "side": OrderSide.SELL if direction == "Short-Long" else OrderSide.BUY,
             "quantity": size_a, "price": price_a, "status": OrderStatus.OPEN,
-            "metadata_json": {"is_shadow": True, "direction": direction},
+            "metadata_json": dict(shadow_meta),
         })
         await persistence_service.log_trade({
             "order_id": trade_id_b, "signal_id": signal_id, "ticker": t_b,
             "side": OrderSide.BUY if direction == "Short-Long" else OrderSide.SELL,
             "quantity": size_b, "price": price_b, "status": OrderStatus.OPEN,
-            "metadata_json": {"is_shadow": True, "direction": direction},
+            "metadata_json": dict(shadow_meta),
         })
         logger.info("SHADOW TRADE EXECUTED: %s for %s at %.4f/%.4f", direction, pair_id, price_a, price_b)
         return signal_id
@@ -55,15 +61,31 @@ class ShadowService:
         return total_pnl
 
     async def get_active_portfolio_with_sectors(self):
+        """Build sized holdings for sector cluster guards.
+
+        Includes all open-ish ledger statuses (not only OPEN) so PARTIAL_EXPOSURE /
+        OPEN_PAIR / CLOSING rows still count toward concentration. Sector labels
+        use ``Unassigned`` (not legacy ``General``) so they match resolve_pair_sector.
+        """
         from sqlalchemy import select
         from src.services.persistence_service import TradeLedger
+        from src.services.portfolio_book_guards import normalize_sector_label
+
+        open_statuses = (
+            OrderStatus.OPEN,
+            OrderStatus.OPEN_PAIR,
+            OrderStatus.PARTIAL_EXPOSURE,
+            OrderStatus.CLOSING,
+        )
         async with persistence_service.AsyncSessionLocal() as session:
-            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.OPEN)
+            stmt = select(TradeLedger).where(TradeLedger.status.in_(open_statuses))
             result = await session.execute(stmt)
             trades = result.scalars().all()
             portfolio = []
             for trade in trades:
-                sector = self._sector_map.get(trade.ticker, "General")
+                sector = normalize_sector_label(
+                    self._sector_map.get(trade.ticker, "Unassigned")
+                )
                 portfolio.append({
                     "ticker": trade.ticker,
                     "size": float(trade.quantity * trade.price),

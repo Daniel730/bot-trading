@@ -1,23 +1,33 @@
+"""Bull theme agent — mean-reversion support argument for the orchestrator.
+
+Default path is an explicit z-score heuristic (``source=heuristic_stub``), not
+LLM theater. Optional Gemini/OpenAI scoring requires ``BULL_BEAR_LLM_ENABLED``
+plus usable keys and remaining hourly/daily budget caps.
+"""
+
+from src.agents.theme_agent_utils import evaluate_theme
+from src.services.telemetry_service import telemetry_service
+
+
 class BullAgent:
     async def evaluate(self, signal_context: dict) -> dict:
-        """
-        Evaluates the signal from a bullish perspective (momentum, support).
-        """
-        # Placeholder for LLM logic
-        result = {
-            "confidence": 0.7,
-            "argument": "Strong upward momentum detected in the technical baseline."
-        }
-        
-        from src.services.telemetry_service import telemetry_service
-        telemetry_service.broadcast("thought", {
-            "agent_name": "BULL_AGENT",
-            "signal_id": signal_context.get('signal_id', 'N/A'),
-            "ticker_pair": f"{signal_context['ticker_a']}_{signal_context['ticker_b']}",
-            "thought": result["argument"],
-            "verdict": "BULLISH"
-        })
-        
+        """Evaluate the signal from a bullish / mean-reversion-support perspective."""
+        result = await evaluate_theme("bull", signal_context)
+
+        telemetry_service.broadcast(
+            "thought",
+            {
+                "agent_name": "BULL_AGENT",
+                "signal_id": signal_context.get("signal_id", "N/A"),
+                "ticker_pair": f"{signal_context['ticker_a']}_{signal_context['ticker_b']}",
+                "thought": result.get("reasoning") or result.get("argument", ""),
+                "verdict": "HEURISTIC" if result.get("source") == "heuristic_stub" else "BULLISH",
+                "source": result.get("source"),
+                "quality": result.get("quality"),
+                "llm_used": result.get("llm_used", False),
+            },
+        )
         return result
+
 
 bull_agent = BullAgent()

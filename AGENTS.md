@@ -31,9 +31,9 @@ Copy `.env.template` to `.env`, then note these dev-critical deviations:
 
 - `POSTGRES_PORT=5432` — the native Postgres install listens on 5432, not the template's `5433`.
 - `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` must be non-default non-empty values or `Settings` refuses to load.
-- Leave `TELEGRAM_BOT_TOKEN` empty. The template's default `your_bot_token` is NOT in the code's
-  placeholder-skip set, so the monitor tries to reach Telegram at startup and hard-crashes with
-  `telegram.error.InvalidToken`. Empty token => console-only mode.
+- Leave `TELEGRAM_BOT_TOKEN` empty. Template placeholders (`your_bot_token`, etc.) are
+  treated as unset — the monitor stays console-only and does not hard-crash with
+  `telegram.error.InvalidToken`. Empty/placeholder token => console-only mode.
 - `DEV_MODE=true` uses 24/7 crypto proxy pairs and bypasses NYSE/NASDAQ market hours — needed for
   end-to-end testing when the market is closed.
 - Alpaca/Polygon/OpenAI/Gemini keys can stay as placeholders in paper mode; `AlpacaProvider`

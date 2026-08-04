@@ -1,10 +1,13 @@
 import logging
+import threading
+import time
 import yfinance as yf
 import pandas as pd
 import requests
+from collections import OrderedDict
 from contextvars import ContextVar
 from polygon import RESTClient
-from typing import Callable, List, Optional, TypeVar
+from typing import Callable, Generic, Hashable, List, Optional, TypeVar
 from src.config import settings
 import asyncio
 import inspect
@@ -18,6 +21,80 @@ _REDIS_CACHE_WRITE_LOOP: ContextVar[asyncio.AbstractEventLoop | None] = ContextV
     "redis_cache_write_loop",
     default=None,
 )
+_POLYGON_PLACEHOLDER_KEYS = frozenset(
+    {
+        "",
+        "none",
+        "null",
+        "your_polygon_key",
+        "your_api_key",
+        "changeme",
+        "placeholder",
+    }
+)
+# Transient transport failures only — exhausted fallbacks (ValueError) must not
+# re-run Alpaca→yfinance→Polygon and amplify overnight equity/crypto storms.
+_HISTORICAL_RETRY_EXCEPTIONS = (
+    requests.RequestException,
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
+# Cap lookbacks so 1y/1h (or worse) cannot materialize multi-10k bar frames in RAM.
+_MAX_HISTORY_DAYS_BY_INTERVAL = {
+    "1m": 7,
+    "1min": 7,
+    "1minute": 7,
+    "5m": 30,
+    "5min": 30,
+    "15m": 60,
+    "15min": 60,
+    "1h": 90,
+    "60m": 90,
+    "60min": 90,
+    "1hour": 90,
+    "1d": 730,
+    "1day": 730,
+    "day": 730,
+}
+
+
+class _BoundedTTLCache(Generic[T]):
+    """Thread-safe LRU+TTL map for yfinance fallback responses."""
+
+    def __init__(self, maxsize: int, ttl_seconds: float):
+        self.maxsize = max(1, int(maxsize))
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self._data: OrderedDict[Hashable, tuple[float, T]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: Hashable) -> Optional[T]:
+        with self._lock:
+            item = self._data.get(key)
+            if item is None:
+                return None
+            stamped_at, value = item
+            if self.ttl_seconds > 0 and (time.monotonic() - stamped_at) > self.ttl_seconds:
+                self._data.pop(key, None)
+                return None
+            self._data.move_to_end(key)
+            return value
+
+    def set(self, key: Hashable, value: T) -> None:
+        with self._lock:
+            self._data[key] = (time.monotonic(), value)
+            self._data.move_to_end(key)
+            while len(self._data) > self.maxsize:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._data)
+
 
 class AwaitableDict(dict):
     def __await__(self):
@@ -38,6 +115,12 @@ class DataService:
     # must mock the client or supply real ALPACA_API_KEY / ALPACA_API_SECRET.
     _ALPACA_PLACEHOLDER_KEY = "PK_TEST_PLACEHOLDER"
     _ALPACA_PLACEHOLDER_SECRET = "SK_TEST_PLACEHOLDER"
+    PRICE_METADATA_MAX = 256
+    HISTORY_ROW_CAP = 5000
+    YF_HISTORY_CACHE_MAX = 64
+    YF_HISTORY_CACHE_TTL_SECONDS = 120.0
+    YF_QUOTE_CACHE_MAX = 64
+    YF_QUOTE_CACHE_TTL_SECONDS = 15.0
 
     def __init__(self, alpaca_client: Optional[object] = None):
         # Increase connection pool size to handle concurrent requests
@@ -59,6 +142,57 @@ class DataService:
         self._ws_client: Optional[WebSocketClient] = None
         self.last_price_sources: dict[str, str] = {}
         self.last_price_timestamps: dict[str, str] = {}
+        # Bound in-process yfinance fallback caches (Alpaca remains preferred).
+        self._yf_history_cache: _BoundedTTLCache[pd.DataFrame] = _BoundedTTLCache(
+            self.YF_HISTORY_CACHE_MAX,
+            self.YF_HISTORY_CACHE_TTL_SECONDS,
+        )
+        self._yf_quote_cache: _BoundedTTLCache[tuple[float, float]] = _BoundedTTLCache(
+            self.YF_QUOTE_CACHE_MAX,
+            self.YF_QUOTE_CACHE_TTL_SECONDS,
+        )
+
+    @staticmethod
+    def _has_usable_polygon_key(api_key: Optional[str] = None) -> bool:
+        """Return True when POLYGON_API_KEY is present and not a template placeholder."""
+        key = (settings.POLYGON_API_KEY if api_key is None else api_key) or ""
+        normalized = str(key).strip().lower()
+        return bool(normalized) and normalized not in _POLYGON_PLACEHOLDER_KEYS
+
+    @staticmethod
+    def _alpaca_timeframe(interval: str) -> str:
+        """
+        Map yfinance-style intervals to Alpaca bar timeframes.
+
+        Historically ``1d`` fell through to ``1Min``, which pulled tens of thousands
+        of equity minute bars during crypto-only hours (regime / macro / portfolio)
+        and timed out under ``MARKET_DATA_TIMEOUT_SECONDS``.
+        """
+        normalized = (interval or "").strip().lower()
+        mapping = {
+            "1m": "1Min",
+            "1min": "1Min",
+            "1minute": "1Min",
+            "5m": "5Min",
+            "5min": "5Min",
+            "15m": "15Min",
+            "15min": "15Min",
+            "1h": "1Hour",
+            "60m": "1Hour",
+            "60min": "1Hour",
+            "1hour": "1Hour",
+            "1d": "1Day",
+            "1day": "1Day",
+            "day": "1Day",
+        }
+        timeframe = mapping.get(normalized)
+        if timeframe is None:
+            logger.warning(
+                "DataService: unrecognized interval %r for Alpaca bars; defaulting to 1Hour",
+                interval,
+            )
+            return "1Hour"
+        return timeframe
 
     def _create_alpaca_rest_client(self) -> tradeapi.REST:
         key_id = self._alpaca_key_id
@@ -128,6 +262,52 @@ class DataService:
                 self.last_price_timestamps[ticker] = price_timestamps[ticker]
             else:
                 self.last_price_timestamps.pop(ticker, None)
+        # Bound metadata maps so scout/denylist churn cannot retain every ticker forever.
+        excess = len(self.last_price_sources) - self.PRICE_METADATA_MAX
+        if excess > 0:
+            for key in list(self.last_price_sources.keys())[:excess]:
+                self.last_price_sources.pop(key, None)
+                self.last_price_timestamps.pop(key, None)
+
+    @staticmethod
+    def _period_to_days(period: str) -> int:
+        normalized = (period or "30d").strip().lower()
+        try:
+            if normalized.endswith("d"):
+                return max(1, int(normalized[:-1]))
+            if normalized.endswith("mo"):
+                return max(1, int(normalized[:-2]) * 30)
+            if normalized.endswith("y"):
+                return max(1, int(normalized[:-1]) * 365)
+            if normalized.endswith("wk"):
+                return max(1, int(normalized[:-2]) * 7)
+            if normalized.endswith("w"):
+                return max(1, int(normalized[:-1]) * 7)
+        except ValueError:
+            pass
+        return 30
+
+    @classmethod
+    def _clamp_history_window(cls, period: str, interval: str) -> tuple[str, int]:
+        """Return (yf_period, days) capped for the requested bar interval."""
+        days = cls._period_to_days(period)
+        interval_key = (interval or "").strip().lower()
+        max_days = _MAX_HISTORY_DAYS_BY_INTERVAL.get(interval_key, 90)
+        if days > max_days:
+            logger.debug(
+                "DataService: clamping history period %s/%s -> %dd (cap for interval)",
+                period,
+                interval,
+                max_days,
+            )
+            days = max_days
+        return f"{days}d", days
+
+    @classmethod
+    def _trim_history_rows(cls, df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty or len(df) <= cls.HISTORY_ROW_CAP:
+            return df
+        return df.iloc[-cls.HISTORY_ROW_CAP :]
 
     def _download_yfinance(self, *args, **kwargs) -> pd.DataFrame:
         """
@@ -146,6 +326,9 @@ class DataService:
             Exception: Re-raises exceptions raised by yf.download except for a TypeError caused by a "timeout" argument, which is handled by retrying without "timeout".
         """
         kwargs.setdefault("timeout", settings.MARKET_DATA_TIMEOUT_SECONDS)
+        # Force single-threaded downloads: threads=True spawns ThreadPool workers that
+        # leak under concurrent asyncio.to_thread fallbacks and amplify overnight RSS.
+        kwargs["threads"] = False
         try:
             df = yf.download(*args, **kwargs)
             if df is None or df.empty:
@@ -158,10 +341,34 @@ class DataService:
             if "timeout" not in str(exc):
                 raise
             kwargs.pop("timeout", None)
+            kwargs["threads"] = False
             return yf.download(*args, **kwargs)
         except Exception as exc:
             logger.error(f"DataService: yfinance download failed: {exc}")
             raise
+
+    def _download_yfinance_history_cached(
+        self,
+        tickers: List[str],
+        period: str,
+        interval: str,
+    ) -> pd.DataFrame:
+        """Fetch yfinance history with a bounded TTL cache to dampen fallback storms."""
+        cache_key = (tuple(tickers), period, interval)
+        cached = self._yf_history_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy(deep=False)
+
+        df = self._download_yfinance(
+            tickers,
+            period=period,
+            interval=interval,
+            progress=False,
+            auto_adjust=True,
+        )
+        stored = df if df is None or df.empty else df.copy(deep=False)
+        self._yf_history_cache.set(cache_key, stored if stored is not None else pd.DataFrame())
+        return df if df is not None else pd.DataFrame()
 
     @staticmethod
     def _dedupe_tickers(tickers: List[str]) -> List[str]:
@@ -371,7 +578,7 @@ class DataService:
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(Exception),
+        retry=retry_if_exception_type(_HISTORICAL_RETRY_EXCEPTIONS),
         reraise=True
     )
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
@@ -379,6 +586,7 @@ class DataService:
         Fetches historical data using Alpaca, falling back to yfinance and Polygon.
         """
         tickers = self._dedupe_tickers(tickers)
+        period, days = self._clamp_history_window(period, interval)
         logger.info(f"DataService: Fetching historical data for {tickers} (period={period}, interval={interval})")
         
         # 1. Try Alpaca first
@@ -391,14 +599,8 @@ class DataService:
             if not alpaca_stock_tickers and not alpaca_crypto_tickers:
                 raise ValueError("No tickers provided for Alpaca")
             
-            # Map period to days
-            days = 30
-            if "d" in period: days = int(period.replace("d", ""))
-            elif "mo" in period: days = int(period.replace("mo", "")) * 30
-            elif "y" in period: days = int(period.replace("y", "")) * 365
-            
-            # Map interval to Alpaca timeframe
-            timeframe = "1Hour" if interval == "1h" else "1Min"
+            # Map interval to Alpaca timeframe (must honor daily bars — never default 1d→1Min)
+            timeframe = self._alpaca_timeframe(interval)
             
             # Use Alpaca bar fetching (RFC3339 UTC format)
             end_dt = datetime.now(timezone.utc) - timedelta(minutes=21)
@@ -429,11 +631,13 @@ class DataService:
                     logger.debug(f"DataService: Alpaca stock bars failed: {e}")
             
             # 1b. Fetch Crypto Bars
+            # alpaca-trade-api.get_crypto_bars uses loc='us', not exchange=...
+            # Passing exchange='CBSE' TypeErrors every call and forces yfinance storms.
             if alpaca_crypto_tickers:
                 crypto_symbols = [t.replace("-", "/") for t in alpaca_crypto_tickers]
                 try:
                     c_bars = self.alpaca_client.get_crypto_bars(
-                        crypto_symbols, timeframe, start=start_str, end=end_str, exchange='CBSE'
+                        crypto_symbols, timeframe, start=start_str, end=end_str
                     ).df
                     if not c_bars.empty:
                         c_df = self._alpaca_bars_to_close_frame(
@@ -451,31 +655,31 @@ class DataService:
                 df = pd.concat(dfs, axis=1).sort_index()
                 if not df.empty:
                     logger.info(f"DataService: Successfully fetched Alpaca historical for {tickers}")
-                    return df
+                    return self._trim_history_rows(df)
         except Exception as e:
             logger.warning(f"DataService: Alpaca historical data failed: {e}")
 
-        # 2. Try yfinance fallback
+        # 2. Try yfinance fallback (TTL-cached to avoid overnight repeat storms)
         try:
             logger.info(f"DataService: Falling back to yfinance for {tickers}...")
             # Bug 1.2: Enforce auto_adjust=True to handle splits and dividends correctly
-            df = self._download_yfinance(tickers, period=period, interval=interval, progress=False, auto_adjust=True)
+            df = self._download_yfinance_history_cached(tickers, period=period, interval=interval)
             if not df.empty:
                 # When auto_adjust=True, 'Adj Close' is usually not present, 'Close' IS the adjusted close
                 if 'Close' in df.columns:
-                    return df['Close']
+                    return self._trim_history_rows(df['Close'])
                 else:
                     # In some cases yf returns a flat DF
                     cols = [c for c in df.columns if 'Close' in c]
                     if cols:
                         logger.info(f"DataService: Successfully fetched yfinance historical for {tickers}")
-                        return df[cols]
+                        return self._trim_history_rows(df[cols])
                     logger.warning(f"Adjusted 'Close' not found in yfinance columns: {df.columns}")
         except Exception as e:
             logger.warning(f"DataService: yfinance historical data error for {tickers}: {e}")
 
-        # 2. Fallback to Polygon if API key exists and it's a small batch
-        if settings.POLYGON_API_KEY and len(tickers) <= 5:
+        # 3. Fallback to Polygon if a real API key exists and it's a small batch
+        if self._has_usable_polygon_key() and len(tickers) <= 5:
             try:
                 logger.info(f"DataService: Falling back to Polygon for {tickers} historical data...")
                 # Polygon is per-ticker, so we fetch one by one and merge
@@ -484,12 +688,6 @@ class DataService:
                 # interval 1h -> 1, "hour"
                 poly_data = {}
                 end_dt = datetime.now()
-                # Simplified period mapping
-                days = 30
-                if "d" in period: days = int(period.replace("d", ""))
-                elif "mo" in period: days = int(period.replace("mo", "")) * 30
-                elif "y" in period: days = int(period.replace("y", "")) * 365
-                
                 start_dt = end_dt - timedelta(days=days)
                 
                 for ticker in tickers:
@@ -501,7 +699,7 @@ class DataService:
                     aggs = self.polygon_client.list_aggs(
                         poly_ticker,
                         1,
-                        "hour" if interval == "1h" else "minute",
+                        "hour" if interval == "1h" else "minute" if interval in {"1m", "1min"} else "day",
                         start_dt.strftime("%Y-%m-%d"),
                         end_dt.strftime("%Y-%m-%d"),
                         limit=5000
@@ -521,7 +719,7 @@ class DataService:
                 if poly_data:
                     final_df = pd.DataFrame(poly_data).sort_index()
                     if not final_df.empty:
-                        return final_df
+                        return self._trim_history_rows(final_df)
             except Exception as pe:
                 logger.error(f"DataService: Polygon fallback failed for {tickers}: {pe}")
 
@@ -629,8 +827,8 @@ class DataService:
             self._update_price_metadata(price_sources, price_timestamps)
             return latest
 
-        # 3. Try Polygon for remaining
-        if settings.POLYGON_API_KEY and remaining_tickers:
+        # 3. Try Polygon for remaining (skip template placeholders that always 401)
+        if self._has_usable_polygon_key() and remaining_tickers:
             poly_prices = self._get_latest_price_polygon(remaining_tickers)
             for ticker, price in poly_prices.items():
                 latest[ticker] = price
@@ -765,7 +963,7 @@ class DataService:
         Fetch latest prices from Polygon for crypto tickers.
         Uses snapshots for immediate price lookup without historical aggregation.
         """
-        if not settings.POLYGON_API_KEY:
+        if not self._has_usable_polygon_key():
             return {}
         
         results = {}
@@ -811,7 +1009,6 @@ class DataService:
             interval="1m",
             progress=False,
             auto_adjust=True,
-            threads=True,
         )
 
         results = {}
@@ -896,7 +1093,9 @@ class DataService:
 
                     bid_value = read_float(bid_fields)
                     ask_value = read_float(ask_fields)
-                    if bid_value <= 0.0 or ask_value <= 0.0:
+                    # Crossed books are not executable; treat as missing so callers
+                    # fail closed (or fall through to another quote source).
+                    if bid_value <= 0.0 or ask_value <= 0.0 or ask_value < bid_value:
                         return 0.0, 0.0
                     return bid_value, ask_value
 
@@ -921,9 +1120,14 @@ class DataService:
                             e,
                         )
 
+                cached_quote = self._yf_quote_cache.get(ticker)
+                if cached_quote is not None:
+                    return cached_quote
+
                 info = yf.Ticker(ticker).info
                 bid, ask = quote_bid_ask(info, ("bid",), ("ask",))
                 if bid > 0.0 and ask > 0.0:
+                    self._yf_quote_cache.set(ticker, (bid, ask))
                     return bid, ask
 
                 if not ticker.endswith("-USD"):

@@ -87,11 +87,13 @@ export interface DashboardData {
   runtime?: RuntimeInfo;
   metrics?: PortfolioMetrics;
   market_regime?: {
-    regime: string;
-    confidence: number;
+    regime: string | null;
+    confidence: number | null;
     features?: any;
   };
-  global_accuracy?: number;
+  global_accuracy?: number | null;
+  global_accuracy_samples?: number;
+  global_accuracy_source?: 'unset' | 'measured' | 'legacy';
   active_signals?: Signal[];
   terminal_messages?: TerminalMessage[];
   timestamp: string;
@@ -421,6 +423,29 @@ export class ApiError extends Error {
   }
 }
 
+/** Normalize FastAPI `detail` (string | validation list | object) into a safe user-facing string. */
+export function formatApiDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object' && 'msg' in item) {
+          return String((item as { msg: unknown }).msg);
+        }
+        return null;
+      })
+      .filter((part): part is string => Boolean(part && part.trim()));
+    if (parts.length) return parts.join('; ');
+  }
+  if (detail && typeof detail === 'object') {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.message === 'string' && record.message.trim()) return record.message;
+    if (typeof record.detail === 'string' && record.detail.trim()) return record.detail;
+  }
+  return fallback;
+}
+
 const API_BASE = getRuntimeApiBase(import.meta.env.VITE_API_URL);
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const configuredTimeout = Number(import.meta.env.VITE_API_TIMEOUT_MS);
@@ -474,7 +499,11 @@ async function requestJson<T>(
   });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, errorData.detail || `Request failed (${response.status})`, errorData);
+    throw new ApiError(
+      response.status,
+      formatApiDetail(errorData.detail, `Request failed (${response.status})`),
+      errorData,
+    );
   }
   return response.json();
 }
@@ -537,11 +566,16 @@ const blockedFallbackPathByKey = new Map<string, { expiresAt: number }>();
 export const useDashboardStream = (token: string | null, sessionToken?: string | null) => {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<ApiError | null>(null);
 
   useEffect(() => {
-    if (!sessionToken) return;
+    if (!sessionToken) {
+      setAuthError(null);
+      return;
+    }
     const controller = new AbortController();
     let retryCount = 0;
+    setAuthError(null);
 
     const connect = async () => {
       while (!controller.signal.aborted) {
@@ -550,7 +584,22 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
             headers: authHeaders(token, sessionToken),
             signal: controller.signal,
           });
-          if (!response.ok || !response.body) throw new Error(`SSE failed (${response.status})`);
+          if (!response.ok || !response.body) {
+            // Fail closed: do not retry forever with a dead/revoked session (token leak via noisy retries).
+            if (response.status === 401 || response.status === 403) {
+              const errorData = await response.json().catch(() => ({}));
+              setAuthError(
+                new ApiError(
+                  response.status,
+                  formatApiDetail(errorData.detail, 'Dashboard session expired. Please log in again.'),
+                  errorData,
+                ),
+              );
+              setError(null);
+              return;
+            }
+            throw new Error(`SSE failed (${response.status})`);
+          }
 
           retryCount = 0;
           setError(null);
@@ -597,7 +646,7 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
     };
   }, [token, sessionToken]);
 
-  return { data, error };
+  return { data, error, authError };
 };
 
 export const login = async (securityToken: string, otpToken?: string): Promise<AuthLoginResponse> =>
@@ -803,7 +852,11 @@ export const fetchTradeHistory = async (
   });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new ApiError(response.status, errorData.detail || `Failed to fetch trade history (${response.status})`, errorData);
+    throw new ApiError(
+      response.status,
+      formatApiDetail(errorData.detail, `Failed to fetch trade history (${response.status})`),
+      errorData,
+    );
   }
   return response.json();
 };

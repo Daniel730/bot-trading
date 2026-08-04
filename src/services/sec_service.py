@@ -18,6 +18,30 @@ with warnings.catch_warnings():
 class SECRateLimitException(Exception):
     """Custom exception for SEC rate limit (429)."""
 
+
+class SECUnreachableException(Exception):
+    """SEC EDGAR / network path is unavailable (timeouts, DNS, connection errors)."""
+
+
+_SEC_UNREACHABLE_MARKERS = (
+    "429",
+    "timeout",
+    "timed out",
+    "connection",
+    "temporarily unavailable",
+    "name or service not known",
+    "nodename nor servname",
+    "failed to resolve",
+    "max retries exceeded",
+    "network is unreachable",
+)
+
+
+def _is_sec_unreachable_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in _SEC_UNREACHABLE_MARKERS)
+
+
 class SECService:
     GROUND_TRUTH_CIKS = {
         "AAPL": "0000320193", "MSFT": "0000789019", "GOOGL": "0001652044", "GOOG": "0001652044",
@@ -112,8 +136,10 @@ class SECService:
                 self.persistence.save_cik_mapping(ticker, cik)
                 return cik
         except Exception as e:
-            if "429" in str(e):
-                raise SECRateLimitException(f"SEC Rate Limit for {ticker}")
+            if "429" in str(e) or _is_sec_unreachable_error(e):
+                if "429" in str(e):
+                    raise SECRateLimitException(f"SEC Rate Limit for {ticker}") from e
+                raise SECUnreachableException(f"SEC unreachable while resolving CIK for {ticker}: {e}") from e
             print(f"Error fetching CIK for {ticker}: {e}")
         
         return None
@@ -124,6 +150,8 @@ class SECService:
     async def fetch_latest_filing_metadata(self, ticker: str, form_type: str = "10-K") -> Optional[Dict]:
         """
         Fetches metadata for the latest filing of a given type.
+        Raises SECUnreachableException / SECRateLimitException on transport failures.
+        Returns None when the company exists but has no matching filings.
         """
         try:
             company = Company(ticker)
@@ -139,7 +167,15 @@ class SECService:
                 "form": latest.form,
                 "filing": latest # Store the edgartools filing object
             }
+        except (SECRateLimitException, SECUnreachableException):
+            raise
         except Exception as e:
+            if _is_sec_unreachable_error(e):
+                if "429" in str(e):
+                    raise SECRateLimitException(f"SEC Rate Limit for {ticker}") from e
+                raise SECUnreachableException(
+                    f"SEC unreachable while fetching {form_type} for {ticker}: {e}"
+                ) from e
             print(f"Error fetching latest filing for {ticker}: {e}")
             return None
 
@@ -176,6 +212,9 @@ class SECService:
     async def get_analyzed_sections(self, ticker: str) -> Dict:
         """
         Efficiently fetches Risk Factors and MD&A for a ticker.
+
+        Propagates SECUnreachableException so callers can circuit-break instead of
+        treating an outage as an empty filing set.
         """
         result = {"sections": {}, "metadata": None}
         
@@ -210,7 +249,13 @@ class SECService:
                         "accession": metadata["accession_number"]
                     }
                     break
+            except (SECRateLimitException, SECUnreachableException):
+                raise
             except Exception as e:
+                if _is_sec_unreachable_error(e):
+                    raise SECUnreachableException(
+                        f"SEC unreachable while parsing {form} for {ticker}: {e}"
+                    ) from e
                 print(f"Error parsing filing for {ticker} {form}: {e}")
                 
         return result

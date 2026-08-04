@@ -6,9 +6,14 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
 from unittest.mock import AsyncMock, MagicMock, patch
+import time
 
 from src.agents.orchestrator import Orchestrator, orchestrator
 from src.config import settings
+
+
+def _fresh_score(score: int) -> dict:
+    return {"score": score, "source": "edgar", "available": True, "last_updated": time.time()}
 
 @pytest.mark.asyncio
 async def test_thompson_sampling_weight_allocation():
@@ -46,7 +51,7 @@ async def test_thompson_sampling_weight_allocation():
     # EXTREME_VOLATILITY and short-circuit the orchestrator before MAB runs.
     with patch('src.agents.bull_agent.BullAgent.evaluate', return_value={"confidence": 0.1, "reasoning": "bad"}), \
          patch('src.agents.bear_agent.BearAgent.evaluate', return_value={"confidence": 0.9, "reasoning": "bad"}), \
-         patch('src.services.redis_service.RedisService.get_fundamental_score', return_value={"score": 100}), \
+         patch('src.services.redis_service.RedisService.get_fundamental_score', return_value=_fresh_score(100)), \
          patch('src.services.persistence_service.PersistenceService.get_system_state', side_effect=mock_get_system_state), \
          patch('src.services.persistence_service.PersistenceService.get_agent_metrics', side_effect=mock_get_agent_metrics), \
          patch('src.services.persistence_service.PersistenceService.set_system_state'), \
@@ -110,8 +115,8 @@ async def test_neutral_sec_weight_does_not_drag_pair_confidence_below_agent_cons
         "src.agents.orchestrator.redis_service.get_fundamental_score",
         new_callable=AsyncMock,
         side_effect=[
-            {"score": settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE},
-            {"score": settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE},
+            _fresh_score(settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE),
+            _fresh_score(settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE),
         ],
     ), patch(
         "src.agents.orchestrator.whale_watcher_agent.evaluate",

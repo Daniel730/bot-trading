@@ -1,5 +1,5 @@
 import { Shield } from 'lucide-react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface LoginViewProps {
   loginToken: string;
@@ -28,6 +28,17 @@ export default function LoginView(props: LoginViewProps) {
     onCancelApproval,
   } = props;
   const [showOtpField, setShowOtpField] = useState(Boolean(loginOtp));
+
+  useEffect(() => {
+    if (loginOtp) setShowOtpField(true);
+  }, [loginOtp]);
+
+  // Fail-closed login often requires OTP when Telegram is unavailable — surface the field automatically.
+  useEffect(() => {
+    if (loginError && /authenticator|backup code|otp|2fa|two-factor/i.test(loginError)) {
+      setShowOtpField(true);
+    }
+  }, [loginError]);
 
   return (
     <div className="login-screen">

@@ -1,12 +1,19 @@
 import logging
 
+from src.config import settings
+
 logger = logging.getLogger(__name__)
 
+
 class WhaleWatcherAgent:
+    """Hard-dormant whale-flow stub on the orchestrator hot path.
+
+    Cache-backed analysis lives under ``legacy/whale_watcher_service.py`` and is
+    not imported by runtime. ``WHALE_WATCHER_ENABLED`` and related knobs are
+    reserved for a future restored evaluator (GitHub #91); flipping the flag
+    alone must not enable veto or confidence side effects.
     """
-    Dummy WhaleWatcherAgent. 
-    Legacy implementation moved to legacy/agents/whale_watcher_agent.py
-    """
+
     active = False
     status_name = "inactive"
     mode = "legacy_neutral"
@@ -20,6 +27,8 @@ class WhaleWatcherAgent:
             "status": self.status_name,
             "mode": self.mode,
             "reason": self.inactive_reason,
+            "enabled_flag": bool(getattr(settings, "WHALE_WATCHER_ENABLED", False)),
+            "enabled_flag_honored": False,
         }
 
     def neutral(self, reasoning: str) -> dict:
@@ -32,10 +41,19 @@ class WhaleWatcherAgent:
             "status": self.status_name,
             "mode": self.mode,
             "inactive_reason": self.inactive_reason,
+            "enabled_flag": bool(getattr(settings, "WHALE_WATCHER_ENABLED", False)),
+            "enabled_flag_honored": False,
             "reasoning": reasoning,
         }
 
     async def evaluate(self, signal_context: dict) -> dict:
+        if bool(getattr(settings, "WHALE_WATCHER_ENABLED", False)):
+            logger.debug(
+                "WHALE_WATCHER_ENABLED=true ignored: hot-path evaluator remains inactive "
+                "(signal_id=%s)",
+                (signal_context or {}).get("signal_id", "N/A"),
+            )
         return self.neutral(self.inactive_reason)
+
 
 whale_watcher_agent = WhaleWatcherAgent()

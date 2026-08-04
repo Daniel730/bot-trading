@@ -23,7 +23,12 @@ export function readStoredDashboardSession(): StoredDashboardSession | null {
     const raw = window.localStorage.getItem(DASHBOARD_SESSION_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StoredDashboardSession>;
-    if (!parsed.sessionToken || !parsed.expiresAt) {
+    if (
+      typeof parsed.sessionToken !== 'string'
+      || !parsed.sessionToken
+      || typeof parsed.expiresAt !== 'string'
+      || !parsed.expiresAt
+    ) {
       clearStoredDashboardSession();
       return null;
     }
@@ -35,7 +40,7 @@ export function readStoredDashboardSession(): StoredDashboardSession | null {
     return {
       sessionToken: parsed.sessionToken,
       expiresAt: parsed.expiresAt,
-      actor: parsed.actor,
+      actor: typeof parsed.actor === 'string' ? parsed.actor : undefined,
     };
   } catch {
     clearStoredDashboardSession();
@@ -62,5 +67,27 @@ export function writeStoredDashboardSession(session: AuthSession) {
 export function isDashboardAuthError(err: unknown) {
   const message = err instanceof Error ? err.message : String(err ?? '');
   if (err instanceof ApiError && err.status === 401) return true;
+  // 403 is only auth when the security token itself was rejected — not OTP/2FA config gates.
+  if (
+    err instanceof ApiError
+    && err.status === 403
+    && /invalid dashboard token/i.test(message)
+  ) {
+    return true;
+  }
   return /dashboard session|dashboard login is required|invalid dashboard token/i.test(message);
+}
+
+/** Strip auth secrets from the address bar before React paints (referrer / screenshot leak surface). */
+export function scrubAuthQueryParamsFromUrl() {
+  if (typeof window === 'undefined') return;
+  try {
+    const currentUrl = new URL(window.location.href);
+    if (!currentUrl.searchParams.has('token') && !currentUrl.searchParams.has('session')) return;
+    currentUrl.searchParams.delete('token');
+    currentUrl.searchParams.delete('session');
+    window.history.replaceState({}, document.title, currentUrl.toString());
+  } catch {
+    // History API can be unavailable in some embedded contexts.
+  }
 }

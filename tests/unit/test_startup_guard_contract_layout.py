@@ -51,6 +51,9 @@ def test_startup_broker_ledger_contract_tests_are_split_from_monolith():
 
     assert "def test_startup_blocks_when_broker_has_unmanaged_position" in broker_ledger
     assert "def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_audit" in broker_ledger
+    assert "def test_startup_allows_unmanaged_positions_when_ignore_flag_enabled" in broker_ledger
+    assert "def test_startup_clears_unmanaged_state_when_broker_matches_ledger" in broker_ledger
+    assert "def test_startup_ignore_unmanaged_never_implies_auto_flatten" in broker_ledger
 
 
 def test_startup_unresolved_execution_contract_tests_are_split_from_monolith():
