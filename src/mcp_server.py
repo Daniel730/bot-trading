@@ -60,15 +60,29 @@ def resolve_mcp_bind(
     return bind_host, port
 
 
+_MCP_TOKEN_PLACEHOLDERS = frozenset(
+    {
+        "",
+        "your_mcp_token",
+        "changeme",
+        "changeme_mcp_token",
+        "mcp_token",
+    }
+)
+
+
 def _configured_tool_token() -> str:
     return os.getenv("MCP_TOOL_TOKEN", "").strip()
 
 
 def _auth_rejection(auth_token: Optional[str]) -> Optional[dict]:
-    """Fail closed when MCP_TOOL_TOKEN is configured and the caller token mismatches."""
+    """Fail closed unless MCP_TOOL_TOKEN is a real secret and matches (F-008)."""
     expected = _configured_tool_token()
-    if not expected:
-        return None
+    if not expected or expected.lower() in _MCP_TOKEN_PLACEHOLDERS:
+        return {
+            "status": "rejected",
+            "reason": "unauthorized: MCP_TOOL_TOKEN not configured",
+        }
     provided = (auth_token or "").strip()
     if provided and provided == expected:
         return None

@@ -973,8 +973,19 @@ class Settings(BaseSettings):
 
     @property
     def is_alpaca_paper_endpoint(self) -> bool:
-        """True when ALPACA_BASE_URL points at Alpaca's paper API host."""
-        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
+        """True when ALPACA_BASE_URL hostname is exactly Alpaca's paper API host.
+
+        Uses urlparse hostname equality (F-005) — never a substring match, which
+        would treat ``https://evil.example/paper-api.alpaca.markets`` as paper.
+        """
+        from urllib.parse import urlparse
+
+        raw = (self.ALPACA_BASE_URL or "").strip()
+        if not raw:
+            return False
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return host == "paper-api.alpaca.markets"
 
     @property
     def is_broker_paper_trading(self) -> bool:
@@ -1081,6 +1092,12 @@ class Settings(BaseSettings):
             raise ValueError("DASHBOARD_TOKEN must be set to a non-default secret")
         if not self.PAPER_TRADING and not self.LIVE_CAPITAL_DANGER:
             raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
+        # F-003: DEV_MODE randomizes prices — never combine with broker/live lanes.
+        if self.DEV_MODE and not self.PAPER_TRADING:
+            raise ValueError(
+                "DEV_MODE=true requires PAPER_TRADING=true (shadow only); "
+                "refusing broker/live execution with randomized prices"
+            )
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
         # Env + bot_settings + dashboard all funnel through validate_secrets; never leave

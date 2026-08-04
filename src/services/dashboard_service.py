@@ -1053,7 +1053,7 @@ class DashboardService:
         self.totp = TOTPManager(self.persistence)
         self.editable_config: Dict[str, dict] = {
             "REGION": {"type": "str", "sensitive": False, "options": ["US", "EU"]},
-            "APPROVAL_THRESHOLD": {"type": "float", "sensitive": False},
+            "APPROVAL_THRESHOLD": {"type": "float", "sensitive": True},
             "SCAN_INTERVAL_SECONDS": {"type": "int", "sensitive": False},
             "SCAN_PAIR_CONCURRENCY": {"type": "int", "sensitive": False},
             "SCAN_EXIT_CONCURRENCY": {"type": "int", "sensitive": False},
@@ -2643,11 +2643,18 @@ async def list_pending_approvals(token: str = Query(None), session: str = Query(
 
 
 @app.post("/api/approvals/{correlation_id}/approve")
-async def approve_pending_trade(correlation_id: str, token: str = Query(None), session: str = Query(None)):
+async def approve_pending_trade(
+    correlation_id: str,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     if token:
         verify_security_token(token)
     else:
         verify_token(token, session)
+    # F-010: step-up 2FA when authenticator is enrolled (LIVE approvals especially).
+    require_step_up_2fa(otp_token, action="approving a pending trade")
     from src.services.notification_service import notification_service
 
     result = notification_service.resolve_pending_approval(correlation_id, approved=True)
@@ -2662,11 +2669,17 @@ async def approve_pending_trade(correlation_id: str, token: str = Query(None), s
 
 
 @app.post("/api/approvals/{correlation_id}/reject")
-async def reject_pending_trade(correlation_id: str, token: str = Query(None), session: str = Query(None)):
+async def reject_pending_trade(
+    correlation_id: str,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     if token:
         verify_security_token(token)
     else:
         verify_token(token, session)
+    require_step_up_2fa(otp_token, action="rejecting a pending trade")
     from src.services.notification_service import notification_service
 
     result = notification_service.resolve_pending_approval(correlation_id, approved=False)
@@ -2687,8 +2700,21 @@ async def get_settings(token: str = Query(None), session: str = Query(None)):
 
 
 @app.post("/api/settings")
-async def update_settings(request: SettingsUpdateRequest, token: str = Query(None), session: str = Query(None)):
+async def update_settings(
+    request: SettingsUpdateRequest,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     verify_token(token, session)
+    # F-001: APPROVAL_THRESHOLD is capital-sensitive — require step-up when 2FA enrolled.
+    require_step_up_2fa(otp_token, action="updating APPROVAL_THRESHOLD")
+    status = dashboard_service.totp.public_status()
+    if not status.get("enabled"):
+        raise HTTPException(
+            status_code=412,
+            detail="Two-factor authentication must be configured before changing APPROVAL_THRESHOLD.",
+        )
     old_value = settings.APPROVAL_THRESHOLD
     settings.APPROVAL_THRESHOLD = request.approval_threshold
     save_settings_override({"APPROVAL_THRESHOLD": request.approval_threshold})
@@ -2697,7 +2723,7 @@ async def update_settings(request: SettingsUpdateRequest, token: str = Query(Non
         key="APPROVAL_THRESHOLD",
         old_value=old_value,
         new_value=request.approval_threshold,
-        requires_2fa=False,
+        requires_2fa=True,
     )
     await dashboard_state.add_message("SYSTEM", f"Auto-trade threshold updated to {request.approval_threshold} EUR")
     return {"status": "ok", "approval_threshold": settings.APPROVAL_THRESHOLD}

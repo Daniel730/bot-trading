@@ -82,14 +82,17 @@ def close_uses_broker(
     """Whether _close_position should place broker close orders.
 
     Prefer ledger metadata from open; fall back to current PAPER_TRADING only for
-    untagged legacy rows.
+    untagged legacy rows **when still in shadow**. For broker/live current env
+    with untagged rows, refuse broker closes (F-009) — operator must tag/backfill
+    rather than guess and hit the wrong venue.
     """
     if signal_is_shadow(signal):
         return False
     if signal_has_explicit_lane(signal):
         # Explicit non-shadow (broker paper or live) — always close via broker.
         return True
-    return not paper_trading
+    # Untagged legacy: never invent a broker close — operator must tag/backfill.
+    return False
 
 
 def stamp_trade_metadata(

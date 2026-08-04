@@ -244,4 +244,17 @@ Auto-approve via `is_broker_paper_trading` → `place_value_order` com `client_o
 
 ---
 
-*Fim do relatório. Nenhuma correção foi aplicada nesta auditoria (mandato: apenas reportar e recomendar).*
+## Status de remediação (mesmo dia, pós-auditoria)
+
+| ID | Estado | Notas |
+|---|---|---|
+| F-001 | **Corrigido** | Removido atalho LIVE por `APPROVAL_THRESHOLD`; knob marcado `sensitive`; `/api/settings` exige 2FA; teste de regressão. |
+| F-002 | **Corrigido** | `capital_halt_service` + gate no início de `execute_trade` (fail-closed); persiste `DAILY_LOSS_HALT` / `MAX_DRAWDOWN_HALT`. |
+| F-003 | **Corrigido** | `validate_secrets` rejeita `DEV_MODE` sem `PAPER_TRADING`; randomização de preço só se ambos. |
+| F-005 | **Corrigido** | `is_alpaca_paper_endpoint` via hostname exact match (`urlparse`). |
+| F-008 | **Corrigido** | MCP rejeita se `MCP_TOOL_TOKEN` ausente/placeholder. |
+| F-009 | **Corrigido** | Untagged legacy nunca inventa close broker. |
+| F-010 | **Corrigido** | Approve/reject exigem step-up 2FA; UI pede OTP em 403. |
+| F-004 / F-006 / F-007 / F-011+ | **Pendente** | Fora deste lote (snapshot atômico, crash recovery status, etc.). |
+
+*Relatório original preservado acima; esta secção regista o follow-up de correções.*

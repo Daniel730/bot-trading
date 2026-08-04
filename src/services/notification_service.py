@@ -659,12 +659,20 @@ class NotificationService:
                 logger.warning("[APPROVAL] Failed to publish pause state: %s", self._redact_sensitive_text(pause_exc))
             return False
 
-        # Threshold auto-approval fast path. In live mode this is only allowed
-        # after the operator's approval channel has been configured.
-        if not force_manual and trade_value is not None and trade_value <= settings.APPROVAL_THRESHOLD:
-            self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
-            return True
-            
+        # F-001: Never auto-approve on APPROVAL_THRESHOLD outside should_auto_approve_trades.
+        # LIVE (and any non-paper lane) always requires an explicit human click / dashboard
+        # resolve. force_manual is retained for call-site clarity but no longer gates a
+        # below-threshold shortcut — that path previously auto-approved real capital.
+        if trade_value is not None and trade_value <= settings.APPROVAL_THRESHOLD:
+            logger.info(
+                "[APPROVAL] Trade value %.2f <= APPROVAL_THRESHOLD %.2f but auto-threshold "
+                "is disabled for non-paper lanes; requiring explicit human approval "
+                "(force_manual=%s).",
+                float(trade_value),
+                float(settings.APPROVAL_THRESHOLD),
+                force_manual,
+            )
+
         correlation_id = str(uuid.uuid4())[:8]
         keyboard = [
             [

@@ -2406,6 +2406,34 @@ class ArbitrageMonitor:
 
         entry_context = entry_context or {}
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
+
+        # F-002: daily / drawdown capital halt — block new opens only.
+        try:
+            from src.services.capital_halt_service import enforce_capital_halt_or_raise_state
+            from src.services.performance_service import performance_service as _perf
+
+            halt = await enforce_capital_halt_or_raise_state(
+                persistence_service=persistence_service,
+                performance_service=_perf,
+                notification_service=notification_service,
+            )
+            if halt.get("halt"):
+                logger.critical(
+                    "CAPITAL HALT: refusing open %s/%s (%s)",
+                    t_a,
+                    t_b,
+                    halt.get("reason"),
+                )
+                return execution_result(
+                    False,
+                    "capital_halt",
+                    halt_reason=halt.get("reason"),
+                    halt_details=halt.get("details"),
+                )
+        except Exception as halt_exc:
+            logger.error("CAPITAL HALT check failed open-fail-closed: %s", halt_exc)
+            return execution_result(False, "capital_halt_check_failed")
+
         if await self._has_active_pair_or_pending_order(t_a, t_b):
             return execution_result(False, "active_pair_or_pending_order")
 

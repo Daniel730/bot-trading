@@ -694,25 +694,31 @@ export const approvePendingTrade = async (
   token: string | null,
   sessionToken: string | null,
   correlationId: string,
-) =>
-  requestJson<{ status: string; message?: string }>(
-    `/api/approvals/${encodeURIComponent(correlationId)}/approve`,
+  otpToken?: string,
+) => {
+  const qs = otpToken ? `?otp_token=${encodeURIComponent(otpToken)}` : '';
+  return requestJson<{ status: string; message?: string }>(
+    `/api/approvals/${encodeURIComponent(correlationId)}/approve${qs}`,
     token,
     { method: 'POST' },
     sessionToken,
   );
+};
 
 export const rejectPendingTrade = async (
   token: string | null,
   sessionToken: string | null,
   correlationId: string,
-) =>
-  requestJson<{ status: string; message?: string }>(
-    `/api/approvals/${encodeURIComponent(correlationId)}/reject`,
+  otpToken?: string,
+) => {
+  const qs = otpToken ? `?otp_token=${encodeURIComponent(otpToken)}` : '';
+  return requestJson<{ status: string; message?: string }>(
+    `/api/approvals/${encodeURIComponent(correlationId)}/reject${qs}`,
     token,
     { method: 'POST' },
     sessionToken,
   );
+};
 
 export const fetchPairs = async (token: string | null, sessionToken?: string | null): Promise<PairsResponse> =>
   requestJson<PairsResponse>('/api/pairs', token, undefined, sessionToken);

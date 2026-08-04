@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Check, X } from 'lucide-react';
-import { approvePendingTrade, fetchPendingApprovals, rejectPendingTrade, type PendingApproval } from '../services/api';
+import {
+  ApiError,
+  approvePendingTrade,
+  fetchPendingApprovals,
+  rejectPendingTrade,
+  type PendingApproval,
+} from '../services/api';
 import { SectionHeader } from './UIHelpers';
 
 interface PendingApprovalsPanelProps {
@@ -41,13 +47,26 @@ const PendingApprovalsPanel: React.FC<PendingApprovalsPanelProps> = ({
   const resolve = async (correlationId: string, approved: boolean) => {
     setBusyId(correlationId);
     try {
-      if (approved) {
-        await approvePendingTrade(token, sessionToken, correlationId);
-        onMessage?.(`Approved ${correlationId}`);
-      } else {
-        await rejectPendingTrade(token, sessionToken, correlationId);
-        onMessage?.(`Rejected ${correlationId}`);
+      const run = (otpToken?: string) =>
+        approved
+          ? approvePendingTrade(token, sessionToken, correlationId, otpToken)
+          : rejectPendingTrade(token, sessionToken, correlationId, otpToken);
+
+      try {
+        await run();
+      } catch (firstErr: any) {
+        const errMsg = firstErr?.message || '';
+        if (firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg)) {
+          const otp = window.prompt(
+            `Enter authenticator or backup code to ${approved ? 'approve' : 'reject'} this trade:`,
+          );
+          if (!otp?.trim()) throw firstErr;
+          await run(otp.trim());
+        } else {
+          throw firstErr;
+        }
       }
+      onMessage?.(`${approved ? 'Approved' : 'Rejected'} ${correlationId}`);
       await refresh();
     } catch (err: any) {
       if (onAuthFailure?.(err)) return;

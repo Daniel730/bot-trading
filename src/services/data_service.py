@@ -449,7 +449,8 @@ class DataService:
 
     @staticmethod
     def _maybe_randomize_price(value: float) -> float:
-        if settings.DEV_MODE:
+        # Belt-and-suspenders with Settings.validate_secrets (F-003): only shadow.
+        if settings.DEV_MODE and settings.PAPER_TRADING:
             import random
             return value * (1 + random.uniform(-0.015, 0.015))
         return value
