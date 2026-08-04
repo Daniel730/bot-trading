@@ -12,6 +12,7 @@ from src.services.pair_discovery_helpers import (
     is_pair_denied,
     normalize_denylist,
     pairs_from_promotions,
+    parse_denylist_env,
     parse_pair_id,
     select_rotation_actions,
 )
@@ -50,6 +51,36 @@ def test_btc_bch_denylist_both_orders():
     assert not is_pair_denied(pair_id="BTC-USD_ETH-USD", denylist=denied)
 
 
+def test_parse_denylist_env_accepts_comma_semicolon_and_whitespace():
+    assert parse_denylist_env("BTC-USD_BCH-USD, BCH-USD_BTC-USD") == [
+        "BTC-USD_BCH-USD",
+        "BCH-USD_BTC-USD",
+    ]
+    assert parse_denylist_env("KO_PEP; MA_V\nXOM_CVX") == ["KO_PEP", "MA_V", "XOM_CVX"]
+    assert parse_denylist_env("") == []
+    assert parse_denylist_env(None) == []
+
+
+def test_select_rotation_actions_promotes_into_fully_empty_active():
+    """Empty Active must fill from scouts (bootstrap / post-quarantine)."""
+    actions = select_rotation_actions(
+        active_pairs=[],
+        candidates=[
+            {"pair_id": "SOL-USD_AVAX-USD", "sortino": 2.1, "hedge_ratio": 1.1},
+            {"pair_id": "BTC-USD_BCH-USD", "sortino": 99.0, "hedge_ratio": 280.0},
+            {"pair_id": "KO_PEP", "sortino": 1.8, "hedge_ratio": 0.9},
+        ],
+        max_active_pairs=2,
+        denylist=["BTC-USD_BCH-USD"],
+        max_abs_hedge=25.0,
+    )
+    assert actions["to_bench"] == []
+    assert [c["pair_id"] for c in actions["to_promote"]] == [
+        "SOL-USD_AVAX-USD",
+        "KO_PEP",
+    ]
+
+
 def test_hedge_ratio_sanity_rejects_btc_bch_scale_beta():
     assert is_hedge_ratio_sane(1.2, max_abs_hedge=25.0)
     assert is_hedge_ratio_sane(-8.0, max_abs_hedge=25.0)
@@ -70,6 +101,42 @@ def test_select_rotation_actions_fills_empty_slots():
     )
     assert actions["to_bench"] == []
     assert [c["pair_id"] for c in actions["to_promote"]] == ["KO_PEP", "MA_V"]
+
+
+def test_select_rotation_actions_enforces_sortino_and_correlation():
+    actions = select_rotation_actions(
+        active_pairs=[],
+        candidates=[
+            {"pair_id": "WEAK_SORT", "sortino": 0.5, "correlation": 0.95, "p_value": 0.01},
+            {"pair_id": "WEAK_CORR", "sortino": 3.0, "correlation": 0.40, "p_value": 0.01},
+            {"pair_id": "WEAK_P", "sortino": 3.0, "correlation": 0.95, "p_value": 0.20},
+            {"pair_id": "GOOD_PAIR", "sortino": 3.0, "correlation": 0.92, "p_value": 0.02, "hedge_ratio": 1.1},
+        ],
+        max_active_pairs=3,
+        sortino_threshold=2.0,
+        min_correlation=0.70,
+        max_pvalue=0.05,
+    )
+    assert [c["pair_id"] for c in actions["to_promote"]] == ["GOOD_PAIR"]
+
+
+def test_select_rotation_actions_benches_insane_active_hedge():
+    actions = select_rotation_actions(
+        active_pairs=[
+            {"id": "BTC-USD_BCH-USD", "is_cointegrated": True, "hedge_ratio": 285.0},
+            {"id": "KO_PEP", "is_cointegrated": True, "hedge_ratio": 1.2},
+        ],
+        candidates=[
+            {"pair_id": "MA_V", "sortino": 3.0, "correlation": 0.9, "p_value": 0.01, "hedge_ratio": 1.0},
+        ],
+        max_active_pairs=2,
+        sortino_threshold=2.0,
+        min_correlation=0.70,
+        max_pvalue=0.05,
+        max_abs_hedge=25.0,
+    )
+    assert actions["to_bench"] == ["BTC-USD_BCH-USD"]
+    assert [c["pair_id"] for c in actions["to_promote"]] == ["MA_V"]
 
 
 def test_select_rotation_actions_replaces_non_cointegrated():
@@ -117,14 +184,14 @@ def test_select_rotation_actions_skips_already_active_candidates():
 
 def test_pairs_from_promotions_builds_trading_pair_payloads():
     payloads = pairs_from_promotions(
-        [{"pair_id": "BTC-USD_ETH-USD", "sortino": 1.2}]
+        [{"pair_id": "BTC-USD_ETH-USD", "sortino": 1.2, "hedge_ratio": 14.5}]
     )
     assert payloads == [
         {
             "id": "BTC-USD_ETH-USD",
             "ticker_a": "BTC-USD",
             "ticker_b": "ETH-USD",
-            "hedge_ratio": 0.0,
+            "hedge_ratio": 14.5,
             "is_cointegrated": True,
             "status": "Active",
         }
@@ -232,6 +299,10 @@ async def test_rotate_pairs_promotes_and_benches(portfolio_manager_agent, monkey
         "src.agents.portfolio_manager_agent.settings.MAX_ACTIVE_PAIRS",
         2,
     )
+    monkeypatch.setattr(
+        "src.agents.portfolio_manager_agent.settings.ELITE_ROTATION_SORTINO_THRESHOLD",
+        0.0,
+    )
 
     result = await agent.rotate_pairs()
     assert result["status"] == "rotated"
@@ -280,6 +351,10 @@ async def test_rotate_pairs_bootstraps_from_empty_active(portfolio_manager_agent
     monkeypatch.setattr(
         "src.agents.portfolio_manager_agent.settings.MAX_ACTIVE_PAIRS",
         2,
+    )
+    monkeypatch.setattr(
+        "src.agents.portfolio_manager_agent.settings.ELITE_ROTATION_SORTINO_THRESHOLD",
+        0.0,
     )
 
     result = await agent.rotate_pairs()
@@ -334,6 +409,10 @@ async def test_rotate_pairs_never_promotes_btc_bch(portfolio_manager_agent, monk
     monkeypatch.setattr(
         "src.agents.portfolio_manager_agent.settings.PAIR_DENYLIST",
         "BTC-USD_BCH-USD,BCH-USD_BTC-USD",
+    )
+    monkeypatch.setattr(
+        "src.agents.portfolio_manager_agent.settings.ELITE_ROTATION_SORTINO_THRESHOLD",
+        0.0,
     )
 
     result = await agent.rotate_pairs()

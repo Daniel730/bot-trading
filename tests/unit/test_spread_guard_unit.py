@@ -90,3 +90,29 @@ async def test_spread_guard_acceptance(monitor):
 
         # Verify it proceeded to risk validation
         assert mock_validate_trade.called
+
+
+@pytest.mark.asyncio
+async def test_spread_guard_rejects_entry_at_overnight_btc_bch_scale(monitor):
+    """Entry-only guard: ~0.7% combined spread (overnight BTC/BCH churn) must reject."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "BCH-USD", "id": "BTC-USD_BCH-USD"}
+    signal_id = str(uuid.uuid4())
+    monitor.brokerage.place_value_order = AsyncMock()
+
+    # Leg A ~0.35%, Leg B ~0.35% → combined ≈ 0.701% > 0.3%
+    with patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch(
+             "src.monitor.data_service.get_bid_ask",
+             new_callable=AsyncMock,
+             side_effect=[(100000.0, 100350.0), (400.0, 401.4)],
+         ), \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock), \
+         patch("src.monitor.risk_service.validate_trade") as mock_validate:
+
+        result = await monitor.execute_trade(pair, "Short-Long", 100350.0, 401.4, signal_id)
+
+        assert result["reason"] == "spread_guard"
+        assert result["total_spread_pct"] == pytest.approx(0.701225, abs=1e-4)
+        assert result["total_spread_pct"] > result["max_spread_pct"]
+        mock_validate.assert_not_called()
+        monitor.brokerage.place_value_order.assert_not_called()

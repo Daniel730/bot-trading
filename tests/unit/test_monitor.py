@@ -335,16 +335,47 @@ async def test_take_profit_holds_when_friction_exceeds_gross_pnl(monitor):
     with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
          patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
          patch("src.monitor.estimate_round_trip_cost_pct", return_value=0.01), \
-         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close:
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close, \
+         patch("src.monitor.settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE", 0.25):
 
         mock_prices.return_value = {"BTC-USD": 60100.0, "ETH-USD": 2990.0}
         kf = MagicMock()
+        # Still in TP band (0.3) but above force-exit (0.25) and underwater on fees.
         kf.calculate_spread_and_zscore.return_value = (0.0, 0.3)
         mock_filter.return_value = kf
 
         await monitor._evaluate_exit_conditions(signal)
 
         mock_close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_take_profit_force_exits_when_mean_reversion_complete(monitor):
+    signal = {
+        "signal_id": str(uuid.uuid4()),
+        "legs": [
+            {"ticker": "BTC-USD", "quantity": 0.01, "side": "BUY", "price": 60000.0},
+            {"ticker": "ETH-USD", "quantity": 0.2, "side": "SELL", "price": 3000.0},
+        ],
+        "total_cost_basis": 1200.0,
+    }
+
+    with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
+         patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
+         patch("src.monitor.estimate_round_trip_cost_pct", return_value=0.01), \
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close, \
+         patch("src.monitor.settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE", 0.25):
+
+        # Slight positive but still below 1% friction on ~$1.2k notional.
+        mock_prices.return_value = {"BTC-USD": 60100.0, "ETH-USD": 2990.0}
+        kf = MagicMock()
+        kf.calculate_spread_and_zscore.return_value = (0.0, 0.1)
+        mock_filter.return_value = kf
+
+        await monitor._evaluate_exit_conditions(signal)
+
+        mock_close.assert_awaited_once()
+        assert mock_close.await_args.kwargs["reason"] == ExitReason.TAKE_PROFIT
 
 
 @pytest.mark.asyncio
@@ -377,3 +408,152 @@ async def test_take_profit_closes_when_gross_pnl_covers_friction(monitor):
             reason=ExitReason.TAKE_PROFIT,
             prices_by_ticker={"BTC-USD": 61000.0, "ETH-USD": 2900.0},
         )
+
+
+@pytest.mark.asyncio
+async def test_take_profit_friction_hold_skips_spread_guard_bid_ask(monitor):
+    """Exit friction-hold must not re-run entry spread-guard bid/ask checks."""
+    signal = {
+        "signal_id": str(uuid.uuid4()),
+        "legs": [
+            {"ticker": "BTC-USD", "quantity": 0.01, "side": "BUY", "price": 60000.0},
+            {"ticker": "ETH-USD", "quantity": 0.2, "side": "SELL", "price": 3000.0},
+        ],
+        "total_cost_basis": 1200.0,
+    }
+
+    with patch("src.monitor.data_service.get_latest_price_async", new_callable=AsyncMock) as mock_prices, \
+         patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
+         patch("src.monitor.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_filter, \
+         patch("src.monitor.estimate_round_trip_cost_pct", return_value=0.01), \
+         patch.object(monitor, "_close_position", new_callable=AsyncMock) as mock_close:
+
+        mock_prices.return_value = {"BTC-USD": 60100.0, "ETH-USD": 2990.0}
+        kf = MagicMock()
+        kf.calculate_spread_and_zscore.return_value = (0.0, 0.3)
+        mock_filter.return_value = kf
+
+        await monitor._evaluate_exit_conditions(signal)
+
+        mock_close.assert_not_awaited()
+        mock_bid_ask.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_initialize_pairs_benches_denylisted_both_orders(monitor, monkeypatch):
+    benched: list[str] = []
+
+    async def fake_active():
+        return [
+            {
+                "id": "BCH-USD_BTC-USD",
+                "ticker_a": "BCH-USD",
+                "ticker_b": "BTC-USD",
+                "hedge_ratio": 280.0,
+                "is_cointegrated": True,
+                "status": "Active",
+            },
+            {
+                "id": "BTC-USD_ETH-USD",
+                "ticker_a": "BTC-USD",
+                "ticker_b": "ETH-USD",
+                "hedge_ratio": 1.2,
+                "is_cointegrated": True,
+                "status": "Active",
+            },
+        ]
+
+    async def fake_update(pair_id: str, status: str):
+        assert status == "Benched"
+        benched.append(pair_id)
+
+    async def fake_filter(pairs, **_kwargs):
+        return list(pairs), []
+
+    async def empty_hist(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(settings, "PAIR_DENYLIST", "BTC-USD_BCH-USD")
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "MAX_ACTIVE_PAIRS", 20)
+
+    with patch(
+        "src.services.persistence_service.persistence_service.get_active_trading_pairs",
+        new=fake_active,
+    ), patch(
+        "src.services.persistence_service.persistence_service.update_pair_status",
+        new=fake_update,
+    ), patch(
+        "src.monitor.filter_pair_universe",
+        new=fake_filter,
+    ), patch(
+        "src.monitor.data_service.get_historical_data_async",
+        new=empty_hist,
+    ), patch(
+        "src.monitor.dashboard_service.update",
+        new_callable=AsyncMock,
+    ):
+        await monitor.initialize_pairs()
+
+    assert "BCH-USD_BTC-USD" in benched
+    assert all(p["id"] != "BCH-USD_BTC-USD" for p in monitor.active_pairs)
+    assert all(p.get("ticker_a") != "BCH-USD" for p in monitor.active_pairs)
+
+
+@pytest.mark.asyncio
+async def test_auto_scout_promotes_when_enabled(monitor, monkeypatch):
+    import asyncio
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(float(seconds))
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_ENABLED", True)
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_AUTO_PROMOTE", True)
+    monkeypatch.setattr(settings, "SCOUT_INITIAL_DELAY_SECONDS", 60)
+    monkeypatch.setattr(settings, "SCOUT_INTERVAL_HOURS", 12)
+
+    with patch("src.monitor.asyncio.sleep", fake_sleep), patch(
+        "src.agents.portfolio_manager_agent.portfolio_manager.run_discovery",
+        new_callable=AsyncMock,
+    ) as mock_discover, patch.object(
+        monitor, "_rotate_elite_pairs", new_callable=AsyncMock
+    ) as mock_rotate:
+        with pytest.raises(asyncio.CancelledError):
+            await monitor._auto_scout_and_rotate_loop()
+
+    mock_discover.assert_awaited_once()
+    mock_rotate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_auto_scout_skips_promote_when_disabled(monitor, monkeypatch):
+    import asyncio
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(float(seconds))
+        if len(sleeps) >= 2:
+            raise asyncio.CancelledError()
+
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_ENABLED", True)
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_AUTO_PROMOTE", False)
+    monkeypatch.setattr(settings, "SCOUT_INITIAL_DELAY_SECONDS", 60)
+    monkeypatch.setattr(settings, "SCOUT_INTERVAL_HOURS", 12)
+
+    with patch("src.monitor.asyncio.sleep", fake_sleep), patch(
+        "src.agents.portfolio_manager_agent.portfolio_manager.run_discovery",
+        new_callable=AsyncMock,
+    ) as mock_discover, patch.object(
+        monitor, "_rotate_elite_pairs", new_callable=AsyncMock
+    ) as mock_rotate:
+        with pytest.raises(asyncio.CancelledError):
+            await monitor._auto_scout_and_rotate_loop()
+
+    mock_discover.assert_awaited_once()
+    mock_rotate.assert_not_awaited()

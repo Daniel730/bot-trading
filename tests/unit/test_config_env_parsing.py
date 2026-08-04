@@ -55,3 +55,29 @@ def test_guard_monitor_entry_zscore_clamps_dangerous_override():
 
     assert _guard_monitor_entry_zscore(0.5) == 1.0
     assert _guard_monitor_entry_zscore(2.0) == 2.0
+
+
+def test_default_pair_denylist_covers_both_btc_bch_orders(monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "strong-postgres-secret")
+    monkeypatch.setenv("DASHBOARD_TOKEN", "strong-dashboard-token")
+    monkeypatch.delenv("PAIR_DENYLIST", raising=False)
+
+    settings = Settings(_env_file=None)
+    denied = settings.pair_denylist_ids
+
+    assert "BTC-USD_BCH-USD" in denied
+    assert "BCH-USD_BTC-USD" in denied
+    assert settings.PAIR_DISCOVERY_AUTO_PROMOTE is True
+    assert settings.PAIR_DISCOVERY_MAX_ABS_HEDGE == 25.0
+
+
+def test_pair_denylist_env_override_normalizes_both_orders(monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "strong-postgres-secret")
+    monkeypatch.setenv("DASHBOARD_TOKEN", "strong-dashboard-token")
+    monkeypatch.setenv("PAIR_DENYLIST", "btc-usd_bch-usd")
+
+    settings = Settings(_env_file=None)
+    denied = settings.pair_denylist_ids
+
+    assert "BTC-USD_BCH-USD" in denied
+    assert "BCH-USD_BTC-USD" in denied

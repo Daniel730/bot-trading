@@ -601,6 +601,7 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fails(monitor):
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock) as mock_log_trade, \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_log_journal, \
          patch("src.services.persistence_service.persistence_service.update_signal_status", new_callable=AsyncMock) as mock_update_status, \
+         patch("src.services.persistence_service.persistence_service.close_trade", new_callable=AsyncMock) as mock_close_trade, \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock) as mock_notify, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
@@ -640,6 +641,8 @@ async def test_execute_trade_emergency_closes_leg_a_when_leg_b_fails(monitor):
             uuid.UUID(signal_id),
             OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
         )
+        mock_close_trade.assert_awaited_once()
+        assert mock_close_trade.await_args.args[0] == uuid.UUID(signal_id)
         orphan_rows = [
             call.args[0]
             for call in mock_log_trade.await_args_list
