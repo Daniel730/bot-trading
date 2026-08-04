@@ -92,15 +92,12 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
 
   useEffect(() => {
     if (!sessionToken) {
-      setAuthError(null);
       intentionalClose.current = true;
       if (ws.current) ws.current.close();
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
-      setIsConnected(false);
       return;
     }
 
-    setAuthError(null);
     connect();
     return () => {
       intentionalClose.current = true;
@@ -109,5 +106,13 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
     };
   }, [connect, sessionToken]);
 
-  return { isConnected, risk, thoughts, botState, authError, ws };
+  // Clear auth errors by derivation when the session is gone (avoids setState-in-effect).
+  return {
+    isConnected: sessionToken ? isConnected : false,
+    risk,
+    thoughts,
+    botState,
+    authError: sessionToken ? authError : null,
+    ws,
+  };
 };

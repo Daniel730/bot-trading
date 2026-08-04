@@ -570,12 +570,10 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
 
   useEffect(() => {
     if (!sessionToken) {
-      setAuthError(null);
       return;
     }
     const controller = new AbortController();
     let retryCount = 0;
-    setAuthError(null);
 
     const connect = async () => {
       while (!controller.signal.aborted) {
@@ -646,7 +644,7 @@ export const useDashboardStream = (token: string | null, sessionToken?: string |
     };
   }, [token, sessionToken]);
 
-  return { data, error, authError };
+  return { data, error, authError: sessionToken ? authError : null };
 };
 
 export const login = async (securityToken: string, otpToken?: string): Promise<AuthLoginResponse> =>

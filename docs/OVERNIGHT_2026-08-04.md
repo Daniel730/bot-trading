@@ -26,6 +26,7 @@ Standing swarm ended ~09:00. bot-server stayed on **Alpaca paper**. Live `~/.env
 - **Live sanity:** discovery still `false`; Active = 3 equities + 4 crypto (all `is_cointegrated=true`); clean `docker diff`; Redis `127.0.0.1:6379` + AUTH PONG; bot RSS ~277 MiB / 1.25 GiB.
 - **Equity knobs:** still `COINTEGRATION_ROLLING_PASS_RATE=0.40`, `MAX_ACTIVE_PAIRS=30`; rollback backup `~/.env.trading.bak_equity_20260804_080557`; tracked in **#109** (#110 closed as duplicate).
 - **Discovery soak:** longer note on **#102** — keep OFF through US open.
+- **Frontend auth lag:** `ec7017e` (no third-party TOTP QR exfil + fail-closed SSE/WS) is on master but the live frontend image still dated ~02:16 UTC; lint `set-state-in-effect` blocked `force_frontend` until fixed. Gemini SEC fidelity tracked in **#111**.
 
 ## Residual risks (do not ignore)
 
