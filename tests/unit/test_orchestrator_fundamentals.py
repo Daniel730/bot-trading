@@ -1,9 +1,14 @@
 from unittest.mock import AsyncMock, patch
+import time
 
 import pytest
 
-from src.agents.orchestrator import Orchestrator
+from src.agents.orchestrator import Orchestrator, _fundamental_score_unknown
 from src.config import settings
+
+
+def _fresh_score(score: int) -> dict:
+    return {"score": score, "source": "edgar", "available": True, "last_updated": time.time()}
 
 
 @pytest.mark.asyncio
@@ -46,7 +51,7 @@ async def test_live_mode_vetoes_missing_fundamental_score(monkeypatch):
     ), patch(
         "src.agents.orchestrator.redis_service.get_fundamental_score",
         new_callable=AsyncMock,
-        side_effect=[None, {"score": 90}],
+        side_effect=[None, _fresh_score(90)],
     ), patch(
         "src.agents.orchestrator.whale_watcher_agent.evaluate",
         new_callable=AsyncMock,
@@ -83,6 +88,97 @@ async def test_live_mode_vetoes_missing_fundamental_score(monkeypatch):
     assert "VETO" in state["final_verdict"]
     assert "unknown fundamental state" in state["final_verdict"].lower()
     mock_portfolio_advice.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_mode_vetoes_stale_fundamental_score(monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "ORCH_FUNDAMENTAL_DEFAULT_SCORE", 75)
+    monkeypatch.setattr(settings, "ORCH_FUNDAMENTAL_VETO_SCORE", 40)
+    monkeypatch.setattr(settings, "ORCH_FUNDAMENTAL_MAX_AGE_SECONDS", 3600)
+
+    orchestrator = Orchestrator()
+    input_data = {
+        "signal_context": {
+            "signal_id": "live_stale_fundamental_1",
+            "ticker_a": "AAPL",
+            "ticker_b": "MSFT",
+            "hedge_ratio": 1.0,
+            "z_score": 2.5,
+        }
+    }
+
+    async def mock_get_system_state(key, default=None):
+        values = {
+            "operational_status": "NORMAL",
+            "consecutive_api_timeouts": "0",
+            "global_strategy_accuracy": "0.75",
+        }
+        return values.get(key, default)
+
+    stale = {
+        "score": 90,
+        "source": "edgar",
+        "available": True,
+        "last_updated": time.time() - 7200,
+    }
+    fresh = _fresh_score(90)
+
+    with patch(
+        "src.agents.orchestrator.macro_economic_agent.get_ticker_regime",
+        new_callable=AsyncMock,
+        return_value="BULLISH",
+    ), patch(
+        "src.agents.orchestrator.bull_agent.evaluate",
+        new_callable=AsyncMock,
+        return_value={"confidence": 0.95, "reasoning": "bullish"},
+    ), patch(
+        "src.agents.orchestrator.bear_agent.evaluate",
+        new_callable=AsyncMock,
+        return_value={"confidence": 0.05, "reasoning": "not bearish"},
+    ), patch(
+        "src.agents.orchestrator.redis_service.get_fundamental_score",
+        new_callable=AsyncMock,
+        side_effect=[stale, fresh],
+    ), patch(
+        "src.agents.orchestrator.whale_watcher_agent.evaluate",
+        new_callable=AsyncMock,
+        return_value={
+            "confidence_delta": 0.0,
+            "confidence_multiplier": 1.0,
+            "veto": False,
+            "whale_score": 0.0,
+            "reasoning": "neutral",
+        },
+    ), patch(
+        "src.agents.orchestrator.portfolio_manager_agent.get_optimization_advice",
+        new_callable=AsyncMock,
+        return_value={"is_recommended": True, "improvement": 0.0},
+    ) as mock_portfolio_advice, patch(
+        "src.agents.orchestrator.persistence_service.get_system_state",
+        new=mock_get_system_state,
+    ), patch(
+        "src.agents.orchestrator.persistence_service.set_system_state",
+        new_callable=AsyncMock,
+    ), patch(
+        "src.agents.orchestrator.persistence_service.get_agent_metrics",
+        new_callable=AsyncMock,
+        return_value=(1, 1),
+    ), patch(
+        "src.agents.orchestrator.telemetry_service.broadcast",
+        return_value=None,
+    ):
+        state = await orchestrator.ainvoke(input_data)
+
+    assert state["fundamental_verdict"]["veto"] is True
+    assert state["fundamental_verdict"]["missing_tickers"] == ["AAPL"]
+    mock_portfolio_advice.assert_not_awaited()
+
+
+def test_fundamental_score_unknown_rejects_monotonic_timestamp():
+    assert _fundamental_score_unknown({"score": 80, "last_updated": 12345.0}) is True
+    assert _fundamental_score_unknown(_fresh_score(80)) is False
+    assert _fundamental_score_unknown({"score": 50, "source": "fallback", "last_updated": time.time()}) is True
 
 
 @pytest.mark.asyncio
@@ -280,7 +376,7 @@ async def test_equity_pair_spread_does_not_get_long_only_sortino_confidence_drag
     ), patch(
         "src.agents.orchestrator.redis_service.get_fundamental_score",
         new_callable=AsyncMock,
-        side_effect=[{"score": 50}, {"score": 50}],
+        side_effect=[_fresh_score(50), _fresh_score(50)],
     ), patch(
         "src.agents.orchestrator.whale_watcher_agent.evaluate",
         new_callable=AsyncMock,
@@ -360,7 +456,7 @@ async def test_low_global_accuracy_does_not_drag_pair_confidence_below_execution
     ), patch(
         "src.agents.orchestrator.redis_service.get_fundamental_score",
         new_callable=AsyncMock,
-        side_effect=[{"score": 50}, {"score": 50}],
+        side_effect=[_fresh_score(50), _fresh_score(50)],
     ), patch(
         "src.agents.orchestrator.whale_watcher_agent.evaluate",
         new_callable=AsyncMock,

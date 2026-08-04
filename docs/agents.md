@@ -61,10 +61,12 @@ When re-enabled, the intended behavior is a crypto/context risk filter that read
 
 The hot path does not run slow SEC analysis directly. Instead:
 
-- `src/daemons/sec_fundamental_worker.py` refreshes structural/fundamental scores in the background.
-- The orchestrator reads cached scores from Redis.
+- `src/daemons/sec_fundamental_worker.py` refreshes structural/fundamental scores in the background (equity tickers only, pre-market window).
+- The orchestrator reads cached scores from Redis and treats missing, fallback, or stale entries (`ORCH_FUNDAMENTAL_MAX_AGE_SECONDS`) as unknown.
 - Cache misses default to `ORCH_FUNDAMENTAL_DEFAULT_SCORE` and emit high-priority telemetry.
+- Live mode (`PAPER_TRADING=false`) vetoes unknown fundamental state; paper mode keeps the default so SEC worker downtime does not block validation.
 - Scores below `ORCH_FUNDAMENTAL_VETO_SCORE` veto the signal.
+- When EDGAR is unreachable the worker circuit-breaks instead of caching neutral fallbacks or hammering every ticker.
 
 ## Reflection / Learning
 

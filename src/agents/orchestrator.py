@@ -1,5 +1,6 @@
 from typing import TypedDict
 import asyncio
+import time
 import numpy as np
 import logging
 from types import SimpleNamespace
@@ -27,6 +28,30 @@ BEACON_ASSETS = {
 
 def _is_crypto_symbol(ticker: str) -> bool:
     return "-USD" in str(ticker or "").upper()
+
+
+def _fundamental_score_unknown(score_data) -> bool:
+    """True when Redis has no usable, fresh EDGAR-backed fundamental score."""
+    if score_data is None or isinstance(score_data, Exception):
+        return True
+    if not isinstance(score_data, dict):
+        return True
+    if score_data.get("available") is False:
+        return True
+    if score_data.get("source") in ("fallback", "unavailable"):
+        return True
+    if "score" not in score_data:
+        return True
+
+    max_age = int(getattr(settings, "ORCH_FUNDAMENTAL_MAX_AGE_SECONDS", 86400) or 0)
+    if max_age <= 0:
+        return False
+
+    ts = score_data.get("last_updated")
+    # Reject monotonic/legacy timestamps that cannot be compared across processes.
+    if not isinstance(ts, (int, float)) or ts < 1_000_000_000:
+        return True
+    return (time.time() - float(ts)) > max_age
 
 
 class AgentState(TypedDict):
@@ -244,15 +269,15 @@ class Orchestrator:
             if isinstance(score_data_a, Exception):
                 logger.warning("Orchestrator Redis read failed for %s: %s", ticker_a, score_data_a)
                 unknown_fundamental_tickers.append(ticker_a)
-            elif score_data_a:
-                score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
-            else:
+            elif _fundamental_score_unknown(score_data_a):
                 logger.warning(
-                    "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                    "CRITICAL - Fundamental cache miss/stale for %s. Defaulting to %s.",
                     ticker_a, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
                 )
                 telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_a, "priority": "HIGH"})
                 unknown_fundamental_tickers.append(ticker_a)
+            else:
+                score_a = score_data_a.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
 
         # Handle Fundamental Score B (Redis)
         score_b = settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
@@ -260,15 +285,15 @@ class Orchestrator:
             if isinstance(score_data_b, Exception):
                 logger.warning("Orchestrator Redis read failed for %s: %s", ticker_b, score_data_b)
                 unknown_fundamental_tickers.append(ticker_b)
-            elif score_data_b:
-                score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
-            else:
+            elif _fundamental_score_unknown(score_data_b):
                 logger.warning(
-                    "CRITICAL - Fundamental cache miss for %s. Defaulting to %s.",
+                    "CRITICAL - Fundamental cache miss/stale for %s. Defaulting to %s.",
                     ticker_b, settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE
                 )
                 telemetry_service.broadcast("fundamental_cache_miss", {"ticker": ticker_b, "priority": "HIGH"})
                 unknown_fundamental_tickers.append(ticker_b)
+            else:
+                score_b = score_data_b.get("score", settings.ORCH_FUNDAMENTAL_DEFAULT_SCORE)
 
         # Paper mode must not fail-closed on SEC cache misses — operators validate
         # execution in shadow mode without the SEC worker. LIVE_CAPITAL_DANGER

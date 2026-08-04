@@ -46,9 +46,11 @@ def test_backend_compose_restart_policies():
     assert services["redis"]["restart"] == "always"
     assert services["postgres"]["restart"] == "always"
 
-    # Trading Python workers stay manual-restart so a crash stays visible.
-    for service_name in ("bot", "mcp-server", "sec-worker"):
+    # Bot/MCP stay manual-restart so crashes stay visible to operators.
+    for service_name in ("bot", "mcp-server"):
         assert services[service_name]["restart"] == "no"
+    # SEC worker auto-recovers: empty Redis fundamentals silently block live equity entries.
+    assert services["sec-worker"]["restart"] == "unless-stopped"
     # Dry-run sidecar may recover without operator intervention.
     assert services["execution-engine"]["restart"] == "unless-stopped"
 

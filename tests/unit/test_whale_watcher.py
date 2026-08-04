@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, patch
+import time
 
 import pytest
 
@@ -68,7 +69,12 @@ async def test_orchestrator_reports_inactive_whale_watcher():
     ), patch(
         "src.agents.orchestrator.redis_service.get_fundamental_score",
         new_callable=AsyncMock,
-        return_value={"score": 100},
+        return_value={
+            "score": 100,
+            "source": "edgar",
+            "available": True,
+            "last_updated": time.time(),
+        },
     ), patch(
         "src.agents.orchestrator.portfolio_manager_agent.get_optimization_advice",
         new_callable=AsyncMock,
