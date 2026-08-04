@@ -35,6 +35,8 @@ class PersistenceManager:
 
     def _init_db(self):
         try:
+            from src.services.schema_migrations import ensure_sqlite_columns
+
             conn = self._connect()
             # Legacy tables used by SECService, AgentLogService, DCA, etc.
             conn.execute("CREATE TABLE IF NOT EXISTS cik_mapping (ticker TEXT PRIMARY KEY, cik TEXT)")
@@ -70,6 +72,9 @@ class PersistenceManager:
                 )
                 """
             )
+            # CREATE TABLE IF NOT EXISTS does not add columns to older volumes —
+            # apply additive ALTER TABLE for any missing columns.
+            ensure_sqlite_columns(conn)
             conn.commit()
             conn.close()
         except Exception as e:
