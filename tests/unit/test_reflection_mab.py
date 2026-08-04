@@ -85,3 +85,74 @@ async def test_reflection_reward_logic_failure():
         mock_update.assert_any_call("BULL_AGENT", False)
         mock_update.assert_any_call("BEAR_AGENT", True)
         mock_update.assert_any_call("SEC_AGENT", False)
+
+
+def test_exit_reason_from_ledger_prefers_metadata():
+    from src.agents.reflection_agent import ReflectionAgent
+    from src.services.persistence_service import ExitReason
+
+    trades = [
+        MagicMock(metadata_json={"pnl": -1.0}),
+        MagicMock(metadata_json={"pnl": -1.0, "exit_reason": ExitReason.STOP_LOSS.value}),
+    ]
+    assert ReflectionAgent._exit_reason_from_ledger(trades) == ExitReason.STOP_LOSS
+
+
+@pytest.mark.asyncio
+async def test_reflection_recovery_stamps_exit_reason_from_ledger():
+    """Missing journal should still persist exit_reason from CLOSED ledger metadata."""
+    from types import SimpleNamespace
+    from src.services.persistence_service import ExitReason, MarketRegime
+
+    signal_id = str(uuid.uuid4())
+    mock_trade = SimpleNamespace(
+        metadata_json={
+            "pnl": -12.0,
+            "exit_reason": ExitReason.STOP_LOSS.value,
+        }
+    )
+
+    class _Session:
+        async def execute(self, _stmt):
+            raise AssertionError("use side_effect")
+
+    session = _Session()
+
+    with patch(
+        "src.services.persistence_service.persistence_service.update_agent_metrics",
+        new_callable=AsyncMock,
+    ), patch(
+        "src.services.persistence_service.persistence_service.log_trade_journal",
+        new_callable=AsyncMock,
+    ) as mock_journal, patch(
+        "src.services.persistence_service.persistence_service.get_latest_market_regime",
+        new_callable=AsyncMock,
+        return_value={"regime": MarketRegime.STABLE.value},
+    ), patch(
+        "src.services.persistence_service.persistence_service.AsyncSessionLocal",
+    ) as mock_session_factory, patch(
+        "src.services.persistence_service.persistence_service.get_system_state",
+        new_callable=AsyncMock,
+        return_value="0.5",
+    ), patch(
+        "src.services.persistence_service.persistence_service.set_system_state",
+        new_callable=AsyncMock,
+    ), patch("asyncio.sleep", new_callable=AsyncMock):
+        mock_scalar_result = MagicMock()
+        mock_scalar_result.all.return_value = [mock_trade]
+        mock_ledger_result = MagicMock()
+        mock_ledger_result.scalars.return_value = mock_scalar_result
+        mock_journal_result = MagicMock()
+        mock_journal_result.scalar_one_or_none.return_value = None
+
+        session.execute = AsyncMock(
+            side_effect=[mock_ledger_result, mock_journal_result]
+        )
+        mock_session_factory.return_value.__aenter__.return_value = session
+
+        await reflection_agent.reflect_on_trade(signal_id)
+
+        mock_journal.assert_awaited()
+        payload = mock_journal.await_args.args[0]
+        assert payload["exit_reason"] == ExitReason.STOP_LOSS
+        assert "Statistical stop" in payload["reflection_text"]
