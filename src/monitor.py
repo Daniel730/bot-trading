@@ -38,6 +38,7 @@ from src.services.trade_math import (
     estimate_pair_profit,
     is_broker_fill_complete,
 )
+import gc
 import uuid
 import pytz
 import inspect
@@ -809,7 +810,11 @@ class ArbitrageMonitor:
                     continue
 
                 is_crypto = is_crypto_pair(ticker_a, ticker_b)
-                p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+                p_thresh = (
+                    settings.CRYPTO_COINTEGRATION_PVALUE_THRESHOLD
+                    if is_crypto
+                    else settings.COINTEGRATION_PVALUE_THRESHOLD
+                )
                 pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
 
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(
@@ -834,7 +839,7 @@ class ArbitrageMonitor:
                         is_coint = False
                         logger.info(
                             "ROLLING COINT FAIL %s/%s: pass_rate=%.2f windows=%d median_p=%.3f "
-                            "→ pair admitted but trading suspended until stability returns.",
+                            "→ pair benched (does not occupy an Active scan slot).",
                             ticker_a,
                             ticker_b,
                             stability["pass_rate"],
@@ -849,6 +854,8 @@ class ArbitrageMonitor:
 
                 from src.services.pair_discovery_helpers import is_hedge_ratio_sane
 
+                pair_id = f"{ticker_a}_{ticker_b}"
+
                 if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
                     logger.warning(
                         "SKIP %s/%s: extreme hedge_ratio=%.3f exceeds PAIR_DISCOVERY_MAX_ABS_HEDGE=%.1f",
@@ -858,14 +865,46 @@ class ArbitrageMonitor:
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     try:
-                        await persistence_service.update_pair_status(
-                            f"{ticker_a}_{ticker_b}", "Benched"
-                        )
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": ticker_a,
+                            "ticker_b": ticker_b,
+                            "hedge_ratio": float(hedge),
+                            "is_cointegrated": False,
+                            "status": "Benched",
+                        }])
                     except Exception:
-                        pass
+                        try:
+                            await persistence_service.update_pair_status(pair_id, "Benched")
+                        except Exception:
+                            pass
                     continue
 
-                pair_id = f"{ticker_a}_{ticker_b}"
+                # Failed static / rolling cointegration must free the Active slot.
+                # Soft-admit + skip used to leave dead equity/crypto burning MAX_ACTIVE_PAIRS.
+                if not is_coint:
+                    logger.warning(
+                        "SKIP %s/%s: not cointegrated (p=%.4f thresh=%.3f); benching Active slot.",
+                        ticker_a,
+                        ticker_b,
+                        float(p_val) if p_val is not None else float("nan"),
+                        float(p_thresh),
+                    )
+                    try:
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": ticker_a,
+                            "ticker_b": ticker_b,
+                            "hedge_ratio": float(hedge),
+                            "is_cointegrated": False,
+                            "status": "Benched",
+                        }])
+                    except Exception:
+                        try:
+                            await persistence_service.update_pair_status(pair_id, "Benched")
+                        except Exception:
+                            pass
+                    continue
 
                 if pair_id in self.kalman_quarantined_pairs:
                     arbitrage_service.filters.pop(pair_id, None)
@@ -994,6 +1033,43 @@ class ArbitrageMonitor:
                 logger.error(f"Error in auto-scout loop: {e}")
                 await asyncio.sleep(3600) # Retry in 1 hour
 
+
+
+    def _maybe_relieve_memory_pressure(self, *, reason: str, threshold_mib: int = 900) -> None:
+        """Log RSS and force a GC cycle when the monitor process is near the compose mem_limit.
+
+        The bot container is capped at 1280m; without periodic reclaim, pandas/yfinance
+        scrap from scouts + scans can push the cgroup to the limit and eventually OOM-kill
+        (exit 137). This is a safety valve, not a substitute for fixing unbounded caches.
+        """
+        rss_mib = None
+        try:
+            with open("/proc/self/status", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        # VmRSS is in kB on Linux.
+                        rss_mib = int(line.split()[1]) // 1024
+                        break
+        except Exception:
+            rss_mib = None
+        if rss_mib is None:
+            try:
+                import psutil
+
+                rss_mib = int(psutil.Process().memory_info().rss / (1024 * 1024))
+            except Exception:
+                return
+
+        if rss_mib < threshold_mib:
+            return
+        collected = gc.collect()
+        logger.warning(
+            "MEMORY PRESSURE [%s]: rss≈%dMiB (threshold=%dMiB); gc.collect() freed %d objects",
+            reason,
+            rss_mib,
+            threshold_mib,
+            collected,
+        )
 
     async def reload_pairs(self):
         """
@@ -2861,16 +2937,54 @@ class ArbitrageMonitor:
         )
         return execution_result(True, pair_status.value)
 
+    async def _bench_pair_for_health(
+        self,
+        pair: dict,
+        *,
+        hedge_ratio: float | None = None,
+        reason: str,
+    ) -> None:
+        """Persist Benched + drop from in-memory Active so the slot can refill."""
+        pair_id = str(pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}")
+        ticker_a = pair.get("ticker_a")
+        ticker_b = pair.get("ticker_b")
+        try:
+            hedge = float(hedge_ratio if hedge_ratio is not None else pair.get("hedge_ratio") or 0.0)
+        except (TypeError, ValueError):
+            hedge = 0.0
+        pair["is_cointegrated"] = False
+        try:
+            await persistence_service.save_trading_pairs([{
+                "id": pair_id,
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "hedge_ratio": hedge,
+                "is_cointegrated": False,
+                "status": "Benched",
+            }])
+        except Exception as persist_exc:
+            logger.warning("Failed to bench %s after %s: %s", pair_id, reason, persist_exc)
+            try:
+                await persistence_service.update_pair_status(pair_id, "Benched")
+            except Exception:
+                pass
+        # Drop from the live scan list without waiting for a full reload.
+        self.active_pairs = [p for p in self.active_pairs if str(p.get("id") or "") != pair_id]
+        self.last_cointegration_check.pop(pair_id, None)
+        logger.info("BENCHED %s (%s); Active now %d pairs.", pair_id, reason, len(self.active_pairs))
+
     async def _recheck_cointegration(self, pair: dict):
         """
         Re-validates the ADF cointegration test for a single pair using the
         last 30 days of hourly data.  Called once per calendar day per pair.
 
-        If the p-value rises above 0.10 the pair is marked is_cointegrated=False
-        and trading is suspended until the next re-check restores it.
-        A Telegram/console alert is fired on both break and restore events.
+        On break (static ADF or rolling stability), the pair is benched so it
+        no longer occupies an Active scan slot. Open positions still exit via
+        the separate open-signal exit loop. A Telegram/console alert is fired
+        on break events.
         """
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
+        pair_id = str(pair.get("id") or f"{t_a}_{t_b}")
         try:
             hist_data = await data_service.get_historical_data_async([t_a, t_b], "30d", "1h")
             if hist_data is None or hist_data.empty:
@@ -2882,15 +2996,34 @@ class ArbitrageMonitor:
                 return
 
             is_crypto = is_crypto_pair(t_a, t_b)
-            p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+            p_thresh = (
+                settings.CRYPTO_COINTEGRATION_PVALUE_THRESHOLD
+                if is_crypto
+                else settings.COINTEGRATION_PVALUE_THRESHOLD
+            )
             pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
 
-            is_coint, p_val, _ = arbitrage_service.check_cointegration(
+            is_coint, p_val, hedge = arbitrage_service.check_cointegration(
                 hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
             )
 
+            from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+
+            if hedge is not None and not is_hedge_ratio_sane(
+                hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+            ):
+                msg = (
+                    f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} exceeds "
+                    f"PAIR_DISCOVERY_MAX_ABS_HEDGE={settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}. "
+                    f"Pair benched to free Active slot."
+                )
+                logger.warning(msg)
+                await self._bench_pair_for_health(pair, hedge_ratio=float(hedge), reason="extreme_hedge")
+                await notification_service.send_message(msg)
+                return
+
             # Spec 037: rolling-window stability. If the pair was statically
-            # cointegrated but rolling-window unstable, suspend it. The
+            # cointegrated but rolling-window unstable, bench it. The
             # daily re-check is the right place to apply this because it
             # already runs once per pair per day with a fresh history pull.
             if is_coint and settings.COINTEGRATION_ROLLING_ENABLED:
@@ -2916,29 +3049,37 @@ class ArbitrageMonitor:
             previously_coint = pair.get('is_cointegrated', True)
 
             if not is_coint:
-                pair['is_cointegrated'] = False
                 if previously_coint:
-                    # Only alert on a real break (True -> False transition).
-                    # If the pair was already non-cointegrated at startup, stay quiet.
                     msg = (
                         f"COINTEGRATION BREAK: {t_a}/{t_b} - "
-                        f"ADF p-value={p_val:.4f} > 0.05. "
-                        f"Pair suspended until cointegration is restored."
+                        f"ADF p-value={p_val:.4f} (thresh={p_thresh:.3f}). "
+                        f"Pair benched to free Active scan slot."
                     )
                     logger.warning(msg)
                     await notification_service.send_message(msg)
                 else:
                     logger.debug(
                         f"[{t_a}/{t_b}] Still non-cointegrated (p={p_val:.4f}). "
-                        f"Staying suspended."
+                        f"Benching Active slot."
                     )
+                await self._bench_pair_for_health(
+                    pair,
+                    hedge_ratio=float(hedge) if hedge is not None else None,
+                    reason="cointegration_break",
+                )
             else:
                 pair['is_cointegrated'] = True
+                if hedge is not None:
+                    try:
+                        pair["hedge_ratio"] = float(hedge)
+                    except (TypeError, ValueError):
+                        pass
                 if not previously_coint:
-                    # Alert only on a real restore (False -> True transition).
+                    # Soft restore in-memory only; promotion back to Active goes
+                    # through elite rotation / operator promote so quality gates apply.
                     msg = (
                         f"COINTEGRATION RESTORED: {t_a}/{t_b} - "
-                        f"ADF p-value={p_val:.4f}. Pair re-activated."
+                        f"ADF p-value={p_val:.4f}. Eligible for re-promotion."
                     )
                     logger.info(msg)
                     await notification_service.send_message(msg)
@@ -2946,6 +3087,18 @@ class ArbitrageMonitor:
                     logger.debug(
                         f"[{t_a}/{t_b}] Cointegration confirmed (p={p_val:.4f})."
                     )
+                    # Keep DB hedge / coint flag fresh for rotation audits.
+                    try:
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": t_a,
+                            "ticker_b": t_b,
+                            "hedge_ratio": float(pair.get("hedge_ratio") or hedge or 0.0),
+                            "is_cointegrated": True,
+                            "status": "Active",
+                        }])
+                    except Exception as persist_exc:
+                        logger.debug("Cointegration confirm persist failed for %s: %s", pair_id, persist_exc)
         except Exception as e:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
@@ -3517,6 +3670,7 @@ class ArbitrageMonitor:
                         logger.warning("TRADE DECISION REPORT: write failed: %s", e)
 
                     await self._reload_quarantined_pairs_if_requested()
+                    self._maybe_relieve_memory_pressure(reason="scan_iteration")
 
                     progress.update(scan_task, description=f"Idle (sleeping {settings.SCAN_INTERVAL_SECONDS}s)...")
                     await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)

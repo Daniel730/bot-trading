@@ -103,6 +103,13 @@ docker compose -f infra/docker-compose.yml down
 
 Compose services declare `mem_limit` / `cpus` so the trading stack cannot unbounded-grow on a shared host (for example bot-server alongside other workloads). Tune in `infra/docker-compose.backend.yml` and `infra/docker-compose.frontend.yml` if the host profile changes.
 
+OOM probe / recover helpers on the shared host:
+
+- `infra/ops_oom_probe.sh` — host + container memory baseline
+- `infra/ops_oom_recover.sh` — start/recreate trading app without wiping volumes
+- `infra/ops_apply_host_soft_limits.sh` — soft-cap AdGuard/Odysseus/NPM/Nextcloud via `docker update`
+- `infra/ops_recreate_bot_env.sh` — recreate bot/mcp after `.env.trading` discovery pins
+
 Host-only ops scripts (HDD, Pi edge, Minecraft limits) may live under `infra/host/` on the operator machine; they are not required to run the bot.
 
 ## Production deploy (bot-server)
