@@ -420,6 +420,8 @@ docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
 
 Scout RAM is bounded by `PAIR_DISCOVERY_MAX_TICKERS` (pin `8` on the shared host; code default `12`). Prefer `PAIR_DISCOVERY_AUTO_PROMOTE=false` overnight if the bot is near its limit. On the shared 7.4 GiB host, set `PAIR_DISCOVERY_ENABLED=false` when the bot is climbing toward its 1280m cgroup cap (re-enable after the memory leak/growth path is fixed or the host has more free RAM).
 
+Scan-loop pacing (bot container `cpus: 1.50`): keep `SCAN_PAIR_CONCURRENCY` / `SCAN_EXIT_CONCURRENCY` at `2` (defaults) and `SCAN_COINT_RECHECK_CONCURRENCY=1`. Raise only after RSS/CPU look calm. `SCAN_INTERVAL_SECONDS` is clamped to 5–300 (default 15). Every scannable pair and every open signal still runs each cycle; only parallelism is capped.
+
 Host alert timer (`host-memory-alert.timer`) runs `~/infra-host/memory_alert.sh` every 5 minutes.
 
 ### Recover after exit 137 / OOM (never wipe volumes)
