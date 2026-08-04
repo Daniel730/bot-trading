@@ -172,7 +172,7 @@ Redis also runs with `--maxmemory 96mb` and `volatile-lru` (under the 128m conta
 | `execution_attempt:*` / `execution_attempt_lock:*` | Python idempotency | 1h / 60s |
 | `execution:inflight:*` | Java order sync | 1h |
 | `l2:*` / `l2:snapshot:*` | L2 book snapshots | Writer-supplied |
-| `whale:*` | Whale watcher cache | `WHALE_WATCHER_CACHE_TTL_SECONDS` |
+| `whale:*` | Whale watcher cache (unused while evaluator is dormant; reserved for #91) | `WHALE_WATCHER_CACHE_TTL_SECONDS` |
 | `entropy_baseline:*` | Live L2 entropy gate | Persistent (live real-money only) |
 
 Dashboard login sessions are JWT/in-process — **not** stored in Redis. Audit live prefixes with `infra/_redis_lifecycle_probe.sh` (prints counts/TTLs only; never prints the password).

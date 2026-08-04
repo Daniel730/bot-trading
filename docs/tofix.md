@@ -54,8 +54,10 @@ Historical registers (`docs/bugs.md`, `.brain/*`) contain many items marked **Pe
 14. **SEC/fundamental cache misses default to neutral in paper mode** — *by design (working tree)*
     Orchestrator now fail-closed on unknown fundamental scores only when `PAPER_TRADING=false` (live broker path). Paper/shadow mode keeps `ORCH_FUNDAMENTAL_DEFAULT_SCORE` so SEC worker downtime does not block paper validation. Live mode still vetoes missing scores — covered by `tests/unit/test_orchestrator_fundamentals.py` (working tree).
 
-15. **Whale watcher is legacy-inactive in the active runtime** — *blocked / future*
-    The orchestrator reports whale verdict as `INACTIVE`. Restoring cache-backed whale analysis needs fresh tests for ingestion freshness, summaries, vetoes, and telemetry.
+15. **Whale watcher is legacy-inactive in the active runtime** — *mitigated / dormant by design*
+    Hot-path stub reports `INACTIVE`; orchestrator applies veto/boost only when `active=True`.
+    `WHALE_WATCHER_ENABLED` is ignored by the stub (template default `false`). Not a MAB arm.
+    Restoring cache-backed whale analysis needs fresh tests for ingestion freshness, summaries, vetoes, and telemetry (GitHub #91).
 
 ## Testing Gaps
 
@@ -79,7 +81,7 @@ Historical registers (`docs/bugs.md`, `.brain/*`) contain many items marked **Pe
 | Doc | Problem | Code truth |
 |-----|---------|------------|
 | `src/README.md` § Core Flow step 7 | Says live mode routes to "Trading 212 or Alpaca" or Web3 by venue | Alpaca-only; T212/Web3 fail startup |
-| `docs/agents.md` § Whale Watcher | Describes active veto/confidence behavior | Runtime reports `INACTIVE` / legacy-neutral |
+| `docs/agents.md` § Whale Watcher | Was stale on active veto behavior | Now documents hard-dormant stub + fail-closed `active=True` gate |
 | `docs/CLAUDE.md` § Signal Flow step 7 | Says live uses `T212/Alpaca/Web3` | Alpaca-only active path |
 | `frontend/README.md` § Pairs screen | "T212 wallet seeding" | Renamed to broker wallet sync (`syncWallet`) |
 | `docs/bugs.md` | Many **Persists** / **New** items from 2026-04-12 | Historical; several fixed (sector mapping, cash mgmt await, secret guards, idempotency via `signal_id` client_order_id) |

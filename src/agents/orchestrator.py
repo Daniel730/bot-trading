@@ -54,6 +54,20 @@ def _fundamental_score_unknown(score_data) -> bool:
     return (time.time() - float(ts)) > max_age
 
 
+def _whale_effects_apply(verdict: dict | None) -> bool:
+    """Apply whale veto/boost only when the evaluator explicitly marks itself active.
+
+    The hot-path stub reports ``active=False`` / ``status=inactive``. Error
+    fallbacks omit ``active``, so effects stay fail-closed until a restored
+    evaluator opts in with ``active=True``.
+    """
+    if not isinstance(verdict, dict):
+        return False
+    if verdict.get("status") == "inactive" or verdict.get("active") is False:
+        return False
+    return verdict.get("active") is True
+
+
 class AgentState(TypedDict):
     signal_context: dict
     bull_verdict: dict
@@ -256,6 +270,8 @@ class Orchestrator:
                 "confidence_multiplier": 1.0,
                 "veto": False,
                 "whale_score": 0.0,
+                "active": False,
+                "status": "inactive",
                 "error": str(whale_results),
             }
         else:
@@ -387,7 +403,7 @@ class Orchestrator:
             state["final_confidence"] = 0.0
             veto_reason = f"VETO: Low Structural Integrity. {ticker_a}: {score_a}, {ticker_b}: {score_b}"
             state["final_verdict"] = veto_reason
-        elif state["whale_verdict"].get("veto"):
+        elif _whale_effects_apply(state["whale_verdict"]) and state["whale_verdict"].get("veto"):
             state["final_confidence"] = 0.0
             state["final_verdict"] = state["whale_verdict"].get(
                 "reasoning",
@@ -450,20 +466,21 @@ class Orchestrator:
                     f"{settings.ORCH_ACCURACY_LOW_THRESHOLD:.2f}; no confidence penalty applied"
                 )
 
-            whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))
-            whale_delta = float(state["whale_verdict"].get("confidence_delta", 0.0))
-            whale_score = float(state["whale_verdict"].get("whale_score", 0.0))
-            if whale_multiplier != 1.0 or whale_delta != 0.0 or whale_score != 0.0:
-                final_conf *= whale_multiplier
-                state["final_verdict"] += (
-                    f" | WHALE score={whale_score:.2f} delta={whale_delta:+.2f}"
-                )
-                logger.info(
-                    "[ORCHESTRATOR] %s - Whale watcher multiplier applied: %.2f (score=%.2f)",
-                    pair_id,
-                    whale_multiplier,
-                    whale_score,
-                )
+            if _whale_effects_apply(state["whale_verdict"]):
+                whale_multiplier = float(state["whale_verdict"].get("confidence_multiplier", 1.0))
+                whale_delta = float(state["whale_verdict"].get("confidence_delta", 0.0))
+                whale_score = float(state["whale_verdict"].get("whale_score", 0.0))
+                if whale_multiplier != 1.0 or whale_delta != 0.0 or whale_score != 0.0:
+                    final_conf *= whale_multiplier
+                    state["final_verdict"] += (
+                        f" | WHALE score={whale_score:.2f} delta={whale_delta:+.2f}"
+                    )
+                    logger.info(
+                        "[ORCHESTRATOR] %s - Whale watcher multiplier applied: %.2f (score=%.2f)",
+                        pair_id,
+                        whale_multiplier,
+                        whale_score,
+                    )
 
             state["final_confidence"] = max(0.0, min(1.0, final_conf))
 

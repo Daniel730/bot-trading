@@ -416,7 +416,9 @@ class Settings(BaseSettings):
     ORCH_ACCURACY_HIGH_MULTIPLIER: float = Field(default=1.1, validation_alias="ORCH_ACCURACY_HIGH_MULTIPLIER")
     GLOBAL_STRATEGY_ACCURACY_DEFAULT: float = Field(default=0.5, validation_alias="GLOBAL_STRATEGY_ACCURACY_DEFAULT")
 
-    # The active whale-flow evaluator is legacy/disabled; keep the knobs for a future restored service.
+    # The active whale-flow evaluator is a hard-dormant stub; knobs are reserved for
+    # a future restored service (GitHub #91). WHALE_WATCHER_ENABLED alone does not
+    # activate veto/boost — the stub ignores the flag.
     WHALE_WATCHER_ENABLED: bool = Field(default=False, validation_alias="WHALE_WATCHER_ENABLED")
     WHALE_WATCHER_ROLLING_WINDOW_SECONDS: int = Field(default=1800, validation_alias="WHALE_WATCHER_ROLLING_WINDOW_SECONDS")
     WHALE_WATCHER_CACHE_TTL_SECONDS: int = Field(default=3600, validation_alias="WHALE_WATCHER_CACHE_TTL_SECONDS")

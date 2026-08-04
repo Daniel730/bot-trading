@@ -53,9 +53,9 @@ Evaluates whether a signal improves the portfolio from an allocation/risk perspe
 
 `src/agents/whale_watcher_agent.py`
 
-**Runtime status: inactive.** The orchestrator emits `verdict: INACTIVE` and does not apply whale veto/multiplier on the hot path today. Legacy agent code and `WHALE_WATCHER_*` settings remain for a future cache-backed reactivation (see GitHub #91).
+**Runtime status: inactive (hard-dormant stub).** The orchestrator emits `verdict: INACTIVE` and applies whale veto/multiplier only when a verdict explicitly sets `active=True`. Today the stub always returns `active=False` with identity multipliers, and `WHALE_WATCHER_ENABLED` is ignored until a restored evaluator ships (GitHub #91). Whale is not a Thompson/MAB arm (only bull/bear/SEC). Legacy cache service code remains under `legacy/whale_watcher_service.py` and is not imported on the hot path.
 
-When re-enabled, the intended behavior is a crypto/context risk filter that reads cached flow summaries and can veto conflicting flow, reduce confidence, or slightly support aligned flow.
+When re-enabled, the intended behavior is a crypto/context risk filter that reads cached flow summaries and can veto conflicting flow, reduce confidence, or slightly support aligned flow. Re-enablement must: honor `WHALE_WATCHER_ENABLED`, set `active=True` only with fresh cache data, and add ingestion/veto/telemetry tests — do not flip the env flag alone.
 
 ## Fundamental Analyst And SEC Worker
 
