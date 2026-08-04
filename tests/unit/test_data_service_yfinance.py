@@ -691,3 +691,105 @@ def test_get_latest_price_skips_placeholder_polygon_key():
         prices = service.get_latest_price(["AAPL"])
 
     assert prices == {"AAPL": 150.0}
+
+
+def test_download_yfinance_forces_threads_false():
+    """yfinance threads=True leaks ThreadPool workers under asyncio.to_thread storms."""
+    service = DataService()
+    captured = {}
+
+    def fake_download(*_args, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame({"Close": [1.0]})
+
+    with patch("src.services.data_service.yf.download", side_effect=fake_download):
+        service._download_yfinance("MSFT", period="1d", interval="1m", threads=True)
+
+    assert captured.get("threads") is False
+
+
+def test_clamp_history_window_caps_intraday_year():
+    period, days = DataService._clamp_history_window("1y", "1h")
+    assert period == "90d"
+    assert days == 90
+    period_d, days_d = DataService._clamp_history_window("1y", "1d")
+    assert period_d == "365d"
+    assert days_d == 365
+
+
+def test_trim_history_rows_caps_frame_length():
+    frame = pd.DataFrame(
+        {"SPY": range(DataService.HISTORY_ROW_CAP + 25)},
+        index=pd.date_range("2020-01-01", periods=DataService.HISTORY_ROW_CAP + 25, freq="h"),
+    )
+    trimmed = DataService._trim_history_rows(frame)
+    assert len(trimmed) == DataService.HISTORY_ROW_CAP
+    assert float(trimmed.iloc[-1]["SPY"]) == float(frame.iloc[-1]["SPY"])
+
+
+def test_yf_history_cache_avoids_repeat_download_storm():
+    service = DataService()
+    timestamps = pd.date_range("2026-05-01", periods=3, freq="h", tz="UTC")
+    close = pd.DataFrame({"Close": [100.0, 101.0, 102.0]}, index=timestamps)
+    calls = {"n": 0}
+
+    def fake_download(*_args, **_kwargs):
+        calls["n"] += 1
+        return close
+
+    with patch.object(service.alpaca_client, "get_bars", side_effect=Exception("alpaca down")), \
+         patch.object(service.alpaca_client, "get_crypto_bars", side_effect=Exception("alpaca down")), \
+         patch.object(service, "_download_yfinance", side_effect=fake_download), \
+         patch.object(service, "_has_usable_polygon_key", return_value=False):
+        first = service.get_historical_data(["MSFT"], period="30d", interval="1h")
+        second = service.get_historical_data(["MSFT"], period="30d", interval="1h")
+
+    assert calls["n"] == 1
+    assert float(first.iloc[-1]) == 102.0
+    assert float(second.iloc[-1]) == 102.0
+    assert len(service._yf_history_cache) == 1
+
+
+def test_price_metadata_is_bounded():
+    service = DataService()
+    service.PRICE_METADATA_MAX = 8
+    for idx in range(20):
+        service._update_price_metadata({f"T{idx}": "yfinance"})
+    assert len(service.last_price_sources) == 8
+    assert set(service.last_price_sources) == {f"T{idx}" for idx in range(12, 20)}
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_yfinance_quote_cache_avoids_repeat_ticker_info():
+    service = DataService()
+    calls = {"n": 0}
+
+    class FakeTicker:
+        def __init__(self, *_args, **_kwargs):
+            calls["n"] += 1
+            self.info = {"bid": 150.0, "ask": 150.1}
+
+    with patch("src.services.data_service.yf.Ticker", side_effect=FakeTicker), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}):
+        first = await service.get_bid_ask("MSFT")
+        second = await service.get_bid_ask("MSFT")
+
+    assert first == (150.0, 150.1)
+    assert second == (150.0, 150.1)
+    assert calls["n"] == 1
+
+
+def test_bounded_ttl_cache_evicts_lru_and_expires():
+    cache = __import__("src.services.data_service", fromlist=["_BoundedTTLCache"])._BoundedTTLCache(
+        maxsize=2,
+        ttl_seconds=0.05,
+    )
+    cache.set("a", 1)
+    cache.set("b", 2)
+    cache.set("c", 3)
+    assert cache.get("a") is None
+    assert cache.get("b") == 2
+    assert cache.get("c") == 3
+    time.sleep(0.06)
+    assert cache.get("b") is None
+    assert cache.get("c") is None
