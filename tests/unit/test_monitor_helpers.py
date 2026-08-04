@@ -228,3 +228,81 @@ class TestResolveHedgeRatio:
     def test_invalid_values_fall_back_to_one(self):
         assert resolve_hedge_ratio({}) == 1.0
         assert resolve_hedge_ratio({"hedge_ratio": 0.0, "dynamic_beta": -1.0}) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Memory hygiene helpers
+# ---------------------------------------------------------------------------
+
+
+class TestPruneActiveSignals:
+    def test_drops_pairs_not_in_active_set(self):
+        from src.monitor_helpers import prune_active_signals
+
+        signals = [
+            {"ticker_a": "AAPL", "ticker_b": "MSFT", "status": "Analyzing"},
+            {"ticker_a": "KO", "ticker_b": "PEP", "status": "VETOED"},
+        ]
+        kept = prune_active_signals(signals, active_pair_ids=["AAPL_MSFT"], drop_terminal=False)
+        assert len(kept) == 1
+        assert kept[0]["ticker_a"] == "AAPL"
+
+    def test_aggressive_drops_terminal_statuses(self):
+        from src.monitor_helpers import prune_active_signals
+
+        signals = [
+            {"ticker_a": "AAPL", "ticker_b": "MSFT", "status": "VETOED"},
+            {"ticker_a": "KO", "ticker_b": "PEP", "status": "APPROVED"},
+        ]
+        kept = prune_active_signals(
+            signals,
+            active_pair_ids=["AAPL_MSFT", "KO_PEP"],
+            drop_terminal=True,
+            max_signals=10,
+        )
+        assert len(kept) == 1
+        assert kept[0]["status"] == "APPROVED"
+
+    def test_respects_max_signals_cap(self):
+        from src.monitor_helpers import prune_active_signals
+
+        signals = [
+            {"ticker_a": f"T{i}", "ticker_b": f"U{i}", "status": "Analyzing"}
+            for i in range(20)
+        ]
+        kept = prune_active_signals(signals, max_signals=5, drop_terminal=False)
+        assert len(kept) == 5
+
+
+class TestRotateJsonl:
+    def test_rotates_when_over_max_bytes(self, tmp_path):
+        from src.monitor_helpers import rotate_jsonl_if_large
+
+        path = tmp_path / "trade_decision_reports.jsonl"
+        path.write_text("x" * 200, encoding="utf-8")
+        assert rotate_jsonl_if_large(path, max_bytes=100) is True
+        assert not path.exists()
+        assert (tmp_path / "trade_decision_reports.jsonl.1").exists()
+
+    def test_noop_when_under_limit(self, tmp_path):
+        from src.monitor_helpers import rotate_jsonl_if_large
+
+        path = tmp_path / "structured_logs.jsonl"
+        path.write_text("small", encoding="utf-8")
+        assert rotate_jsonl_if_large(path, max_bytes=10_000) is False
+        assert path.exists()
+
+
+class TestEvictTtlCache:
+    def test_evicts_expired_and_overflow(self):
+        from src.monitor_helpers import evict_ttl_cache
+
+        cache = {
+            "a": (1.0, "old"),
+            "b": (50.0, "mid"),
+            "c": (100.0, "new"),
+        }
+        removed = evict_ttl_cache(cache, now=120.0, ttl_seconds=30.0, max_entries=1)
+        assert removed >= 2
+        assert list(cache.keys()) == ["c"]
+

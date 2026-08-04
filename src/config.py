@@ -168,10 +168,22 @@ class Settings(BaseSettings):
         default="compact",
         validation_alias="DECISION_TRACE_LEVEL",
     )
-    DECISION_TRACE_RING_SIZE: int = Field(default=2000, validation_alias="DECISION_TRACE_RING_SIZE")
+    DECISION_TRACE_RING_SIZE: int = Field(default=500, validation_alias="DECISION_TRACE_RING_SIZE")
     DECISION_TRACE_INPUT_MAX_CHARS: int = Field(
         default=500,
         validation_alias="DECISION_TRACE_INPUT_MAX_CHARS",
+    )
+    # Soft RSS reclaim threshold (MiB). Compose mem_limit is 1280m; act before OOM.
+    MEMORY_PRESSURE_THRESHOLD_MIB: int = Field(
+        default=900,
+        validation_alias="MEMORY_PRESSURE_THRESHOLD_MIB",
+    )
+    # Cap dashboard-facing active_signals rows (soft prune keeps non-terminal only under pressure).
+    MEMORY_ACTIVE_SIGNAL_MAX: int = Field(default=40, validation_alias="MEMORY_ACTIVE_SIGNAL_MAX")
+    STRUCTURED_LOG_MAX_BYTES: int = Field(default=5_000_000, validation_alias="STRUCTURED_LOG_MAX_BYTES")
+    TRADE_DECISION_LOG_MAX_BYTES: int = Field(
+        default=10_000_000,
+        validation_alias="TRADE_DECISION_LOG_MAX_BYTES",
     )
     REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")
 
@@ -204,6 +216,17 @@ class Settings(BaseSettings):
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
     # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Minimum Pearson correlation for scout admission and elite promotion.
+    # Loose enough for crypto co-movers; still rejects uncorrelated junk.
+    PAIR_DISCOVERY_MIN_CORRELATION: float = Field(
+        default=0.70,
+        validation_alias="PAIR_DISCOVERY_MIN_CORRELATION",
+    )
+    # Maximum Engle-Granger / ADF p-value allowed when promoting scouts to Active.
+    PAIR_DISCOVERY_MAX_PVALUE: float = Field(
+        default=0.05,
+        validation_alias="PAIR_DISCOVERY_MAX_PVALUE",
+    )
     # Hard denylist (either leg order). Comma-separated pair ids in env.
     # Default quarantines the known BTC/BCH spread-guard churner.
     PAIR_DENYLIST: str = Field(
@@ -345,6 +368,13 @@ class Settings(BaseSettings):
     SPREAD_GUARD_MAX_PCT: float = Field(default=0.003, validation_alias="SPREAD_GUARD_MAX_PCT")
     TAKE_PROFIT_ZSCORE: float = Field(default=0.5, validation_alias="TAKE_PROFIT_ZSCORE")
     STOP_LOSS_ZSCORE: float = Field(default=3.5, validation_alias="STOP_LOSS_ZSCORE")
+    # Crypto warm-up / daily re-check uses a slightly looser ADF threshold than
+    # equities, but 0.25 admitted too many unstable spreads. Keep looser than
+    # COINTEGRATION_PVALUE_THRESHOLD without becoming a free pass.
+    CRYPTO_COINTEGRATION_PVALUE_THRESHOLD: float = Field(
+        default=0.10,
+        validation_alias="CRYPTO_COINTEGRATION_PVALUE_THRESHOLD",
+    )
     SCAN_INTERVAL_SECONDS: int = Field(default=15, validation_alias="SCAN_INTERVAL_SECONDS")
     RISK_DRAWDOWN_ZERO_PCT: float = Field(default=0.15, validation_alias="RISK_DRAWDOWN_ZERO_PCT")
     RISK_SHARPE_FLOOR: float = Field(default=0.5, validation_alias="RISK_SHARPE_FLOOR")
@@ -363,6 +393,25 @@ class Settings(BaseSettings):
     ORCH_AGENT_CONFIDENCE_THRESHOLD: float = Field(default=0.5, validation_alias="ORCH_AGENT_CONFIDENCE_THRESHOLD")
     ORCH_FUNDAMENTAL_DEFAULT_SCORE: int = Field(default=50, validation_alias="ORCH_FUNDAMENTAL_DEFAULT_SCORE")
     ORCH_FUNDAMENTAL_VETO_SCORE: int = Field(default=40, validation_alias="ORCH_FUNDAMENTAL_VETO_SCORE")
+    # Treat Redis SEC scores older than this (or with unusable timestamps) as unknown.
+    # Matches redis_service fundamental TTL (24h) so live mode cannot trade on stale cache.
+    ORCH_FUNDAMENTAL_MAX_AGE_SECONDS: int = Field(
+        default=86400,
+        validation_alias="ORCH_FUNDAMENTAL_MAX_AGE_SECONDS",
+    )
+    # Skip re-analysis when a usable score is newer than this (worker only).
+    SEC_WORKER_REFRESH_SECONDS: int = Field(
+        default=43200,
+        validation_alias="SEC_WORKER_REFRESH_SECONDS",
+    )
+    SEC_WORKER_UNREACHABLE_THRESHOLD: int = Field(
+        default=3,
+        validation_alias="SEC_WORKER_UNREACHABLE_THRESHOLD",
+    )
+    SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS: int = Field(
+        default=1800,
+        validation_alias="SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS",
+    )
     ORCH_ACCURACY_LOW_THRESHOLD: float = Field(default=0.4, validation_alias="ORCH_ACCURACY_LOW_THRESHOLD")
     ORCH_ACCURACY_HIGH_THRESHOLD: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_HIGH_THRESHOLD")
     ORCH_ACCURACY_LOW_MULTIPLIER: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_LOW_MULTIPLIER")

@@ -49,4 +49,26 @@ async def test_kalman_state_invalidates_on_corporate_action(monkeypatch):
     await service.save_filter_state(pair_id, kf, z_score=0.0)
 
     assert saved_payload["state_fingerprint"]
+    assert saved_payload["state_fingerprint"].startswith("history-v2:")
     assert saved_payload["state_fingerprint"] != "old-adjusted-history"
+
+
+def test_build_state_fingerprint_is_stable_and_sensitive_to_rescales():
+    """Streaming fingerprint must stay stable for identical history and change on rescale."""
+    base = pd.DataFrame(
+        {
+            "AAA": [100.0, 101.0, 102.0, 103.0],
+            "BBB": [50.0, 50.5, 51.0, 51.5],
+        },
+        index=pd.date_range("2026-01-01", periods=4, freq="h"),
+    )
+    fp1 = ArbitrageService.build_state_fingerprint("AAA_BBB", base)
+    fp2 = ArbitrageService.build_state_fingerprint("AAA_BBB", base.copy())
+    assert fp1 == fp2
+    assert fp1.startswith("history-v2:")
+
+    rescaled = base.copy()
+    rescaled["AAA"] = rescaled["AAA"] * 0.5  # corporate-action style adjust
+    fp3 = ArbitrageService.build_state_fingerprint("AAA_BBB", rescaled)
+    assert fp3 != fp1
+    assert fp3.startswith("history-v2:")

@@ -18,22 +18,35 @@ class ArbitrageService:
 
     @staticmethod
     def build_state_fingerprint(pair_id: str, data: Optional[pd.DataFrame]) -> Optional[str]:
+        """Hash pair id + history shape/values without materializing a giant JSON blob.
+
+        ``history-v1`` built a full ``DataFrame.to_json()`` string then hashed
+        ``repr(payload)``, which briefly doubled RAM during every warm-start and
+        quarantine rebuild. ``history-v2`` streams column bytes into SHA-256 so
+        corporate-action invalidation still works without the allocation spike.
+        """
         if data is None or data.empty:
             return None
-        normalized = data.copy()
-        normalized.columns = [str(col) for col in normalized.columns]
-        normalized = normalized.sort_index(axis=1)
-        payload = {
-            "pair_id": pair_id,
-            "history": normalized.to_json(
-                orient="split",
-                date_format="iso",
-                double_precision=10,
-            ),
-        }
-        return "history-v1:" + hashlib.sha256(
-            repr(payload).encode("utf-8")
-        ).hexdigest()
+        columns = sorted((str(col), col) for col in data.columns)
+        hasher = hashlib.sha256()
+        hasher.update(b"history-v2\0")
+        hasher.update(str(pair_id).encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(str(data.shape).encode("utf-8"))
+        if len(data.index):
+            hasher.update(b"\0")
+            hasher.update(str(data.index[0]).encode("utf-8"))
+            hasher.update(b"\0")
+            hasher.update(str(data.index[-1]).encode("utf-8"))
+        for col_name, raw_col in columns:
+            hasher.update(b"\0")
+            hasher.update(col_name.encode("utf-8"))
+            values = pd.to_numeric(data[raw_col], errors="coerce").to_numpy(
+                dtype="float64",
+                copy=False,
+            )
+            hasher.update(values.tobytes())
+        return "history-v2:" + hasher.hexdigest()
 
     @agent_trace("ArbitrageService.get_or_create_filter")
     async def get_or_create_filter(
@@ -89,14 +102,19 @@ class ArbitrageService:
                 kf = KalmanFilter(delta=delta, r=r, r_relative=r_relative)
                 # D.1 Kalman Pre-Warming
                 try:
-                    from src.services.data_service import DataService
                     t_a, t_b = pair_id.split('_')
                     
                     df = prewarm_data
                     if df is None:
-                        ds = DataService()
-                        logger.info(f"[ArbitrageService] No Redis state or prewarm_data for {pair_id}. Initiating 30d historical pre-warming...")
-                        df = await ds.get_historical_data_async([t_a, t_b], "30d", "1h")
+                        from src.services.data_service import data_service as shared_data_service
+
+                        logger.info(
+                            f"[ArbitrageService] No Redis state or prewarm_data for {pair_id}. "
+                            "Initiating 30d historical pre-warming..."
+                        )
+                        df = await shared_data_service.get_historical_data_async(
+                            [t_a, t_b], "30d", "1h"
+                        )
                     
                     if df is not None and not df.empty:
                         for i in range(len(df)):

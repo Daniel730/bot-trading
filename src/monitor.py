@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 from rich.logging import RichHandler
 from rich.console import Console
 from rich.theme import Theme
@@ -31,7 +32,10 @@ from src.services.venue_metadata import estimate_round_trip_cost_pct
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service, dashboard_state
 from src.services.background_task_watchdog import background_task_watchdog
-from src.services.decision_trace_service import decision_recorder
+from src.services.decision_trace_service import (
+    COMPACT_OMIT_SKIP_REASONS,
+    decision_recorder,
+)
 from src.services.trade_math import (
     build_pair_legs,
     cap_pair_notional,
@@ -48,6 +52,10 @@ from src.monitor_helpers import (
     resolve_kalman_pair_id,
     resolve_hedge_ratio,
     compute_entry_zscore,
+    prune_active_signals,
+    prune_dict_to_keys,
+    rotate_jsonl_if_large,
+    evict_ttl_cache,
 )
 from src.monitor_scan_helpers import (
     build_candidate_pairs,
@@ -122,7 +130,12 @@ def setup_logging():
     rich_handler.setFormatter(logging.Formatter("%(message)s"))
     root_logger.addHandler(rich_handler)
     STRUCTURED_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    structured_handler = logging.FileHandler(STRUCTURED_LOG_PATH, encoding="utf-8")
+    structured_handler = RotatingFileHandler(
+        STRUCTURED_LOG_PATH,
+        maxBytes=max(1_000_000, int(getattr(settings, "STRUCTURED_LOG_MAX_BYTES", 5_000_000))),
+        backupCount=2,
+        encoding="utf-8",
+    )
     structured_handler.setFormatter(JsonLineFormatter())
     root_logger.addHandler(structured_handler)
     root_logger.setLevel(_resolve_log_level(settings.LOG_LEVEL))
@@ -267,6 +280,7 @@ class ArbitrageMonitor:
         status: str,
         confidence: float | None = None,
         hedge_ratio: float | None = None,
+        signal_id: str | None = None,
     ) -> None:
         """Keep dashboard-facing signal state live for z-score and confidence."""
         if self._signals_lock is None:
@@ -285,6 +299,8 @@ class ArbitrageMonitor:
                 signal_entry["confidence"] = confidence
             if hedge_ratio is not None:
                 signal_entry["hedge_ratio"] = hedge_ratio
+            if signal_id is not None:
+                signal_entry["signal_id"] = signal_id
 
     async def _remove_active_signal(self, ticker_a: str, ticker_b: str) -> None:
         if self._signals_lock is None:
@@ -907,12 +923,7 @@ class ArbitrageMonitor:
                     continue
 
                 if pair_id in self.kalman_quarantined_pairs:
-                    arbitrage_service.filters.pop(pair_id, None)
-                    arbitrage_service.filter_fingerprints.pop(pair_id, None)
-                    try:
-                        await redis_service.client.delete(f"kalman:{pair_id}")
-                    except Exception as exc:
-                        logger.warning("KALMAN QUARANTINE: Redis state delete failed for %s: %s", pair_id, exc)
+                    await self._drop_kalman_runtime_state(pair_id)
 
                 # Initialize Kalman filter.
                 # Do NOT pass initial_state here — that would bypass both Redis
@@ -975,8 +986,8 @@ class ArbitrageMonitor:
                 "pre_warming",
                 f"Pair list pre-warming complete ({len(self.active_pairs)}/{total_pairs}).",
             )
-
-    async def _rotate_elite_pairs(self):
+        # Boot pre-warm allocates large temporary frames; reclaim before the scan loop.
+        self._maybe_relieve_memory_pressure(reason="initialize_pairs")
         """
         Promote scout candidates into the Active universe, then hot-reload
         in-memory pair state when anything changed.
@@ -1035,40 +1046,157 @@ class ArbitrageMonitor:
 
 
 
-    def _maybe_relieve_memory_pressure(self, *, reason: str, threshold_mib: int = 900) -> None:
-        """Log RSS and force a GC cycle when the monitor process is near the compose mem_limit.
-
-        The bot container is capped at 1280m; without periodic reclaim, pandas/yfinance
-        scrap from scouts + scans can push the cgroup to the limit and eventually OOM-kill
-        (exit 137). This is a safety valve, not a substitute for fixing unbounded caches.
-        """
-        rss_mib = None
+    def _read_process_rss_mib(self) -> int | None:
+        """Return current process RSS in MiB, or None if unavailable."""
         try:
             with open("/proc/self/status", encoding="utf-8") as fh:
                 for line in fh:
                     if line.startswith("VmRSS:"):
                         # VmRSS is in kB on Linux.
-                        rss_mib = int(line.split()[1]) // 1024
-                        break
+                        return int(line.split()[1]) // 1024
         except Exception:
-            rss_mib = None
-        if rss_mib is None:
+            pass
+        try:
+            import psutil
+
+            return int(psutil.Process().memory_info().rss / (1024 * 1024))
+        except Exception:
+            return None
+
+    def _prune_runtime_caches(self, *, aggressive: bool = False) -> dict[str, int]:
+        """Drop retainable scan scrap that is safe to forget between iterations."""
+        active_ids = {
+            str(pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}")
+            for pair in self.active_pairs
+        }
+        active_tickers = {
+            str(ticker)
+            for pair in self.active_pairs
+            for ticker in (pair.get("ticker_a"), pair.get("ticker_b"))
+            if ticker
+        }
+        stats = {
+            "signals_before": len(self.active_signals),
+            "signals_after": 0,
+            "crypto_markers_removed": 0,
+            "price_meta_removed": 0,
+            "jsonl_rotated": 0,
+            "decision_events_cleared": 0,
+            "regime_evicted": 0,
+        }
+
+        max_signals = max(
+            int(getattr(settings, "MEMORY_ACTIVE_SIGNAL_MAX", 0) or 0),
+            int(settings.MAX_ACTIVE_PAIRS) * 2,
+        )
+        self.active_signals = prune_active_signals(
+            self.active_signals,
+            active_pair_ids=active_ids,
+            max_signals=max_signals,
+            drop_terminal=aggressive,
+        )
+        stats["signals_after"] = len(self.active_signals)
+
+        stats["crypto_markers_removed"] = prune_dict_to_keys(
+            self._crypto_snapshot_pair_prices,
+            active_ids,
+        )
+        # Stale Kalman fingerprints for pairs no longer Active.
+        for pid in list(arbitrage_service.filter_fingerprints.keys()):
+            if pid not in active_ids and pid not in arbitrage_service.filters:
+                arbitrage_service.filter_fingerprints.pop(pid, None)
+
+        price_sources = getattr(data_service, "last_price_sources", None)
+        price_timestamps = getattr(data_service, "last_price_timestamps", None)
+        if isinstance(price_sources, dict):
+            stats["price_meta_removed"] += prune_dict_to_keys(price_sources, active_tickers)
+        if isinstance(price_timestamps, dict):
+            stats["price_meta_removed"] += prune_dict_to_keys(price_timestamps, active_tickers)
+
+        decision_max = int(getattr(settings, "STRUCTURED_LOG_MAX_BYTES", 5_000_000) or 5_000_000)
+        trade_max = int(
+            getattr(settings, "TRADE_DECISION_LOG_MAX_BYTES", 10_000_000) or 10_000_000
+        )
+        if rotate_jsonl_if_large(STRUCTURED_LOG_PATH, max_bytes=decision_max):
+            stats["jsonl_rotated"] += 1
+        if rotate_jsonl_if_large(self.trade_decision_report_path, max_bytes=trade_max):
+            stats["jsonl_rotated"] += 1
+
+        if aggressive:
+            from src.services.decision_trace_service import decision_recorder as live_recorder
+
+            before = len(live_recorder._events)
+            # Keep promoted/anomaly crumbs; drop routine skip noise.
+            retained = [
+                event
+                for event in live_recorder._events
+                if event.promoted or event.outcome in ("anomaly", "execute", "veto")
+            ]
+            from collections import deque
+
+            live_recorder._events = deque(
+                retained,
+                maxlen=max(1, live_recorder._maxsize),
+            )
+            stats["decision_events_cleared"] = max(0, before - len(live_recorder._events))
+
             try:
-                import psutil
+                import time as _time
 
-                rss_mib = int(psutil.Process().memory_info().rss / (1024 * 1024))
+                stats["regime_evicted"] += evict_ttl_cache(
+                    market_regime_service._regime_cache,
+                    now=_time.monotonic(),
+                    ttl_seconds=float(market_regime_service.cache_ttl_seconds),
+                    max_entries=32,
+                )
             except Exception:
-                return
+                pass
 
-        if rss_mib < threshold_mib:
+        return stats
+
+    def _maybe_relieve_memory_pressure(self, *, reason: str, threshold_mib: int | None = None) -> None:
+        """Prune retainable caches and GC when RSS nears the compose mem_limit.
+
+        The bot container is capped at 1280m; without periodic reclaim, pandas/yfinance
+        scrap from scouts + scans can push the cgroup to the limit and eventually OOM-kill
+        (exit 137). Soft prune runs every scan; aggressive prune+GC only above threshold.
+        """
+        if threshold_mib is None:
+            threshold_mib = int(getattr(settings, "MEMORY_PRESSURE_THRESHOLD_MIB", 900) or 900)
+
+        # Cheap soft prune every scan (no GC) to stop slow list/dict growth.
+        soft_stats = self._prune_runtime_caches(aggressive=False)
+
+        rss_mib = self._read_process_rss_mib()
+        if rss_mib is None:
             return
+        if rss_mib < threshold_mib:
+            if soft_stats["signals_before"] != soft_stats["signals_after"]:
+                logger.debug(
+                    "MEMORY HYGIENE [%s]: rss≈%dMiB signals %d→%d",
+                    reason,
+                    rss_mib,
+                    soft_stats["signals_before"],
+                    soft_stats["signals_after"],
+                )
+            return
+
+        hard_stats = self._prune_runtime_caches(aggressive=True)
         collected = gc.collect()
         logger.warning(
-            "MEMORY PRESSURE [%s]: rss≈%dMiB (threshold=%dMiB); gc.collect() freed %d objects",
+            "MEMORY PRESSURE [%s]: rss≈%dMiB (threshold=%dMiB); "
+            "gc.collect()=%d signals=%d→%d crypto_markers_removed=%d "
+            "price_meta_removed=%d jsonl_rotated=%d decision_cleared=%d",
             reason,
             rss_mib,
             threshold_mib,
             collected,
+            soft_stats["signals_before"],
+            hard_stats["signals_after"],
+            hard_stats["crypto_markers_removed"],
+            hard_stats["price_meta_removed"],
+            hard_stats["jsonl_rotated"],
+            hard_stats["decision_events_cleared"],
         )
 
     async def reload_pairs(self):
@@ -1110,14 +1238,149 @@ class ArbitrageMonitor:
             # doesn't accumulate across reloads.
             removed = old_ids - new_ids
             if removed:
-                from src.services.arbitrage_service import arbitrage_service
                 for pid in removed:
-                    arbitrage_service.filters.pop(pid, None)
+                    await self._drop_kalman_runtime_state(pid)
                 logger.info(f"reload_pairs: dropped {len(removed)} pairs ({sorted(removed)})")
             logger.info(
                 f"reload_pairs complete: {len(new_ids)} active pairs "
                 f"(+{len(new_ids - old_ids)} new, -{len(removed)} removed)"
             )
+
+    async def _drop_kalman_runtime_state(self, pair_id: str) -> None:
+        """Drop in-memory Kalman filter/fingerprint and Redis state for *pair_id*."""
+        arbitrage_service.filters.pop(pair_id, None)
+        arbitrage_service.filter_fingerprints.pop(pair_id, None)
+        self._crypto_snapshot_pair_prices.pop(pair_id, None)
+        try:
+            await redis_service.client.delete(f"kalman:{pair_id}")
+        except Exception as exc:
+            logger.warning(
+                "KALMAN GUARD: failed to delete Redis state for %s: %s",
+                pair_id,
+                exc,
+            )
+
+    @staticmethod
+    def _normalize_pair_history_frame(hist_data: pd.DataFrame) -> pd.DataFrame:
+        """Flatten MultiIndex yfinance frames to a ticker→close DataFrame."""
+        if isinstance(hist_data.columns, pd.MultiIndex):
+            if "Close" in hist_data.columns.get_level_values(0):
+                return hist_data["Close"]
+            normalized = hist_data.copy()
+            normalized.columns = normalized.columns.get_level_values(-1)
+            return normalized
+        return hist_data
+
+    async def _rebuild_quarantined_kalman_pair(self, pair: dict) -> bool:
+        """Re-warm a single quarantined pair without reloading the whole universe.
+
+        Full ``reload_pairs()`` re-fetches 30d history for every Active pair and
+        resets the dashboard stage — expensive for RAM and hostile when
+        ``PAIR_DISCOVERY_ENABLED=false`` (slots cannot be refilled). Targeted
+        rebuild keeps the rest of the scan universe intact.
+        """
+        pair_id = pair.get("id") or f"{pair['ticker_a']}_{pair['ticker_b']}"
+        ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
+
+        await self._drop_kalman_runtime_state(pair_id)
+
+        hist_data = await data_service.get_historical_data_async(
+            [ticker_a, ticker_b],
+            "30d",
+            "1h",
+        )
+        if hist_data is None or hist_data.empty:
+            logger.warning(
+                "KALMAN QUARANTINE: targeted rebuild for %s failed — no history.",
+                pair_id,
+            )
+            return False
+
+        hist_data = self._normalize_pair_history_frame(hist_data)
+        col_a = next(
+            (c for c in hist_data.columns if ticker_a.upper() in str(c).upper()),
+            None,
+        )
+        col_b = next(
+            (c for c in hist_data.columns if ticker_b.upper() in str(c).upper()),
+            None,
+        )
+        if not col_a or not col_b:
+            logger.warning(
+                "KALMAN QUARANTINE: targeted rebuild for %s failed — columns missing (%s).",
+                pair_id,
+                list(hist_data.columns),
+            )
+            return False
+
+        await arbitrage_service.get_or_create_filter(
+            pair_id,
+            delta=settings.KALMAN_DELTA,
+            r=settings.KALMAN_R,
+            prewarm_data=hist_data,
+        )
+        self.kalman_quarantined_pairs.discard(pair_id)
+        logger.info(
+            "KALMAN QUARANTINE CLEARED for %s after targeted historical rebuild.",
+            pair_id,
+        )
+        return True
+
+    async def _retire_failed_kalman_pair(
+        self,
+        pair: dict,
+        *,
+        reason: str = "kalman_quarantine_exhausted",
+    ) -> None:
+        """Bench a pair that stayed invalid after its one-shot rebuild.
+
+        Stuck ``kalman_state_quarantined`` skips used to keep burning Active
+        slots (and Redis/in-memory filter residue) forever — especially painful
+        with discovery pinned off on the server.
+        """
+        pair_id = pair.get("id") or f"{pair['ticker_a']}_{pair['ticker_b']}"
+        ticker_a, ticker_b = pair["ticker_a"], pair["ticker_b"]
+
+        await self._drop_kalman_runtime_state(pair_id)
+
+        before = len(self.active_pairs)
+        self.active_pairs = [p for p in self.active_pairs if p.get("id") != pair_id]
+        removed = before - len(self.active_pairs)
+
+        self.kalman_quarantined_pairs.discard(pair_id)
+        # Allow a future re-promote (elite rotation) one fresh rebuild chance.
+        self._kalman_rebuild_attempted.discard(pair_id)
+        self.last_cointegration_check.pop(pair_id, None)
+        self.bumped_pairs_today.pop(pair_id, None)
+
+        try:
+            await persistence_service.save_trading_pairs([{
+                "id": pair_id,
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "hedge_ratio": float(pair.get("hedge_ratio") or 0.0),
+                "is_cointegrated": False,
+                "status": "Benched",
+            }])
+        except Exception:
+            try:
+                await persistence_service.update_pair_status(pair_id, "Benched")
+            except Exception as exc:
+                logger.warning(
+                    "KALMAN QUARANTINE: failed to bench %s after %s: %s",
+                    pair_id,
+                    reason,
+                    exc,
+                )
+
+        logger.warning(
+            "KALMAN QUARANTINE RETIRE [%s/%s]: %s — benched and freed Active slot "
+            "(removed_from_memory=%s).",
+            ticker_a,
+            ticker_b,
+            reason,
+            bool(removed),
+        )
 
     async def _reload_quarantined_pairs_if_requested(self) -> bool:
         if not self._kalman_quarantine_reload_requested:
@@ -1129,11 +1392,26 @@ class ArbitrageMonitor:
         quarantined = sorted(self.kalman_quarantined_pairs)
         self._kalman_quarantine_reload_requested = False
         logger.warning(
-            "KALMAN QUARANTINE: rebuilding quarantined pair state after scan: %s",
+            "KALMAN QUARANTINE: targeted rebuild after scan (no full universe reload): %s",
             quarantined,
         )
-        await self.reload_pairs()
-        return True
+        pairs_by_id = {p["id"]: p for p in self.active_pairs if p.get("id")}
+        rebuilt_any = False
+        for pair_id in quarantined:
+            pair = pairs_by_id.get(pair_id)
+            if pair is None:
+                self.kalman_quarantined_pairs.discard(pair_id)
+                await self._drop_kalman_runtime_state(pair_id)
+                continue
+            try:
+                rebuilt_any = await self._rebuild_quarantined_kalman_pair(pair) or rebuilt_any
+            except Exception as exc:
+                logger.warning(
+                    "KALMAN QUARANTINE: targeted rebuild failed for %s: %s",
+                    pair_id,
+                    exc,
+                )
+        return rebuilt_any or bool(quarantined)
 
     async def _get_sizing_base(self) -> float:
         """Helper to fetch the current account equity/cash for sizing calculations."""
@@ -1295,6 +1573,9 @@ class ArbitrageMonitor:
                     else None
                 ),
             }
+            # Join key for flight recorder / AgentReasoning / TradeJournal / ledger.
+            if result.get("signal_id"):
+                decision["signal_id"] = result["signal_id"]
             if result.get("reason"):
                 decision["reason"] = result["reason"]
                 decision["rejection_reason"] = result["reason"]
@@ -1330,6 +1611,7 @@ class ArbitrageMonitor:
         report = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "mode": "paper" if settings.PAPER_TRADING else "live",
+            "scan_id": decision_recorder.scan_id,
             "pairs_loaded": len(self.active_pairs),
             "pairs_scanned": len(scan_pairs),
             "prices_received": len(latest_prices),
@@ -1362,7 +1644,13 @@ class ArbitrageMonitor:
                     reason=reason,
                     inputs=inputs or None,
                 )
-                logger.info("PAIR SKIP [%s/%s]: %s", t_a, t_b, reason)
+                # Match flight-recorder compact mode: routine skips stay out of INFO.
+                skip_log = (
+                    logger.debug
+                    if reason in COMPACT_OMIT_SKIP_REASONS
+                    else logger.info
+                )
+                skip_log("PAIR SKIP [%s/%s]: %s", t_a, t_b, reason)
                 return diagnostic
 
             # Multi-Market Hour Enforcement
@@ -1375,6 +1663,20 @@ class ArbitrageMonitor:
                 return skip("not_cointegrated")
 
             if pair['id'] in self.kalman_quarantined_pairs:
+                # Quarantined + rebuild already attempted + no reload pending means
+                # the one-shot rebuild finished and the pair was re-quarantined.
+                # Free the Active slot instead of skipping forever (burns slots
+                # when discovery is pinned off). While reload is still queued,
+                # keep skipping so the targeted rebuild can run.
+                if (
+                    pair['id'] in self._kalman_rebuild_attempted
+                    and not self._kalman_quarantine_reload_requested
+                ):
+                    await self._retire_failed_kalman_pair(
+                        pair,
+                        reason="kalman_quarantine_exhausted",
+                    )
+                    return skip("kalman_quarantine_benched", stage="kalman")
                 return skip("kalman_state_quarantined")
 
             if t_a not in latest_prices or t_b not in latest_prices:
@@ -1521,17 +1823,7 @@ class ArbitrageMonitor:
             if invalid_kalman_state:
                 already_quarantined = pair['id'] in self.kalman_quarantined_pairs
                 self.kalman_quarantined_pairs.add(pair['id'])
-                arbitrage_service.filters.pop(pair['id'], None)
-                arbitrage_service.filter_fingerprints.pop(pair['id'], None)
-                try:
-                    await redis_service.client.delete(f"kalman:{pair['id']}")
-                except Exception as exc:
-                    logger.warning(
-                        "KALMAN GUARD [%s/%s]: failed to delete Redis state for quarantine: %s",
-                        t_a,
-                        t_b,
-                        exc,
-                    )
+                await self._drop_kalman_runtime_state(pair['id'])
                 logger.warning(
                     "KALMAN GUARD [%s/%s]: invalid state. beta=%s z_score=%s "
                     "innovation_var=%s spread=%s. Blocking entry before state persistence/approval.",
@@ -1546,22 +1838,27 @@ class ArbitrageMonitor:
                     self._kalman_quarantine_reload_requested = True
                     self._kalman_rebuild_attempted.add(pair['id'])
                     logger.warning(
-                        "KALMAN QUARANTINE [%s/%s]: queued historical rebuild after this scan.",
+                        "KALMAN QUARANTINE [%s/%s]: queued targeted historical rebuild after this scan.",
                         t_a,
                         t_b,
                     )
-                elif pair['id'] in self._kalman_rebuild_attempted:
-                    # Rebuild already tried and the state is still invalid (e.g. an
-                    # extreme price-ratio pair pinned at the beta clip). Leave it
-                    # quarantined and skip it, but do NOT trigger another reload —
-                    # that would reset the dashboard stage and re-warm on a loop.
-                    logger.debug(
-                        "KALMAN QUARANTINE [%s/%s]: rebuild already attempted; skipping without reload.",
-                        t_a,
-                        t_b,
+                    return skip(
+                        "kalman_state_invalid",
+                        stage="kalman",
+                        beta=beta,
+                        z_score=z_score_value,
                     )
+
+                # Rebuild already tried and the state is still invalid (e.g. an
+                # extreme price-ratio pair pinned at the beta clip). Bench the
+                # pair so it stops occupying an Active slot — do NOT request
+                # another universe reload (that resets stage + re-warms on a loop).
+                await self._retire_failed_kalman_pair(
+                    pair,
+                    reason="kalman_quarantine_exhausted",
+                )
                 return skip(
-                    "kalman_state_invalid",
+                    "kalman_quarantine_benched",
                     stage="kalman",
                     beta=beta,
                     z_score=z_score_value,
@@ -1608,6 +1905,7 @@ class ArbitrageMonitor:
 
             if in_entry_band:
                 signal_id = str(uuid.uuid4())
+                diagnostic["signal_id"] = signal_id
                 decision_recorder.set_signal_id(signal_id)
                 decision_recorder.record(
                     stage="signal",
@@ -1627,7 +1925,8 @@ class ArbitrageMonitor:
                     t_a, t_b,
                     z_score=z_score,
                     status="Analyzing",
-                    hedge_ratio=float(pair.get("hedge_ratio", 1.0))
+                    hedge_ratio=float(pair.get("hedge_ratio", 1.0)),
+                    signal_id=signal_id,
                 )
 
                 # AI Validation
@@ -1659,7 +1958,8 @@ class ArbitrageMonitor:
                         z_score=z_score,
                         status="VETOED_TIMEOUT",
                         confidence=0.0,
-                        hedge_ratio=float(pair.get("hedge_ratio", 1.0))
+                        hedge_ratio=float(pair.get("hedge_ratio", 1.0)),
+                        signal_id=signal_id,
                     )
                     logger.warning(
                         "ORCHESTRATOR [%s/%s] timed out after %.1f s. "
@@ -1694,6 +1994,7 @@ class ArbitrageMonitor:
                         status="VETOED",
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
+                        signal_id=signal_id,
                     )
                     if orchestrator_vetoed:
                         logger.info(f"ORCHESTRATOR [{t_a}/{t_b}] VETOED: {final_verdict}")
@@ -1741,6 +2042,7 @@ class ArbitrageMonitor:
                         status="VETOED_SIZE",
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
+                        signal_id=signal_id,
                     )
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
@@ -1803,7 +2105,15 @@ class ArbitrageMonitor:
 
                 if preview.net_profit <= 0:
                     logger.info(f"PROFIT GUARD [{t_a}/{t_b}]: Net profit ${preview.net_profit:.2f} is non-positive. Vetoing.")
-                    await self._upsert_active_signal(t_a, t_b, z_score=z_score, status="VETOED_UNPROFITABLE", confidence=final_confidence, hedge_ratio=hedge_ratio)
+                    await self._upsert_active_signal(
+                        t_a,
+                        t_b,
+                        z_score=z_score,
+                        status="VETOED_UNPROFITABLE",
+                        confidence=final_confidence,
+                        hedge_ratio=hedge_ratio,
+                        signal_id=signal_id,
+                    )
                     diagnostic["verdict"] = "VETOED"
                     diagnostic["confidence"] = final_confidence
                     diagnostic["reason"] = "unprofitable"
@@ -1842,6 +2152,7 @@ class ArbitrageMonitor:
                             status="ALREADY_OPEN",
                             confidence=final_confidence,
                             hedge_ratio=hedge_ratio,
+                            signal_id=signal_id,
                         )
                         diagnostic["verdict"] = "SKIPPED"
                         diagnostic["confidence"] = final_confidence
@@ -1861,6 +2172,7 @@ class ArbitrageMonitor:
                         status="APPROVED",
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
+                        signal_id=signal_id,
                     )
                     approved = await notification_service.request_approval(
                         trade_summary,
@@ -1894,6 +2206,7 @@ class ArbitrageMonitor:
                                 status="EXECUTED",
                                 confidence=final_confidence,
                                 hedge_ratio=hedge_ratio,
+                                signal_id=signal_id,
                             )
                             diagnostic["verdict"] = "EXECUTED"
                             diagnostic["reason"] = execution_result.get("reason", "executed")
@@ -1912,6 +2225,7 @@ class ArbitrageMonitor:
                                 status="EXECUTION_BLOCKED",
                                 confidence=final_confidence,
                                 hedge_ratio=hedge_ratio,
+                                signal_id=signal_id,
                             )
                             diagnostic["verdict"] = "EXECUTION_BLOCKED"
                             diagnostic["reason"] = (
@@ -1933,6 +2247,7 @@ class ArbitrageMonitor:
                             status="REJECTED",
                             confidence=final_confidence,
                             hedge_ratio=hedge_ratio,
+                            signal_id=signal_id,
                         )
                         diagnostic["verdict"] = "REJECTED"
                         diagnostic["reason"] = "approval_denied"
@@ -3101,6 +3416,12 @@ class ArbitrageMonitor:
                         logger.debug("Cointegration confirm persist failed for %s: %s", pair_id, persist_exc)
         except Exception as e:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
+        finally:
+            # Daily ADF/rolling windows allocate large temporary frames; drop refs early.
+            try:
+                del hist_data
+            except NameError:
+                pass
 
     async def _run_startup_auto_reconciliation(self) -> None:
         """Ordered startup repair before fail-fast counting.

@@ -394,7 +394,19 @@ bash infra/ops_oom_probe.sh
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
 ```
 
-Scout RAM is bounded by `PAIR_DISCOVERY_MAX_TICKERS` (pin `8` on the shared host; code default `12`). Prefer `PAIR_DISCOVERY_AUTO_PROMOTE=false` overnight if the bot is near its limit. On the shared 7.4 GiB host, set `PAIR_DISCOVERY_ENABLED=false` when the bot is climbing toward its 1280m cgroup cap (re-enable after the memory leak/growth path is fixed or the host has more free RAM).
+Scout RAM is bounded by `PAIR_DISCOVERY_MAX_TICKERS` (pin `8` on the shared host; code default `12`). Prefer `PAIR_DISCOVERY_AUTO_PROMOTE=false` overnight if the bot is near its limit. On the shared 7.4 GiB host, set `PAIR_DISCOVERY_ENABLED=false` when the bot is climbing toward its 1280m cgroup cap.
+
+### When it is safe to re-enable scout
+
+Keep discovery **OFF** until all of the following hold for ≥2–3 hours on bot-server:
+
+1. `trading-bot-bot-1` RSS stays **well under ~700 MiB** with scout still off (compose limit is 1280m; GC valve trips at `MEMORY_PRESSURE_THRESHOLD_MIB`, default 900).
+2. Deployed Python image includes memory hygiene (`history-v2` Kalman fingerprints + `_prune_runtime_caches` / `MEMORY PRESSURE` log lines after a deliberate high-RSS cycle).
+3. Re-enable gradually:
+   - `PAIR_DISCOVERY_MAX_TICKERS=8`
+   - `PAIR_DISCOVERY_AUTO_PROMOTE=true` only after a clean scout cycle with promote still false
+   - then `PAIR_DISCOVERY_ENABLED=true`
+4. Watch `docker stats` + `docker logs … | grep MEMORY` for the first scout interval (`SCOUT_INITIAL_DELAY_SECONDS` then `SCOUT_INTERVAL_HOURS`). If RSS climbs through 900 MiB during scout, flip discovery back off and investigate before retrying.
 
 Host alert timer (`host-memory-alert.timer`) runs `~/infra-host/memory_alert.sh` every 5 minutes.
 
