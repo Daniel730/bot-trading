@@ -56,7 +56,7 @@ The Python backend is the control plane and strategy runtime.
 - `src/services/brokerage_service.py` routes through the active Alpaca provider. `BROKERAGE_PROVIDER` must be `ALPACA`; Trading 212 and Web3 routes are legacy/disabled and unsupported values fail startup.
 - `src/services/pair_eligibility_service.py` rejects unsupported or high-friction pairs before Kalman state is allocated.
 
-`src/monitor.py` order routing: `PAPER_TRADING=true` calls `shadow_service`; broker-connected mode submits both legs through Python `BrokerageService`. The Java execution engine is a dry-run/audit sidecar and is not the monitor's default order path.
+`src/monitor.py` order routing: `PAPER_TRADING=true` is the **SHADOW** lane (`shadow_service` only). `PAPER_TRADING=false` with Alpaca's paper API is **BROKER_PAPER** (real paper orders via Python `BrokerageService`). Real Alpaca URLs are **LIVE**. Ledger metadata stamps `execution_lane` / `is_shadow` with the open `signal_id`; closes follow the open lane so mode flips do not double-count or orphan fills. The Java execution engine is a dry-run/audit sidecar and is not the monitor's default order path.
 
 ### Java Execution Engine
 

@@ -35,12 +35,16 @@
 
 ## Modes
 
-| Setting | Backend behavior |
+| Setting / lane | Backend behavior |
 |---|---|
-| `PAPER_TRADING=true` | Simulated fills through shadow service, no live broker submissions |
-| `DEV_MODE=true` | Crypto-only test universe, 24/7 market-hours bypass, development behavior |
-| `LIVE_CAPITAL_DANGER=true` | Requires Redis entropy baselines for configured pairs before startup |
+| `PAPER_TRADING=true` → **SHADOW** | Simulated fills through `shadow_service` only; no broker submissions. Ledger rows tagged `is_shadow` / `execution_lane=SHADOW` with the same `signal_id` as journal/reasoning. |
+| `PAPER_TRADING=false` + Alpaca paper API → **BROKER_PAPER** | Real orders on Alpaca paper money via `BrokerageService`; auto-approve; never calls shadow execute. |
+| Real Alpaca URL → **LIVE** | Real-money broker path; human approval required. |
+| `DEV_MODE=true` | Crypto-only test universe, 24/7 market-hours bypass; not counted as `ALPACA_PAPER`. |
+| `LIVE_CAPITAL_DANGER=true` | Requires Redis entropy baselines for live endpoints (skipped for `ALPACA_PAPER`). |
 | `REGION=US/EU` | Selects hedge/compliance path in risk services |
+
+Opens refuse mixing SHADOW and broker-lane open signals. Closes follow the lane stamped at open (not only the current env flag) so mode flips cannot double-submit or orphan fills. PnL is written once via `persistence.close_trade`.
 
 ## Dashboard API
 

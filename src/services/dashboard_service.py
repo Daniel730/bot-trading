@@ -361,6 +361,7 @@ class DashboardState:
         return {
             "mode": mode,
             "execution_mode": mode,
+            "execution_lane": settings.execution_lane,
             "paper_trading": settings.PAPER_TRADING,
             "broker_paper_trading": settings.is_broker_paper_trading,
             "alpaca_endpoint_class": alpaca_endpoint_class,

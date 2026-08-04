@@ -9,6 +9,7 @@ def test_shadow_paper_should_auto_approve(monkeypatch):
     monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
 
     assert settings.is_broker_paper_trading is False
+    assert settings.execution_lane == "SHADOW"
     assert settings.should_auto_approve_trades is True
 
 
@@ -21,6 +22,7 @@ def test_alpaca_paper_should_auto_approve(monkeypatch):
 
     assert settings.is_alpaca_paper_endpoint is True
     assert settings.is_broker_paper_trading is True
+    assert settings.execution_lane == "BROKER_PAPER"
     assert settings.should_auto_approve_trades is True
 
 
@@ -33,6 +35,7 @@ def test_live_real_money_should_not_auto_approve(monkeypatch):
 
     assert settings.is_alpaca_paper_endpoint is False
     assert settings.is_broker_paper_trading is False
+    assert settings.execution_lane == "LIVE"
     assert settings.should_auto_approve_trades is False
 
 

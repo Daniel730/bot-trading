@@ -128,5 +128,6 @@ Open positions are evaluated each loop:
 
 - financial kill switch first;
 - then Kalman-based take profit or stop loss;
-- paper exits also call `shadow_service.close_simulated_trade()` for shadow ledger consistency;
+- paper / shadow exits also call `shadow_service.close_simulated_trade()` for directional PnL logging only; durable close is a single `persistence.close_trade` write (broker paper / live closes skip the shadow log and use broker fill confirmation first);
+- close routing follows ledger `execution_lane` / `is_shadow` from open, not only the current `PAPER_TRADING` flag;
 - realized P&L is directional per leg.

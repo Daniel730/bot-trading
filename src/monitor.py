@@ -56,6 +56,11 @@ from src.monitor_scan_helpers import (
     build_close_orders,
     calculate_realized_pnl,
 )
+from src.services.execution_lane import (
+    LANE_SHADOW,
+    close_uses_broker,
+    signal_is_shadow,
+)
 
 # Initialize Rich Console with a custom theme
 custom_theme = Theme({
@@ -335,6 +340,40 @@ class ArbitrageMonitor:
                     await notification_service.send_message(msg)
                 return True
 
+        if settings.BLOCK_SHARED_LEG_OPENS:
+            from src.services.portfolio_book_guards import find_shared_leg_conflict
+
+            conflict = find_shared_leg_conflict(
+                ticker_a,
+                ticker_b,
+                open_signals,
+                canonicalize=self._canonical_position_symbol,
+            )
+            if conflict:
+                msg = (
+                    f"Shared-leg entry blocked for {ticker_a}/{ticker_b}: "
+                    f"overlap {conflict['overlap']} with open signal "
+                    f"{conflict.get('signal_id')}."
+                )
+                logger.warning(msg)
+                if notify:
+                    await notification_service.send_message(msg)
+                return True
+
+        open_count = len(open_signals or [])
+        from src.services.portfolio_book_guards import check_max_open_pairs
+
+        slot_check = check_max_open_pairs(open_count, settings.MAX_OPEN_PAIRS)
+        if not slot_check["allowed"]:
+            msg = (
+                f"Open-pair slot limit blocked for {ticker_a}/{ticker_b}: "
+                f"{slot_check['reason']}."
+            )
+            logger.warning(msg)
+            if notify:
+                await notification_service.send_message(msg)
+            return True
+
         if settings.PAPER_TRADING:
             return False
 
@@ -579,9 +618,11 @@ class ArbitrageMonitor:
         mode = runtime["mode"]
         next_open = self.next_market_open()
         logger.info(
-            "Runtime mode resolved: execution_mode=%s broker_paper_trading=%s "
-            "alpaca_endpoint_class=%s paper_trading=%s live_capital_danger=%s",
+            "Runtime mode resolved: execution_mode=%s execution_lane=%s "
+            "broker_paper_trading=%s alpaca_endpoint_class=%s paper_trading=%s "
+            "live_capital_danger=%s",
             runtime["execution_mode"],
+            runtime.get("execution_lane", settings.execution_lane),
             runtime["broker_paper_trading"],
             runtime["alpaca_endpoint_class"],
             runtime["paper_trading"],
@@ -591,6 +632,10 @@ class ArbitrageMonitor:
         table = Table(title="Bot Pre-flight Configuration", show_header=False, box=None)
         table.add_row("Mode", f"[bold cyan]{mode}[/]")
         table.add_row("Execution Mode", f"[bold cyan]{runtime['execution_mode']}[/]")
+        table.add_row(
+            "Execution Lane",
+            f"[bold cyan]{runtime.get('execution_lane', settings.execution_lane)}[/]",
+        )
         table.add_row("Alpaca Endpoint", f"{runtime['alpaca_endpoint_class']}")
         table.add_row("Dev Mode", f"{'[green]Enabled[/]' if settings.DEV_MODE else '[yellow]Disabled[/]'}")
 
@@ -2196,30 +2241,45 @@ class ArbitrageMonitor:
             legs.gross_notional, target_cash_a, target_cash_b, t_a, t_b, hedge_ratio, risk_res["kelly_fraction"], sizing_base, risk_res["max_allowed_fiat"], effective_cash
         )
 
-        # Feature 008 - Sector Cluster Guard (prospective, race-condition-safe).
-        # Both legs are counted as new exposure (target_cash each) so the check
-        # is evaluated BEFORE the trade is placed, not after.  This prevents two
-        # signals in the same scan window from independently passing the 30 % cap
-        # and then together pushing the sector to 60 %.
+        # Feature 008 - Sector Cluster Guard + book overcrowding gates.
+        # Evaluate BEFORE the trade is placed. Open signals are loaded once and
+        # reused for lane / slot / shared-leg / gross-book checks.
         pair_sector = resolve_pair_sector(pair["id"], t_a, t_b, settings.PAIR_SECTORS)
         current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
-        total_size = sum(p['size'] for p in current_portfolio)
-        sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
         new_trade_size = target_cash_a + target_cash_b  # sum of both legs
 
-        # Feature 008 Fix: prevent "Empty Portfolio Trap" where the first trade
-        # is always 100% exposure. We use the larger of actual total size or
-        # a theoretical 'full portfolio' base (e.g. 5x target leg cash).
-        denominador = max(total_size + new_trade_size, sizing_base)
-        projected_exposure = (sector_size + new_trade_size) / denominador
+        from src.services.portfolio_book_guards import (
+            check_portfolio_gross_notional,
+            check_projected_sector_exposure,
+            find_shared_leg_conflict,
+            gross_notional_from_signals,
+            check_max_open_pairs,
+        )
 
-        if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
+        sector_check = check_projected_sector_exposure(
+            current_portfolio,
+            pair_sector=pair_sector,
+            new_trade_size=new_trade_size,
+            sizing_base=sizing_base,
+            max_sector_exposure=settings.MAX_SECTOR_EXPOSURE,
+        )
+        if not sector_check["allowed"]:
             logger.warning(
-                f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
-                f"'{pair_sector}' exposure to {projected_exposure:.1%} (base: ${denominador:.2f}), "
-                f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
+                "CLUSTER GUARD: Rejecting %s/%s. %s",
+                t_a,
+                t_b,
+                sector_check["reason"],
             )
             return execution_result(False, "sector_exposure_guard")
+
+        if risk_service.is_sector_frozen(sector_check["sector"]):
+            logger.warning(
+                "SECTOR FREEZE: Rejecting %s/%s — sector '%s' is frozen.",
+                t_a,
+                t_b,
+                sector_check["sector"],
+            )
+            return execution_result(False, "sector_frozen")
 
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
@@ -2236,9 +2296,82 @@ class ArbitrageMonitor:
         exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
 
+        # Mutual exclusion: SHADOW (PAPER_TRADING) XOR broker path (ALPACA_PAPER / LIVE).
+        # Refuse opens that would mix shadow and broker ledger exposure in one book.
+        opening_shadow = bool(settings.PAPER_TRADING)
+        try:
+            open_for_lane = await persistence_service.get_open_signals()
+        except Exception as exc:
+            logger.critical(
+                "Execution blocked for %s/%s: could not load open signals for lane guard (%s).",
+                t_a, t_b, exc,
+            )
+            return execution_result(False, "lane_guard_open_signals_unavailable")
+
+        slot_check = check_max_open_pairs(len(open_for_lane or []), settings.MAX_OPEN_PAIRS)
+        if not slot_check["allowed"]:
+            logger.warning(
+                "OPEN PAIR CAP: Rejecting %s/%s. %s",
+                t_a,
+                t_b,
+                slot_check["reason"],
+            )
+            return execution_result(False, "max_open_pairs_guard")
+
+        if settings.BLOCK_SHARED_LEG_OPENS:
+            conflict = find_shared_leg_conflict(
+                t_a,
+                t_b,
+                open_for_lane,
+                canonicalize=self._canonical_position_symbol,
+            )
+            if conflict:
+                logger.warning(
+                    "SHARED LEG GUARD: Rejecting %s/%s — overlap %s with open signal %s.",
+                    t_a,
+                    t_b,
+                    conflict["overlap"],
+                    conflict.get("signal_id"),
+                )
+                return execution_result(False, "shared_leg_guard")
+
+        gross_check = check_portfolio_gross_notional(
+            gross_notional_from_signals(open_for_lane),
+            legs.gross_notional,
+            settings.MAX_PORTFOLIO_GROSS_NOTIONAL_USD,
+        )
+        if not gross_check["allowed"]:
+            logger.warning(
+                "BOOK GROSS CAP: Rejecting %s/%s. %s",
+                t_a,
+                t_b,
+                gross_check["reason"],
+            )
+            return execution_result(False, "portfolio_gross_notional_guard")
+
+        for existing in open_for_lane or []:
+            existing_shadow = signal_is_shadow(existing)
+            if opening_shadow and not existing_shadow:
+                msg = (
+                    f"Execution blocked for {t_a}/{t_b}: open broker-lane signal "
+                    f"{existing.get('signal_id')} would mix with SHADOW fills "
+                    f"(no double-counting / dual ledger)."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return execution_result(False, "mixed_execution_lane_blocked")
+            if not opening_shadow and existing_shadow:
+                msg = (
+                    f"Execution blocked for {t_a}/{t_b}: open SHADOW signal "
+                    f"{existing.get('signal_id')} must be closed before broker-lane fills."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return execution_result(False, "mixed_execution_lane_blocked")
+
         # Feature 037: only paper mode is forced to shadow execution. In live
         # mode, crypto routes through the configured brokerage provider.
-        if settings.PAPER_TRADING:
+        if opening_shadow:
             await persistence_service.log_trade_journal({
                 "signal_id": uuid.UUID(signal_id),
                 "entry_regime": regime_info["regime"],
@@ -2259,6 +2392,8 @@ class ArbitrageMonitor:
                     "max_allowed_fiat": risk_res.get("max_allowed_fiat"),
                     "direction": direction,
                     "paper_trade": True,
+                    "execution_lane": LANE_SHADOW,
+                    "broker_paper_trading": False,
                 }
             })
             # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
@@ -2274,7 +2409,11 @@ class ArbitrageMonitor:
             )
             return execution_result(True, "paper_shadow_executed")
 
-        logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
+        lane_label = settings.execution_lane
+        logger.info(
+            "%s EXECUTION: Placing broker orders for %s/%s - %s",
+            lane_label, exec_t_a, exec_t_b, direction,
+        )
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
@@ -2895,10 +3034,16 @@ class ArbitrageMonitor:
             "signal_id": uuid.UUID(signal_id),
             "entry_regime": regime_info["regime"],
             "metrics_at_entry": {
-                "z_score": risk_res.get("z_score", 0.0),
+                "z_score": float(entry_context.get("z_score", risk_res.get("z_score", 0.0)) or 0.0),
+                "entry_zscore": entry_context.get("entry_zscore"),
+                "confidence": entry_context.get("confidence"),
+                "orchestrator_verdict": entry_context.get("orchestrator_verdict"),
                 "win_prob": settings.DEFAULT_WIN_PROBABILITY,
                 "regime_confidence": regime_info["confidence"],
-                "features": regime_info["features"]
+                "features": regime_info["features"],
+                "paper_trade": False,
+                "execution_lane": settings.execution_lane,
+                "broker_paper_trading": bool(settings.is_broker_paper_trading),
             }
         })
 
@@ -3814,7 +3959,14 @@ class ArbitrageMonitor:
                 dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
             )
 
-            if not settings.PAPER_TRADING:
+            # Close via broker only when the *open* was broker-lane (metadata), not merely
+            # when PAPER_TRADING is currently false — avoids orphaning Alpaca paper fills
+            # after a mode flip or submitting broker closes for SHADOW ledger rows.
+            use_broker_close = close_uses_broker(
+                signal,
+                paper_trading=bool(settings.PAPER_TRADING),
+            )
+            if use_broker_close:
                 sell_orders = [order for order in close_orders if order["side"] == "SELL"]
                 if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
                     # Restore to OPEN so subsequent close attempts are not blocked
@@ -3980,11 +4132,10 @@ class ArbitrageMonitor:
                 },
             )
 
-            # N2 fix: in paper mode, route through shadow_service so the shadow ledger
-            # gets a proper close log with directional PnL breakdown.
-            # shadow_service.close_simulated_trade does NOT call persistence - we handle
-            # DB writes once here for both live and paper paths to preserve exit_reason.
-            if settings.PAPER_TRADING:
+            # N2 fix: shadow-lane closes log directional PnL via shadow_service, then a
+            # single persistence.close_trade write (shared with broker closes) so PnL is
+            # not double-counted in TradeLedger. close_simulated_trade does NOT persist.
+            if not use_broker_close:
                 direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
                 await shadow_service.close_simulated_trade(
                     pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
