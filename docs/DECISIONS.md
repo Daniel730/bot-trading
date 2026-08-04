@@ -90,6 +90,8 @@ Runtime and safety decisions recorded during the 2026-08-04 full-day audit and P
 ## Production posture
 
 - Phase-3: paper-ready.
-- Phase-4 verdict: **READY FOR LIMITED LIVE CAPITAL** (see `docs/AUDIT_PHASE4.md`) — small capital, checklist-gated, soak on bot-server before scale.
-- Phase-5 ops: provenance on every trade, `replay_trade`, shadow/LIVE divergence skeleton, `rollback_deploy.sh`, limited-LIVE kill criteria (`docs/AUDIT_PHASE5_OPS.md`).
-- Platform maturity ≠ statistical edge — OOS/regime evidence required before trusting larger capital.
+- Phase-4 verdict: **READY FOR LIMITED LIVE CAPITAL** — small capital, checklist-gated.
+- Phase-5 ops: provenance, replay, Decision Package, severity-based divergence, limited-LIVE kill.
+- **Dual-track roadmap** (`docs/ROADMAP_DUAL_TRACK.md`): platform = maintenance; research = primary effort.
+- Strategy Acceptance Protocol gates LIVE eligibility (`research/STRATEGY_ACCEPTANCE_PROTOCOL.md`).
+- Platform maturity ≠ statistical edge.

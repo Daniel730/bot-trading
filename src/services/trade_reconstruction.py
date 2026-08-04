@@ -175,7 +175,7 @@ async def reconstruct_trade(
             provenance = meta["provenance"]
             break
 
-    return {
+    result = {
         "reconstructed_at": datetime.now(timezone.utc).isoformat(),
         "query": {
             "trade_id": trade_id,
@@ -219,3 +219,10 @@ async def reconstruct_trade(
             "Compare provenance.git_commit / config_hash against runtime_provenance_now for drift.",
         ],
     }
+    try:
+        from src.services.decision_package import decision_package_from_reconstruction
+
+        result["decision_package"] = decision_package_from_reconstruction(result)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("decision_package build skipped: %s", exc)
+    return result

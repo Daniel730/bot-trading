@@ -3,9 +3,8 @@
 
 Examples:
   PYTHONPATH=/workspace .venv/bin/python scripts/replay_trade.py --trade-id <uuid>
-  PYTHONPATH=/workspace .venv/bin/python scripts/replay_trade.py --signal-id <uuid>
-  PYTHONPATH=/workspace .venv/bin/python scripts/replay_trade.py --order-id <client_or_broker_id>
-  PYTHONPATH=/workspace .venv/bin/python scripts/replay_trade.py --signal-id <uuid> --out /tmp/pack.json
+  PYTHONPATH=/workspace .venv/bin/python scripts/replay_trade.py --signal-id <uuid> --decision-package
+  PYTHONPATH=/workspace .venv/bin/python scripts/replay_trade.py --order-id <id> --out /tmp/pack.json
 """
 from __future__ import annotations
 
@@ -37,6 +36,22 @@ async def _run(args: argparse.Namespace) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
+    if args.decision_package:
+        from src.services.decision_package import (
+            decision_package_from_reconstruction,
+            write_decision_package,
+        )
+
+        dp = pack.get("decision_package") or decision_package_from_reconstruction(pack)
+        path = write_decision_package(dp, out_dir=args.decision_dir)
+        print(f"Decision package: {path}")
+        if args.out:
+            Path(args.out).write_text(json.dumps(dp, indent=2, default=str))
+            print(f"Wrote {args.out}")
+        elif not args.quiet:
+            print(json.dumps(dp, indent=2, default=str))
+        return 0
+
     text = json.dumps(pack, indent=2, default=str)
     if args.out:
         out = Path(args.out)
@@ -67,6 +82,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--signal-id", default=None, help="Signal UUID")
     p.add_argument("--order-id", default=None, help="Broker or client_order_id")
     p.add_argument("--out", default=None, help="Write JSON pack to path")
+    p.add_argument(
+        "--decision-package",
+        action="store_true",
+        help="Emit canonical decision_package/v1 (why the trade happened)",
+    )
+    p.add_argument(
+        "--decision-dir",
+        default=str(ROOT / "data" / "decision_packages"),
+        help="Directory for decision package files",
+    )
+    p.add_argument("--quiet", action="store_true", help="Less stdout when writing packages")
     p.add_argument(
         "--incident-dir",
         default=str(ROOT / "data" / "incident_packs"),
