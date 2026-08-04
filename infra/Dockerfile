@@ -68,10 +68,6 @@ COPY --from=builder /app/src/generated /app/src/generated
 # most often; everything above is kept stable).
 COPY src/ /app/src/
 COPY scripts/ /app/scripts/
-COPY legacy/dashboard/ /app/dashboard/
-# Legacy index.html references /static/app.js and /static/style.css.
-RUN mkdir -p /app/dashboard/static \
-    && cp /app/dashboard/app.js /app/dashboard/style.css /app/dashboard/static/
 COPY .env.template /app/.env.template
 COPY infra/entrypoint.sh /app/infra/entrypoint.sh
 RUN chmod +x /app/infra/entrypoint.sh
