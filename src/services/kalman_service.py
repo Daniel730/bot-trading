@@ -36,7 +36,12 @@ class KalmanFilter:
         
         # Process noise covariance Q.
         # Delta controls how fast the state evolves. Smaller delta = more stable beta.
-        self.Q_base = np.eye(2) * delta / (1 - delta)
+        delta_f = float(delta)
+        if not (0.0 < delta_f < 1.0):
+            raise ValueError(
+                f"Kalman delta must be in (0, 1) exclusive; got {delta_f}"
+            )
+        self.Q_base = np.eye(2) * delta_f / (1 - delta_f)
         self.Q = self.Q_base.copy()
         self._q_inflation_remaining = 0
         self._q_inflation_total = 0
