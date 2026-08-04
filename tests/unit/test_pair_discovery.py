@@ -89,6 +89,79 @@ def test_hedge_ratio_sanity_rejects_btc_bch_scale_beta():
     assert not is_hedge_ratio_sane(float("nan"), max_abs_hedge=25.0)
 
 
+def test_hedge_ratio_sanity_rejects_near_zero_when_min_floor_set():
+    """AVAX/LTC-style OLS ≈ -0.002 must fail admission min-abs floor."""
+    # Live Kalman path leaves min_abs at default 0.0 → near-zero still "sane"
+    # aside from exact 0.0 (admission-only floor).
+    assert is_hedge_ratio_sane(-0.002, max_abs_hedge=25.0)
+    assert is_hedge_ratio_sane(0.12, max_abs_hedge=25.0, min_abs_hedge=0.05)
+
+    assert not is_hedge_ratio_sane(-0.002, max_abs_hedge=25.0, min_abs_hedge=0.05)
+    assert not is_hedge_ratio_sane(0.001, max_abs_hedge=25.0, min_abs_hedge=0.05)
+    assert not is_hedge_ratio_sane(0.049, max_abs_hedge=25.0, min_abs_hedge=0.05)
+    assert is_hedge_ratio_sane(0.05, max_abs_hedge=25.0, min_abs_hedge=0.05)
+    assert is_hedge_ratio_sane(-0.08, max_abs_hedge=25.0, min_abs_hedge=0.05)
+
+
+def test_select_rotation_actions_rejects_near_zero_hedge_candidates():
+    actions = select_rotation_actions(
+        active_pairs=[],
+        candidates=[
+            {
+                "pair_id": "AVAX-USD_LTC-USD",
+                "sortino": 9.0,
+                "correlation": 0.95,
+                "p_value": 0.01,
+                "hedge_ratio": -0.002,
+            },
+            {
+                "pair_id": "KO_PEP",
+                "sortino": 2.0,
+                "correlation": 0.9,
+                "p_value": 0.02,
+                "hedge_ratio": 1.1,
+            },
+        ],
+        max_active_pairs=2,
+        sortino_threshold=1.0,
+        min_correlation=0.70,
+        max_pvalue=0.05,
+        max_abs_hedge=25.0,
+        min_abs_hedge=0.05,
+    )
+    assert [c["pair_id"] for c in actions["to_promote"]] == ["KO_PEP"]
+
+
+def test_select_rotation_actions_benches_near_zero_active_hedge():
+    actions = select_rotation_actions(
+        active_pairs=[
+            {
+                "id": "AVAX-USD_LTC-USD",
+                "is_cointegrated": True,
+                "hedge_ratio": -0.002,
+            },
+            {"id": "KO_PEP", "is_cointegrated": True, "hedge_ratio": 1.2},
+        ],
+        candidates=[
+            {
+                "pair_id": "MA_V",
+                "sortino": 3.0,
+                "correlation": 0.9,
+                "p_value": 0.01,
+                "hedge_ratio": 1.0,
+            },
+        ],
+        max_active_pairs=2,
+        sortino_threshold=2.0,
+        min_correlation=0.70,
+        max_pvalue=0.05,
+        max_abs_hedge=25.0,
+        min_abs_hedge=0.05,
+    )
+    assert actions["to_bench"] == ["AVAX-USD_LTC-USD"]
+    assert [c["pair_id"] for c in actions["to_promote"]] == ["MA_V"]
+
+
 def test_select_rotation_actions_fills_empty_slots():
     actions = select_rotation_actions(
         active_pairs=[],

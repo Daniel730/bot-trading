@@ -535,6 +535,97 @@ async def test_initialize_pairs_benches_denylisted_both_orders(monitor, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_initialize_pairs_benches_near_zero_ols_hedge(monitor, monkeypatch):
+    """Admission rejects AVAX/LTC-style OLS hedges below PAIR_DISCOVERY_MIN_ABS_HEDGE."""
+    import pandas as pd
+
+    saved: list[dict] = []
+
+    async def fake_active():
+        return [
+            {
+                "id": "AVAX-USD_LTC-USD",
+                "ticker_a": "AVAX-USD",
+                "ticker_b": "LTC-USD",
+                "hedge_ratio": 0.0,
+                "is_cointegrated": True,
+                "status": "Active",
+            },
+            {
+                "id": "KO_PEP",
+                "ticker_a": "KO",
+                "ticker_b": "PEP",
+                "hedge_ratio": 1.1,
+                "is_cointegrated": True,
+                "status": "Active",
+            },
+        ]
+
+    async def fake_filter(pairs, **_kwargs):
+        return list(pairs), []
+
+    async def fake_hist(tickers, *_a, **_k):
+        idx = pd.RangeIndex(60)
+        cols = {t: (30.0 if "AVAX" in t or t == "KO" else 80.0) + 0.01 * idx for t in tickers}
+        return pd.DataFrame(cols, index=idx)
+
+    async def fake_save(pairs):
+        saved.extend(pairs)
+
+    def fake_coint(s1, s2, pvalue_threshold=0.05):
+        # First warm-up pair is AVAX/LTC → near-zero OLS; KO/PEP is sane.
+        name = str(getattr(s1, "name", "") or "")
+        if "AVAX" in name:
+            return True, 0.01, -0.002
+        return True, 0.01, 1.15
+
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "MAX_ACTIVE_PAIRS", 20)
+    monkeypatch.setattr(settings, "COINTEGRATION_ROLLING_ENABLED", False)
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_MIN_ABS_HEDGE", 0.05)
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_MAX_ABS_HEDGE", 25.0)
+
+    with patch(
+        "src.services.persistence_service.persistence_service.get_active_trading_pairs",
+        new=fake_active,
+    ), patch(
+        "src.monitor.filter_pair_universe",
+        new=fake_filter,
+    ), patch(
+        "src.monitor.data_service.get_historical_data_async",
+        new=fake_hist,
+    ), patch(
+        "src.monitor.arbitrage_service.check_cointegration",
+        side_effect=fake_coint,
+    ), patch(
+        "src.monitor.persistence_service.save_trading_pairs",
+        new=fake_save,
+    ), patch(
+        "src.monitor.dashboard_service.update",
+        new_callable=AsyncMock,
+    ), patch(
+        "src.monitor.arbitrage_service.get_or_create_filter",
+        new_callable=AsyncMock,
+    ), patch(
+        "src.monitor.arbitrage_service.get_spread_metrics",
+        return_value={"mean": 0.0, "std": 1.0},
+    ), patch(
+        "src.monitor.asyncio.sleep",
+        new_callable=AsyncMock,
+    ):
+        await monitor.initialize_pairs()
+
+    benched_near_zero = [
+        p for p in saved
+        if p.get("id") == "AVAX-USD_LTC-USD" and p.get("status") == "Benched"
+    ]
+    assert benched_near_zero, f"expected AVAX/LTC benched; saved={saved}"
+    assert all(p.get("id") != "AVAX-USD_LTC-USD" for p in monitor.active_pairs)
+    assert any(p.get("id") == "KO_PEP" for p in monitor.active_pairs)
+
+
+@pytest.mark.asyncio
 async def test_auto_scout_promotes_when_enabled(monitor, monkeypatch):
     import asyncio
 

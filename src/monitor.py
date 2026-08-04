@@ -969,12 +969,18 @@ class ArbitrageMonitor:
 
                 pair_id = f"{ticker_a}_{ticker_b}"
 
-                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                if not is_hedge_ratio_sane(
+                    hedge,
+                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
+                ):
                     logger.warning(
-                        "SKIP %s/%s: extreme hedge_ratio=%.3f exceeds PAIR_DISCOVERY_MAX_ABS_HEDGE=%.1f",
+                        "SKIP %s/%s: insane hedge_ratio=%.6f "
+                        "(min_abs=%.3f max_abs=%.1f)",
                         ticker_a,
                         ticker_b,
                         float(hedge),
+                        settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     try:

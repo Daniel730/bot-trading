@@ -240,6 +240,10 @@ class Settings(BaseSettings):
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
     # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Admission-only floor on |OLS hedge|. Exact 0.0 was already rejected; near-zero
+    # betas (e.g. AVAX/LTC ≈ -0.002) still admit and make sizing fragile. Live
+    # Kalman scans do not use this floor (see KALMAN_BETA_CLIP_MIN separately).
+    PAIR_DISCOVERY_MIN_ABS_HEDGE: float = Field(default=0.05, validation_alias="PAIR_DISCOVERY_MIN_ABS_HEDGE")
     # Scout/promote quality floors (pair-internal correlation + cointegration p-value).
     PAIR_DISCOVERY_MIN_CORRELATION: float = Field(
         default=0.70,
