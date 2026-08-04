@@ -496,8 +496,14 @@ async def test_scan_sector_persists_cointegrated_combo(portfolio_manager_agent, 
         "src.agents.portfolio_manager_agent.settings.PAIR_DISCOVERY_MAX_TICKERS",
         3,
     )
+    monkeypatch.setattr(
+        "src.agents.portfolio_manager_agent.settings.PAIR_DISCOVERY_MIN_CORRELATION",
+        0.5,
+    )
 
     await agent.scan_sector_universe("Information Technology")
     assert len(saved) == 1
     assert len(saved[0]) == 3  # C(3,2)
     assert {c.pair_id for c in saved[0]} == {"AAPL_MSFT", "AAPL_NVDA", "MSFT_NVDA"}
+    assert all(float(c.hedge_ratio) == 1.0 for c in saved[0])
+    assert all(float(c.correlation) >= 0.5 for c in saved[0])

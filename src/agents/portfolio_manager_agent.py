@@ -364,6 +364,16 @@ class PortfolioManagerAgent:
                     )
                     continue
 
+                pair_corr = float(df[t_a].corr(df[t_b]))
+                if pair_corr < settings.PAIR_DISCOVERY_MIN_CORRELATION:
+                    logger.debug(
+                        "SCOUT SKIP %s: correlation=%.3f below min=%.3f",
+                        pair_id,
+                        pair_corr,
+                        settings.PAIR_DISCOVERY_MIN_CORRELATION,
+                    )
+                    continue
+
                 if is_coint:
                     spread = df[t_a] - (hedge * df[t_b])
                     spread_returns = spread.pct_change().dropna()
@@ -374,10 +384,11 @@ class PortfolioManagerAgent:
                         pair_id=pair_id,
                         sector=sector,
                         p_value=p_val,
-                        correlation=df[t_a].corr(df[t_b]),
+                        correlation=pair_corr,
                         expected_return=spread_returns.mean() * 252,
                         volatility=spread_returns.std() * np.sqrt(252),
                         sortino=pair_sortino,
+                        hedge_ratio=float(hedge),
                     ))
                     logger.info(f"Found new candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
             except Exception as e:
@@ -464,6 +475,15 @@ class PortfolioManagerAgent:
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     continue
+                pair_corr = float(df[t_a].corr(df[t_b]))
+                if pair_corr < settings.PAIR_DISCOVERY_MIN_CORRELATION:
+                    logger.debug(
+                        "SCOUT SKIP %s: correlation=%.3f below min=%.3f",
+                        pair_id,
+                        pair_corr,
+                        settings.PAIR_DISCOVERY_MIN_CORRELATION,
+                    )
+                    continue
                 if is_coint:
                     spread = df[t_a] - (hedge * df[t_b])
                     spread_returns = spread.pct_change().dropna()
@@ -474,10 +494,11 @@ class PortfolioManagerAgent:
                         pair_id=pair_id,
                         sector="Crypto",
                         p_value=p_val,
-                        correlation=df[t_a].corr(df[t_b]),
+                        correlation=pair_corr,
                         expected_return=spread_returns.mean() * 365,
                         volatility=spread_returns.std() * np.sqrt(365),
                         sortino=pair_sortino,
+                        hedge_ratio=float(hedge),
                     ))
                     logger.info(f"Found new crypto candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
             except Exception:
@@ -620,6 +641,8 @@ class PortfolioManagerAgent:
             sortino_threshold=settings.ELITE_ROTATION_SORTINO_THRESHOLD,
             denylist=settings.pair_denylist_ids,
             max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+            min_correlation=settings.PAIR_DISCOVERY_MIN_CORRELATION,
+            max_pvalue=settings.PAIR_DISCOVERY_MAX_PVALUE,
         )
         to_bench = actions["to_bench"]
         to_promote = actions["to_promote"]
