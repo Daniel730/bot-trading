@@ -2,22 +2,27 @@ package com.arbitrage.engine.broker;
 
 import reactor.core.publisher.Mono;
 
+/**
+ * Intentionally disabled stub. The Java engine must run with {@code DRY_RUN=true}
+ * and route through {@link MockBroker}; live brokerage remains on the Python path.
+ */
 public class LiveBroker implements Broker {
+    private static final String DISABLED =
+            "LiveBroker is intentionally disabled. Set DRY_RUN=true; "
+                    + "Java live brokerage is not implemented.";
+
     @Override
     public Mono<BrokerExecutionResponse> execute(BrokerExecutionRequest request) {
-        // Placeholder for real brokerage integration
-        return Mono.just(new BrokerExecutionResponse(false, "LiveBroker integration not yet implemented", null));
+        return Mono.error(new UnsupportedOperationException(DISABLED));
     }
 
     @Override
     public int cancelAllOrders() {
-        // Placeholder for real cancellation logic
-        return 0;
+        throw new UnsupportedOperationException(DISABLED);
     }
 
     @Override
     public int liquidateAllPositions() {
-        // Placeholder for real liquidation logic
-        return 0;
+        throw new UnsupportedOperationException(DISABLED);
     }
 }

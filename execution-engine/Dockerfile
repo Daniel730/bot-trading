@@ -22,5 +22,8 @@ RUN --mount=type=cache,target=/home/gradle/.gradle,sharing=locked \
 FROM eclipse-temurin:21-jre-alpine
 WORKDIR /app
 COPY --from=builder /app/build/libs/execution-engine-1.0-SNAPSHOT-all.jar app.jar
+# Fail-closed default: Application refuses to boot unless DRY_RUN=true.
+ENV DRY_RUN=true
+ENV LIVE_CAPITAL_DANGER=false
 EXPOSE 50051
 ENTRYPOINT ["java", "-jar", "app.jar"]
