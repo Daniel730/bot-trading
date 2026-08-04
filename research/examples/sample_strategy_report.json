@@ -1,0 +1,37 @@
+{
+  "strategy_id": "pair-arb-kalman-demo",
+  "metrics": {
+    "sharpe": 1.4,
+    "sortino": 1.8,
+    "profit_factor": 1.55,
+    "max_drawdown": 0.12,
+    "expectancy": 12.5,
+    "n_trades": 120
+  },
+  "costs": {
+    "spread": true,
+    "slippage": true,
+    "commission": true,
+    "latency": true,
+    "partial_fills": false
+  },
+  "walk_forward": {
+    "completed": true,
+    "folds": 5,
+    "parameters_refit_on_test": false
+  },
+  "out_of_sample": {
+    "completed": true,
+    "holdout_fraction": 0.2
+  },
+  "robustness": {
+    "param_shock_pm_10pct": {
+      "base_sharpe": 1.4,
+      "worst_sharpe": 1.15
+    }
+  },
+  "search_space": {
+    "combinations_tested": 48,
+    "multiple_testing_corrected": true
+  }
+}

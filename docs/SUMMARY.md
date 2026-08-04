@@ -1,35 +1,33 @@
 # SUMMARY.md
 
-## What shipped (2026-08-04)
+## Status
 
-1. **Full-day local SHADOW soak** + harness (`scripts/full_day_audit_*`, longwatch).
-2. **Phase-1 adversarial audit** (`docs/AUDIT_TECHNICAL_2026-08-04.md`) and remediations F-001…F-010 (subset).
-3. **Phase-2 independent audit** (`docs/AUDIT_PHASE2.md`) proving path gaps and closing them.
-4. **Phase-3 production-readiness** (`docs/AUDIT_PHASE3.md`) — closed F-015, F-020, Telegram LIVE trade auth gap, F-023, F-025; attempted to break each fix.
+**READY FOR LIMITED LIVE CAPITAL** (place money) — not yet trust large capital.
 
-## Phase-3 remediations (high level)
+Dominant risk shifted from engineering → **quantitative research quality**.
 
-- Open-slot reservation + checksummed intent WAL before approval (F-015/F-020).
-- SQLite WAL + atomic budget increment (F-020).
-- LIVE Telegram trade Approve / `/invest` / DCA schedule refused; login Approve preserved.
-- Pairs update + discover step-up 2FA (F-023); UI OTP prompts.
-- TOTP Fernet AEAD + salted backup hashes with legacy migration (F-025).
+## Dual track
 
-## Verdict
+| Track | Mode | Effort |
+|---|---|---|
+| Platform | Maintenance / hardening | ~10% |
+| Quant research | Primary | ~60% + 20% observability |
 
-**READY FOR PAPER TRADING ONLY**
+See `docs/ROADMAP_DUAL_TRACK.md`, `research/`.
 
-Not limited/full LIVE: multi-process reservation (R-301), Leg B crash orphans (R-302), realized-PnL-only drawdown (R-303) remain open failure classes.
+## Recent foundations
 
-## Scores (Phase-3)
+- Decision Package `decision_package/v1` (`scripts/replay_trade.py --decision-package`)
+- Divergence **severity** (INFO/WARNING/CRITICAL/FATAL) — no kill on INFO piles
+- Strategy Acceptance Protocol checker (`scripts/check_strategy_acceptance.py`)
 
-| Security | Reliability | Trading Safety | Recoverability | Observability | Determinism | Maintainability |
-|---|---|---|---|---|---|---|
-| 7.8 | 7.8 | 8.0 | 7.5 | 7.0 | 6.5 | 7.5 |
+## Scale-up conditions
 
-## Verification
+1. 48h soak clean  
+2. Small capital  
+3. Severity-based stops + rollback  
+4. Strategy report **accepted** under the protocol (OOS, costs, robustness, no lookahead)
 
-- Backend Phase-3 unit: **pass** (`tests/unit/test_audit_phase3_remediations.py`).
-- Related Phase-1/2 + security/budget: **pass**.
-- Frontend PairsPanel: **pass**.
-- PR: https://github.com/Daniel730/bot-trading/pull/116
+## PR
+
+https://github.com/Daniel730/bot-trading/pull/117

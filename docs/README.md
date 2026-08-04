@@ -20,12 +20,28 @@ Use these files as the current documentation set:
 | `agents.md` | Agent ensemble and background analysis |
 | `CLAUDE.md` | Assistant-oriented repo map and commands |
 | `tofix.md` | Current known backlog and open risks |
+| `SUMMARY.md` | Current readiness verdict and open risks |
+| `DECISIONS.md` | Architecture / safety decision log |
+| `ROADMAP_DUAL_TRACK.md` | Platform maintenance vs quant research tracks |
+| `../research/README.md` | Research track entry + acceptance protocol |
+
+Production audit series (2026-08-04 soak → Limited LIVE ops):
+
+| Document | Scope |
+|---|---|
+| `FULL_DAY_AUDIT_2026-08-04.md` | Full-day soak findings |
+| `AUDIT_PHASE2.md` | Phase 2 hardening |
+| `AUDIT_PHASE3.md` | Phase 3 LIVE blockers (reservation, Telegram, 2FA) |
+| `AUDIT_PHASE4.md` | Distributed reservation, exactly-once, broker SoT |
+| `AUDIT_PHASE5_OPS.md` | Provenance, replay, divergence, rollback, kill criteria |
+| `AUDIT_TECHNICAL_2026-08-04.md` | Technical deep-dive companion |
 
 Historical artifacts:
 
 - `bugs.md` captures an older audit register and is not the current backlog.
 - `MONDAY_READINESS_AUDIT.md` captures the paper-trading readiness state for 2026-04-20.
 - `geminiplan.md` is the original long-form design/research plan.
+- `WIP_AUDIT_2026-07-17.md`, `OVERNIGHT_2026-08-04.md`, and ad-hoc `*-report.md` files are point-in-time snapshots — prefer the Phase docs + `SUMMARY.md` for current posture.
 - `specs/` and `.specify/` contain feature-planning artifacts and templates, not always current runtime docs.
 
 ## Support

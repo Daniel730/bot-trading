@@ -110,7 +110,79 @@ async def evaluate_capital_halt(
         except Exception as exc:  # noqa: BLE001
             logger.warning("capital_halt: rolling metrics unavailable: %s", exc)
 
+    # R-303: equity high-water-mark / unrealized drawdown (broker equity as truth).
+    equity_halt = await _evaluate_equity_drawdown(
+        persistence_service=persistence_service,
+        max_dd=max_dd,
+        details=details,
+    )
+    if equity_halt is not None:
+        return equity_halt
+
     return {"halt": False, "reason": None, "details": details}
+
+
+async def _evaluate_equity_drawdown(
+    *,
+    persistence_service: Any,
+    max_dd: float,
+    details: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    """Halt when (HWM - current_equity) / HWM >= MAX_DRAWDOWN.
+
+    Updates ``equity_high_water_mark`` in system_state when equity makes new highs.
+    Fail-closed on broker/live when equity cannot be read.
+    """
+    try:
+        from src.services.brokerage_service import BrokerageService
+
+        brokerage = BrokerageService()
+        equity = await brokerage.get_account_equity()
+        equity_f = float(equity or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("capital_halt: equity unavailable: %s", exc)
+        if not bool(getattr(settings, "PAPER_TRADING", True)):
+            return {
+                "halt": True,
+                "reason": "equity_unavailable",
+                "details": {**details, "error": str(exc)},
+            }
+        return None
+
+    details["current_equity"] = equity_f
+    if equity_f <= 0:
+        if not bool(getattr(settings, "PAPER_TRADING", True)):
+            return {
+                "halt": True,
+                "reason": "equity_non_positive",
+                "details": details,
+            }
+        return None
+
+    try:
+        raw_hwm = await persistence_service.get_system_state("equity_high_water_mark")
+        hwm = float(raw_hwm) if raw_hwm is not None else 0.0
+    except Exception:
+        hwm = 0.0
+
+    if equity_f > hwm:
+        hwm = equity_f
+        try:
+            await persistence_service.set_system_state("equity_high_water_mark", str(hwm))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("capital_halt: failed to persist HWM: %s", exc)
+
+    details["equity_high_water_mark"] = hwm
+    if hwm > 0:
+        dd_frac = max(0.0, (hwm - equity_f) / hwm)
+        details["equity_drawdown_fraction"] = dd_frac
+        if dd_frac >= max_dd:
+            return {
+                "halt": True,
+                "reason": "equity_drawdown_exceeds_max_drawdown",
+                "details": details,
+            }
+    return None
 
 
 async def enforce_capital_halt_or_raise_state(
@@ -135,7 +207,7 @@ async def enforce_capital_halt_or_raise_state(
 
     new_state = (
         "MAX_DRAWDOWN_HALT"
-        if "rolling_max_drawdown" in reason
+        if ("rolling_max_drawdown" in reason or "equity_drawdown" in reason)
         else "DAILY_LOSS_HALT"
         if "daily_loss" in reason
         else current

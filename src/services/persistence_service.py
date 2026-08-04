@@ -597,6 +597,7 @@ class PersistenceService:
         return (
             OrderStatus.ORDER_SUBMITTED,
             OrderStatus.LEG_A_SUBMITTED,
+            OrderStatus.LEG_A_FILLED,
             OrderStatus.LEG_A_PARTIAL,
             OrderStatus.LEG_B_SUBMITTED,
             OrderStatus.LEG_B_PARTIAL,
