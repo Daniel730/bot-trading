@@ -363,6 +363,25 @@ class Settings(BaseSettings):
     ORCH_AGENT_CONFIDENCE_THRESHOLD: float = Field(default=0.5, validation_alias="ORCH_AGENT_CONFIDENCE_THRESHOLD")
     ORCH_FUNDAMENTAL_DEFAULT_SCORE: int = Field(default=50, validation_alias="ORCH_FUNDAMENTAL_DEFAULT_SCORE")
     ORCH_FUNDAMENTAL_VETO_SCORE: int = Field(default=40, validation_alias="ORCH_FUNDAMENTAL_VETO_SCORE")
+    # Treat Redis SEC scores older than this (or with unusable timestamps) as unknown.
+    # Matches redis_service fundamental TTL (24h) so live mode cannot trade on stale cache.
+    ORCH_FUNDAMENTAL_MAX_AGE_SECONDS: int = Field(
+        default=86400,
+        validation_alias="ORCH_FUNDAMENTAL_MAX_AGE_SECONDS",
+    )
+    # Skip re-analysis when a usable score is newer than this (worker only).
+    SEC_WORKER_REFRESH_SECONDS: int = Field(
+        default=43200,
+        validation_alias="SEC_WORKER_REFRESH_SECONDS",
+    )
+    SEC_WORKER_UNREACHABLE_THRESHOLD: int = Field(
+        default=3,
+        validation_alias="SEC_WORKER_UNREACHABLE_THRESHOLD",
+    )
+    SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS: int = Field(
+        default=1800,
+        validation_alias="SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS",
+    )
     ORCH_ACCURACY_LOW_THRESHOLD: float = Field(default=0.4, validation_alias="ORCH_ACCURACY_LOW_THRESHOLD")
     ORCH_ACCURACY_HIGH_THRESHOLD: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_HIGH_THRESHOLD")
     ORCH_ACCURACY_LOW_MULTIPLIER: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_LOW_MULTIPLIER")
@@ -848,6 +867,16 @@ class Settings(BaseSettings):
         if (self.BROKERAGE_PROVIDER or "").upper() != "ALPACA":
             return False
         return self.is_alpaca_paper_endpoint
+
+    @property
+    def execution_lane(self) -> str:
+        """Single fill path: SHADOW | BROKER_PAPER | LIVE (mutually exclusive)."""
+        from src.services.execution_lane import resolve_execution_lane
+
+        return resolve_execution_lane(
+            paper_trading=bool(self.PAPER_TRADING),
+            broker_paper_trading=bool(self.is_broker_paper_trading),
+        )
 
     @property
     def should_auto_approve_trades(self) -> bool:

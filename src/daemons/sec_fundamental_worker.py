@@ -92,8 +92,12 @@ class SECFundamentalWorker:
                             print("AGENT_LOGGER: Hard Kill threshold (09:15 EST) reached. ABORTING CYCLE.")
                         break
 
-                    if self._consecutive_unreachable >= settings.SEC_WORKER_UNREACHABLE_THRESHOLD:
-                        backoff = settings.SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS
+                    if self._consecutive_unreachable >= int(
+                        getattr(settings, "SEC_WORKER_UNREACHABLE_THRESHOLD", 3)
+                    ):
+                        backoff = int(
+                            getattr(settings, "SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS", 1800)
+                        )
                         print(
                             "AGENT_LOGGER: SEC Worker circuit open after "
                             f"{self._consecutive_unreachable} unreachable failures. "
@@ -129,7 +133,10 @@ class SECFundamentalWorker:
         """Refresh one equity ticker; skip fresh cache; do not cache SEC outages."""
         try:
             cached = await redis_service.get_fundamental_score(ticker)
-            if _score_is_fresh(cached, max_age_seconds=settings.SEC_WORKER_REFRESH_SECONDS):
+            if _score_is_fresh(
+                cached,
+                max_age_seconds=int(getattr(settings, "SEC_WORKER_REFRESH_SECONDS", 43200)),
+            ):
                 print(
                     f"AGENT_LOGGER: SEC Worker skipping {ticker}; "
                     f"fresh cache score={cached.get('score')}"
