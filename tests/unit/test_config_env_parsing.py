@@ -62,10 +62,53 @@ def test_default_dashboard_cors_regex_allows_tailscale_origins(monkeypatch):
 
 
 def test_guard_monitor_entry_zscore_clamps_dangerous_override():
-    from src.config import _guard_monitor_entry_zscore
+    from src.config import MONITOR_ENTRY_ZSCORE_MIN, _guard_monitor_entry_zscore
 
+    assert MONITOR_ENTRY_ZSCORE_MIN == 1.0
     assert _guard_monitor_entry_zscore(0.5) == 1.0
+    assert _guard_monitor_entry_zscore(0.99) == 1.0
+    assert _guard_monitor_entry_zscore(1.0) == 1.0
     assert _guard_monitor_entry_zscore(2.0) == 2.0
+
+
+def test_env_monitor_entry_zscore_below_floor_is_clamped(monkeypatch):
+    """Env MONITOR_ENTRY_ZSCORE=0.5 must not silently stick on Settings."""
+    monkeypatch.setenv("POSTGRES_PASSWORD", "strong-postgres-secret")
+    monkeypatch.setenv("DASHBOARD_TOKEN", "strong-dashboard-token")
+    monkeypatch.setenv("MONITOR_ENTRY_ZSCORE", "0.5")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.MONITOR_ENTRY_ZSCORE == 1.0
+
+
+def test_validate_runtime_settings_update_writes_clamped_entry_z_back(monkeypatch):
+    """Dashboard setattr must receive the clamped value, not the raw 0.5."""
+    from src.config import settings, validate_runtime_settings_update
+
+    monkeypatch.setattr(settings, "MONITOR_ENTRY_ZSCORE", 2.0)
+    updates = {"MONITOR_ENTRY_ZSCORE": 0.5}
+
+    validate_runtime_settings_update(updates)
+
+    assert updates["MONITOR_ENTRY_ZSCORE"] == 1.0
+    # Live settings restored after validation probe.
+    assert settings.MONITOR_ENTRY_ZSCORE == 2.0
+
+
+def test_save_settings_override_persists_clamped_entry_z(tmp_path, monkeypatch):
+    import json
+
+    from src import config as config_mod
+
+    override_path = tmp_path / "bot_settings.json"
+    monkeypatch.setattr(config_mod, "BOT_SETTINGS_OVERRIDE_PATH", override_path)
+
+    config_mod.save_settings_override({"MONITOR_ENTRY_ZSCORE": 0.5, "SCAN_INTERVAL_SECONDS": 20})
+
+    stored = json.loads(override_path.read_text(encoding="utf-8"))
+    assert stored["MONITOR_ENTRY_ZSCORE"] == 1.0
+    assert stored["SCAN_INTERVAL_SECONDS"] == 20
 
 
 def test_default_pair_denylist_covers_both_btc_bch_orders(monkeypatch):

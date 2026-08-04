@@ -419,8 +419,11 @@ class DashboardState:
             self.details = details
             if active_signals is not None:
                 self.active_signals = active_signals
+            # `pnl` is lifetime closed-trade revenue from the monitor scan loop.
+            # Never write it into daily_profit -- that field is owned by _poll_metrics
+            # (today's realized PnL) and the Overview "profit today" card.
             if pnl is not None:
-                self.portfolio_metrics["daily_profit"] = pnl
+                self.portfolio_metrics["total_revenue"] = pnl
             await self._broadcast()
 
     async def update_metrics(self, metrics: dict):
@@ -997,6 +1000,9 @@ class DashboardService:
             "MARKET_DATA_TIMEOUT_SECONDS": {"type": "float", "sensitive": False},
             "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
             "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": False},
+            # Missing from editable set historically broke CI patches that expected
+            # operators to tune the force-exit floor via dashboard / bot_settings.
+            "TAKE_PROFIT_FORCE_EXIT_ZSCORE": {"type": "float", "sensitive": False},
             "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": False},
             "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True},
             "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True},
