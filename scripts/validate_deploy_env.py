@@ -48,6 +48,12 @@ def validate(values: dict[str, str]) -> list[str]:
     elif postgres_password.lower() in BLOCKED_POSTGRES_PASSWORDS:
         errors.append("POSTGRES_PASSWORD is still a blocked default value.")
 
+    redis_password = values.get("REDIS_PASSWORD", "")
+    if not redis_password:
+        errors.append("REDIS_PASSWORD is missing or empty.")
+    elif len(redis_password) < 16:
+        errors.append("REDIS_PASSWORD must be at least 16 characters long.")
+
     dashboard_token = values.get("DASHBOARD_TOKEN", "")
     if not dashboard_token:
         errors.append("DASHBOARD_TOKEN is missing or empty.")
@@ -112,7 +118,8 @@ def main() -> int:
         print(
             "Fix the persistent deployment env file with strong values before starting "
             "containers. If POSTGRES_PASSWORD changes for an existing Postgres volume, "
-            "rotate the database user's password too."
+            "rotate the database user's password too. REDIS_PASSWORD must be set (≥16 chars) "
+            "so compose can enable Redis --requirepass."
         )
         return 1
 

@@ -149,7 +149,11 @@ The dashboard removes old `token`/`session` query params from the URL. API auth 
 
 ## Host publish hardening (bot-server)
 
-Compose publishes Redis (`6379`), Postgres (`5433`), FastMCP (`8000`), and the Java gRPC engine (`50051`) on **`127.0.0.1` only**. Inter-container traffic still uses the Docker network (`redis` / `postgres` hostnames). Do not re-bind those ports to `0.0.0.0`/`[::]` — bot-server has LAN and public IPv6 addresses, and Redis currently runs without `requirepass`.
+Compose publishes Redis (`6379`), Postgres (`5433`), FastMCP (`8000`), and the Java gRPC engine (`50051`) on **`127.0.0.1` only**. Inter-container traffic still uses the Docker network (`redis` / `postgres` hostnames) and does **not** go through host publishes.
+
+Redis requires `REDIS_PASSWORD` (compose `--requirepass`). Store it only in `/home/daniel/.env.trading` (never commit). Bot/MCP/execution-engine/sec-worker read it via `env_file`; host-side `redis-cli` must use `-a` against `127.0.0.1:6379`.
+
+Do not re-bind those ports to `0.0.0.0`/`[::]` — bot-server has LAN and public IPv6. After compose edits, re-apply with `infra/ops_apply_loopback_binds.sh` and confirm with `infra/ops_security_probe.sh`.
 
 Dashboard API (`BOT_HOST_PORT`, usually `8082`) and frontend (`3000`) remain host-reachable for Tailscale/operator access; API routes stay session/token protected (`/ping` is the unauthenticated liveness exception).
 
@@ -222,7 +226,7 @@ Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
 | `ORCHESTRATOR_TIMEOUT_SECONDS` | `60` (or unset → code default 60) | Agent swarm budget |
 | `MONITOR_ENTRY_ZSCORE` | `2.0` (never `0.5`) | Entry threshold; code clamps below 1.0 |
 | `IMAGE_OWNER` | `daniel730` | GHCR namespace |
-| `POSTGRES_PASSWORD`, `DASHBOARD_TOKEN` | non-default, ≥16 chars for token | Startup guards |
+| `POSTGRES_PASSWORD`, `DASHBOARD_TOKEN`, `REDIS_PASSWORD` | non-default; token ≥16 chars; Redis password ≥16 chars | Startup / compose guards (`REDIS_PASSWORD` enables `--requirepass`) |
 | `PAIR_DISCOVERY_ENABLED` | `true` (default) | Background scout + elite rotation |
 | `PAIR_DISCOVERY_AUTO_PROMOTE` | `true` (default) | Promote scouts into Active after discover |
 | `PAIR_DENYLIST` | includes `BTC-USD_BCH-USD` | Quarantine junk / spread-guard churners |

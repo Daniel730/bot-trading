@@ -21,6 +21,7 @@ def test_validate_deploy_env_accepts_non_default_secrets(tmp_path):
             [
                 "POSTGRES_PASSWORD=strong-postgres-secret",
                 "DASHBOARD_TOKEN=strong-dashboard-token",
+                "REDIS_PASSWORD=strong-redis-password-32",
                 "DATABASE_URL=",
             ]
         ),
@@ -31,6 +32,25 @@ def test_validate_deploy_env_accepts_non_default_secrets(tmp_path):
 
     assert result.returncode == 0
     assert "OK" in result.stdout
+
+
+def test_validate_deploy_env_requires_redis_password(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "POSTGRES_PASSWORD=strong-postgres-secret",
+                "DASHBOARD_TOKEN=strong-dashboard-token",
+                "REDIS_PASSWORD=",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_validator(env_file)
+
+    assert result.returncode == 1
+    assert "REDIS_PASSWORD" in result.stdout
 
 
 def test_validate_deploy_env_blocks_values_that_crash_runtime_config(tmp_path):
@@ -63,6 +83,7 @@ def test_validate_deploy_env_blocks_invalid_json_objects(tmp_path):
             [
                 "POSTGRES_PASSWORD=strong-postgres-secret",
                 "DASHBOARD_TOKEN=strong-dashboard-token",
+                "REDIS_PASSWORD=strong-redis-password-32",
                 "CRYPTO_TOKEN_MAPPING=not-json",
             ]
         ),
@@ -82,6 +103,7 @@ def test_validate_deploy_env_blocks_paper_trading_false(tmp_path):
             [
                 "POSTGRES_PASSWORD=strong-postgres-secret",
                 "DASHBOARD_TOKEN=strong-dashboard-token",
+                "REDIS_PASSWORD=strong-redis-password-32",
                 "PAPER_TRADING=false",
             ]
         ),
@@ -101,6 +123,7 @@ def test_validate_deploy_env_allows_paper_trading_false_on_alpaca_paper_api(tmp_
             [
                 "POSTGRES_PASSWORD=strong-postgres-secret",
                 "DASHBOARD_TOKEN=strong-dashboard-token",
+                "REDIS_PASSWORD=strong-redis-password-32",
                 "PAPER_TRADING=false",
                 "ALPACA_BASE_URL=https://paper-api.alpaca.markets",
             ]
@@ -121,6 +144,7 @@ def test_validate_deploy_env_blocks_template_alpaca_credentials(tmp_path):
             [
                 "POSTGRES_PASSWORD=strong-postgres-secret",
                 "DASHBOARD_TOKEN=strong-dashboard-token",
+                "REDIS_PASSWORD=strong-redis-password-32",
                 "ALPACA_API_KEY=your_alpaca_key",
                 "ALPACA_API_SECRET=your_alpaca_secret",
             ]

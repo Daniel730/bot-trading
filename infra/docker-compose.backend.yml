@@ -1,16 +1,32 @@
 services:
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    # Host publishes are loopback-only (bot-server has LAN + public IPv6).
+    # requirepass is mandatory so a mistaken 0.0.0.0 republish is still not open.
+    # Inter-container clients use service name `redis` + REDIS_PASSWORD from env_file.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     restart: always
     mem_limit: 128m
     cpus: 0.50
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        [
+          "CMD-SHELL",
+          'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG',
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -22,7 +38,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: ${POSTGRES_DB:-trading_bot}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: always
@@ -69,8 +85,9 @@ services:
     # No `build:` block here so Compose doesn't redundantly re-run the build.
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     command: python src/mcp_server.py
+    # FastMCP has no auth layer; keep the host publish on loopback only.
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - ${APP_ENV_FILE:-../.env}
     volumes:
@@ -97,8 +114,9 @@ services:
 
   execution-engine:
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/execution-engine:${IMAGE_TAG:-latest}
+    # gRPC sidecar is only needed on-host / via compose network — not LAN/IPv6.
     ports:
-      - "50051:50051"
+      - "127.0.0.1:50051:50051"
     env_file:
       - ${APP_ENV_FILE:-../.env}
     environment:

@@ -2,4 +2,5 @@ server:
   port: 50051
 
 execution:
-  dry-run: ${DRY_RUN:false}
+  # Default true: the engine refuses live brokerage until LiveBroker is wired.
+  dry-run: ${DRY_RUN:true}

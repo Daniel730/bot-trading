@@ -76,6 +76,26 @@ def test_execution_engine_forces_dry_run_sidecar_mode():
     assert environment["LIVE_CAPITAL_DANGER"] == "false"
 
 
+def test_sensitive_backend_ports_are_loopback_only():
+    """Host publishes must not expose Redis/Postgres/MCP/gRPC on LAN or public IPv6."""
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    expected = {
+        "redis": "127.0.0.1:6379:6379",
+        "postgres": "127.0.0.1:5433:5432",
+        "mcp-server": "127.0.0.1:8000:8000",
+        "execution-engine": "127.0.0.1:50051:50051",
+    }
+    for service_name, binding in expected.items():
+        ports = compose["services"][service_name].get("ports") or []
+        assert binding in ports, f"{service_name} must publish {binding} only"
+        assert not any(
+            isinstance(p, str) and p.startswith("0.0.0.0:") for p in ports
+        )
+        assert not any(
+            isinstance(p, str) and re.fullmatch(r"\d+:\d+", p) for p in ports
+        ), f"{service_name} must not use unscoped host binds like 'PORT:PORT'"
+
+
 def test_bot_uses_compose_dependency_hosts():
     compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
     environment = compose["services"]["bot"]["environment"]
@@ -117,3 +137,32 @@ def test_sec_worker_uses_compose_postgres_host():
 
     assert environment["POSTGRES_HOST"] == "postgres"
     assert environment["POSTGRES_PORT"] == "5432"
+
+
+def test_backend_compose_hardens_host_publishes_to_loopback():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    expected = {
+        "redis": "127.0.0.1:6379:6379",
+        "postgres": "127.0.0.1:5433:5432",
+        "mcp-server": "127.0.0.1:8000:8000",
+        "execution-engine": "127.0.0.1:50051:50051",
+    }
+    for service_name, publish in expected.items():
+        ports = compose["services"][service_name]["ports"]
+        assert publish in ports
+        assert not any(p.startswith("0.0.0.0:") for p in ports)
+        assert not any(isinstance(p, str) and p.startswith(publish.split(":")[1] + ":") for p in ports)
+
+
+def test_backend_compose_requires_redis_password_and_requirepass():
+    compose_text = BACKEND_COMPOSE.read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+    redis = compose["services"]["redis"]
+
+    assert redis["environment"]["REDIS_PASSWORD"] == (
+        "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}"
+    )
+    assert "--requirepass" in redis["command"]
+    assert "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}" in redis["command"]
+    health = redis["healthcheck"]["test"]
+    assert any("REDIS_PASSWORD" in part for part in health if isinstance(part, str))

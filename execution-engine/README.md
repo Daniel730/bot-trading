@@ -74,7 +74,8 @@ The proto lives at `src/main/proto/execution.proto` and exposes:
 
 ```bash
 docker build -t execution-engine .
-docker run --rm -p 50051:50051 --env-file ../.env execution-engine
+# Host publish must stay loopback-only (LAN/IPv6 must not reach gRPC).
+docker run --rm -p 127.0.0.1:50051:50051 -e DRY_RUN=true --env-file ../.env execution-engine
 ```
 
-The production compose file uses a TCP healthcheck against port `50051` before dependent Python services begin sending gRPC calls.
+Production compose publishes `127.0.0.1:50051` and forces `DRY_RUN=true`. A TCP healthcheck against port `50051` runs before dependent Python services begin sending gRPC calls. The monitor's paper/live order path does **not** default through this sidecar.
