@@ -13,12 +13,16 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../services/api', () => ({
-  fetchPairs: vi.fn(),
-  syncWallet: vi.fn(),
-  discoverPairs: vi.fn(),
-  updatePairs: vi.fn(),
-}));
+vi.mock('../services/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../services/api')>();
+  return {
+    ...actual,
+    fetchPairs: vi.fn(),
+    syncWallet: vi.fn(),
+    discoverPairs: vi.fn(),
+    updatePairs: vi.fn(),
+  };
+});
 
 import { discoverPairs, fetchPairs, syncWallet } from '../services/api';
 import PairsPanel from '../components/PairsPanel';

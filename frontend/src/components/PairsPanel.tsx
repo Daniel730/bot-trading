@@ -427,7 +427,13 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
         result = await syncWallet(token, sessionToken, budget);
       } catch (firstErr) {
         const errMsg = (firstErr as Error)?.message || '';
-        if (firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg)) {
+        // Guard ApiError: partial mocks may omit the class (instanceof would throw).
+        if (
+          typeof ApiError === 'function' &&
+          firstErr instanceof ApiError &&
+          firstErr.status === 403 &&
+          /2fa|token/i.test(errMsg)
+        ) {
           const otp = window.prompt('Enter authenticator or backup code to confirm wallet sync:');
           if (!otp?.trim()) throw firstErr;
           result = await syncWallet(token, sessionToken, budget, otp.trim());
