@@ -868,14 +868,22 @@ class DataService:
                 # wide yfinance crypto bid/ask pairs commonly false-reject the
                 # spread guard even when the paper broker quote is tight.
                 if ticker.endswith("-USD"):
-                    crypto_symbol = ticker.replace("-", "/")
-                    snapshots = self.alpaca_client.get_crypto_snapshots([crypto_symbol])
-                    snapshot = snapshots.get(crypto_symbol) if isinstance(snapshots, dict) else None
-                    if snapshot is not None:
-                        quote = getattr(snapshot, "latest_quote", None)
-                        bid, ask = quote_bid_ask(quote, ("bp", "bid_price", "bid"), ("ap", "ask_price", "ask"))
-                        if bid > 0.0 and ask > 0.0:
-                            return bid, ask
+                    try:
+                        crypto_symbol = ticker.replace("-", "/")
+                        snapshots = self.alpaca_client.get_crypto_snapshots([crypto_symbol])
+                        snapshot = snapshots.get(crypto_symbol) if isinstance(snapshots, dict) else None
+                        if snapshot is not None:
+                            quote = getattr(snapshot, "latest_quote", None)
+                            bid, ask = quote_bid_ask(quote, ("bp", "bid_price", "bid"), ("ap", "ask_price", "ask"))
+                            if bid > 0.0 and ask > 0.0:
+                                return bid, ask
+                    except Exception as e:
+                        # Keep yfinance fallback reachable when Alpaca crypto data fails.
+                        logger.debug(
+                            "DataService: Alpaca crypto bid/ask failed for %s: %s",
+                            ticker,
+                            e,
+                        )
 
                 info = yf.Ticker(ticker).info
                 bid, ask = quote_bid_ask(info, ("bid",), ("ask",))
