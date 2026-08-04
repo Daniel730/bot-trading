@@ -1,5 +1,5 @@
 import { Shield } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 
 interface LoginViewProps {
   loginToken: string;
@@ -14,6 +14,8 @@ interface LoginViewProps {
   onCancelApproval?: () => void;
 }
 
+const OTP_ERROR_RE = /authenticator|backup code|otp|2fa|two-factor/i;
+
 export default function LoginView(props: LoginViewProps) {
   const {
     loginToken,
@@ -27,18 +29,10 @@ export default function LoginView(props: LoginViewProps) {
     onSubmit,
     onCancelApproval,
   } = props;
-  const [showOtpField, setShowOtpField] = useState(Boolean(loginOtp));
-
-  useEffect(() => {
-    if (loginOtp) setShowOtpField(true);
-  }, [loginOtp]);
-
-  // Fail-closed login often requires OTP when Telegram is unavailable — surface the field automatically.
-  useEffect(() => {
-    if (loginError && /authenticator|backup code|otp|2fa|two-factor/i.test(loginError)) {
-      setShowOtpField(true);
-    }
-  }, [loginError]);
+  // Derive OTP visibility from props; only manual "Use OTP instead" needs local state.
+  const [otpManual, setOtpManual] = useState(false);
+  const showOtpField =
+    Boolean(loginOtp) || Boolean(loginError && OTP_ERROR_RE.test(loginError)) || otpManual;
 
   return (
     <div className="login-screen">
@@ -81,7 +75,7 @@ export default function LoginView(props: LoginViewProps) {
             <button
               type="button"
               className="link-btn"
-              onClick={() => setShowOtpField(true)}
+              onClick={() => setOtpManual(true)}
             >
               Use OTP instead
             </button>
