@@ -955,7 +955,7 @@ class ArbitrageMonitor:
                     arbitrage_service.filters.pop(pair_id, None)
                     arbitrage_service.filter_fingerprints.pop(pair_id, None)
                     try:
-                        await redis_service.client.delete(f"kalman:{pair_id}")
+                        await redis_service.delete_kalman_state(pair_id)
                     except Exception as exc:
                         logger.warning("KALMAN QUARANTINE: Redis state delete failed for %s: %s", pair_id, exc)
 
@@ -1569,7 +1569,7 @@ class ArbitrageMonitor:
                 arbitrage_service.filters.pop(pair['id'], None)
                 arbitrage_service.filter_fingerprints.pop(pair['id'], None)
                 try:
-                    await redis_service.client.delete(f"kalman:{pair['id']}")
+                    await redis_service.delete_kalman_state(pair['id'])
                 except Exception as exc:
                     logger.warning(
                         "KALMAN GUARD [%s/%s]: failed to delete Redis state for quarantine: %s",

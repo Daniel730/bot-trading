@@ -27,7 +27,7 @@
 
 | Store | Used For |
 |---|---|
-| Redis | Kalman state, latest prices, telemetry, L2 books, fundamental scores, idempotency helpers |
+| Redis | Kalman state (sliding TTL), latest prices, telemetry, L2 books, fundamental scores (`sec:integrity`), idempotency helpers. Dashboard sessions are JWT/in-process, not Redis. |
 | PostgreSQL | Trade ledger, agent reasoning, journal, market regime, audit tables |
 | SQLite (`data/trading_bot.db` by default) | Runtime state, budgets, config audit, local fallback |
 | `data/pairs.json` | Dashboard-edited pair universe override |

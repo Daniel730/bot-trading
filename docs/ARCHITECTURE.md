@@ -84,7 +84,7 @@ The React console provides:
 
 | Store | Role |
 |---|---|
-| Redis | Fast state: Kalman filters, latest prices, L2 books, telemetry, fundamental-score cache, Java idempotency helpers |
+| Redis | Fast state: Kalman filters (sliding TTL), latest prices, L2 books, telemetry, fundamental-score cache (`sec:integrity`, 24h), Java/Python idempotency helpers. Dashboard sessions are not stored in Redis. See `docs/OPERATIONS.md` key table. |
 | PostgreSQL | Durable trading/audit data: ledger, fills, reasoning, journal, market regime |
 | SQLite | Local runtime state: budgets, system state, dashboard 2FA/config audit, fallback history |
 | `data/pairs.json` | Dashboard-edited pair universe override |

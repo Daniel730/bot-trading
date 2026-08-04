@@ -82,10 +82,12 @@ gradle shadowJar --no-daemon
 DRY_RUN=true gradle run --no-daemon
 ```
 
-Optional FastMCP tool server:
+Optional FastMCP tool server (loopback by default; `execute_trade` always rejects):
 
 ```bash
 python src/mcp_server.py
+# Override only inside Docker: MCP_HOST=0.0.0.0 MCP_ALLOW_NON_LOOPBACK=true
+# Optional tool gate: MCP_TOOL_TOKEN=... (pass auth_token= to each tool)
 ```
 
 ## Docker Run
@@ -152,6 +154,28 @@ The dashboard removes old `token`/`session` query params from the URL. API auth 
 Compose publishes Redis (`6379`), Postgres (`5433`), FastMCP (`8000`), and the Java gRPC engine (`50051`) on **`127.0.0.1` only**. Inter-container traffic still uses the Docker network (`redis` / `postgres` hostnames) and does **not** go through host publishes.
 
 Redis requires `REDIS_PASSWORD` (compose `--requirepass`). Store it only in `/home/daniel/.env.trading` (never commit). Bot/MCP/execution-engine/sec-worker read it via `env_file`; host-side `redis-cli` must use `-a` against `127.0.0.1:6379`.
+
+**Do not rotate `REDIS_PASSWORD` in the env file alone.** Compose bakes `--requirepass` into the Redis container command at create time; changing the env without recreating `trading-bot-redis-1` leaves clients with a new password against the old requirepass and breaks AUTH. Prefer leaving a strong existing password in place. If rotation is required: update `~/.env.trading`, then `docker compose ... up -d --force-recreate --no-deps redis` and recreate dependents so every service picks up the same value. `infra/ops_apply_loopback_binds.sh` only adds/rotates when the password is missing or shorter than 16 characters.
+
+Redis also runs with `--maxmemory 96mb` and `volatile-lru` (under the 128m container `mem_limit`) so TTL-bearing keys can be evicted before Docker OOM-kills Redis.
+
+### Redis key namespaces and TTLs
+
+| Prefix | Purpose | TTL |
+|---|---|---|
+| `price:{ticker}` | Latest price shadow cache | 10s |
+| `kalman:{pair_id}` | Kalman warm-start hash | Sliding `KALMAN_STATE_TTL_SECONDS` (default 14d); quarantine deletes the key |
+| `sec:integrity:{ticker}` | SEC fundamental score cache | 24h |
+| `cache:*` | Misc caches (e.g. TNX yield) | Caller-supplied |
+| `ratelimit:*` | API rate windows | Window length |
+| `latency:metrics:raw` | Latency ring buffer | 1h + LTRIM 1000 |
+| `execution_attempt:*` / `execution_attempt_lock:*` | Python idempotency | 1h / 60s |
+| `execution:inflight:*` | Java order sync | 1h |
+| `l2:*` / `l2:snapshot:*` | L2 book snapshots | Writer-supplied |
+| `whale:*` | Whale watcher cache | `WHALE_WATCHER_CACHE_TTL_SECONDS` |
+| `entropy_baseline:*` | Live L2 entropy gate | Persistent (live real-money only) |
+
+Dashboard login sessions are JWT/in-process — **not** stored in Redis. Audit live prefixes with `infra/_redis_lifecycle_probe.sh` (prints counts/TTLs only; never prints the password).
 
 Do not re-bind those ports to `0.0.0.0`/`[::]` — bot-server has LAN and public IPv6. After compose edits, re-apply with `infra/ops_apply_loopback_binds.sh` and confirm with `infra/ops_security_probe.sh`.
 

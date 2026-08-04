@@ -112,6 +112,9 @@ def test_mcp_server_uses_compose_redis_host():
     environment = compose["services"]["mcp-server"]["environment"]
 
     assert environment["REDIS_HOST"] == "redis"
+    # Container-internal all-interfaces listen is OK only with loopback host publish.
+    assert environment["MCP_HOST"] == "0.0.0.0"
+    assert environment["MCP_ALLOW_NON_LOOPBACK"] == "true"
 
 
 def test_sec_worker_uses_compose_redis_host():
@@ -166,5 +169,9 @@ def test_backend_compose_requires_redis_password_and_requirepass():
     )
     assert "--requirepass" in redis["command"]
     assert "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}" in redis["command"]
+    assert "--maxmemory" in redis["command"]
+    assert "96mb" in redis["command"]
+    assert "--maxmemory-policy" in redis["command"]
+    assert "volatile-lru" in redis["command"]
     health = redis["healthcheck"]["test"]
     assert any("REDIS_PASSWORD" in part for part in health if isinstance(part, str))
