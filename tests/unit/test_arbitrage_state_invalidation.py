@@ -53,6 +53,37 @@ async def test_kalman_state_invalidates_on_corporate_action(monkeypatch):
     assert saved_payload["state_fingerprint"] != "old-adjusted-history"
 
 
+def test_series_has_corporate_action_jump_detects_single_bar_spike():
+    quiet = pd.Series([100.0, 101.0, 102.0, 103.0, 104.0])
+    spiked = pd.Series([50.0, 50.5, 51.0, 80.0, 80.5])  # ~57% jump
+    assert ArbitrageService.series_has_corporate_action_jump(
+        quiet, spiked, threshold=0.15
+    )
+    assert not ArbitrageService.series_has_corporate_action_jump(
+        quiet, quiet, threshold=0.15
+    )
+
+
+@pytest.mark.asyncio
+async def test_invalidate_pair_state_clears_filter_and_redis(monkeypatch):
+    service = ArbitrageService()
+    service.filters["AAA_BBB"] = object()
+    service.filter_fingerprints["AAA_BBB"] = "fp"
+    deleted = []
+
+    async def delete_kalman_state(pair_id):
+        deleted.append(pair_id)
+
+    monkeypatch.setattr(
+        "src.services.arbitrage_service.redis_service.delete_kalman_state",
+        delete_kalman_state,
+    )
+    await service.invalidate_pair_state("AAA_BBB", reason="corporate_action_jump")
+    assert "AAA_BBB" not in service.filters
+    assert "AAA_BBB" not in service.filter_fingerprints
+    assert deleted == ["AAA_BBB"]
+
+
 def test_build_state_fingerprint_is_stable_and_sensitive_to_rescales():
     """Streaming fingerprint must stay stable for identical history and change on rescale."""
     base = pd.DataFrame(

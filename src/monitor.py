@@ -944,6 +944,38 @@ class ArbitrageMonitor:
                     )
                     continue
 
+                pair_id = f"{ticker_a}_{ticker_b}"
+                if ArbitrageService.series_has_corporate_action_jump(
+                    hist_data[col_a],
+                    hist_data[col_b],
+                    threshold=settings.CORP_ACTION_PRICE_JUMP_PCT,
+                ):
+                    logger.warning(
+                        "SKIP %s/%s: corporate-action-sized price jump "
+                        "(threshold=%.0f%%); invalidating Kalman and benching.",
+                        ticker_a,
+                        ticker_b,
+                        settings.CORP_ACTION_PRICE_JUMP_PCT * 100.0,
+                    )
+                    await arbitrage_service.invalidate_pair_state(
+                        pair_id, reason="corporate_action_jump"
+                    )
+                    try:
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": ticker_a,
+                            "ticker_b": ticker_b,
+                            "hedge_ratio": 0.0,
+                            "is_cointegrated": False,
+                            "status": "Benched",
+                        }])
+                    except Exception:
+                        try:
+                            await persistence_service.update_pair_status(pair_id, "Benched")
+                        except Exception:
+                            pass
+                    continue
+
                 is_crypto = is_crypto_pair(ticker_a, ticker_b)
                 p_thresh = (
                     settings.CRYPTO_COINTEGRATION_PVALUE_THRESHOLD
@@ -988,8 +1020,6 @@ class ArbitrageMonitor:
                     hedge = 1.0
 
                 from src.services.pair_discovery_helpers import is_hedge_ratio_sane
-
-                pair_id = f"{ticker_a}_{ticker_b}"
 
                 if not is_hedge_ratio_sane(
                     hedge,
@@ -2166,12 +2196,13 @@ class ArbitrageMonitor:
                 # Calculate expected profit/loss from the same gross pair
                 # notional that execution will use.
                 effective_sizing_base = sizing_base if sizing_base > 0 else settings.PAPER_TRADING_STARTING_CASH
+                kelly_inputs = await persistence_service.get_kelly_inputs_from_ledger()
                 risk_res = risk_service.validate_trade(
                     ticker=f"{t_a}_{t_b}",
                     total_portfolio_cash=effective_sizing_base,
                     amount_fiat=effective_sizing_base,
-                    win_prob=settings.DEFAULT_WIN_PROBABILITY,
-                    win_loss_ratio=settings.DEFAULT_WIN_LOSS_RATIO
+                    win_prob=float(kelly_inputs["win_prob"]),
+                    win_loss_ratio=float(kelly_inputs["win_loss_ratio"]),
                 )
                 desired_notional = cap_pair_notional(
                     float(risk_res["final_amount"]),
@@ -2720,12 +2751,13 @@ class ArbitrageMonitor:
 
         # Risk sizing is applied inside RiskService (Kelly + allocation cap).
         # Pass the sizing_base (equity) so sizing is calculated according to total wallet.
+        kelly_inputs = await persistence_service.get_kelly_inputs_from_ledger()
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
             total_portfolio_cash=sizing_base,
             amount_fiat=sizing_base,
-            win_prob=settings.DEFAULT_WIN_PROBABILITY,
-            win_loss_ratio=settings.DEFAULT_WIN_LOSS_RATIO
+            win_prob=float(kelly_inputs["win_prob"]),
+            win_loss_ratio=float(kelly_inputs["win_loss_ratio"]),
         )
 
         if not risk_res["is_acceptable"]:
@@ -2948,7 +2980,9 @@ class ArbitrageMonitor:
                     "entry_zscore": entry_context.get("entry_zscore"),
                     "confidence": entry_context.get("confidence"),
                     "orchestrator_verdict": entry_context.get("orchestrator_verdict"),
-                    "win_prob": settings.DEFAULT_WIN_PROBABILITY,
+                    "win_prob": float(kelly_inputs["win_prob"]),
+                    "win_loss_ratio": float(kelly_inputs["win_loss_ratio"]),
+                    "kelly_source": kelly_inputs.get("source"),
                     "regime_confidence": regime_info["confidence"],
                     "features": regime_info["features"],
                     "gross_notional": legs.gross_notional,
@@ -3181,6 +3215,7 @@ class ArbitrageMonitor:
                     order_id_a,
                     filled_quantity=filled_qty_a,
                     fill_price=fill_price_a,
+                    expected_quantity=expected_qty_a,
                     metadata_updates={
                         "filled_qty": filled_qty_a,
                         "filled_avg_price": fill_price_a,
@@ -3555,6 +3590,7 @@ class ArbitrageMonitor:
                 filled_quantity=filled_qty_a,
                 fill_price=fill_price_a,
                 status=OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                expected_quantity=expected_qty_a,
                 metadata_updates={
                     "filled_qty": filled_qty_a,
                     "filled_avg_price": fill_price_a,
@@ -3616,6 +3652,7 @@ class ArbitrageMonitor:
                 filled_quantity=filled_qty_a,
                 fill_price=fill_price_a,
                 status=OrderStatus.PARTIAL_EXPOSURE,
+                expected_quantity=expected_qty_a,
                 metadata_updates={
                     "filled_qty": filled_qty_a,
                     "filled_avg_price": fill_price_a,
@@ -3630,6 +3667,7 @@ class ArbitrageMonitor:
                 filled_quantity=filled_qty_b,
                 fill_price=fill_price_b,
                 status=OrderStatus.PARTIAL_EXPOSURE,
+                expected_quantity=expected_qty_b,
                 metadata_updates={
                     "filled_qty": filled_qty_b,
                     "filled_avg_price": fill_price_b,
@@ -3739,7 +3777,9 @@ class ArbitrageMonitor:
                 "entry_zscore": entry_context.get("entry_zscore"),
                 "confidence": entry_context.get("confidence"),
                 "orchestrator_verdict": entry_context.get("orchestrator_verdict"),
-                "win_prob": settings.DEFAULT_WIN_PROBABILITY,
+                "win_prob": float(kelly_inputs["win_prob"]),
+                "win_loss_ratio": float(kelly_inputs["win_loss_ratio"]),
+                "kelly_source": kelly_inputs.get("source"),
                 "regime_confidence": regime_info["confidence"],
                 "features": regime_info["features"],
                 "paper_trade": False,
@@ -3754,6 +3794,7 @@ class ArbitrageMonitor:
             filled_quantity=filled_qty_a if filled_qty_a > 0 else size_a,
             fill_price=fill_price_a if fill_price_a > 0 else price_a,
             status=visible_status,
+            expected_quantity=expected_qty_a,
             metadata_updates={
                 "filled_qty": filled_qty_a,
                 "filled_avg_price": fill_price_a,
@@ -3768,6 +3809,7 @@ class ArbitrageMonitor:
             filled_quantity=filled_qty_b if filled_qty_b > 0 else size_b,
             fill_price=fill_price_b if fill_price_b > 0 else price_b,
             status=visible_status,
+            expected_quantity=expected_qty_b,
             metadata_updates={
                 "filled_qty": filled_qty_b,
                 "filled_avg_price": fill_price_b,
@@ -3846,6 +3888,24 @@ class ArbitrageMonitor:
             col_a = resolve_history_column(hist_data.columns, t_a)
             col_b = resolve_history_column(hist_data.columns, t_b)
             if not col_a or not col_b:
+                return
+
+            if ArbitrageService.series_has_corporate_action_jump(
+                hist_data[col_a],
+                hist_data[col_b],
+                threshold=settings.CORP_ACTION_PRICE_JUMP_PCT,
+            ):
+                msg = (
+                    f"CORP ACTION JUMP: {t_a}/{t_b} single-bar move exceeds "
+                    f"{settings.CORP_ACTION_PRICE_JUMP_PCT:.0%}. "
+                    f"Invalidating Kalman and benching pair."
+                )
+                logger.warning(msg)
+                await arbitrage_service.invalidate_pair_state(
+                    pair_id, reason="corporate_action_jump"
+                )
+                await self._bench_pair_for_health(pair, reason="corporate_action_jump")
+                await notification_service.send_message(msg)
                 return
 
             is_crypto = is_crypto_pair(t_a, t_b)
@@ -4985,22 +5045,20 @@ class ArbitrageMonitor:
                         )
                         return
 
-            # M-04: Compute realized PnL from entry vs exit price per leg
+            # M-04: Compute realized PnL from entry vs exit price per leg.
+            # Shadow: adverse-slip exit mids before cost-adjusted PnL so ledger
+            # matches open-fill realism (entry fill already embeds open slip).
             leg_a, leg_b = signal["legs"][0], signal["legs"][1]
-            exit_prices, pnl = calculate_realized_pnl(
-                signal,
-                prices_by_ticker=prices_by_ticker or {
-                    leg_a["ticker"]: float(price_a),
-                    leg_b["ticker"]: float(price_b),
-                },
-            )
+            pnl_prices = prices_by_ticker or {
+                leg_a["ticker"]: float(price_a),
+                leg_b["ticker"]: float(price_b),
+            }
 
-            # N2 fix: shadow-lane closes log directional PnL via shadow_service, then a
-            # single persistence.close_trade write (shared with broker closes) so PnL is
-            # not double-counted in TradeLedger. close_simulated_trade does NOT persist.
+            # N2 fix: shadow-lane closes log via shadow_service, then a single
+            # persistence.close_trade write (shared with broker closes).
             if not use_broker_close:
                 direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
-                await shadow_service.close_simulated_trade(
+                _shadow_pnl, slipped_a, slipped_b = await shadow_service.close_simulated_trade(
                     pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",
                     signal_id=sig_uuid,
                     direction=direction,
@@ -5011,6 +5069,15 @@ class ArbitrageMonitor:
                     exit_price_a=price_a,
                     exit_price_b=price_b,
                 )
+                pnl_prices = {
+                    leg_a["ticker"]: float(slipped_a),
+                    leg_b["ticker"]: float(slipped_b),
+                }
+
+            exit_prices, pnl = calculate_realized_pnl(
+                signal,
+                prices_by_ticker=pnl_prices,
+            )
 
             await persistence_service.close_trade(sig_uuid, exit_prices, pnl, exit_reason=reason)
 

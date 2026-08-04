@@ -247,7 +247,7 @@ class Settings(BaseSettings):
     ALPACA_BUDGET_USD: float = Field(default=0.0, validation_alias="ALPACA_BUDGET_USD")
     WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 15.0
-    MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
+    MAX_ACTIVE_PAIRS: int = Field(default=12, validation_alias="MAX_ACTIVE_PAIRS")
     # Hard cap on concurrent open pair signals (ledger). Separate from scan-universe
     # MAX_ACTIVE_PAIRS — prevents overcrowding when many Active pairs fire together.
     # 0 disables the gate.
@@ -261,10 +261,9 @@ class Settings(BaseSettings):
     # Reject opens that share a ticker with any already-open pair (correlated blowups).
     BLOCK_SHARED_LEG_OPENS: bool = Field(default=True, validation_alias="BLOCK_SHARED_LEG_OPENS")
     SCOUT_INTERVAL_HOURS: int = Field(default=12, validation_alias="SCOUT_INTERVAL_HOURS")
-    # Automatic pair discovery (S&P sector + crypto scout → universe_candidates → Active).
-    # When false, the monitor skips the background scout loop; dashboard POST
-    # /api/pairs/discover still works so operators can run a one-shot scan.
-    PAIR_DISCOVERY_ENABLED: bool = Field(default=True, validation_alias="PAIR_DISCOVERY_ENABLED")
+    # Automatic pair discovery frozen by default — curated universe only.
+    # Dashboard POST /api/pairs/discover still works for one-shot operator scans.
+    PAIR_DISCOVERY_ENABLED: bool = Field(default=False, validation_alias="PAIR_DISCOVERY_ENABLED")
     # Seconds to wait after boot before the first auto-scout cycle (avoids
     # yfinance saturation during Kalman warm-up). Periodic interval remains
     # SCOUT_INTERVAL_HOURS after that.
@@ -272,9 +271,8 @@ class Settings(BaseSettings):
     # Cap tickers per sector/crypto scout pass so C(n,2) cointegration tests stay bounded.
     # Kept modest to avoid yfinance/RAM spikes on the Mini PC during overnight scouts.
     PAIR_DISCOVERY_MAX_TICKERS: int = Field(default=12, validation_alias="PAIR_DISCOVERY_MAX_TICKERS")
-    # After a scout finishes, promote top candidates into empty Active slots /
-    # replace non-cointegrated Active pairs. Dashboard discover uses the same path.
-    PAIR_DISCOVERY_AUTO_PROMOTE: bool = Field(default=True, validation_alias="PAIR_DISCOVERY_AUTO_PROMOTE")
+    # Do not auto-promote scouted pairs into the live book (operator must promote).
+    PAIR_DISCOVERY_AUTO_PROMOTE: bool = Field(default=False, validation_alias="PAIR_DISCOVERY_AUTO_PROMOTE")
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
     # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
@@ -340,9 +338,18 @@ class Settings(BaseSettings):
     DEFAULT_WIN_LOSS_RATIO: float = 1.0
 
     MAX_FRICTION_PCT: float = 0.015
+    # Alpaca US equities are commission-free; keep 0 so friction gates use
+    # bid/ask spread estimates rather than a T212-era flat proxy.
     FLAT_ORDER_FRICTION_USD: float = Field(
-        default=0.5,
+        default=0.0,
         validation_alias=AliasChoices("FLAT_ORDER_FRICTION_USD", "T212_FLAT_SPREAD_USD"),
+    )
+    # Shadow lane: adverse mid offset on each fill (open and close). 5 bps ≈ half
+    # a tight liquid equity spread so paper PnL does not overstate Alpaca fills.
+    SHADOW_FILL_SLIPPAGE_BPS: float = Field(
+        default=5.0,
+        validation_alias="SHADOW_FILL_SLIPPAGE_BPS",
+        ge=0.0,
     )
     MICRO_TRADE_THRESHOLD_USD: float = Field(default=5.0, validation_alias="MICRO_TRADE_THRESHOLD_USD")
     # WEB3 / DEX trades carry percentage-based gas + slippage instead of a
@@ -353,6 +360,19 @@ class Settings(BaseSettings):
     MIN_TRADE_VALUE: float = 1.00
     FINANCIAL_KILL_SWITCH_PCT: float = Field(default=0.02, validation_alias="FINANCIAL_KILL_SWITCH_PCT")
     T212_LIMIT_SLIPPAGE_PCT: float = Field(default=0.01, validation_alias="T212_LIMIT_SLIPPAGE_PCT")
+    # Single-bar absolute return above this fraction benches the pair and clears
+    # Kalman state (splits / symbol changes / stale adjusted history).
+    CORP_ACTION_PRICE_JUMP_PCT: float = Field(
+        default=0.15,
+        validation_alias="CORP_ACTION_PRICE_JUMP_PCT",
+        gt=0.0,
+    )
+    # Minimum closed signals before Kelly inputs leave config defaults.
+    KELLY_LEDGER_MIN_TRADES: int = Field(
+        default=20,
+        validation_alias="KELLY_LEDGER_MIN_TRADES",
+        ge=1,
+    )
 
     EXECUTION_ENGINE_HOST: str = Field(default="localhost", validation_alias="EXECUTION_ENGINE_HOST")
     EXECUTION_ENGINE_PORT: int = Field(default=50051, validation_alias="EXECUTION_ENGINE_PORT")
@@ -553,6 +573,34 @@ class Settings(BaseSettings):
     WHALE_WATCHER_VETO_MIN_EVENTS: int = Field(default=2, validation_alias="WHALE_WATCHER_VETO_MIN_EVENTS")
     WHALE_WATCHER_RISK_MULTIPLIER: float = Field(default=0.85, validation_alias="WHALE_WATCHER_RISK_MULTIPLIER")
     WHALE_WATCHER_SUPPORT_MULTIPLIER: float = Field(default=1.05, validation_alias="WHALE_WATCHER_SUPPORT_MULTIPLIER")
+
+    # News risk overlay — veto-only (not directional alpha). Opt-in; when disabled or
+    # when the feed/API is missing, the agent stays inactive and does NOT block entries.
+    NEWS_RISK_ENABLED: bool = Field(default=False, validation_alias="NEWS_RISK_ENABLED")
+    # Headline age window for veto eligibility (1–4h typical).
+    NEWS_RISK_TTL_SECONDS: int = Field(default=7200, validation_alias="NEWS_RISK_TTL_SECONDS", ge=60)
+    # Redis cache for fetched headlines (refresh cadence).
+    NEWS_RISK_CACHE_SECONDS: int = Field(default=300, validation_alias="NEWS_RISK_CACHE_SECONDS", ge=30)
+    NEWS_RISK_MAX_HEADLINES: int = Field(default=50, validation_alias="NEWS_RISK_MAX_HEADLINES", ge=1)
+    # Materiality threshold for hard veto (heuristic keyword score in [0, 1]).
+    NEWS_RISK_VETO_SCORE: float = Field(default=0.75, validation_alias="NEWS_RISK_VETO_SCORE", ge=0.0, le=1.0)
+    # Below veto but at/above this → shrink confidence (still not directional).
+    NEWS_RISK_SHRINK_SCORE: float = Field(default=0.55, validation_alias="NEWS_RISK_SHRINK_SCORE", ge=0.0, le=1.0)
+    NEWS_RISK_CONFIDENCE_MULTIPLIER: float = Field(
+        default=0.85,
+        validation_alias="NEWS_RISK_CONFIDENCE_MULTIPLIER",
+        ge=0.0,
+        le=1.0,
+    )
+    # rss | file | stub | polygon
+    NEWS_RISK_PROVIDER: str = Field(default="rss", validation_alias="NEWS_RISK_PROVIDER")
+    # Comma-separated RSS/Atom URLs (free path; no paid key required).
+    NEWS_RISK_FEED_URLS: str = Field(default="", validation_alias="NEWS_RISK_FEED_URLS")
+    # Optional local JSON/NDJSON headlines for ops/testing (provider=file).
+    NEWS_RISK_FEED_FILE: str = Field(default="", validation_alias="NEWS_RISK_FEED_FILE")
+    # Optional LLM scoring (default false; MVP keeps heuristic-only even if true).
+    NEWS_RISK_LLM_ENABLED: bool = Field(default=False, validation_alias="NEWS_RISK_LLM_ENABLED")
+
     COINTEGRATION_MIN_OBSERVATIONS: int = Field(default=20, validation_alias="COINTEGRATION_MIN_OBSERVATIONS")
     COINTEGRATION_PVALUE_THRESHOLD: float = Field(default=0.05, validation_alias="COINTEGRATION_PVALUE_THRESHOLD")
     # Crypto pairs are noisier; allow a slightly looser ADF gate than equities.
@@ -798,7 +846,9 @@ class Settings(BaseSettings):
     }
 
     ARBITRAGE_PAIRS: list = [
-        # --- YOUR ORIGINAL CLASSIC PAIRS ---
+        # Curated US liquid pairs only (same-session, Alpaca-friendly).
+        # Regional EU/LSE/Xetra/cross-listed pairs were removed to cut rate-limit
+        # noise and friction; re-add deliberately via dashboard overrides if needed.
         {'ticker_a': 'KO',      'ticker_b': 'PEP'},
         {'ticker_a': 'MA',      'ticker_b': 'V'},
         {'ticker_a': 'XOM',     'ticker_b': 'CVX'},
@@ -812,16 +862,11 @@ class Settings(BaseSettings):
         {'ticker_a': 'GM',      'ticker_b': 'F'},
         {'ticker_a': 'INTC',    'ticker_b': 'AMD'},
         {'ticker_a': 'PYPL',    'ticker_b': 'AFRM'},
-        {'ticker_a': 'NKE',     'ticker_b': 'ADS.DE'},   # switched from ADDYY ADR → primary Xetra listing
         {'ticker_a': 'PG',      'ticker_b': 'CL'},
-        {'ticker_a': 'BA',      'ticker_b': 'AIR.PA'},
         {'ticker_a': 'T',       'ticker_b': 'VZ'},
         {'ticker_a': 'VLO',     'ticker_b': 'MPC'},
         {'ticker_a': 'COF',     'ticker_b': 'SYF'},
         {'ticker_a': 'GS',      'ticker_b': 'MS'},
-        {'ticker_a': 'BTCE.DE', 'ticker_b': 'ZETH.DE'},
-
-        # --- YOUR ORIGINAL HIGH-VOL PAIRS ---
         {'ticker_a': 'NVDA',    'ticker_b': 'AMD'},
         {'ticker_a': 'TSLA',    'ticker_b': 'RIVN'},
         {'ticker_a': 'COIN',    'ticker_b': 'MSTR'},
@@ -834,76 +879,19 @@ class Settings(BaseSettings):
         {'ticker_a': 'AMZN',    'ticker_b': 'SHOP'},
         {'ticker_a': 'PLTR',    'ticker_b': 'BBAI'},
         {'ticker_a': 'BRK-B',   'ticker_b': 'JPM'},
-
-        # German Automotive (High Correlation)
-        {"ticker_a": "BMW.DE", "ticker_b": "MBG.DE"},        # BMW vs Mercedes-Benz
-        {"ticker_a": "VOW3.DE", "ticker_b": "PAH3.DE"},      # VW vs Porsche SE
-        {"ticker_a": "CON.DE", "ticker_b": "PUM.DE"},        # Continental vs Puma (Consumer/Industrial)
-
-        # European Banking (High Beta)
-        {"ticker_a": "DBK.DE", "ticker_b": "CBK.DE"},        # Deutsche Bank vs Commerzbank
-        {"ticker_a": "BNP.PA", "ticker_b": "GLE.PA"},        # BNP Paribas vs Societe Generale
-        {"ticker_a": "ACA.PA", "ticker_b": "BNP.PA"},        # Credit Agricole vs BNP Paribas
-
-        # French Luxury (The "Gold Standard" for Pairs)
-        {"ticker_a": "MC.PA", "ticker_b": "RMS.PA"},         # LVMH vs Hermes
-        {"ticker_a": "MC.PA", "ticker_b": "KER.PA"},         # LVMH vs Kering (Gucci)
-        {"ticker_a": "OR.PA", "ticker_b": "EL.PA"},          # L'Oreal vs EssilorLuxottica
-
-        # Energy & Utilities
-        {"ticker_a": "RWE.DE", "ticker_b": "EOAN.DE"},       # RWE vs E.ON
-        {"ticker_a": "ENGI.PA", "ticker_b": "ORA.PA"},       # Engie vs Orange
-
-        # Energy & Mining (Commodity Driven)
-        {"ticker_a": "SHEL.L", "ticker_b": "BP.L"},          # Shell vs BP
-        {"ticker_a": "RIO.L", "ticker_b": "BHP.L"},          # Rio Tinto vs BHP
-        {"ticker_a": "AAL.L", "ticker_b": "GLEN.L"},         # Anglo American vs Glencore
-
-        # Banking & Insurance
-        {"ticker_a": "LLOY.L", "ticker_b": "BARC.L"},        # Lloyds vs Barclays
-        {"ticker_a": "HSBA.L", "ticker_b": "STAN.L"},        # HSBC vs Standard Chartered
-        {"ticker_a": "AV.L", "ticker_b": "LGEN.L"},          # Aviva vs Legal & General
-
-        # Consumer & Retail
-        {"ticker_a": "TSCO.L", "ticker_b": "SBRY.L"},        # Tesco vs Sainsbury’s
-        {"ticker_a": "ULVR.L", "ticker_b": "RKT.L"},         # Unilever vs Reckitt
-        {"ticker_a": "BATS.L", "ticker_b": "IMB.L"},         # British Am. Tobacco vs Imperial Brands
-
-        # Semiconductors (Very High Correlation)
-        {"ticker_a": "ASML.AS", "ticker_b": "ASM.AS"},       # ASML vs ASM International (Euronext)
-        {"ticker_a": "NVDA", "ticker_b": "AMD"},             # Nvidia vs AMD
-        {"ticker_a": "LRCX", "ticker_b": "AMAT"},            # Lam Research vs Applied Materials
-
-        # Big Tech Proxies
-        {"ticker_a": "GOOGL", "ticker_b": "META"},           # Alphabet vs Meta
-        {"ticker_a": "MSFT", "ticker_b": "AAPL"},            # Microsoft vs Apple
-
-        # Payments & Fintech
-        {"ticker_a": "V", "ticker_b": "MA"},                 # Visa vs Mastercard
-        # PYPL/SQ removed 2026-04-28: SQ (Block Inc.) returning "possibly delisted" from Yahoo Finance.
-        # Re-add once correct current ticker is confirmed.
-
-        # --- SEMICONDUCTORS & HARDWARE (Expanded) ---
+        {'ticker_a': 'LRCX',    'ticker_b': 'AMAT'},
+        {'ticker_a': 'GOOGL',   'ticker_b': 'META'},
         {'ticker_a': 'AVGO',    'ticker_b': 'QCOM'},
-        {'ticker_a': 'AMAT',    'ticker_b': 'LRCX'},
-        {'ticker_a': 'KLAC',    'ticker_b': 'ASML'},
         {'ticker_a': 'TXN',     'ticker_b': 'ADI'},
         {'ticker_a': 'MCHP',    'ticker_b': 'NXPI'},
         {'ticker_a': 'WDC',     'ticker_b': 'STX'},
         {'ticker_a': 'HPQ',     'ticker_b': 'HPE'},
-
-        # --- SAAS & CLOUD SOFTWARE ---
         {'ticker_a': 'CRM',     'ticker_b': 'ADBE'},
         {'ticker_a': 'NOW',     'ticker_b': 'TEAM'},
         {'ticker_a': 'SNOW',    'ticker_b': 'PLTR'},
-        {'ticker_a': 'WDAY',    'ticker_b': 'SAP'},
-        {'ticker_a': 'ADSK',    'ticker_b': 'PTC'},
         {'ticker_a': 'ZS',      'ticker_b': 'CRWD'},
         {'ticker_a': 'PANW',    'ticker_b': 'FTNT'},
         {'ticker_a': 'DDOG',    'ticker_b': 'NET'},
-        {'ticker_a': 'OKTA',    'ticker_b': 'MDB'},
-
-        # --- FINTECH & BANKING ---
         {'ticker_a': 'C',       'ticker_b': 'WFC'},
         {'ticker_a': 'BLK',     'ticker_b': 'TROW'},
         {'ticker_a': 'SCHW',    'ticker_b': 'IBKR'},
@@ -911,58 +899,26 @@ class Settings(BaseSettings):
         {'ticker_a': 'BX',      'ticker_b': 'KKR'},
         {'ticker_a': 'SPGI',    'ticker_b': 'MCO'},
         {'ticker_a': 'CME',     'ticker_b': 'ICE'},
-        {'ticker_a': 'MET',     'ticker_b': 'PRU'},
-        {'ticker_a': 'AIG',     'ticker_b': 'TRV'},
-
-        # --- CONSUMER RETAIL & LUXURY ---
         {'ticker_a': 'COST',    'ticker_b': 'BJ'},
         {'ticker_a': 'LULU',    'ticker_b': 'NKE'},
         {'ticker_a': 'DG',      'ticker_b': 'DLTR'},
         {'ticker_a': 'TJX',     'ticker_b': 'ROST'},
-        {'ticker_a': 'EL',      'ticker_b': 'ULTA'},
         {'ticker_a': 'BKNG',    'ticker_b': 'EXPE'},
         {'ticker_a': 'MAR',     'ticker_b': 'HLT'},
-        {'ticker_a': 'YUM',     'ticker_b': 'QSR'},
-        {'ticker_a': 'MDLZ',    'ticker_b': 'HSY'},
-        {'ticker_a': 'CL',      'ticker_b': 'KMB'},
-
-        # --- ENERGY & INDUSTRIALS ---
         {'ticker_a': 'PSX',     'ticker_b': 'VLO'},
         {'ticker_a': 'COP',     'ticker_b': 'EOG'},
         {'ticker_a': 'CAT',     'ticker_b': 'DE'},
         {'ticker_a': 'LMT',     'ticker_b': 'NOC'},
         {'ticker_a': 'GD',      'ticker_b': 'RTX'},
-        {'ticker_a': 'WM',      'ticker_b': 'RSG'},
         {'ticker_a': 'UNP',     'ticker_b': 'NSC'},
-        {'ticker_a': 'CSX',     'ticker_b': 'CP'},
-        {'ticker_a': 'ETN',     'ticker_b': 'EMR'},
-        {'ticker_a': 'URI',     'ticker_b': 'HRI'},
-        {'ticker_a': 'VMC',     'ticker_b': 'MLM'},
-        {'ticker_a': 'GE',      'ticker_b': 'HON'},
-
-        # --- PHARMA & HEALTHCARE ---
         {'ticker_a': 'PFE',     'ticker_b': 'MRK'},
         {'ticker_a': 'JNJ',     'ticker_b': 'ABBV'},
-        {'ticker_a': 'LLY',     'ticker_b': 'NVO'},
         {'ticker_a': 'UNH',     'ticker_b': 'ELV'},
-        {'ticker_a': 'CI',      'ticker_b': 'HUM'},
-        {'ticker_a': 'ISRG',    'ticker_b': 'SYK'},
-        {'ticker_a': 'BSX',     'ticker_b': 'MDT'},
-        {'ticker_a': 'TMO',     'ticker_b': 'A'},
         {'ticker_a': 'AMGN',    'ticker_b': 'GILD'},
-        {'ticker_a': 'ZTS',     'ticker_b': 'IDXX'},
-        {'ticker_a': 'REGN',    'ticker_b': 'VRTX'},
-        {'ticker_a': 'MCK',     'ticker_b': 'COR'},
-
-        # --- REAL ESTATE (REITS) & UTILITIES ---
         {'ticker_a': 'AMT',     'ticker_b': 'CCI'},
         {'ticker_a': 'PLD',     'ticker_b': 'PSA'},
-        {'ticker_a': 'O',       'ticker_b': 'ADC'},
         {'ticker_a': 'DUK',     'ticker_b': 'SO'},
         {'ticker_a': 'NEE',     'ticker_b': 'D'},
-        {'ticker_a': 'AEP',     'ticker_b': 'SRE'},
-        {'ticker_a': 'CMCSA',   'ticker_b': 'CHTR'},
-        {'ticker_a': 'SPOT',    'ticker_b': 'WMG'}
     ]
 
     # Crypto pairs traded 24/7 — 100% compatible with Alpaca Paper/Free tier.

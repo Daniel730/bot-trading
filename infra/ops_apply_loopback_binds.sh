@@ -125,14 +125,19 @@ export BOT_HOST_PORT
 
 cd "$COMPOSE_DIR/.."
 
-# Recreate infra publishes + Redis auth first, then consumers so they pick up
+# Recreate core infra publishes + Redis auth first, then consumers so they pick up
 # REDIS_PASSWORD from env_file (same docker network; host binds stay loopback).
+# mcp-server / execution-engine are optional-profile sidecars — recreate only if present.
 COMPOSE=(docker compose --env-file "$ENV_FILE" -p trading-bot -f "$BACKEND")
 if [ -f "$FRONTEND" ]; then
   COMPOSE+=(-f "$FRONTEND")
 fi
 
-"${COMPOSE[@]}" up -d --no-deps redis postgres mcp-server execution-engine
+"${COMPOSE[@]}" up -d --no-deps redis postgres
+if docker inspect trading-bot-mcp-server-1 >/dev/null 2>&1 \
+  || docker inspect trading-bot-execution-engine-1 >/dev/null 2>&1; then
+  "${COMPOSE[@]}" --profile optional up -d --no-deps mcp-server execution-engine || true
+fi
 "${COMPOSE[@]}" up -d --no-deps bot sec-worker 2>/dev/null || \
   "${COMPOSE[@]}" up -d --no-deps bot || true
 

@@ -45,8 +45,13 @@ redeploy_backend() {
     echo "--- Redeploying Backend ---"
     # O8: Removed --no-cache. Docker handles layer caching natively; 
     # if requirements.txt hasn't changed, it will skip the heavy pip install stage.
-    docker-compose -f "$BACKEND_COMPOSE" build bot mcp-server sec-worker
+    docker-compose -f "$BACKEND_COMPOSE" build bot sec-worker
     docker-compose -f "$BACKEND_COMPOSE" up -d
+    # Optional sidecars stay off unless COMPOSE_PROFILES=optional (or --profile optional).
+    if [[ "${COMPOSE_PROFILES:-}" == *optional* ]]; then
+        docker-compose -f "$BACKEND_COMPOSE" --profile optional build mcp-server
+        docker-compose -f "$BACKEND_COMPOSE" --profile optional up -d mcp-server
+    fi
 }
 
 # Redeploy Frontend
@@ -93,12 +98,15 @@ case "$1" in
                 JAVA_HASH=$(find ../execution-engine/src/ ../execution-engine/build.gradle.kts -type f -exec md5sum {} + 2>/dev/null | md5sum)
                 FRONTEND_HASH=$(find ../frontend/src/ -type f -exec md5sum {} + | md5sum)
 
-                # Check if Java engine changed — rebuild execution-engine image specifically
+                # Check if Java engine changed — rebuild only when optional profile is active
                 if [ "$PREV_JAVA_HASH" != "$JAVA_HASH" ]; then
-                    echo "Java execution-engine change detected. Rebuilding..."
-                    # O8: Removed --no-cache. 
-                    docker-compose -f "$BACKEND_COMPOSE" build execution-engine
-                    docker-compose -f "$BACKEND_COMPOSE" up -d execution-engine
+                    if [[ "${COMPOSE_PROFILES:-}" == *optional* ]]; then
+                        echo "Java execution-engine change detected. Rebuilding (optional profile)..."
+                        docker-compose -f "$BACKEND_COMPOSE" --profile optional build execution-engine
+                        docker-compose -f "$BACKEND_COMPOSE" --profile optional up -d execution-engine
+                    else
+                        echo "Java execution-engine change detected; skipped (set COMPOSE_PROFILES=optional to deploy sidecar)."
+                    fi
                     PREV_JAVA_HASH="$JAVA_HASH"
                 fi
 

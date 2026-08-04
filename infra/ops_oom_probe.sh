@@ -14,12 +14,16 @@ echo "--- top rss ---"
 ps aux --sort=-%mem | awk 'NR==1 || NR<=16 {printf "%s\n",$0}'
 
 echo "--- trading-bot limits ---"
-for c in trading-bot-bot-1 trading-bot-mcp-server-1 trading-bot-sec-worker-1 \
-         trading-bot-postgres-1 trading-bot-redis-1 trading-bot-frontend-1 \
-         trading-bot-execution-engine-1; do
+for c in trading-bot-bot-1 trading-bot-sec-worker-1 \
+         trading-bot-postgres-1 trading-bot-redis-1 trading-bot-frontend-1; do
   docker inspect "$c" --format \
     '{{.Name}} status={{.State.Status}} oom={{.State.OOMKilled}} rc={{.RestartCount}} mem={{.HostConfig.Memory}} swap={{.HostConfig.MemorySwap}} nano_cpus={{.HostConfig.NanoCpus}} started={{.State.StartedAt}} exit={{.State.ExitCode}}' \
     2>/dev/null || echo "MISSING $c"
+done
+for c in trading-bot-mcp-server-1 trading-bot-execution-engine-1; do
+  docker inspect "$c" --format \
+    '{{.Name}} status={{.State.Status}} oom={{.State.OOMKilled}} rc={{.RestartCount}} mem={{.HostConfig.Memory}} swap={{.HostConfig.MemorySwap}} nano_cpus={{.HostConfig.NanoCpus}} started={{.State.StartedAt}} exit={{.State.ExitCode}}' \
+    2>/dev/null || echo "SKIP $c (optional profile not deployed)"
 done
 
 echo "--- other stack limits (0 = unlimited) ---"

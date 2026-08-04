@@ -68,7 +68,6 @@ jobs:
             python_image:
               - 'src/**'
               - 'scripts/**'
-              - 'legacy/dashboard/**'
               - 'requirements.txt'
               - 'requirements.lock'
               - 'infra/Dockerfile'
@@ -569,24 +568,24 @@ jobs:
 
       - name: Pull execution-engine image
         if: ${{ needs.detect_changes.outputs.java_image == 'true' }}
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull execution-engine
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml --profile optional pull execution-engine
 
       - name: Remove legacy execution-engine container
         run: docker rm -f execution-engine 2>/dev/null || true
 
-      - name: Apply / restart execution engine
+      - name: Apply / restart execution engine (optional profile)
         run: |
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
-          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d execution-engine
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml --profile optional config --quiet
+          timeout 5m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml --profile optional up -d execution-engine
 
       - name: Verify execution-engine deployment
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps execution-engine
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml --profile optional ps execution-engine
 
       - name: Dump execution-engine logs on deployment failure
         if: failure()
         run: |
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps execution-engine || true
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml logs --tail=120 execution-engine || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml --profile optional ps execution-engine || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml --profile optional logs --tail=120 execution-engine || true
 
   deploy_sec_worker:
     needs:
@@ -629,9 +628,9 @@ jobs:
       - name: Log in to GHCR (for private image pulls)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Pull python image (bot, mcp-server, sec-worker)
+      - name: Pull python image (bot, sec-worker)
         if: ${{ needs.detect_changes.outputs.python_image == 'true' }}
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot mcp-server sec-worker
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot sec-worker
 
       - name: Remove legacy sec-worker and base containers
         run: |
@@ -673,11 +672,7 @@ jobs:
           needs.detect_changes.outputs.python_image != 'true' ||
           needs.build_python.result == 'success'
         ) &&
-        needs.deploy_sec_worker.result == 'success' &&
-        (
-          needs.detect_changes.outputs.java_deploy != 'true' ||
-          needs.deploy_execution_engine.result == 'success'
-        )
+        needs.deploy_sec_worker.result == 'success'
       }}
     runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 15
@@ -707,30 +702,30 @@ jobs:
       - name: Log in to GHCR (for private image pulls)
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Pull python image (bot, mcp-server)
+      - name: Pull python image (bot)
         if: ${{ needs.detect_changes.outputs.python_image == 'true' }}
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot mcp-server
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml pull bot
 
-      - name: Remove legacy bot and mcp-server containers
+      - name: Remove legacy bot container name
         run: docker rm -f trading-bot mcp-server 2>/dev/null || true
 
-      - name: Apply / restart bot and mcp-server
+      - name: Apply / restart bot
         run: |
           docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml config --quiet
-          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d --no-deps bot mcp-server
+          timeout 10m docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml up -d --no-deps bot
 
       - name: Cleanup dangling images (force-all only)
         if: ${{ inputs.force_all == true }}
         run: docker image prune -f
 
-      - name: Verify bot and mcp-server deployment
-        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps bot mcp-server
+      - name: Verify bot deployment
+        run: docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps bot
 
-      - name: Dump bot and mcp-server logs on deployment failure
+      - name: Dump bot logs on deployment failure
         if: failure()
         run: |
           docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml ps || true
-          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml logs --tail=120 bot mcp-server execution-engine postgres redis || true
+          docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f infra/docker-compose.backend.yml logs --tail=120 bot postgres redis || true
 
   deployment_summary:
     needs:
@@ -757,8 +752,8 @@ jobs:
             echo "| Lane | Quality | Build | Deploy |"
             echo "| --- | --- | --- | --- |"
             echo "| SEC worker | ${{ needs.quality_python.result }} | ${{ needs.build_python.result }} | ${{ needs.deploy_sec_worker.result }} |"
-            echo "| Bot / MCP server | ${{ needs.quality_python.result }} | ${{ needs.build_python.result }} | ${{ needs.deploy_python_services.result }} |"
-            echo "| Execution engine | ${{ needs.quality_java.result }} | ${{ needs.build_java.result }} | ${{ needs.deploy_execution_engine.result }} |"
+            echo "| Bot | ${{ needs.quality_python.result }} | ${{ needs.build_python.result }} | ${{ needs.deploy_python_services.result }} |"
+            echo "| Execution engine (optional) | ${{ needs.quality_java.result }} | ${{ needs.build_java.result }} | ${{ needs.deploy_execution_engine.result }} |"
             echo "| Frontend | ${{ needs.quality_frontend.result }} | ${{ needs.build_frontend.result }} | ${{ needs.deploy_frontend.result }} |"
             echo
             echo "### Change flags"

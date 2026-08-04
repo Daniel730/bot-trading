@@ -191,7 +191,20 @@ def calculate_realized_pnl(
     prices_by_ticker: dict[str, float] | None = None,
     price_a: float | None = None,
     price_b: float | None = None,
+    include_costs: bool = True,
+    exit_fee_per_leg: float | None = None,
 ) -> tuple[dict[str, float], float]:
+    """Directional leg PnL, optionally net of entry/exit fees and slippage.
+
+    Costs subtracted when ``include_costs`` is True:
+    - per-leg ``fee`` (entry commission / flat friction recorded at open)
+    - estimated exit fee per leg (defaults to ``settings.FLAT_ORDER_FRICTION_USD``)
+    - ``slippage_bps`` on entry notional when present on the leg or its metadata
+
+    When the ledger ``price`` already embeds adverse fill slip (shadow lane),
+    do not also store ``slippage_bps`` on the leg — that would double-count.
+    Audit-only keys such as ``applied_slippage_bps`` are ignored here.
+    """
     if prices_by_ticker is None:
         leg_a, leg_b = signal["legs"][0], signal["legs"][1]
         prices_by_ticker = {
@@ -201,11 +214,39 @@ def calculate_realized_pnl(
     exit_prices = {k: float(v) for k, v in prices_by_ticker.items()}
     pnl = 0.0
     for leg in signal["legs"]:
-        quantity = leg["quantity"]
-        entry = leg["price"]
+        quantity = float(leg["quantity"])
+        entry = float(leg["price"])
         exit_price = exit_prices[leg["ticker"]]
         if leg["side"] == "BUY":
             pnl += (exit_price - entry) * quantity
         else:
             pnl += (entry - exit_price) * quantity
+
+        if not include_costs:
+            continue
+
+        entry_fee = float(leg.get("fee") or 0.0)
+        meta = leg.get("metadata") if isinstance(leg.get("metadata"), dict) else {}
+        if entry_fee <= 0.0 and meta:
+            entry_fee = float(meta.get("fee") or 0.0)
+        pnl -= entry_fee
+
+        if exit_fee_per_leg is None:
+            from src.config import settings
+
+            exit_fee = float(settings.FLAT_ORDER_FRICTION_USD)
+        else:
+            exit_fee = float(exit_fee_per_leg)
+        pnl -= exit_fee
+
+        slip_bps = leg.get("slippage_bps")
+        if slip_bps is None and meta:
+            slip_bps = meta.get("slippage_bps")
+        try:
+            slip_bps_f = float(slip_bps or 0.0)
+        except (TypeError, ValueError):
+            slip_bps_f = 0.0
+        if slip_bps_f > 0.0:
+            pnl -= abs(entry * quantity) * (slip_bps_f / 10_000.0)
+
     return exit_prices, pnl

@@ -63,21 +63,32 @@ if [[ "$APPLY_SOFT" == "1" ]]; then
 fi
 
 if [[ "$RECREATE_BOT" == "1" ]]; then
-  echo "--- recreate bot/mcp/sec without touching volumes ---"
+  echo "--- recreate bot/sec without touching volumes ---"
   cd "$ROOT"
   docker compose --env-file "$ENV_FILE" -p trading-bot \
     -f infra/docker-compose.backend.yml \
-    up -d --no-deps --no-build bot mcp-server sec-worker
+    up -d --no-deps --no-build bot sec-worker
 else
   # Prefer start over recreate when sibling may be deploying.
   echo "--- start stopped trading-bot containers (no recreate) ---"
-  for c in trading-bot-redis-1 trading-bot-postgres-1 trading-bot-execution-engine-1 \
-           trading-bot-mcp-server-1 trading-bot-sec-worker-1 trading-bot-bot-1 \
+  for c in trading-bot-redis-1 trading-bot-postgres-1 trading-bot-sec-worker-1 trading-bot-bot-1 \
            trading-bot-frontend-1; do
     st=$(docker inspect "$c" --format '{{.State.Status}}' 2>/dev/null || echo missing)
     if [[ "$st" == "exited" || "$st" == "created" ]]; then
       echo "starting $c (was $st)"
       docker start "$c" || true
+    else
+      echo "ok $c status=$st"
+    fi
+  done
+  # Optional sidecars: start only if already created under --profile optional.
+  for c in trading-bot-execution-engine-1 trading-bot-mcp-server-1; do
+    st=$(docker inspect "$c" --format '{{.State.Status}}' 2>/dev/null || echo missing)
+    if [[ "$st" == "exited" || "$st" == "created" ]]; then
+      echo "starting optional $c (was $st)"
+      docker start "$c" || true
+    elif [[ "$st" == "missing" ]]; then
+      echo "skip $c (optional profile not deployed)"
     else
       echo "ok $c status=$st"
     fi

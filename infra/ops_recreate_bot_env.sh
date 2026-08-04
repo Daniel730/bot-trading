@@ -8,7 +8,7 @@ export IMAGE_OWNER="${IMAGE_OWNER:-daniel730}"
 cd "$ROOT"
 docker compose --env-file "$APP_ENV_FILE" -p trading-bot \
   -f infra/docker-compose.backend.yml \
-  up -d --no-deps --no-build bot mcp-server
+  up -d --no-deps --no-build bot sec-worker
 sleep 10
 docker exec trading-bot-bot-1 python3 -c 'from src.config import settings; print("discovery", settings.PAIR_DISCOVERY_ENABLED, settings.PAIR_DISCOVERY_MAX_TICKERS, settings.PAIR_DISCOVERY_AUTO_PROMOTE)'
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}' | head -20

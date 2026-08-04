@@ -316,7 +316,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 100.0),
             _leg("MSFT", "SELL", 5.0, 200.0),
         ])
-        exit_prices, pnl = calculate_realized_pnl(sig, price_a=110.0, price_b=200.0)
+        exit_prices, pnl = calculate_realized_pnl(
+            sig, price_a=110.0, price_b=200.0, include_costs=False
+        )
         # AAPL: BUY, (110-100)*10=100; MSFT: SELL, (200-200)*5=0
         assert pnl == pytest.approx(100.0)
 
@@ -325,7 +327,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 100.0),
             _leg("MSFT", "SELL", 5.0, 200.0),
         ])
-        exit_prices, pnl = calculate_realized_pnl(sig, price_a=90.0, price_b=200.0)
+        exit_prices, pnl = calculate_realized_pnl(
+            sig, price_a=90.0, price_b=200.0, include_costs=False
+        )
         # AAPL: BUY, (90-100)*10=-100; MSFT: SELL, 0
         assert pnl == pytest.approx(-100.0)
 
@@ -335,7 +339,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 100.0),
             _leg("MSFT", "SELL", 5.0, 200.0),
         ])
-        exit_prices, pnl = calculate_realized_pnl(sig, price_a=100.0, price_b=180.0)
+        exit_prices, pnl = calculate_realized_pnl(
+            sig, price_a=100.0, price_b=180.0, include_costs=False
+        )
         # AAPL: BUY, 0; MSFT: SELL, (200-180)*5=100
         assert pnl == pytest.approx(100.0)
 
@@ -344,7 +350,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 100.0),
             _leg("MSFT", "SELL", 5.0, 200.0),
         ])
-        exit_prices, pnl = calculate_realized_pnl(sig, price_a=100.0, price_b=220.0)
+        exit_prices, pnl = calculate_realized_pnl(
+            sig, price_a=100.0, price_b=220.0, include_costs=False
+        )
         # AAPL: BUY, 0; MSFT: SELL, (200-220)*5=-100
         assert pnl == pytest.approx(-100.0)
 
@@ -356,7 +364,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 150.0),
             _leg("MSFT", "SELL", 5.0, 300.0),
         ])
-        exit_prices, pnl = calculate_realized_pnl(sig, price_a=160.0, price_b=280.0)
+        exit_prices, pnl = calculate_realized_pnl(
+            sig, price_a=160.0, price_b=280.0, include_costs=False
+        )
         assert pnl == pytest.approx(200.0)
 
     def test_returns_exit_prices_dict(self):
@@ -364,7 +374,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 150.0),
             _leg("MSFT", "SELL", 5.0, 300.0),
         ])
-        exit_prices, _ = calculate_realized_pnl(sig, price_a=160.0, price_b=280.0)
+        exit_prices, _ = calculate_realized_pnl(
+            sig, price_a=160.0, price_b=280.0, include_costs=False
+        )
         assert exit_prices == {"AAPL": 160.0, "MSFT": 280.0}
 
     def test_zero_pnl_when_prices_unchanged(self):
@@ -372,7 +384,9 @@ class TestCalculateRealizedPnl:
             _leg("AAPL", "BUY", 10.0, 150.0),
             _leg("MSFT", "SELL", 5.0, 300.0),
         ])
-        _, pnl = calculate_realized_pnl(sig, price_a=150.0, price_b=300.0)
+        _, pnl = calculate_realized_pnl(
+            sig, price_a=150.0, price_b=300.0, include_costs=False
+        )
         assert pnl == pytest.approx(0.0)
 
     def test_crypto_legs_same_logic(self):
@@ -381,5 +395,64 @@ class TestCalculateRealizedPnl:
             _leg("ETH-USD", "SELL", 1.0, 3000.0),
         ])
         # BTC: BUY, (62000-60000)*0.1=200; ETH: SELL, (3000-2900)*1.0=100 → total 300
-        _, pnl = calculate_realized_pnl(sig, price_a=62000.0, price_b=2900.0)
+        _, pnl = calculate_realized_pnl(
+            sig, price_a=62000.0, price_b=2900.0, include_costs=False
+        )
         assert pnl == pytest.approx(300.0)
+
+    def test_include_costs_subtracts_fees_and_slippage_bps(self):
+        sig = _signal([
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 10.0,
+                "price": 100.0,
+                "fee": 0.25,
+                "slippage_bps": 10.0,
+            },
+            {
+                "ticker": "MSFT",
+                "side": "SELL",
+                "quantity": 5.0,
+                "price": 200.0,
+                "fee": 0.25,
+                "slippage_bps": 10.0,
+            },
+        ])
+        # Directional: 0. Exit fees 0.40*2 + entry fees 0.25*2 + slip on notional
+        # AAPL slip: 1000 * 10/10000 = 1.0; MSFT slip: 1000 * 10/10000 = 1.0
+        _, pnl = calculate_realized_pnl(
+            sig,
+            price_a=100.0,
+            price_b=200.0,
+            include_costs=True,
+            exit_fee_per_leg=0.40,
+        )
+        assert pnl == pytest.approx(-(0.25 + 0.25 + 0.40 + 0.40 + 1.0 + 1.0))
+
+    def test_include_costs_reads_fee_and_slip_from_metadata(self):
+        sig = _signal([
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 10.0,
+                "price": 100.0,
+                "metadata": {"fee": 1.0, "slippage_bps": 5.0},
+            },
+            {
+                "ticker": "MSFT",
+                "side": "SELL",
+                "quantity": 5.0,
+                "price": 200.0,
+                "metadata": {"fee": 1.0, "slippage_bps": 5.0},
+            },
+        ])
+        _, pnl = calculate_realized_pnl(
+            sig,
+            price_a=100.0,
+            price_b=200.0,
+            include_costs=True,
+            exit_fee_per_leg=0.0,
+        )
+        # fees 2.0 + slip 0.5 + 0.5
+        assert pnl == pytest.approx(-(2.0 + 0.5 + 0.5))

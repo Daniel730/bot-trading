@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from src.services.persistence_service import OrderSide, OrderStatus, PersistenceService
-from src.services.shadow_service import ShadowService
+from src.services.shadow_service import ShadowService, apply_shadow_fill_slippage
 
 
 @pytest.mark.asyncio
@@ -49,6 +49,50 @@ async def test_execute_simulated_trade_reuses_signal_id_and_logs_atomically(monk
     assert legs[0]["status"] == OrderStatus.OPEN
     assert legs[0]["metadata_json"]["is_shadow"] is True
     assert legs[0]["metadata_json"]["execution_lane"] == "SHADOW"
+    # Fill price embeds adverse slip; audit key must not be slippage_bps (PnL double-count).
+    assert "slippage_bps" not in legs[0]["metadata_json"]
+    assert legs[0]["metadata_json"]["applied_slippage_bps"] > 0
+    # Short-Long: leg A SELL → fill below mid; leg B BUY → fill above mid
+    assert legs[0]["price"] < 3000.0
+    assert legs[1]["price"] > 140.0
+
+
+def test_apply_shadow_fill_slippage_buy_pays_up_sell_receives_less():
+    buy_px, bps = apply_shadow_fill_slippage(100.0, "BUY", slippage_bps=10.0)
+    sell_px, _ = apply_shadow_fill_slippage(100.0, "SELL", slippage_bps=10.0)
+    assert bps == 10.0
+    assert buy_px == pytest.approx(100.1)
+    assert sell_px == pytest.approx(99.9)
+
+
+@pytest.mark.asyncio
+async def test_close_simulated_trade_returns_slipped_exits(monkeypatch):
+    service = ShadowService()
+    monkeypatch.setattr(
+        "src.services.shadow_service.settings",
+        SimpleNamespace(FLAT_ORDER_FRICTION_USD=0.0, SHADOW_FILL_SLIPPAGE_BPS=10.0),
+    )
+    monkeypatch.setattr(
+        "src.services.shadow_service.apply_shadow_fill_slippage",
+        lambda mid, side, slippage_bps=None: (
+            (mid * 1.001, 10.0) if str(side).upper() == "BUY" else (mid * 0.999, 10.0)
+        ),
+    )
+    total, exit_a, exit_b = await service.close_simulated_trade(
+        "AAPL_MSFT",
+        uuid.uuid4(),
+        "Long-Short",
+        10.0,
+        5.0,
+        150.0,
+        300.0,
+        160.0,
+        290.0,
+    )
+    # Long-Short close: SELL A / BUY B
+    assert exit_a == pytest.approx(160.0 * 0.999)
+    assert exit_b == pytest.approx(290.0 * 1.001)
+    assert isinstance(total, float)
 
 
 @pytest.mark.asyncio

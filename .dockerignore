@@ -31,8 +31,9 @@ frontend/dist/
 
 # Sibling projects not needed by the Python bot image
 # (infra/Dockerfile uses the repo root as build context, and only needs src/,
-# scripts/, legacy/dashboard/, requirements.txt, and the proto file.)
+# scripts/, requirements.txt, and the proto file.)
 frontend/
+legacy/
 execution-engine/build/
 execution-engine/.gradle/
 !execution-engine/src/main/proto/

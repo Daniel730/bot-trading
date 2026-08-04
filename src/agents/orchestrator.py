@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from src.agents.bull_agent import bull_agent
 from src.agents.bear_agent import bear_agent
 from src.agents.whale_watcher_agent import whale_watcher_agent
+from src.agents.news_risk_agent import news_risk_agent, news_effects_apply
 from src.agents.portfolio_manager_agent import portfolio_manager_agent
 from src.agents.macro_economic_agent import macro_economic_agent
 from src.services.redis_service import redis_service
@@ -106,6 +107,7 @@ class AgentState(TypedDict):
     bear_verdict: dict
     fundamental_verdict: dict
     whale_verdict: dict
+    news_verdict: dict
     final_confidence: float
     final_verdict: str
 
@@ -153,6 +155,7 @@ class Orchestrator:
             "bear_verdict": {},
             "fundamental_verdict": {},
             "whale_verdict": {},
+            "news_verdict": {},
             "final_confidence": 0.0,
             "final_verdict": ""
         }
@@ -218,10 +221,11 @@ class Orchestrator:
             score_task_a,
             score_task_b,
             whale_watcher_agent.evaluate(state['signal_context']),
+            news_risk_agent.evaluate(state['signal_context']),
             return_exceptions=True
         )
 
-        bull_results, bear_results, score_data_a, score_data_b, whale_results = results
+        bull_results, bear_results, score_data_a, score_data_b, whale_results, news_results = results
 
         # Broadcast intermediate agent thoughts
         sig_id = state['signal_context'].get('signal_id', 'N/A')
@@ -283,6 +287,38 @@ class Orchestrator:
             )
         })
 
+        news_inactive = (
+            isinstance(news_results, Exception)
+            or (
+                isinstance(news_results, dict)
+                and (
+                    news_results.get("status") == "inactive"
+                    or news_results.get("active") is False
+                )
+            )
+        )
+        telemetry_service.broadcast("thought", {
+            "agent_name": "NEWS_RISK",
+            "signal_id": sig_id,
+            "thought": (
+                str(news_results.get("reasoning", "News risk check complete"))
+                if not isinstance(news_results, Exception)
+                else f"Error: {news_results}"
+            ),
+            "verdict": "INACTIVE"
+            if news_inactive
+            else (
+                "VETO"
+                if isinstance(news_results, dict) and news_results.get("veto")
+                else (
+                    "RISK"
+                    if isinstance(news_results, dict)
+                    and float(news_results.get("confidence_multiplier", 1.0)) < 1.0
+                    else "NEUTRAL"
+                )
+            ),
+        })
+
         # Track if any major API timeout occurred for circuit breaker
         timeout_occurred = False
 
@@ -316,6 +352,23 @@ class Orchestrator:
             }
         else:
             state['whale_verdict'] = whale_results
+
+        if isinstance(news_results, Exception):
+            logger.warning("Orchestrator News Risk failed: %s", news_results)
+            if isinstance(news_results, asyncio.TimeoutError):
+                timeout_occurred = True
+            # Fail open for trading: news errors must not veto the book.
+            state["news_verdict"] = {
+                "active": False,
+                "status": "inactive",
+                "veto": False,
+                "confidence_multiplier": 1.0,
+                "materiality": 0.0,
+                "warning": str(news_results),
+                "reasoning": f"News risk error → inactive no-veto: {news_results}",
+            }
+        else:
+            state["news_verdict"] = news_results
 
         unknown_fundamental_tickers = []
 
@@ -449,6 +502,23 @@ class Orchestrator:
                 "reasoning",
                 "VETO: Whale watcher flagged conflicting exchange flow.",
             )
+        elif news_effects_apply(state["news_verdict"]) and state["news_verdict"].get("veto"):
+            state["final_confidence"] = 0.0
+            state["final_verdict"] = state["news_verdict"].get(
+                "reasoning",
+                "VETO: News risk flagged material headline shock for a pair leg.",
+            )
+            decision_recorder.record(
+                stage="orchestrator_news",
+                outcome="veto",
+                reason="news_risk_material_headline",
+                inputs={
+                    "materiality": state["news_verdict"].get("materiality"),
+                    "matched_tickers": state["news_verdict"].get("matched_tickers"),
+                },
+                pair_id=pair_id,
+                signal_id=state["signal_context"].get("signal_id"),
+            )
         else:
             # --- PHASE 2: MULTI-ARMED BANDIT (ADAPTIVE LEARNING) ---
             bull_s, bull_f = await self._get_agent_metrics("BULL_AGENT")
@@ -522,6 +592,21 @@ class Orchestrator:
                         pair_id,
                         whale_multiplier,
                         whale_score,
+                    )
+
+            if news_effects_apply(state["news_verdict"]):
+                news_mult = float(state["news_verdict"].get("confidence_multiplier", 1.0))
+                news_mat = float(state["news_verdict"].get("materiality", 0.0))
+                if news_mult != 1.0 and news_mat > 0.0:
+                    final_conf *= news_mult
+                    state["final_verdict"] += (
+                        f" | NEWS materiality={news_mat:.2f} mult={news_mult:.2f}"
+                    )
+                    logger.info(
+                        "[ORCHESTRATOR] %s - News risk confidence shrink: %.2f (materiality=%.2f)",
+                        pair_id,
+                        news_mult,
+                        news_mat,
                     )
 
             state["final_confidence"] = max(0.0, min(1.0, final_conf))

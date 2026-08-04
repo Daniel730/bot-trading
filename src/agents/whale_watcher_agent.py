@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class WhaleWatcherAgent:
     """Hard-dormant whale-flow stub on the orchestrator hot path.
 
-    Cache-backed analysis lives under ``legacy/whale_watcher_service.py`` and is
+    Cache-backed analysis was removed with the ``legacy/`` tree and is
     not imported by runtime. ``WHALE_WATCHER_ENABLED`` and related knobs are
     reserved for a future restored evaluator (GitHub #91); flipping the flag
     alone must not enable veto or confidence side effects.

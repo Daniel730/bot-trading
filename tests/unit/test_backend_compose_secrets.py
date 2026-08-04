@@ -46,13 +46,30 @@ def test_backend_compose_restart_policies():
     assert services["redis"]["restart"] == "always"
     assert services["postgres"]["restart"] == "always"
 
-    # Bot/MCP stay manual-restart so crashes stay visible to operators.
-    for service_name in ("bot", "mcp-server"):
-        assert services[service_name]["restart"] == "no"
+    # Bot stays manual-restart so crashes stay visible to operators.
+    assert services["bot"]["restart"] == "no"
     # SEC worker auto-recovers: empty Redis fundamentals silently block live equity entries.
     assert services["sec-worker"]["restart"] == "unless-stopped"
-    # Dry-run sidecar may recover without operator intervention.
+    # Optional dry-run sidecars may recover without operator intervention when profile-enabled.
+    assert services["mcp-server"]["restart"] == "no"
     assert services["execution-engine"]["restart"] == "unless-stopped"
+
+
+def test_optional_sidecars_use_compose_profile_and_bot_does_not_depend_on_them():
+    compose = yaml.safe_load(BACKEND_COMPOSE.read_text(encoding="utf-8"))
+    services = compose["services"]
+
+    assert services["mcp-server"].get("profiles") == ["optional"]
+    assert services["execution-engine"].get("profiles") == ["optional"]
+
+    bot_deps = services["bot"].get("depends_on") or {}
+    assert "mcp-server" not in bot_deps
+    assert "execution-engine" not in bot_deps
+    assert "redis" in bot_deps
+    assert "postgres" in bot_deps
+
+    mcp_deps = services["mcp-server"].get("depends_on") or {}
+    assert "execution-engine" not in mcp_deps
 
 
 def test_frontend_compose_restarts_unless_stopped():

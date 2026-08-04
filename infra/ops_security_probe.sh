@@ -61,18 +61,29 @@ for k in (
 PY
 
 echo "=== container security posture (no env secrets) ==="
-for c in trading-bot-bot-1 trading-bot-postgres-1 trading-bot-redis-1 trading-bot-mcp-server-1 trading-bot-frontend-1 trading-bot-execution-engine-1; do
+# mcp-server / execution-engine are optional-profile sidecars — tolerate absence.
+for c in trading-bot-bot-1 trading-bot-postgres-1 trading-bot-redis-1 trading-bot-frontend-1; do
   echo "--- $c ---"
-  docker inspect "$c" --format 'User={{json .Config.User}} Privileged={{json .HostConfig.Privileged}} ReadonlyRootfs={{json .HostConfig.ReadonlyRootfs}} CapAdd={{json .HostConfig.CapAdd}} CapDrop={{json .HostConfig.CapDrop}} NetworkMode={{json .HostConfig.NetworkMode}}'
+  docker inspect "$c" --format 'User={{json .Config.User}} Privileged={{json .HostConfig.Privileged}} ReadonlyRootfs={{json .HostConfig.ReadonlyRootfs}} CapAdd={{json .HostConfig.CapAdd}} CapDrop={{json .HostConfig.CapDrop}} NetworkMode={{json .HostConfig.NetworkMode}}' \
+    2>/dev/null || echo "MISSING $c"
+done
+for c in trading-bot-mcp-server-1 trading-bot-execution-engine-1; do
+  echo "--- $c (optional) ---"
+  docker inspect "$c" --format 'User={{json .Config.User}} Privileged={{json .HostConfig.Privileged}} ReadonlyRootfs={{json .HostConfig.ReadonlyRootfs}} CapAdd={{json .HostConfig.CapAdd}} CapDrop={{json .HostConfig.CapDrop}} NetworkMode={{json .HostConfig.NetworkMode}}' \
+    2>/dev/null || echo "SKIP $c (optional profile not deployed)"
 done
 
 echo "=== bot SAFE env flags ==="
 docker inspect trading-bot-bot-1 --format '{{range .Config.Env}}{{println .}}{{end}}' \
   | grep -E '^(PAPER_TRADING|LIVE_CAPITAL_DANGER|DEV_MODE|BROKERAGE_PROVIDER|ALPACA_BASE_URL|APCA_API_BASE_URL|DRY_RUN|IGNORE_UNMANAGED|DASHBOARD_ALLOWED)=' || true
 
-echo "=== execution-engine SAFE env ==="
-docker inspect trading-bot-execution-engine-1 --format '{{range .Config.Env}}{{println .}}{{end}}' \
-  | grep -E '^(DRY_RUN|LIVE_CAPITAL_DANGER|PAPER_TRADING|ALPACA_BASE_URL)=' || true
+echo "=== execution-engine SAFE env (optional) ==="
+if docker inspect trading-bot-execution-engine-1 >/dev/null 2>&1; then
+  docker inspect trading-bot-execution-engine-1 --format '{{range .Config.Env}}{{println .}}{{end}}' \
+    | grep -E '^(DRY_RUN|LIVE_CAPITAL_DANGER|PAPER_TRADING|ALPACA_BASE_URL)=' || true
+else
+  echo "SKIP execution-engine (optional profile not deployed)"
+fi
 
 echo "=== published ports of interest ==="
 ss -tuln 2>/dev/null | awk 'NR==1 || /:(6379|5433|8082|8000|3000|50051|5432) /'

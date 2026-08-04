@@ -155,6 +155,49 @@ class ArbitrageService:
         self.filter_fingerprints[pair_id] = state_fingerprint
         return self.filters[pair_id]
 
+    async def invalidate_pair_state(self, pair_id: str, *, reason: str = "manual") -> None:
+        """Drop in-memory + Redis Kalman state after corporate actions / quarantine."""
+        self.filters.pop(pair_id, None)
+        self.filter_fingerprints.pop(pair_id, None)
+        try:
+            await redis_service.delete_kalman_state(pair_id)
+        except Exception as exc:
+            logger.warning(
+                "[ArbitrageService] Failed to delete Kalman Redis state for %s (%s): %s",
+                pair_id,
+                reason,
+                exc,
+            )
+        logger.info("[ArbitrageService] Invalidated Kalman state for %s (%s)", pair_id, reason)
+
+    @staticmethod
+    def series_has_corporate_action_jump(
+        series_a: pd.Series,
+        series_b: pd.Series,
+        *,
+        threshold: Optional[float] = None,
+    ) -> bool:
+        """True when either leg has a single-bar absolute return above threshold.
+
+        Adjusted history usually absorbs routine splits, but unadjusted gaps,
+        ticker changes, and bad Yahoo stitches still produce jump artifacts that
+        poison Kalman / cointegration. Threshold defaults to
+        ``settings.CORP_ACTION_PRICE_JUMP_PCT`` (15%).
+        """
+        jump = float(
+            settings.CORP_ACTION_PRICE_JUMP_PCT if threshold is None else threshold
+        )
+        if jump <= 0.0:
+            return False
+        for series in (series_a, series_b):
+            cleaned = pd.to_numeric(series, errors="coerce").dropna()
+            if len(cleaned) < 3:
+                continue
+            rets = cleaned.pct_change().abs().dropna()
+            if not rets.empty and bool((rets > jump).any()):
+                return True
+        return False
+
     @agent_trace("ArbitrageService.save_filter_state")
     async def save_filter_state(
         self,

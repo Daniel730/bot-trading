@@ -43,6 +43,7 @@ Historical artifacts:
 - `geminiplan.md` is the original long-form design/research plan.
 - `WIP_AUDIT_2026-07-17.md`, `OVERNIGHT_2026-08-04.md`, and ad-hoc `*-report.md` files are point-in-time snapshots — prefer the Phase docs + `SUMMARY.md` for current posture.
 - `specs/` and `.specify/` contain feature-planning artifacts and templates, not always current runtime docs.
+- The former `legacy/` tree (T212, Web3, whale cache service, old HTML dashboard) was removed; Alpaca is the only brokerage path.
 
 ## Support
 

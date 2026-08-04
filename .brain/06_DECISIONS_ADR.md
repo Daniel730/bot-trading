@@ -45,7 +45,7 @@
 ## ADR-007: Alpaca is the current active brokerage facade
 
 - Status: accepted by current code, docs need reconciliation.
-- Context: `BrokerageService` logs that legacy providers moved to `legacy/` and initializes Alpaca regardless of requested provider.
+- Context: `BrokerageService` rejects non-Alpaca providers as legacy/disabled and initializes Alpaca; the old `legacy/` tree was removed.
 - Decision in code: force Alpaca.
 - Consequence: docs, `.env.template`, dashboard labels, and release checklist must not imply T212/Web3 live routing is currently active unless routing is restored with tests.
 

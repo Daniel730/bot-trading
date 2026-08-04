@@ -4,6 +4,12 @@ The strategy is pairs trading with multiple layers of economic, statistical, and
 
 ## Pair Admission
 
+The default equity universe is a **curated US liquid list** in `settings.ARBITRAGE_PAIRS`
+(same-session, Alpaca-friendly). Regional EU/LSE/Xetra/cross-listed pairs were removed from
+defaults to cut rate-limit noise and friction; re-add deliberately via dashboard overrides if
+needed. Automatic pair discovery is frozen by default (`PAIR_DISCOVERY_ENABLED=false`,
+`PAIR_DISCOVERY_AUTO_PROMOTE=false`); operators can still run one-shot discover from the dashboard.
+
 Candidate pairs are first filtered by `src/services/pair_eligibility_service.py`.
 
 A pair can be rejected before any Kalman state is allocated when:
@@ -13,6 +19,8 @@ A pair can be rejected before any Kalman state is allocated when:
 - the pair crosses settlement currencies while cross-currency blocking is enabled;
 - an LSE ticker is present while short-hold LSE pairs are blocked;
 - estimated round-trip cost exceeds `PAIR_MAX_ROUND_TRIP_COST_PCT`.
+- a single-bar absolute return exceeds `CORP_ACTION_PRICE_JUMP_PCT` (default 15%) — the pair is
+  benched and Kalman state is invalidated (split / symbol-change / bad stitch protection).
 
 Crypto pairs are admitted as 24/7 same-session pairs and use the active Alpaca brokerage path later. Web3 execution is legacy/disabled in the current runtime.
 
@@ -78,19 +86,21 @@ The orchestrator is an async Python ensemble, not a required LangGraph runtime p
 2. Macro beacon fail-fast veto by sector.
 3. Bull and bear agent evaluation. Default path is a labeled z-score heuristic (`source=heuristic_stub`), not LLM theater (legacy fixed 0.7/0.4 removed). Optional Gemini/OpenAI theme scoring requires `BULL_BEAR_LLM_ENABLED=true`, usable keys, and remaining hourly/daily caps; otherwise agents stay heuristic. Orchestrator telemetry uses `HEURISTIC` (not AI BULLISH/BEARISH) for non-LLM payloads and annotates `final_verdict` with a `THEME:` quality note.
 4. Cached SEC/fundamental integrity scores from Redis.
-5. Whale watcher status for crypto-sensitive flows. The hot-path implementation is a hard-dormant stub that reports `INACTIVE` (`active=False`). `WHALE_WATCHER_ENABLED` and related knobs are reserved; flipping the flag alone does not enable flow analysis. Cache-backed logic remains under `legacy/` (GitHub #91).
-6. Portfolio manager confidence adjustment.
-7. Historical global accuracy multiplier.
-8. Per-ticker beacon flash-crash veto.
+5. News risk overlay (opt-in via `NEWS_RISK_ENABLED`, default **false**). Veto-only: material headlines mapped to either leg can hard-veto or shrink confidence. Missing feed/API key → inactive **no-veto** (does not block the book). This is a risk overlay, not directional news alpha.
+6. Whale watcher status for crypto-sensitive flows. The hot-path implementation is a hard-dormant stub that reports `INACTIVE` (`active=False`). `WHALE_WATCHER_ENABLED` and related knobs are reserved; flipping the flag alone does not enable flow analysis. Cache-backed logic was removed with the `legacy/` tree (GitHub #91).
+7. Portfolio manager confidence adjustment.
+8. Historical global accuracy multiplier.
+9. Per-ticker beacon flash-crash veto.
 
 Hard veto examples:
 
 - sector beacon is in `EXTREME_VOLATILITY`;
 - fundamental score is below `ORCH_FUNDAMENTAL_VETO_SCORE`;
+- an **active** news risk agent returns a veto (`NEWS_RISK_ENABLED=true`, feed healthy, materiality ≥ `NEWS_RISK_VETO_SCORE`, ticker-relevant, within TTL);
 - an **active** whale watcher returns a veto (`active=True`). The current stub is inactive, so no whale-flow veto or confidence boost/penalty is applied; orchestrator ignores inactive payloads even if they carry veto/multiplier fields;
 - operational status is `DEGRADED_MODE`.
 
-Multi-armed bandit weights cover bull, bear, and SEC agents only — whale is not a MAB arm and does not consume Thompson-sampling weight.
+Multi-armed bandit weights cover bull, bear, and SEC agents only — whale and news risk are not MAB arms and do not consume Thompson-sampling weight.
 
 ## Risk Guards
 
@@ -103,7 +113,21 @@ Multi-armed bandit weights cover bull, bear, and SEC agents only — whale is no
 | Live sell preflight | Blocks sell legs when available shares are insufficient. |
 | Atomic leg guard | Aborts after leg A failure; emergency-closes leg A when leg B fails. |
 | Kill switch | Closes positions when current value breaches `FINANCIAL_KILL_SWITCH_PCT`. |
+| Corporate-action jump | Benches pair + clears Kalman when a single-bar move exceeds `CORP_ACTION_PRICE_JUMP_PCT`. |
 | Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE` (friction hold until fees clear, or force exit at `TAKE_PROFIT_FORCE_EXIT_ZSCORE`); stop loss at `STOP_LOSS_ZSCORE`. |
+
+## Sizing And Realized P&L Honesty
+
+- Position sizing can derive Kelly win probability / payoff from **closed ledger PnLs** via
+  `persistence_service.get_kelly_inputs_from_ledger()` once `KELLY_LEDGER_MIN_TRADES` (default 20)
+  closed signals exist; below that floor it keeps `DEFAULT_WIN_PROBABILITY` /
+  `DEFAULT_WIN_LOSS_RATIO` (never invents a high win rate from a tiny sample).
+- Alpaca US equities are commission-free: `FLAT_ORDER_FRICTION_USD` defaults to **0.0** so friction
+  gates use bid/ask spread estimates rather than a T212-era flat proxy.
+- Shadow fills apply `SHADOW_FILL_SLIPPAGE_BPS` (default 5) adverse mid offset so paper PnL does not
+  overstate liquid equity fills.
+- `calculate_realized_pnl(..., include_costs=True)` nets entry fees, estimated exit friction, and
+  recorded slippage bps when present on the leg / metadata.
 
 ## Execution Direction
 

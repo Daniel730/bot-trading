@@ -26,6 +26,9 @@ Optional but useful:
 - `BROKERAGE_PROVIDER=ALPACA`; unsupported values such as `T212` or `WEB3` fail startup.
 - Trading 212 and Web3 settings are legacy/disabled in the current runtime.
 - `OPENAI_API_KEY` and/or `GEMINI_API_KEY` for model-backed analysis paths.
+- `NEWS_RISK_ENABLED=false` (default). Veto-only news overlay — keep off unless you configure
+  `NEWS_RISK_PROVIDER` + `NEWS_RISK_FEED_URLS` (RSS) or `polygon` with a usable Polygon key.
+  Missing feed/API does **not** block entries (inactive no-veto).
 
 ## Paper Startup Check
 
@@ -257,13 +260,18 @@ Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
 | `MONITOR_ENTRY_ZSCORE` | `2.0` (never `0.5`); validator rejects `< 1.0` | Entry threshold; code clamps below 1.0 |
 | `IMAGE_OWNER` | `daniel730` | GHCR namespace |
 | `POSTGRES_PASSWORD`, `DASHBOARD_TOKEN`, `REDIS_PASSWORD` | non-default; token ≥16 chars; Redis password ≥16 chars | Startup / compose guards (`REDIS_PASSWORD` enables `--requirepass`) |
-| `PAIR_DISCOVERY_ENABLED` | `true` (default) | Background scout + elite rotation |
-| `PAIR_DISCOVERY_AUTO_PROMOTE` | `true` (default) | Promote scouts into Active after discover |
+| `PAIR_DISCOVERY_ENABLED` | `false` (default) | Background scout frozen; curated US universe only |
+| `PAIR_DISCOVERY_AUTO_PROMOTE` | `false` (default) | Promote scouts into Active after discover |
 | `PAIR_DENYLIST` | includes `BTC-USD_BCH-USD` | Quarantine junk / spread-guard churners |
 | `PAIR_DISCOVERY_MAX_TICKERS` | `12` (default); pin `8` on bot-server | Bounds scout RAM/yfinance load |
 | `PAIR_DISCOVERY_MIN_CORRELATION` | `0.70` (default) | Scout/promote correlation floor |
 | `PAIR_DISCOVERY_MAX_PVALUE` | `0.05` (default) | Promote only statistically cointegrated scouts |
 | `ELITE_ROTATION_SORTINO_THRESHOLD` | `2.0` (default) | Do not promote weak Sortino scouts |
+| `FLAT_ORDER_FRICTION_USD` | `0.0` (default) | Alpaca commission-free; friction uses spreads |
+| `SHADOW_FILL_SLIPPAGE_BPS` | `5` (default) | Adverse mid offset on shadow fills |
+| `CORP_ACTION_PRICE_JUMP_PCT` | `0.15` (default) | Bench + invalidate Kalman on jump |
+| `KELLY_LEDGER_MIN_TRADES` | `20` (default) | Min closed signals before Kelly leaves defaults |
+| `NEWS_RISK_ENABLED` | `false` (default) | Opt-in veto-only news overlay (keep off overnight) |
 | `TAKE_PROFIT_FORCE_EXIT_ZSCORE` | `0.25` (default) | Exit when mean reversion is done even if fees not cleared |
 | `CRYPTO_COINTEGRATION_PVALUE_THRESHOLD` | `0.10` (default) | Tighter than legacy 0.25 crypto ADF gate |
 | `PAPER_TRADING` | `true` for paper Alpaca | Do not enable live real-money overnight |
@@ -429,7 +437,7 @@ bash infra/ops_oom_probe.sh
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
 ```
 
-Scout RAM is bounded by `PAIR_DISCOVERY_MAX_TICKERS` (pin `8` on the shared host; code default `12`). Prefer `PAIR_DISCOVERY_AUTO_PROMOTE=false` overnight if the bot is near its limit. On the shared 7.4 GiB host, set `PAIR_DISCOVERY_ENABLED=false` when the bot is climbing toward its 1280m cgroup cap (re-enable after the memory leak/growth path is fixed or the host has more free RAM).
+Scout RAM is bounded by `PAIR_DISCOVERY_MAX_TICKERS` (pin `8` on the shared host; code default `12`). Discovery stays frozen by default (`PAIR_DISCOVERY_ENABLED=false`, `PAIR_DISCOVERY_AUTO_PROMOTE=false`). Keep those false overnight on the shared 7.4 GiB host when the bot is climbing toward its 1280m cgroup cap.
 
 Scan-loop pacing (bot container `cpus: 1.50`): keep `SCAN_PAIR_CONCURRENCY` / `SCAN_EXIT_CONCURRENCY` at `2` (defaults) and `SCAN_COINT_RECHECK_CONCURRENCY=1`. Raise only after RSS/CPU look calm. `SCAN_INTERVAL_SECONDS` is clamped to 5–300 (default 15). Every scannable pair and every open signal still runs each cycle; only parallelism is capped.
 

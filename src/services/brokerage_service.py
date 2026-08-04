@@ -22,7 +22,7 @@ class AwaitableFloat(float):
 class BrokerageService:
     """
     BrokerageService facade, now simplified to focus on Alpaca as the primary provider.
-    Legacy providers (T212, Web3) have been moved to legacy/.
+    Legacy providers (T212, Web3) are removed; only Alpaca is supported.
     """
     def __init__(self, provider_name: str = None):
         self.configure_provider(provider_name)
@@ -35,7 +35,7 @@ class BrokerageService:
             logger.warning("BrokerageService: %s is legacy-only; using ALPACA.", provider_name)
         self.provider_name = "ALPACA"
         self.provider = AlpacaProvider()
-        logger.info("BrokerageService: Initialized with ALPACA provider (Legacy providers moved to legacy/).")
+        logger.info("BrokerageService: Initialized with ALPACA provider (T212/Web3 removed).")
 
     def test_connection(self) -> bool:
         return self.provider.test_connection()

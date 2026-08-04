@@ -81,12 +81,11 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      mcp-server:
-        condition: service_healthy
-      execution-engine:
-        condition: service_healthy
 
+  # Optional sidecars — not on the Alpaca monitor hot path.
+  # Start with: docker compose --profile optional up -d
   mcp-server:
+    profiles: ["optional"]
     # Shares the trading-bot-base image built by the `bot` service above.
     # No `build:` block here so Compose doesn't redundantly re-run the build.
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
@@ -112,8 +111,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      execution-engine:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import socket; s = socket.create_connection(('127.0.0.1', 8000), 3); s.close()\""]
       interval: 10s
@@ -122,6 +119,7 @@ services:
       start_period: 30s
 
   execution-engine:
+    profiles: ["optional"]
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/execution-engine:${IMAGE_TAG:-latest}
     # gRPC sidecar is only needed on-host / via compose network — not LAN/IPv6.
     ports:
@@ -142,8 +140,6 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    # O7 fix: TCP probe confirms the JVM is bound and accepting connections before
-    # dependent services (bot, mcp-server) start sending gRPC calls.
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 50051 || exit 1"]
       interval: 10s

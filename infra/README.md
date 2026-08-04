@@ -7,7 +7,7 @@ This directory contains the container and deployment wiring for the full bot sta
 | File | Purpose |
 |---|---|
 | `docker-compose.yml` | Includes backend and frontend compose files |
-| `docker-compose.backend.yml` | Redis, PostgreSQL, bot, dashboard/MCP server, Java execution engine, SEC worker |
+| `docker-compose.backend.yml` | Redis, PostgreSQL, bot, SEC worker; optional-profile MCP + Java execution engine |
 | `docker-compose.frontend.yml` | Frontend nginx container |
 | `docker-compose.local.yml` | Local build override for machines that cannot pull production GHCR images |
 | `Dockerfile` | Python runtime image for bot, dashboard API, scripts, and SEC worker |
@@ -43,6 +43,14 @@ From the repository root:
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d
+```
+
+Default stack: `redis`, `postgres`, `bot`, `sec-worker`, `frontend`.
+
+Optional dry-run sidecars (`mcp-server`, `execution-engine`) are behind Compose profile `optional`:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile optional up -d
 ```
 
 The production files pull images from:
@@ -82,8 +90,8 @@ IMAGE_OWNER=my-ghcr-owner IMAGE_TAG=my-tag docker compose -f infra/docker-compos
 |---|---:|---|---|
 | `frontend` | `80` | `3000` | nginx static app and API proxy (LAN/Tailscale OK) |
 | `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | monitor + dashboard API |
-| `mcp-server` | `8000` | `127.0.0.1:8000` | FastMCP; process defaults to loopback; optional `MCP_TOOL_TOKEN`; host publish loopback only |
-| `execution-engine` | `50051` | `127.0.0.1:50051` | Java gRPC dry-run sidecar — loopback only |
+| `mcp-server` | `8000` | `127.0.0.1:8000` | Optional (`--profile optional`); FastMCP; host publish loopback only |
+| `execution-engine` | `50051` | `127.0.0.1:50051` | Optional (`--profile optional`); Java gRPC dry-run sidecar — loopback only |
 | `redis` | `6379` | `127.0.0.1:6379` | requirepass via `REDIS_PASSWORD`; clients use host `redis` on the compose network |
 | `postgres` | `5432` | `127.0.0.1:5433` | ledger/audit DB — loopback only |
 
@@ -91,11 +99,13 @@ Containers talk over the compose network with service DNS (`REDIS_HOST=redis`, `
 
 ## Useful Commands
 
+Useful commands note optional profile for MCP/Java:
+
 ```bash
 docker compose -f infra/docker-compose.yml ps
 docker compose -f infra/docker-compose.yml logs -f bot
-docker compose -f infra/docker-compose.yml logs -f mcp-server
-docker compose -f infra/docker-compose.yml logs -f execution-engine
+docker compose -f infra/docker-compose.yml --profile optional logs -f mcp-server
+docker compose -f infra/docker-compose.yml --profile optional logs -f execution-engine
 docker compose -f infra/docker-compose.yml down
 ```
 

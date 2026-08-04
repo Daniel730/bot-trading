@@ -81,11 +81,11 @@ PY
 grep -E '^(PAIR_DISCOVERY_|PAIR_DENYLIST)' "$ENV_FILE" || true
 
 if [[ "$RECREATE" == "1" ]]; then
-  echo "--- recreate bot/mcp to pick up env (volumes kept) ---"
+  echo "--- recreate bot to pick up env (volumes kept) ---"
   cd "$ROOT"
   docker compose --env-file "$ENV_FILE" -p trading-bot \
     -f infra/docker-compose.backend.yml \
-    up -d --no-deps --no-build bot mcp-server
+    up -d --no-deps --no-build bot
   sleep 8
 fi
 

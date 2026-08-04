@@ -65,7 +65,7 @@ The active safety work is moving the bot away from optimistic `OPEN`/`COMPLETED`
 
 ## Current Architecture Divergences To Remember
 
-- Docs and runtime now present the active broker route as Alpaca-only. Current `BrokerageService` forces Alpaca and logs that legacy providers moved to `legacy/`.
+- Docs and runtime now present the active broker route as Alpaca-only. Current `BrokerageService` forces Alpaca; T212/Web3 providers are legacy/disabled (the old `legacy/` tree was removed).
 - `src/config.py` validates `BROKERAGE_PROVIDER` and fails startup for unsupported values instead of silently coercing them.
 - The Java execution engine intentionally refuses `DRY_RUN=false`; live Java brokerage is not available. Compose pins it to `DRY_RUN=true` and `LIVE_CAPITAL_DANGER=false` even when the Python monitor runs Alpaca paper broker mode.
 - `infra/docker-compose.backend.yml` keeps `POSTGRES_PASSWORD` required with no default; this is protected by `tests/unit/test_backend_compose_secrets.py`.

@@ -107,9 +107,17 @@ def test_close_uses_broker_follows_open_lane_not_only_env():
 async def test_execute_trade_shadow_never_calls_broker(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
+    kelly = {
+        "win_prob": 0.55,
+        "win_loss_ratio": 1.0,
+        "source": "defaults",
+        "closed_trades": 0,
+        "min_trades": 20,
+    }
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.monitor.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=[]), \
+         patch("src.monitor.persistence_service.get_kelly_inputs_from_ledger", new_callable=AsyncMock, return_value=kelly), \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_journal, \
          patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
@@ -140,15 +148,25 @@ async def test_execute_trade_shadow_never_calls_broker(monitor):
     assert journal["signal_id"] == uuid.UUID(signal_id)
     assert journal["metrics_at_entry"]["execution_lane"] == LANE_SHADOW
     assert journal["metrics_at_entry"]["paper_trade"] is True
+    assert journal["metrics_at_entry"]["win_prob"] == 0.55
+    assert journal["metrics_at_entry"]["kelly_source"] == "defaults"
 
 
 @pytest.mark.asyncio
 async def test_execute_trade_broker_paper_never_calls_shadow(monitor):
     pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
     signal_id = str(uuid.uuid4())
+    kelly = {
+        "win_prob": 0.6,
+        "win_loss_ratio": 1.2,
+        "source": "ledger",
+        "closed_trades": 25,
+        "min_trades": 20,
+    }
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.monitor.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=[]), \
+         patch("src.monitor.persistence_service.get_kelly_inputs_from_ledger", new_callable=AsyncMock, return_value=kelly), \
          patch("src.services.persistence_service.persistence_service.log_trade", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.update_trade_fill", new_callable=AsyncMock), \
          patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock) as mock_journal, \
@@ -199,6 +217,7 @@ async def test_execute_trade_broker_paper_never_calls_shadow(monitor):
         assert journal["metrics_at_entry"]["execution_lane"] == LANE_BROKER_PAPER
         assert journal["metrics_at_entry"]["paper_trade"] is False
         assert journal["metrics_at_entry"]["broker_paper_trading"] is True
+        assert journal["metrics_at_entry"]["kelly_source"] == "ledger"
 
 
 @pytest.mark.asyncio
@@ -218,6 +237,17 @@ async def test_execute_trade_blocks_shadow_when_broker_signal_open(monitor):
 
     with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock) as mock_bid_ask, \
          patch("src.monitor.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=[open_broker]), \
+         patch(
+             "src.monitor.persistence_service.get_kelly_inputs_from_ledger",
+             new_callable=AsyncMock,
+             return_value={
+                 "win_prob": 0.55,
+                 "win_loss_ratio": 1.0,
+                 "source": "defaults",
+                 "closed_trades": 0,
+                 "min_trades": 20,
+             },
+         ), \
          patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow, \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch("src.services.risk_service.risk_service.validate_trade") as mock_validate, \
@@ -276,6 +306,7 @@ async def test_close_shadow_skips_broker_even_if_paper_trading_false(monitor):
         mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
         mock_persistence.close_trade = AsyncMock()
         mock_persistence.update_signal_status = AsyncMock()
+        mock_shadow_close.return_value = (42.0, 160.08, 289.855)
         monitor.brokerage.place_value_order = AsyncMock()
 
         await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)

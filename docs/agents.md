@@ -10,12 +10,13 @@ Responsibilities:
 
 - blocks new entries while `operational_status=DEGRADED_MODE`;
 - performs macro beacon fail-fast checks;
-- runs bull, bear, fundamental-cache, and whale watcher reads concurrently;
+- runs bull, bear, fundamental-cache, whale watcher, and news-risk reads concurrently;
 - labels bull/bear telemetry as `HEURISTIC` when theme agents are non-LLM stubs (does not paint fixed/heuristic confidence as AI BULLISH/BEARISH);
 - annotates `final_verdict` with a `THEME:` quality note (heuristic vs LLM);
 - broadcasts intermediate thoughts to telemetry;
 - applies fundamental hard vetoes (live fail-closed on unknown scores; paper keeps default score);
 - records whale watcher as `INACTIVE` in the active runtime (legacy agent code remains; not a live veto today);
+- applies news risk veto/shrink only when the agent marks `active=True` (opt-in; missing feed does not block entries);
 - adjusts confidence with portfolio logic and global strategy accuracy;
 - resets `DEGRADED_MODE` back to normal after successful agent loops.
 
@@ -59,9 +60,34 @@ Evaluates whether a signal improves the portfolio from an allocation/risk perspe
 
 `src/agents/whale_watcher_agent.py`
 
-**Runtime status: inactive (hard-dormant stub).** The orchestrator emits `verdict: INACTIVE` and applies whale veto/multiplier only when a verdict explicitly sets `active=True`. Today the stub always returns `active=False` with identity multipliers, and `WHALE_WATCHER_ENABLED` is ignored until a restored evaluator ships (GitHub #91). Whale is not a Thompson/MAB arm (only bull/bear/SEC). Legacy cache service code remains under `legacy/whale_watcher_service.py` and is not imported on the hot path.
+**Runtime status: inactive (hard-dormant stub).** The orchestrator emits `verdict: INACTIVE` and applies whale veto/multiplier only when a verdict explicitly sets `active=True`. Today the stub always returns `active=False` with identity multipliers, and `WHALE_WATCHER_ENABLED` is ignored until a restored evaluator ships (GitHub #91). Whale is not a Thompson/MAB arm (only bull/bear/SEC). The former cache-backed whale service under `legacy/` was removed.
 
 When re-enabled, the intended behavior is a crypto/context risk filter that reads cached flow summaries and can veto conflicting flow, reduce confidence, or slightly support aligned flow. Re-enablement must: honor `WHALE_WATCHER_ENABLED`, set `active=True` only with fresh cache data, and add ingestion/veto/telemetry tests — do not flip the env flag alone.
+
+## News Risk Agent
+
+`src/agents/news_risk_agent.py` (feeds in `src/services/news_feed.py`)
+
+**Role: veto-only risk overlay — not directional news trading / alpha prediction.**
+
+- Opt-in via `NEWS_RISK_ENABLED` (default **false**).
+- Maps headlines → tickers with a simple alias table (Coca-Cola→KO, Pepsi→PEP, …) plus exact ticker tokens.
+- Scores materiality with keyword severity heuristics first. `NEWS_RISK_LLM_ENABLED` defaults false (same spirit as `BULL_BEAR_LLM_ENABLED`).
+- Veto only when `active=True` and materiality ≥ `NEWS_RISK_VETO_SCORE`, the headline hits `ticker_a` or `ticker_b`, and it is inside `NEWS_RISK_TTL_SECONDS`.
+- Mild materiality can shrink confidence via `NEWS_RISK_CONFIDENCE_MULTIPLIER` without a hard veto.
+- Pluggable feeds: `rss` (default), `file`, `stub`, `polygon` (needs usable `POLYGON_API_KEY`).
+- **Fail semantics:** missing API key / empty `NEWS_RISK_FEED_URLS` / empty feed → inactive **no-veto** (trading continues). Parse/network errors → inactive no-veto with a warning. Orchestrator applies news effects only when `active=True`.
+- Not a Thompson/MAB arm.
+
+Enable RSS path example:
+
+```env
+NEWS_RISK_ENABLED=true
+NEWS_RISK_PROVIDER=rss
+NEWS_RISK_FEED_URLS=https://finance.yahoo.com/rss/headline?s=KO,PEP
+NEWS_RISK_TTL_SECONDS=7200
+NEWS_RISK_VETO_SCORE=0.75
+```
 
 ## Fundamental Analyst And SEC Worker
 

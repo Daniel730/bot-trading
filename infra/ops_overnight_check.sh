@@ -19,15 +19,21 @@ dmesg -T 2>/dev/null | grep -iE "oom|killed process|Out of memory" | tail -10 ||
 
 echo "--- containers ---"
 docker ps -a --filter name=trading-bot --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}'
-for svc in trading-bot-bot-1 trading-bot-mcp-server-1 trading-bot-sec-worker-1 trading-bot-redis-1 trading-bot-postgres-1; do
+for svc in trading-bot-bot-1 trading-bot-sec-worker-1 trading-bot-redis-1 trading-bot-postgres-1; do
   docker inspect "$svc" --format '{{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}} started={{.State.StartedAt}} rc={{.RestartCount}} oom={{.State.OOMKilled}}' 2>/dev/null || echo "MISSING $svc"
+done
+for svc in trading-bot-mcp-server-1 trading-bot-execution-engine-1; do
+  docker inspect "$svc" --format '{{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}} started={{.State.StartedAt}} rc={{.RestartCount}} oom={{.State.OOMKilled}}' 2>/dev/null || echo "SKIP $svc (optional profile not deployed)"
 done
 
 echo "--- mem ---"
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}' | head -40
 echo "--- trading-bot cgroup limits (0 mem = UNLIMITED) ---"
-for svc in trading-bot-bot-1 trading-bot-mcp-server-1 trading-bot-sec-worker-1 trading-bot-execution-engine-1; do
+for svc in trading-bot-bot-1 trading-bot-sec-worker-1; do
   docker inspect "$svc" --format '{{.Name}} mem={{.HostConfig.Memory}} nano_cpus={{.HostConfig.NanoCpus}} oom={{.State.OOMKilled}}' 2>/dev/null || echo "MISSING $svc"
+done
+for svc in trading-bot-mcp-server-1 trading-bot-execution-engine-1; do
+  docker inspect "$svc" --format '{{.Name}} mem={{.HostConfig.Memory}} nano_cpus={{.HostConfig.NanoCpus}} oom={{.State.OOMKilled}}' 2>/dev/null || echo "SKIP $svc (optional)"
 done
 
 echo "--- env non-secret ---"

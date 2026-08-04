@@ -60,7 +60,7 @@ export IMAGE_OWNER="${IMAGE_OWNER:-daniel730}"
 export IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 docker compose --env-file "$DEPLOY_ENV_FILE" -p trading-bot -f "$COMPOSE" \
-  up -d --force-recreate --no-deps bot mcp-server sec-worker
+  up -d --force-recreate --no-deps bot sec-worker
 
 echo "RECREATE_OK"
 docker ps --filter name=trading-bot --format 'table {{.Names}}\t{{.Status}}'

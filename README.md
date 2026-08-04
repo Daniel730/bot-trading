@@ -32,10 +32,11 @@ Alpha Arbitrage is a **statistical-arbitrage trading bot** and research/executio
 ## Features
 
 - **Statistical arbitrage** signal engine with Kalman-filter spread estimation and entropy/risk gates.
-- **Multi-agent validation** ensemble that vets signals before they reach execution.
-- **Execution venues**: paper shadow and the active Alpaca brokerage path; Trading 212 and Web3 code is legacy/disabled in the current runtime.
+- **Curated US pair universe** by default; automatic discovery/auto-promote are frozen unless operators enable them.
+- **Multi-agent validation** ensemble that vets signals before they reach execution (optional veto-only news risk overlay, default OFF).
+- **Execution venues**: paper shadow (cost/slippage-aware) and the active Alpaca brokerage path; Trading 212 and Web3 code is legacy/disabled in the current runtime.
 - **Operations console** built in React for live telemetry, pair management, trade history, and configuration.
-- **FastMCP tool server** for assistant/AI integrations over SSE.
+- **FastMCP tool server** and **Java gRPC engine** as optional Compose-profile sidecars (not on the default bot hot path).
 - **Production-ready infra** with Dockerfiles, Compose files, Redis idempotency, and PostgreSQL persistence.
 
 ## Project Map
@@ -155,10 +156,13 @@ java -jar build/libs/execution-engine-1.0-SNAPSHOT-all.jar
 
 ## Docker
 
-Production compose pulls GHCR images:
+Production compose pulls GHCR images. Default stack is redis, postgres, bot, sec-worker, frontend
+(`mcp-server` and `execution-engine` stay behind Compose profile `optional`):
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d
+# Optional dry-run sidecars:
+docker compose -f infra/docker-compose.yml --profile optional up -d
 ```
 
 For local builds on your machine:
@@ -180,7 +184,9 @@ It repairs non-secret paper-mode connectivity keys, validates the env file, and 
 If the check reports already-running app containers, stop them first:
 
 ```bash
-docker stop infra-bot-1 infra-execution-engine-1 infra-mcp-server-1 infra-sec-worker-1 infra-frontend-1
+docker stop infra-bot-1 infra-sec-worker-1 infra-frontend-1
+# Optional profile sidecars (only if previously started with --profile optional):
+# docker stop infra-execution-engine-1 infra-mcp-server-1
 ```
 
 Useful ports:

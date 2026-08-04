@@ -506,32 +506,70 @@ class PersistenceService:
         fill_price: Optional[float] = None,
         status: Optional[OrderStatus] = None,
         metadata_updates: Optional[dict] = None,
+        expected_quantity: Optional[float] = None,
+        fee: Optional[float] = None,
     ):
+        """Persist fill qty/avg price and remaining quantity for partial lifecycle.
+
+        Always writes ``filled_qty``, ``filled_avg_price``, ``expected_qty``, and
+        ``remaining_qty`` into metadata so open→close reconciliation can read a
+        complete leg snapshot even when status stays PARTIAL_EXPOSURE.
+        """
         from sqlalchemy import select, update
 
-        values = {"quantity": filled_quantity}
+        values: dict = {"quantity": filled_quantity}
         if fill_price and fill_price > 0:
             values["price"] = fill_price
         if status is not None:
             values["status"] = status
+        if fee is not None:
+            values["fee"] = float(fee)
+
+        expected = float(expected_quantity) if expected_quantity is not None else None
+        remaining = None
+        if expected is not None:
+            remaining = max(0.0, expected - float(filled_quantity))
+
+        fill_meta = {
+            "filled_qty": float(filled_quantity),
+            "filled_avg_price": float(fill_price) if fill_price and fill_price > 0 else None,
+            "expected_qty": expected,
+            "remaining_qty": remaining,
+        }
+        if fee is not None:
+            fill_meta["fee"] = float(fee)
 
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 existing_rows = (
                     await session.execute(
-                        select(TradeLedger.id, TradeLedger.metadata_json)
+                        select(TradeLedger.id, TradeLedger.metadata_json, TradeLedger.quantity)
                         .where(TradeLedger.signal_id == signal_id)
                         .where(TradeLedger.order_id == order_id)
                     )
                 ).all()
                 for row in existing_rows:
                     existing_metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+                    if expected is None and existing_metadata.get("expected_qty") is None:
+                        # Fall back to pre-fill submitted qty when caller omitted expected.
+                        try:
+                            prior_expected = float(
+                                existing_metadata.get("submitted_qty")
+                                or existing_metadata.get("expected_qty")
+                                or row.quantity
+                                or filled_quantity
+                            )
+                        except (TypeError, ValueError):
+                            prior_expected = float(filled_quantity)
+                        fill_meta["expected_qty"] = prior_expected
+                        fill_meta["remaining_qty"] = max(0.0, prior_expected - float(filled_quantity))
+                    merged = {**existing_metadata, **fill_meta, **(metadata_updates or {})}
                     stmt = (
                         update(TradeLedger)
                         .where(TradeLedger.id == row.id)
                         .values(
                             **values,
-                            metadata_json={**existing_metadata, **(metadata_updates or {})},
+                            metadata_json=merged,
                         )
                     )
                     await session.execute(stmt)
@@ -705,10 +743,19 @@ class PersistenceService:
                     "side": t.side.value,
                     "quantity": float(t.quantity),
                     "price": float(t.price),
+                    "fee": float(t.fee or 0.0),
+                    "slippage_bps": float(meta.get("slippage_bps") or 0.0),
                     "execution_timestamp": t.execution_timestamp,
                     "metadata": meta,
                     "is_shadow": leg_is_shadow,
                     "execution_lane": leg_lane,
+                    "remaining_qty": float(meta.get("remaining_qty") or 0.0) or None,
+                    "expected_qty": float(meta.get("expected_qty") or 0.0) or None,
+                    "filled_avg_price": (
+                        float(meta["filled_avg_price"])
+                        if meta.get("filled_avg_price") is not None
+                        else None
+                    ),
                 })
                 signals[sig]["total_cost_basis"] += float(t.quantity * t.price)
                 if leg_is_shadow:
@@ -964,6 +1011,62 @@ class PersistenceService:
             )
 
         return {"items": items, "total": total, "page": page, "page_size": page_size}
+
+    async def get_kelly_inputs_from_ledger(
+        self,
+        *,
+        min_trades: Optional[int] = None,
+    ) -> Dict[str, float | str | int]:
+        """Derive Kelly win probability / payoff from closed ledger PnLs.
+
+        Falls back to ``settings.DEFAULT_WIN_*`` until enough closed signals exist
+        (``KELLY_LEDGER_MIN_TRADES``). Conservative: never invent a high win rate
+        from a tiny sample.
+        """
+        min_n = int(min_trades if min_trades is not None else settings.KELLY_LEDGER_MIN_TRADES)
+        from sqlalchemy import select
+
+        async with self.AsyncSessionLocal() as session:
+            stmt = select(TradeLedger).where(TradeLedger.status == OrderStatus.CLOSED)
+            trades = (await session.execute(stmt)).scalars().all()
+
+        closed_signal_pnls: Dict[str, float] = {}
+        for trade in trades:
+            if not trade.metadata_json or "pnl" not in trade.metadata_json:
+                continue
+            key = str(trade.signal_id or trade.id)
+            if key not in closed_signal_pnls:
+                closed_signal_pnls[key] = float(trade.metadata_json["pnl"])
+
+        closed_count = len(closed_signal_pnls)
+        if closed_count < min_n:
+            return {
+                "win_prob": float(settings.DEFAULT_WIN_PROBABILITY),
+                "win_loss_ratio": float(settings.DEFAULT_WIN_LOSS_RATIO),
+                "source": "defaults",
+                "closed_trades": closed_count,
+                "min_trades": min_n,
+            }
+
+        wins = [p for p in closed_signal_pnls.values() if p > 0]
+        losses = [p for p in closed_signal_pnls.values() if p < 0]
+        win_prob = len(wins) / closed_count
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+        if avg_loss <= 0.0:
+            win_loss_ratio = float(settings.DEFAULT_WIN_LOSS_RATIO)
+        else:
+            win_loss_ratio = max(0.05, avg_win / avg_loss)
+
+        # Clamp win_prob away from 0/1 so Kelly stays defined.
+        win_prob = min(0.95, max(0.05, float(win_prob)))
+        return {
+            "win_prob": win_prob,
+            "win_loss_ratio": float(win_loss_ratio),
+            "source": "ledger",
+            "closed_trades": closed_count,
+            "min_trades": min_n,
+        }
 
     async def get_trade_summary(self) -> Dict[str, float]:
         """Returns high-level dashboard trade counts and win-rate metrics."""

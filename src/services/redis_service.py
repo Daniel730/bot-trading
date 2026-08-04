@@ -17,6 +17,7 @@ REDIS_KEY_NAMESPACES = {
     "execution:inflight": {"pattern": "execution:inflight:{uuid}", "ttl": "1h (Java)"},
     "l2": {"pattern": "l2:snapshot:{ticker} / l2:{ticker}", "ttl": "writer-supplied"},
     "whale": {"pattern": "whale:*", "ttl": "WHALE_WATCHER_CACHE_TTL_SECONDS"},
+    "news:risk": {"pattern": "news:risk:headlines", "ttl": "NEWS_RISK_CACHE_SECONDS"},
     "entropy_baseline": {"pattern": "entropy_baseline:{ticker}", "ttl": "persistent (live gate)"},
 }
 
