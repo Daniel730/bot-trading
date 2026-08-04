@@ -39,6 +39,17 @@ def test_live_mode_requires_explicit_live_capital_danger(monkeypatch):
         Settings(_env_file=None)
 
 
+def test_take_profit_force_exit_clamped_to_take_profit_band(monkeypatch):
+    monkeypatch.setenv("POSTGRES_PASSWORD", "strong-postgres-secret")
+    monkeypatch.setenv("DASHBOARD_TOKEN", "strong-dashboard-token")
+    monkeypatch.setenv("TAKE_PROFIT_ZSCORE", "0.5")
+    monkeypatch.setenv("TAKE_PROFIT_FORCE_EXIT_ZSCORE", "1.5")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE == pytest.approx(0.5)
+
+
 def test_default_dashboard_cors_regex_allows_tailscale_origins(monkeypatch):
     monkeypatch.setenv("POSTGRES_PASSWORD", "strong-postgres-secret")
     monkeypatch.setenv("DASHBOARD_TOKEN", "strong-dashboard-token")
@@ -69,6 +80,14 @@ def test_default_pair_denylist_covers_both_btc_bch_orders(monkeypatch):
     assert "BCH-USD_BTC-USD" in denied
     assert settings.PAIR_DISCOVERY_AUTO_PROMOTE is True
     assert settings.PAIR_DISCOVERY_MAX_ABS_HEDGE == 25.0
+    assert settings.PAIR_DISCOVERY_MIN_CORRELATION == 0.70
+    assert settings.PAIR_DISCOVERY_MAX_PVALUE == 0.05
+    assert settings.CRYPTO_COINTEGRATION_PVALUE_THRESHOLD == 0.10
+    assert settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE == 0.25
+    assert settings.MAX_OPEN_PAIRS == 8
+    assert settings.MAX_PORTFOLIO_GROSS_NOTIONAL_USD == 800.0
+    assert settings.BLOCK_SHARED_LEG_OPENS is True
+    assert settings.MAX_SECTOR_EXPOSURE == 0.30
 
 
 def test_pair_denylist_env_override_normalizes_both_orders(monkeypatch):

@@ -89,10 +89,10 @@ else
 fi
 
 echo "=== hardened host publishes ==="
-ss -tuln 2>/dev/null | awk '/:(6379|5433|8000|50051) / {print}' | while read -r line; do
-  case "$line" in
-    *127.0.0.1:*) echo "ok_loopback $line" ;;
-    *) echo "BAD_PUBLIC $line" ;;
+ss -tuln 2>/dev/null | awk 'NR > 1 && /:(6379|5433|8000|50051) / { print $5 }' | while read -r loc; do
+  case "$loc" in
+    127.0.0.1:*) echo "ok_loopback $loc" ;;
+    *) echo "BAD_PUBLIC $loc" ;;
   esac
 done
 

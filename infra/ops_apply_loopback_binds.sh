@@ -140,7 +140,8 @@ echo "=== listening after apply ==="
 ss -tuln | awk 'NR==1 || /:(6379|5433|8000|50051|8082|3000) /'
 
 echo "=== public bind check (expect none on hardened ports) ==="
-if ss -tuln | awk '/:(6379|5433|8000|50051) / {print}' | grep -E '0\.0\.0\.0:|\[::\]:|\*:'; then
+# Only inspect Local Address (field 5). Peer Address is often 0.0.0.0:* on LISTEN.
+if ss -tuln | awk 'NR > 1 && /:(6379|5433|8000|50051) / { print $5 }' | grep -vE '^127\.0\.0\.1:'; then
   echo "FAIL: hardened ports still publicly bound" >&2
   exit 1
 fi
