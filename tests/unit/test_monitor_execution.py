@@ -91,11 +91,10 @@ async def test_execute_trade_success_marks_both_final_legs_open_pair(monitor):
 
         await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
-        submitted_rows = [call.args[0] for call in mock_log_trade.await_args_list]
-        assert [row["status"] for row in submitted_rows] == [
-            OrderStatus.LEG_A_SUBMITTED,
-            OrderStatus.LEG_B_SUBMITTED,
-        ]
+        # F-007: pre-submit ORDER_SUBMITTED for Leg A; Leg B still logged after place.
+        statuses = [call.args[0]["status"] for call in mock_log_trade.await_args_list]
+        assert OrderStatus.ORDER_SUBMITTED in statuses
+        assert OrderStatus.LEG_B_SUBMITTED in statuses
         assert mock_update_fill.await_count == 2
         assert all(call.kwargs["status"] == OrderStatus.OPEN_PAIR for call in mock_update_fill.await_args_list)
 
@@ -137,10 +136,9 @@ async def test_execute_trade_success_resolves_submitted_ledger_rows(monitor):
 
         await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
 
-        assert [call.args[0]["status"] for call in mock_log_trade.await_args_list] == [
-            OrderStatus.LEG_A_SUBMITTED,
-            OrderStatus.LEG_B_SUBMITTED,
-        ]
+        statuses = [call.args[0]["status"] for call in mock_log_trade.await_args_list]
+        assert OrderStatus.ORDER_SUBMITTED in statuses
+        assert OrderStatus.LEG_B_SUBMITTED in statuses
         assert [call.args[1] for call in mock_update_fill.await_args_list] == ["leg-a", "leg-b"]
         assert [call.kwargs["status"] for call in mock_update_fill.await_args_list] == [
             OrderStatus.OPEN_PAIR,
@@ -539,8 +537,13 @@ async def test_execute_trade_marks_manual_reconciliation_when_leg_a_submission_a
         mock_await_fill.assert_not_awaited()
         mock_sleep.assert_not_awaited()
         mock_log_journal.assert_not_awaited()
-        assert mock_log_trade.await_args.args[0]["status"] == OrderStatus.NEEDS_MANUAL_RECONCILIATION
-        assert mock_log_trade.await_args.args[0]["order_id"] == f"{signal_id}-A"
+        # Pre-submit row first; promote via attach_broker_order_id on ambiguous submit.
+        assert mock_log_trade.await_args_list[0].args[0]["status"] == OrderStatus.ORDER_SUBMITTED
+        assert mock_log_trade.await_args_list[0].args[0]["order_id"] == f"{signal_id}-A"
+        from src.services.persistence_service import persistence_service as _ps
+        assert _ps.attach_broker_order_id.await_count >= 1
+        attach_kwargs = _ps.attach_broker_order_id.await_args.kwargs
+        assert attach_kwargs["status"] == OrderStatus.NEEDS_MANUAL_RECONCILIATION
         mock_update_status.assert_awaited_once_with(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
         mock_notify.assert_awaited_once()
 

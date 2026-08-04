@@ -97,10 +97,10 @@ def test_close_uses_broker_follows_open_lane_not_only_env():
     assert close_uses_broker(broker_signal, paper_trading=True) is True
     assert signal_is_shadow(broker_signal) is False
 
-    # Untagged legacy: fall back to current PAPER_TRADING.
+    # Untagged legacy (F-009): never invent a broker close — fail closed either env.
     legacy = {"signal_id": "s3", "legs": [{"ticker": "AAPL", "side": "BUY", "quantity": 1, "price": 1}]}
     assert close_uses_broker(legacy, paper_trading=True) is False
-    assert close_uses_broker(legacy, paper_trading=False) is True
+    assert close_uses_broker(legacy, paper_trading=False) is False
 
 
 @pytest.mark.asyncio

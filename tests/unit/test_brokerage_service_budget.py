@@ -11,23 +11,30 @@ def _brokerage_service() -> BrokerageService:
         return BrokerageService()
 
 
+def _open_gate_patches():
+    return (
+        patch("src.services.brokerage_service.settings.PAPER_TRADING", False),
+        patch("src.services.brokerage_service.settings.LIVE_CAPITAL_DANGER", True),
+        patch(
+            "src.services.capital_halt_service.enforce_capital_halt_or_raise_state",
+            new=AsyncMock(return_value={"halt": False, "reason": None, "details": {}}),
+        ),
+    )
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "provider_result",
-    [
-        {"status": "success", "order_id": "submitted-order"},
-        {
+async def test_budget_does_not_update_on_unknown_submit():
+    svc = _brokerage_service()
+    svc.provider.place_value_order = AsyncMock(
+        return_value={
             "status": "unknown",
             "requires_reconciliation": True,
             "client_order_id": "cid-budget-unknown",
-        },
-    ],
-)
-async def test_budget_updates_only_after_confirmed_fill(provider_result):
-    svc = _brokerage_service()
-    svc.provider.place_value_order = AsyncMock(return_value=dict(provider_result))
+        }
+    )
 
-    with patch("src.services.brokerage_service.settings.PAPER_TRADING", False), patch(
+    p1, p2, p3 = _open_gate_patches()
+    with p1, p2, p3, patch(
         "src.services.budget_service.budget_service.update_used_budget"
     ) as mock_update:
         result = await svc.place_value_order(
@@ -49,13 +56,32 @@ async def test_confirmed_fill_updates_budget_once():
         }
     )
 
-    with patch("src.services.brokerage_service.settings.PAPER_TRADING", False), patch(
+    p1, p2, p3 = _open_gate_patches()
+    with p1, p2, p3, patch(
         "src.services.budget_service.budget_service.update_used_budget"
     ) as mock_update:
         result = await svc.place_value_order("MSFT", 500.0, "BUY")
 
     assert result["venue"] == "ALPACA"
     mock_update.assert_called_once_with("ALPACA", 487.25)
+
+
+@pytest.mark.asyncio
+async def test_f018_success_submit_accrues_budget():
+    """Alpaca returns success on accept — budget must accrue (F-018)."""
+    svc = _brokerage_service()
+    svc.provider.place_value_order = AsyncMock(
+        return_value={"status": "success", "order_id": "submitted-order"}
+    )
+
+    p1, p2, p3 = _open_gate_patches()
+    with p1, p2, p3, patch(
+        "src.services.budget_service.budget_service.update_used_budget"
+    ) as mock_update:
+        result = await svc.place_value_order("MSFT", 500.0, "BUY")
+
+    assert result["venue"] == "ALPACA"
+    mock_update.assert_called_once_with("ALPACA", 500.0)
 
 
 @pytest.mark.asyncio

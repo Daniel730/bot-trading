@@ -355,11 +355,16 @@ class PortfolioManagerAgent:
                 if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
                     continue
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
-                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                if not is_hedge_ratio_sane(
+                    hedge,
+                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
+                ):
                     logger.info(
-                        "SCOUT SKIP %s: extreme hedge_ratio=%.3f (max_abs=%.1f)",
+                        "SCOUT SKIP %s: insane hedge_ratio=%.6f (min_abs=%.3f max_abs=%.1f)",
                         pair_id,
                         float(hedge),
+                        settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     continue
@@ -467,11 +472,16 @@ class PortfolioManagerAgent:
                     continue
 
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
-                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                if not is_hedge_ratio_sane(
+                    hedge,
+                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
+                ):
                     logger.info(
-                        "SCOUT SKIP %s: extreme hedge_ratio=%.3f (max_abs=%.1f)",
+                        "SCOUT SKIP %s: insane hedge_ratio=%.6f (min_abs=%.3f max_abs=%.1f)",
                         pair_id,
                         float(hedge),
+                        settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     continue
@@ -641,6 +651,7 @@ class PortfolioManagerAgent:
             sortino_threshold=settings.ELITE_ROTATION_SORTINO_THRESHOLD,
             denylist=settings.pair_denylist_ids,
             max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+            min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
             min_correlation=settings.PAIR_DISCOVERY_MIN_CORRELATION,
             max_pvalue=settings.PAIR_DISCOVERY_MAX_PVALUE,
         )

@@ -46,22 +46,108 @@ class BrokerageService:
     def _format_ticker(self, ticker: str) -> str:
         return str(ticker or "").strip().upper()
 
-    async def place_market_order(self, ticker: str, quantity: float, side: str, limit_price: float = None, client_order_id: str = None) -> Dict[str, Any]:
-        result = await self.provider.place_market_order(ticker, quantity, side, limit_price, client_order_id)
+    async def _pre_submit_gate(self, *, intent: str = "open") -> Optional[Dict[str, Any]]:
+        """Fail-closed checks before any broker submit (F-002 bypass, F-004).
+
+        ``intent=\"close\"`` skips capital-halt so exits remain available when
+        daily/drawdown halt is engaged. Opens/manual buys always check halt.
+        """
+        intent_norm = (intent or "open").strip().lower()
+        if intent_norm not in {"open", "close", "manual"}:
+            intent_norm = "open"
+
+        # Shadow paper must never place broker opens (wallet/invest already guard;
+        # this is the last line of defense).
+        if settings.PAPER_TRADING and intent_norm != "close":
+            return {
+                "status": "error",
+                "message": "broker submit blocked: PAPER_TRADING (shadow) mode",
+            }
+
+        # F-004: re-assert LIVE_CAPITAL_DANGER on every non-shadow submit.
+        if not settings.PAPER_TRADING and not settings.LIVE_CAPITAL_DANGER:
+            return {
+                "status": "error",
+                "message": "broker submit blocked: LIVE_CAPITAL_DANGER is false",
+            }
+
+        if intent_norm == "close":
+            return None
+
+        try:
+            from src.services.capital_halt_service import enforce_capital_halt_or_raise_state
+            from src.services.persistence_service import persistence_service
+            from src.services.performance_service import performance_service
+
+            halt = await enforce_capital_halt_or_raise_state(
+                persistence_service=persistence_service,
+                performance_service=performance_service,
+                notification_service=None,
+            )
+            if halt.get("halt"):
+                return {
+                    "status": "error",
+                    "message": f"capital_halt:{halt.get('reason')}",
+                    "halt_reason": halt.get("reason"),
+                    "halt_details": halt.get("details"),
+                }
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Broker pre-submit capital halt check failed open-fail-closed: %s", exc)
+            return {
+                "status": "error",
+                "message": "capital_halt_check_failed",
+            }
+        return None
+
+    async def place_market_order(
+        self,
+        ticker: str,
+        quantity: float,
+        side: str,
+        limit_price: float = None,
+        client_order_id: str = None,
+        *,
+        intent: str = "open",
+    ) -> Dict[str, Any]:
+        blocked = await self._pre_submit_gate(intent=intent)
+        if blocked:
+            blocked["venue"] = self.provider_name
+            return blocked
+        result = await self.provider.place_market_order(
+            ticker, quantity, side, limit_price, client_order_id
+        )
         result["venue"] = self.provider_name
         return result
 
-    async def place_value_order(self, ticker: str, amount: float, side: str, price: float = None, client_order_id: str = None) -> Dict[str, Any]:
-        result = await self.provider.place_value_order(ticker, amount, side, price, client_order_id)
+    async def place_value_order(
+        self,
+        ticker: str,
+        amount: float,
+        side: str,
+        price: float = None,
+        client_order_id: str = None,
+        *,
+        intent: str = "open",
+    ) -> Dict[str, Any]:
+        blocked = await self._pre_submit_gate(intent=intent)
+        if blocked:
+            blocked["venue"] = self.provider_name
+            return blocked
+        result = await self.provider.place_value_order(
+            ticker, amount, side, price, client_order_id
+        )
         result["venue"] = self.provider_name
         status = str(result.get("status", "")).lower()
-        if status == "filled" and not result.get("requires_reconciliation") and not settings.PAPER_TRADING:
+        # F-018: Alpaca returns "success" on accept — accrue budget on submit, not only "filled".
+        billable = status in {"filled", "success"} and not result.get("requires_reconciliation")
+        if billable and not settings.PAPER_TRADING and intent != "close":
             filled_amount = result.get("filled_notional") or result.get("filled_amount") or amount
             try:
                 budget_amount = float(filled_amount)
             except (TypeError, ValueError):
                 budget_amount = amount
-            budget_service.update_used_budget(self.provider_name, budget_amount)
+            if side.upper() == "BUY":
+                budget_service.update_used_budget(self.provider_name, budget_amount)
         return result
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
@@ -302,9 +388,16 @@ class _LazyBrokerageService:
         side: str,
         limit_price: float = None,
         client_order_id: str = None,
+        *,
+        intent: str = "open",
     ) -> Dict[str, Any]:
         return await self._get_instance().place_market_order(
-            ticker, quantity, side, limit_price, client_order_id
+            ticker,
+            quantity,
+            side,
+            limit_price,
+            client_order_id,
+            intent=intent,
         )
 
     async def place_value_order(
@@ -314,9 +407,16 @@ class _LazyBrokerageService:
         side: str,
         price: float = None,
         client_order_id: str = None,
+        *,
+        intent: str = "open",
     ) -> Dict[str, Any]:
         return await self._get_instance().place_value_order(
-            ticker, amount, side, price, client_order_id
+            ticker,
+            amount,
+            side,
+            price,
+            client_order_id,
+            intent=intent,
         )
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:

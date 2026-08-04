@@ -335,7 +335,26 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
     setSaveError(null);
     setSaveOk(null);
     try {
-      const result = await discoverPairs(token, sessionToken);
+      let result;
+      try {
+        result = await discoverPairs(token, sessionToken);
+      } catch (firstErr) {
+        const errMsg = (firstErr as Error)?.message || '';
+        if (
+          typeof ApiError === 'function' &&
+          firstErr instanceof ApiError &&
+          firstErr.status === 403 &&
+          /2fa|token/i.test(errMsg)
+        ) {
+          const otp = window.prompt(
+            'Step-up 2FA required to start pair discovery.\nEnter authenticator or backup code:',
+          );
+          if (!otp?.trim()) throw firstErr;
+          result = await discoverPairs(token, sessionToken, otp.trim());
+        } else {
+          throw firstErr;
+        }
+      }
       setSaveOk(result.message || 'Pair discovery started. Completion will appear here and in the terminal feed.');
       await refresh();
     } catch (err: any) {
@@ -376,10 +395,33 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
     setSaveError(null);
     setSaveOk(null);
     try {
-      const result = await updatePairs(token, draftStocks, {
-        applyNow,
-        cryptoPairs: draftCrypto,
-      }, sessionToken);
+      let result;
+      try {
+        result = await updatePairs(token, draftStocks, {
+          applyNow,
+          cryptoPairs: draftCrypto,
+        }, sessionToken);
+      } catch (firstErr) {
+        const errMsg = (firstErr as Error)?.message || '';
+        if (
+          typeof ApiError === 'function' &&
+          firstErr instanceof ApiError &&
+          firstErr.status === 403 &&
+          /2fa|token/i.test(errMsg)
+        ) {
+          const otp = window.prompt(
+            'Step-up 2FA required to mutate trading pairs.\nEnter authenticator or backup code:',
+          );
+          if (!otp?.trim()) throw firstErr;
+          result = await updatePairs(token, draftStocks, {
+            applyNow,
+            cryptoPairs: draftCrypto,
+            otpToken: otp.trim(),
+          }, sessionToken);
+        } else {
+          throw firstErr;
+        }
+      }
       const total = draftStocks.length + draftCrypto.length;
       setSaveOk(
         result.reloaded

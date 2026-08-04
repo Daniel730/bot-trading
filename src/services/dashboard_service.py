@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import time
+import uuid
 from collections import deque
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -797,20 +798,32 @@ class TOTPManager:
     def __init__(self, persistence: PersistenceManager):
         self.persistence = persistence
 
+    _SECRET_PREFIX_FERNET = "fernet:"
+
     def _key_bytes(self) -> bytes:
-        return hashlib.sha256(settings.DASHBOARD_TOKEN.encode("utf-8")).digest()
+        # F-025: prefer dedicated TOTP_ENCRYPTION_KEY when present.
+        dedicated = (os.getenv("TOTP_ENCRYPTION_KEY") or "").strip()
+        material = dedicated.encode("utf-8") if dedicated else settings.DASHBOARD_TOKEN.encode("utf-8")
+        return hashlib.sha256(material).digest()
+
+    def _fernet(self):
+        from cryptography.fernet import Fernet
+        return Fernet(base64.urlsafe_b64encode(self._key_bytes()))
 
     def _protect_secret(self, secret: str) -> str:
-        secret_bytes = secret.encode("utf-8")
-        key = self._key_bytes()
-        masked = bytes(b ^ key[i % len(key)] for i, b in enumerate(secret_bytes))
-        return base64.urlsafe_b64encode(masked).decode("ascii")
+        token = self._fernet().encrypt(secret.encode("utf-8")).decode("ascii")
+        return f"{self._SECRET_PREFIX_FERNET}{token}"
 
     def _unprotect_secret(self, payload: str) -> str:
-        masked = base64.urlsafe_b64decode(payload.encode("ascii"))
+        raw = str(payload or "")
+        if raw.startswith(self._SECRET_PREFIX_FERNET):
+            token = raw[len(self._SECRET_PREFIX_FERNET):]
+            return self._fernet().decrypt(token.encode("ascii")).decode("utf-8")
+        # Legacy XOR (pre-F-025) — still decryptable for migration.
+        masked = base64.urlsafe_b64decode(raw.encode("ascii"))
         key = self._key_bytes()
-        raw = bytes(b ^ key[i % len(key)] for i, b in enumerate(masked))
-        return raw.decode("utf-8")
+        plain = bytes(b ^ key[i % len(key)] for i, b in enumerate(masked))
+        return plain.decode("utf-8")
 
     def _normalize_token(self, token: str) -> str:
         return "".join(ch for ch in str(token or "") if ch.isdigit())
@@ -843,8 +856,26 @@ class TOTPManager:
                 return True
         return False
 
-    def hash_backup_code(self, code: str) -> str:
-        return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    def hash_backup_code(self, code: str, salt: str | None = None) -> str:
+        """Salted HMAC-SHA256 backup hash (F-025). Format: salt$hexdigest."""
+        normalized = str(code or "").strip().upper()
+        salt_hex = salt or secrets.token_hex(16)
+        digest = hmac.new(
+            self._key_bytes(),
+            f"{salt_hex}:{normalized}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return f"{salt_hex}${digest}"
+
+    def _backup_hash_matches(self, stored: str, code: str) -> bool:
+        stored = str(stored or "")
+        normalized = str(code or "").strip().upper()
+        if "$" in stored:
+            salt, _digest = stored.split("$", 1)
+            return hmac.compare_digest(self.hash_backup_code(normalized, salt=salt), stored)
+        # Legacy unsalted SHA-256.
+        legacy = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(legacy, stored)
 
     def generate_backup_codes(self, count: int = 8) -> List[str]:
         return [secrets.token_hex(4).upper() for _ in range(count)]
@@ -911,16 +942,27 @@ class TOTPManager:
         state = self.get_state()
         if not state.get("enabled") or not state.get("secret_encrypted"):
             return False
-        secret = self._unprotect_secret(state["secret_encrypted"])
+        payload = state["secret_encrypted"]
+        secret = self._unprotect_secret(payload)
+        # Migrate legacy XOR ciphertext to Fernet after successful decrypt.
+        if not str(payload).startswith(self._SECRET_PREFIX_FERNET):
+            try:
+                state["secret_encrypted"] = self._protect_secret(secret)
+                self.save_state(state)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TOTP: Fernet migration save failed: %s", exc)
         if self.verify_totp(secret, token):
             return True
-        hashed = self.hash_backup_code(str(token or "").strip().upper())
+        normalized = str(token or "").strip().upper()
         backups = list(state.get("backup_code_hashes", []))
-        if hashed in backups:
-            backups.remove(hashed)
-            state["backup_code_hashes"] = backups
-            self.save_state(state)
-            return True
+        for idx, stored in enumerate(list(backups)):
+            if self._backup_hash_matches(stored, normalized):
+                # Upgrade legacy hash to salted form when consuming... actually
+                # consume (single-use) either way.
+                backups.pop(idx)
+                state["backup_code_hashes"] = backups
+                self.save_state(state)
+                return True
         return False
 
     def public_status(self) -> dict:
@@ -936,6 +978,7 @@ class TOTPManager:
 class CommandRequest(BaseModel):
     command: str
     metadata: Optional[dict] = None
+    otp_token: Optional[str] = None
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -951,6 +994,7 @@ class PairsUpdateRequest(BaseModel):
     pairs: List[PairConfig]
     crypto_pairs: Optional[List[PairConfig]] = None
     apply_now: bool = True
+    otp_token: Optional[str] = None
 
 
 class WalletSyncRequest(BaseModel):
@@ -1053,24 +1097,24 @@ class DashboardService:
         self.totp = TOTPManager(self.persistence)
         self.editable_config: Dict[str, dict] = {
             "REGION": {"type": "str", "sensitive": False, "options": ["US", "EU"]},
-            "APPROVAL_THRESHOLD": {"type": "float", "sensitive": False},
+            "APPROVAL_THRESHOLD": {"type": "float", "sensitive": True, "masked": False},
             "SCAN_INTERVAL_SECONDS": {"type": "int", "sensitive": False},
             "SCAN_PAIR_CONCURRENCY": {"type": "int", "sensitive": False},
             "SCAN_EXIT_CONCURRENCY": {"type": "int", "sensitive": False},
             "SCAN_COINT_RECHECK_CONCURRENCY": {"type": "int", "sensitive": False},
             "MARKET_DATA_TIMEOUT_SECONDS": {"type": "float", "sensitive": False},
-            "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
-            "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": False},
+            "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
+            "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
             # Missing from editable set historically broke CI patches that expected
             # operators to tune the force-exit floor via dashboard / bot_settings.
-            "TAKE_PROFIT_FORCE_EXIT_ZSCORE": {"type": "float", "sensitive": False},
-            "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": False},
-            "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True},
-            "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True},
-            "MAX_DRAWDOWN": {"type": "float", "sensitive": True},
-            "FINANCIAL_KILL_SWITCH_PCT": {"type": "float", "sensitive": True},
+            "TAKE_PROFIT_FORCE_EXIT_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
+            "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
+            "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True, "masked": False},
+            "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True, "masked": False},
+            "MAX_DRAWDOWN": {"type": "float", "sensitive": True, "masked": False},
+            "FINANCIAL_KILL_SWITCH_PCT": {"type": "float", "sensitive": True, "masked": False},
             "COINTEGRATION_PVALUE_THRESHOLD": {"type": "float", "sensitive": False},
-            "KALMAN_DELTA": {"type": "float", "sensitive": False},
+            "KALMAN_DELTA": {"type": "float", "sensitive": True, "masked": False},
             "KALMAN_R": {"type": "float", "sensitive": False},
             "BROKERAGE_PROVIDER": {
                 "type": "str",
@@ -1078,11 +1122,11 @@ class DashboardService:
                 "masked": False,
                 "options": ["ALPACA"],
             },
-            "ALPACA_BUDGET_USD": {"type": "float", "sensitive": False},
-            "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True},
-            "PAPER_TRADING": {"type": "bool", "sensitive": True},
-            "DEV_MODE": {"type": "bool", "sensitive": True},
-            "IGNORE_UNMANAGED_POSITIONS": {"type": "bool", "sensitive": False},
+            "ALPACA_BUDGET_USD": {"type": "float", "sensitive": True, "masked": False},
+            "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True, "masked": False},
+            "PAPER_TRADING": {"type": "bool", "sensitive": True, "masked": False},
+            "DEV_MODE": {"type": "bool", "sensitive": True, "masked": False},
+            "IGNORE_UNMANAGED_POSITIONS": {"type": "bool", "sensitive": True, "masked": False},
             "OPENAI_API_KEY": {"type": "str", "sensitive": True},
             "GEMINI_API_KEY": {"type": "str", "sensitive": True},
             "POLYGON_API_KEY": {"type": "str", "sensitive": True},
@@ -1662,10 +1706,17 @@ class DashboardService:
                 "status": "pending",
             }
             try:
+                # F-017: stable client_order_id so ambiguous submits can reconcile.
+                client_order_id = (
+                    f"WALLET-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+                    f"-{ticker}-{idx}-{uuid.uuid4().hex[:8]}"
+                )
                 result = await brokerage_service.place_value_order(
                     ticker,
                     float(amount),
-                    "BUY"
+                    "BUY",
+                    client_order_id=client_order_id,
+                    intent="manual",
                 )
                 if result.get("status") == "error":
                     failures += 1
@@ -2008,6 +2059,28 @@ class DashboardService:
             validate_runtime_settings_update(normalized_updates)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # F-004: refuse lane/mode flips while open positions exist.
+        lane_keys = {"PAPER_TRADING", "ALPACA_BASE_URL", "LIVE_CAPITAL_DANGER", "DEV_MODE"}
+        if lane_keys.intersection(normalized_updates):
+            from src.services.persistence_service import persistence_service as _ps
+
+            try:
+                open_signals = await _ps.get_open_signals()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Cannot verify open positions before lane change: {exc}",
+                ) from exc
+            if open_signals:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Refuse PAPER_TRADING/ALPACA_BASE_URL/LIVE_CAPITAL_DANGER/DEV_MODE "
+                        f"change while {len(open_signals)} open signal(s) exist. "
+                        "Close or reconcile positions first."
+                    ),
+                )
 
         for key, value in normalized_updates.items():
             old_value = getattr(settings, key)
@@ -2357,8 +2430,13 @@ class DashboardService:
                 equity_cash: Optional[float] = None
                 equity_pending: float = 0.0
                 try:
-                    equity_cash = await brokerage_service.get_account_cash()
-                    equity_pending = await brokerage_service.get_pending_orders_value()
+                    if settings.PAPER_TRADING:
+                        # Shadow lane never hits the broker; avoid unauthorized Alpaca spam.
+                        equity_cash = float(settings.PAPER_TRADING_STARTING_CASH)
+                        equity_pending = 0.0
+                    else:
+                        equity_cash = await brokerage_service.get_account_cash()
+                        equity_pending = await brokerage_service.get_pending_orders_value()
                 except Exception as exc:
                     logger.warning("DASHBOARD: Could not fetch %s cash: %s", active_provider, exc)
 
@@ -2619,6 +2697,21 @@ async def terminal_command(request: CommandRequest, token: str = Query(None), se
     verify_token(token, session)
     from src.services.notification_service import notification_service
 
+    # F-014: terminal /approve|/reject|/set_threshold must not bypass F-010 step-up.
+    cmd = (request.command or "").strip().lower()
+    if cmd.startswith("/approve"):
+        require_step_up_2fa(request.otp_token, action="approving a pending trade via terminal")
+    elif cmd.startswith("/reject"):
+        require_step_up_2fa(request.otp_token, action="rejecting a pending trade via terminal")
+    elif cmd.startswith("/set_threshold"):
+        require_step_up_2fa(request.otp_token, action="updating APPROVAL_THRESHOLD via terminal")
+        status = dashboard_service.totp.public_status()
+        if not status.get("enabled"):
+            raise HTTPException(
+                status_code=412,
+                detail="Two-factor authentication must be configured before changing APPROVAL_THRESHOLD.",
+            )
+
     result = await notification_service.handle_dashboard_command(request.command, request.metadata)
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))
@@ -2638,11 +2731,18 @@ async def list_pending_approvals(token: str = Query(None), session: str = Query(
 
 
 @app.post("/api/approvals/{correlation_id}/approve")
-async def approve_pending_trade(correlation_id: str, token: str = Query(None), session: str = Query(None)):
+async def approve_pending_trade(
+    correlation_id: str,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     if token:
         verify_security_token(token)
     else:
         verify_token(token, session)
+    # F-010: step-up 2FA when authenticator is enrolled (LIVE approvals especially).
+    require_step_up_2fa(otp_token, action="approving a pending trade")
     from src.services.notification_service import notification_service
 
     result = notification_service.resolve_pending_approval(correlation_id, approved=True)
@@ -2657,11 +2757,17 @@ async def approve_pending_trade(correlation_id: str, token: str = Query(None), s
 
 
 @app.post("/api/approvals/{correlation_id}/reject")
-async def reject_pending_trade(correlation_id: str, token: str = Query(None), session: str = Query(None)):
+async def reject_pending_trade(
+    correlation_id: str,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     if token:
         verify_security_token(token)
     else:
         verify_token(token, session)
+    require_step_up_2fa(otp_token, action="rejecting a pending trade")
     from src.services.notification_service import notification_service
 
     result = notification_service.resolve_pending_approval(correlation_id, approved=False)
@@ -2682,8 +2788,21 @@ async def get_settings(token: str = Query(None), session: str = Query(None)):
 
 
 @app.post("/api/settings")
-async def update_settings(request: SettingsUpdateRequest, token: str = Query(None), session: str = Query(None)):
+async def update_settings(
+    request: SettingsUpdateRequest,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     verify_token(token, session)
+    # F-001: APPROVAL_THRESHOLD is capital-sensitive — require step-up when 2FA enrolled.
+    require_step_up_2fa(otp_token, action="updating APPROVAL_THRESHOLD")
+    status = dashboard_service.totp.public_status()
+    if not status.get("enabled"):
+        raise HTTPException(
+            status_code=412,
+            detail="Two-factor authentication must be configured before changing APPROVAL_THRESHOLD.",
+        )
     old_value = settings.APPROVAL_THRESHOLD
     settings.APPROVAL_THRESHOLD = request.approval_threshold
     save_settings_override({"APPROVAL_THRESHOLD": request.approval_threshold})
@@ -2692,7 +2811,7 @@ async def update_settings(request: SettingsUpdateRequest, token: str = Query(Non
         key="APPROVAL_THRESHOLD",
         old_value=old_value,
         new_value=request.approval_threshold,
-        requires_2fa=False,
+        requires_2fa=True,
     )
     await dashboard_state.add_message("SYSTEM", f"Auto-trade threshold updated to {request.approval_threshold} EUR")
     return {"status": "ok", "approval_threshold": settings.APPROVAL_THRESHOLD}
@@ -2821,16 +2940,27 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
     raise HTTPException(status_code=403, detail="Invalid 2FA token.")
 
 @app.post("/api/pairs/discover")
-async def discover_pairs(token: str = Query(None), session: str = Query(None)):
+async def discover_pairs(
+    request: Request,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     """
     Initiates a background pair discovery task for the dashboard.
 
     Starts the pair discovery workflow and returns a record describing the initiated request and its acceptance status.
-
-    Returns:
-    	A serializable object (typically a dict) describing the scheduled discovery task and its acceptance/status metadata.
+    Requires step-up 2FA when enrolled (universe mutation adjacency).
     """
     verify_token(token, session)
+    body_otp = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            body_otp = body.get("otp_token") or body.get("otp")
+    except Exception:
+        body_otp = None
+    require_step_up_2fa(otp_token or body_otp, action="triggering pair discovery")
     return await dashboard_service.trigger_pair_discovery(actor="dashboard")
 
 @app.get("/api/pairs")
@@ -2915,11 +3045,13 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
             - `pairs`: list of pair objects; each pair must contain two distinct tickers.
             - `crypto_pairs` (optional): list of crypto pair objects; validated similarly to `pairs`.
             - `apply_now` (bool): if true and a monitor is attached, attempts to hot-reload pairs immediately.
+            - `otp_token`: step-up 2FA when authenticator is enrolled (F-023).
         token (str): Dashboard security token (from query/header; validated via verify_token). Omit documenting if provided by middleware.
         session (str): Dashboard session token (from query/header; validated via verify_token). Omit documenting if provided by middleware.
 
     Raises:
         HTTPException: 400 if no valid pairs are provided or if any pair has identical tickers.
+        HTTPException: 403 if step-up 2FA is required and missing/invalid.
 
     Returns:
         dict: {
@@ -2930,6 +3062,8 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
         }
     """
     verify_token(token, session)
+    # F-023: pair universe mutation is capital-adjacent — require step-up 2FA.
+    require_step_up_2fa(request.otp_token, action="mutating trading pairs")
 
     seen = set()
     cleaned: list = []

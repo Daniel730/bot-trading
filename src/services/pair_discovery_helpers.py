@@ -87,15 +87,32 @@ def is_pair_denied(
     return False
 
 
-def is_hedge_ratio_sane(hedge_ratio: float | None, *, max_abs_hedge: float) -> bool:
-    """Reject extreme OLS/Kalman betas that blow up notional and spread guards."""
+def is_hedge_ratio_sane(
+    hedge_ratio: float | None,
+    *,
+    max_abs_hedge: float,
+    min_abs_hedge: float = 0.0,
+) -> bool:
+    """Reject extreme OLS/Kalman betas that blow up notional and spread guards.
+
+    ``min_abs_hedge`` is for *admission* paths (warm-up / scout / promote).
+    Near-zero OLS hedges (e.g. AVAX-USD/LTC-USD ≈ -0.002) pass the exact-zero
+    check but make sizing fragile. Live Kalman scans should leave the floor at
+    the default ``0.0`` so only the absolute ceiling (and exact zero) apply.
+    """
     try:
         value = float(hedge_ratio)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return False
     if value != value or value == 0.0:  # NaN or zero
         return False
-    return abs(value) <= float(max_abs_hedge)
+    abs_value = abs(value)
+    if abs_value > float(max_abs_hedge):
+        return False
+    floor = float(min_abs_hedge)
+    if floor > 0.0 and abs_value < floor:
+        return False
+    return True
 
 
 def candidate_pair_combos(
@@ -131,6 +148,7 @@ def _candidate_passes_quality(
     min_correlation: float,
     max_pvalue: float,
     max_abs_hedge: float,
+    min_abs_hedge: float = 0.0,
 ) -> bool:
     """Quality gates for promotion — keep junk out of the Active squad."""
     if _candidate_sortino(candidate) < float(sortino_threshold):
@@ -153,7 +171,9 @@ def _candidate_passes_quality(
             return False
 
     hedge = candidate.get("hedge_ratio")
-    if hedge is not None and not is_hedge_ratio_sane(hedge, max_abs_hedge=max_abs_hedge):
+    if hedge is not None and not is_hedge_ratio_sane(
+        hedge, max_abs_hedge=max_abs_hedge, min_abs_hedge=min_abs_hedge
+    ):
         return False
     return True
 
@@ -166,6 +186,7 @@ def select_rotation_actions(
     sortino_threshold: float = 0.0,
     denylist: Iterable[str] | None = None,
     max_abs_hedge: float = 25.0,
+    min_abs_hedge: float = 0.0,
     min_correlation: float = 0.0,
     max_pvalue: float = 1.0,
 ) -> dict:
@@ -173,7 +194,8 @@ def select_rotation_actions(
 
     Policy (in order):
     1. Bench denylisted Active pairs immediately.
-    2. Bench Active pairs with insane hedge ratios (BTC/BCH-scale betas).
+    2. Bench Active pairs with insane hedge ratios (BTC/BCH-scale betas or
+       near-zero OLS hedges when ``min_abs_hedge`` is set).
     3. Bench non-cointegrated Active pairs immediately (free scan slots even
        when no replacement scout is ready).
     4. Fill open slots up to ``max_active_pairs`` from top quality candidates.
@@ -194,7 +216,9 @@ def select_rotation_actions(
             to_bench.append(pair_id)
             continue
         hedge = pair.get("hedge_ratio")
-        if hedge is not None and not is_hedge_ratio_sane(hedge, max_abs_hedge=max_abs_hedge):
+        if hedge is not None and not is_hedge_ratio_sane(
+            hedge, max_abs_hedge=max_abs_hedge, min_abs_hedge=min_abs_hedge
+        ):
             to_bench.append(pair_id)
             continue
         # Dead equity / broken crypto must not keep occupying Active slots
@@ -219,6 +243,7 @@ def select_rotation_actions(
             min_correlation=min_correlation,
             max_pvalue=max_pvalue,
             max_abs_hedge=max_abs_hedge,
+            min_abs_hedge=min_abs_hedge,
         ):
             continue
         # Do not promote pairs that share a leg with remaining Active pairs —

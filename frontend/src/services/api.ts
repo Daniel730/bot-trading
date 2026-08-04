@@ -671,11 +671,17 @@ export const cancelLogin = async (challengeId: string): Promise<{ status: string
 export const logout = async (token: string | null, sessionToken: string | null) =>
   requestJson<{ status: string }>('/api/auth/logout', token, { method: 'POST' }, sessionToken);
 
-export const sendTerminalCommand = async (command: string, token: string | null, sessionToken: string | null, metadata?: any) =>
+export const sendTerminalCommand = async (
+  command: string,
+  token: string | null,
+  sessionToken: string | null,
+  metadata?: any,
+  otpToken?: string,
+) =>
   requestJson<{ status: string; message: string }>('/api/terminal/command', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command, metadata }),
+    body: JSON.stringify({ command, metadata, otp_token: otpToken || undefined }),
   }, sessionToken);
 
 export interface PendingApproval {
@@ -694,38 +700,50 @@ export const approvePendingTrade = async (
   token: string | null,
   sessionToken: string | null,
   correlationId: string,
-) =>
-  requestJson<{ status: string; message?: string }>(
-    `/api/approvals/${encodeURIComponent(correlationId)}/approve`,
+  otpToken?: string,
+) => {
+  const qs = otpToken ? `?otp_token=${encodeURIComponent(otpToken)}` : '';
+  return requestJson<{ status: string; message?: string }>(
+    `/api/approvals/${encodeURIComponent(correlationId)}/approve${qs}`,
     token,
     { method: 'POST' },
     sessionToken,
   );
+};
 
 export const rejectPendingTrade = async (
   token: string | null,
   sessionToken: string | null,
   correlationId: string,
-) =>
-  requestJson<{ status: string; message?: string }>(
-    `/api/approvals/${encodeURIComponent(correlationId)}/reject`,
+  otpToken?: string,
+) => {
+  const qs = otpToken ? `?otp_token=${encodeURIComponent(otpToken)}` : '';
+  return requestJson<{ status: string; message?: string }>(
+    `/api/approvals/${encodeURIComponent(correlationId)}/reject${qs}`,
     token,
     { method: 'POST' },
     sessionToken,
   );
+};
 
 export const fetchPairs = async (token: string | null, sessionToken?: string | null): Promise<PairsResponse> =>
   requestJson<PairsResponse>('/api/pairs', token, undefined, sessionToken);
 
-export const discoverPairs = async (token: string | null, sessionToken: string | null): Promise<{ status: string; message: string }> =>
+export const discoverPairs = async (
+  token: string | null,
+  sessionToken: string | null,
+  otpToken?: string,
+): Promise<{ status: string; message: string }> =>
   requestJson('/api/pairs/discover', token, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp_token: otpToken }),
   }, sessionToken);
 
 export const updatePairs = async (
   token: string | null,
   pairs: PairConfigEntry[],
-  options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[] } = {},
+  options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[]; otpToken?: string } = {},
   sessionToken?: string | null,
 ): Promise<{ status: string; saved_pairs: number; reloaded: boolean; reload_error: string | null }> =>
   requestJson('/api/pairs', token, {
@@ -735,6 +753,7 @@ export const updatePairs = async (
       pairs,
       crypto_pairs: options.cryptoPairs,
       apply_now: options.applyNow ?? true,
+      otp_token: options.otpToken,
     }),
   }, sessionToken);
 

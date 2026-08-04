@@ -246,6 +246,9 @@ class FakePersistence:
     async def log_trade(self, payload: dict[str, Any]):
         self.trade_logs.append(payload)
 
+    async def log_trades(self, payloads: list[dict[str, Any]]):
+        self.trade_logs.extend(payloads)
+
     async def log_trade_journal(self, payload: dict[str, Any]):
         self.journal_logs.append(payload)
 

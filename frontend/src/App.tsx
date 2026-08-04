@@ -345,7 +345,23 @@ function App() {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await discoverPairs(securityToken, sessionToken);
+      let result;
+      try {
+        result = await discoverPairs(securityToken, sessionToken);
+      } catch (firstErr: any) {
+        const errMsg = firstErr?.message || '';
+        const needsOtp =
+          firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg);
+        if (needsOtp) {
+          const otp = window.prompt(
+            'Step-up 2FA required to start pair discovery.\nEnter authenticator or backup code:',
+          );
+          if (!otp?.trim()) throw firstErr;
+          result = await discoverPairs(securityToken, sessionToken, otp.trim());
+        } else {
+          throw firstErr;
+        }
+      }
       setSystemMessage(result.message || 'Pair discovery started. Completion will appear in the terminal feed.');
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
@@ -355,12 +371,30 @@ function App() {
     }
   };
 
-  const handleTerminalCommand = async (command: string) => {
+  const handleTerminalCommand = async (command: string, otpToken?: string) => {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await sendTerminalCommand(command, securityToken, sessionToken);
-      setSystemMessage(result.message || `Command sent: ${command}`);
+      const run = (otp?: string) =>
+        sendTerminalCommand(command, securityToken, sessionToken, undefined, otp);
+      try {
+        const result = await run(otpToken);
+        setSystemMessage(result.message || `Command sent: ${command}`);
+      } catch (firstErr: any) {
+        const errMsg = firstErr?.message || '';
+        const needsOtp =
+          firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg);
+        if (needsOtp && !otpToken) {
+          const otp = window.prompt(
+            'Enter authenticator or backup code for this terminal command:',
+          );
+          if (!otp?.trim()) throw firstErr;
+          const result = await run(otp.trim());
+          setSystemMessage(result.message || `Command sent: ${command}`);
+        } else {
+          throw firstErr;
+        }
+      }
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
       setSystemError(err.message || 'Failed to send terminal command.');

@@ -24,6 +24,7 @@ async def _call_mcp_tool(tool, **kwargs):
 async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch):
     # Module must not even expose these; if a regression re-imports them, still
     # prove the tool never awaits broker/ledger side effects.
+    monkeypatch.setenv("MCP_TOOL_TOKEN", "expected-secret")
     direct_execute = AsyncMock(
         return_value=SimpleNamespace(status=0, message="accepted", actual_vwap=123.45)
     )
@@ -41,6 +42,7 @@ async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch
             quantity=1.0,
             mode="SHADOW",
             pair_id="AAPL_MSFT",
+            auth_token="expected-secret",
         )
     )
 
@@ -52,7 +54,8 @@ async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["SHADOW", "LIVE", "PAPER", "BROKER"])
-async def test_mcp_execute_trade_rejects_all_modes(mode: str):
+async def test_mcp_execute_trade_rejects_all_modes(mode: str, monkeypatch):
+    monkeypatch.setenv("MCP_TOOL_TOKEN", "expected-secret")
     result = json.loads(
         await _call_mcp_tool(
             mcp_server.execute_trade,
@@ -61,6 +64,7 @@ async def test_mcp_execute_trade_rejects_all_modes(mode: str):
             quantity=0.5,
             mode=mode,
             pair_id="MANUAL",
+            auth_token="expected-secret",
         )
     )
     assert result["status"] == "rejected"
@@ -109,8 +113,35 @@ async def test_mcp_get_market_data_requires_token_when_configured(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_mcp_get_market_data_never_claims_broker_source(monkeypatch):
+async def test_mcp_get_market_data_requires_configured_token(monkeypatch):
+    """F-008: unset/placeholder MCP_TOOL_TOKEN must fail closed."""
     monkeypatch.delenv("MCP_TOOL_TOKEN", raising=False)
+    get_price = AsyncMock(return_value=42.0)
+    monkeypatch.setattr(mcp_server.redis_service, "get_price", get_price)
+
+    denied = json.loads(await _call_mcp_tool(mcp_server.get_market_data, tickers=["MSFT"]))
+    assert denied["status"] == "rejected"
+    assert "not configured" in denied["reason"]
+    get_price.assert_not_awaited()
+
+    monkeypatch.setenv("MCP_TOOL_TOKEN", "expected-secret")
+    ok = json.loads(
+        await _call_mcp_tool(
+            mcp_server.get_market_data,
+            tickers=["MSFT"],
+            source="alpaca",
+            auth_token="expected-secret",
+        )
+    )
+    assert ok["status"] == "success"
+    assert ok["source"] == "redis"
+    assert ok["requested_source"] == "alpaca"
+    get_price.assert_awaited_once_with("MSFT")
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_market_data_never_claims_broker_source(monkeypatch):
+    monkeypatch.setenv("MCP_TOOL_TOKEN", "expected-secret")
     monkeypatch.setattr(
         mcp_server.redis_service, "get_price", AsyncMock(return_value=42.0)
     )
@@ -119,6 +150,7 @@ async def test_mcp_get_market_data_never_claims_broker_source(monkeypatch):
             mcp_server.get_market_data,
             tickers=["MSFT"],
             source="alpaca",
+            auth_token="expected-secret",
         )
     )
     assert result["status"] == "success"

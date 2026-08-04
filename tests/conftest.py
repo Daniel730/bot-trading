@@ -62,6 +62,12 @@ def monitor(monkeypatch):
 
     with patch("src.monitor.BrokerageService") as mock_broker_class:
         monkeypatch.setattr(persistence_service, "get_open_signals", AsyncMock(return_value=[]))
+        # F-002 capital halt is covered by dedicated unit tests; keep execute_trade
+        # fixtures focused on order/ledger behaviour.
+        monkeypatch.setattr(
+            "src.services.capital_halt_service.enforce_capital_halt_or_raise_state",
+            AsyncMock(return_value={"halt": False, "reason": None, "details": {}}),
+        )
         monitor_instance = ArbitrageMonitor(mode="live")
         monitor_instance.brokerage = mock_broker_class.return_value
         monitor_instance.brokerage.get_venue.return_value = "ALPACA"
@@ -81,4 +87,8 @@ def monitor(monkeypatch):
             ]
         )
         monkeypatch.setattr(persistence_service, "update_trade_fill", AsyncMock(), raising=False)
+        monkeypatch.setattr(persistence_service, "log_trade", AsyncMock(), raising=False)
+        monkeypatch.setattr(persistence_service, "log_trades", AsyncMock(), raising=False)
+        monkeypatch.setattr(persistence_service, "attach_broker_order_id", AsyncMock(return_value=1), raising=False)
+        monkeypatch.setattr(persistence_service, "update_signal_status", AsyncMock(), raising=False)
         return monitor_instance

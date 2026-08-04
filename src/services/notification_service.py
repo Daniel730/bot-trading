@@ -262,6 +262,12 @@ class NotificationService:
                 return
 
             if args[0].lower() == "schedule":
+                if not settings.should_auto_approve_trades and not settings.PAPER_TRADING:
+                    await update.message.reply_text(
+                        "🔒 LIVE DCA schedule via Telegram is disabled. "
+                        "Use the ops console with step-up 2FA."
+                    )
+                    return
                 # Parse schedule args
                 params = {}
                 for item in args[1:]:
@@ -320,6 +326,21 @@ class NotificationService:
                 await update.message.reply_text("⛔ Trading commands are disabled by default in live mode. (LIVE_CAPITAL_DANGER not true)")
                 return
 
+            # Phase-3: LIVE capital mutations require dashboard + step-up 2FA.
+            # Telegram chat-id alone is not sufficient authorization parity.
+            if not settings.should_auto_approve_trades:
+                await update.message.reply_text(
+                    "🔒 LIVE /invest is disabled on Telegram. "
+                    "Use the ops console wallet sync with step-up 2FA."
+                )
+                audit_logger.warning(
+                    "AUDIT: /invest LIVE refused — dashboard 2FA required. user=%s ticker=%s amount=%s",
+                    sender_user_id,
+                    ticker,
+                    amount,
+                )
+                return
+
             from src.services.brokerage_service import BrokerageService
             from src.services.budget_service import budget_service
             brokerage = BrokerageService()
@@ -331,7 +352,8 @@ class NotificationService:
                 audit_logger.warning(f"AUDIT: /invest rejected, insufficient budget. requested={amount} effective={effective_cash}")
                 return
 
-            # PATCH 2e: In live mode, require explicit approval before placing the order.
+            # Broker-paper path: auto-approve lane already gated above; still require
+            # explicit approval Future when Telegram is used as notify channel.
             trade_summary = f"/invest command: BUY ${amount:.2f} of {ticker}"
             approved = await self.request_approval(trade_summary, trade_value=amount, force_manual=True)
             if not approved:
@@ -425,7 +447,44 @@ class NotificationService:
         data = query.data.split(":")
         action = data[0]
         correlation_id = data[1]
-        
+
+        # Phase-3: LIVE trade Approve via Telegram is refused — dashboard + step-up
+        # 2FA is the only trade-approve path (parity with REST/CLI). Login challenges
+        # share the approve: callback but are NOT in pending_approval_summaries and
+        # must still work. Reject remains allowed for trades (fail-closed).
+        is_trade_approval = correlation_id in self.pending_approval_summaries
+        if (
+            action == "approve"
+            and is_trade_approval
+            and not settings.should_auto_approve_trades
+        ):
+            try:
+                base = query.message.text if query.message else ""
+                await query.edit_message_text(
+                    text=(
+                        f"{base}\n\n🔒 LIVE trade approval requires the dashboard with 2FA. "
+                        f"Telegram Approve is disabled for real capital "
+                        f"(cid={correlation_id}). Use Reject here or Approve in the ops console."
+                        if base
+                        else (
+                            f"🔒 LIVE trade approval requires the dashboard with 2FA "
+                            f"(cid={correlation_id})."
+                        )
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "TELEGRAM: Could not edit LIVE-approve refusal: %s",
+                    self._redact_sensitive_text(e),
+                )
+            import logging as _logging
+            _logging.getLogger("audit").warning(
+                "TELEGRAM LIVE TRADE APPROVE REFUSED: cid=%s sender=%s — dashboard 2FA required",
+                correlation_id,
+                sender_user_id,
+            )
+            return
+
         if correlation_id in self.pending_approvals:
             future = self.pending_approvals.pop(correlation_id)
             self.pending_approval_summaries.pop(correlation_id, None)
@@ -659,12 +718,20 @@ class NotificationService:
                 logger.warning("[APPROVAL] Failed to publish pause state: %s", self._redact_sensitive_text(pause_exc))
             return False
 
-        # Threshold auto-approval fast path. In live mode this is only allowed
-        # after the operator's approval channel has been configured.
-        if not force_manual and trade_value is not None and trade_value <= settings.APPROVAL_THRESHOLD:
-            self._schedule_paper_notify(f"Auto-approved below threshold:\n{trade_summary}")
-            return True
-            
+        # F-001: Never auto-approve on APPROVAL_THRESHOLD outside should_auto_approve_trades.
+        # LIVE (and any non-paper lane) always requires an explicit human click / dashboard
+        # resolve. force_manual is retained for call-site clarity but no longer gates a
+        # below-threshold shortcut — that path previously auto-approved real capital.
+        if trade_value is not None and trade_value <= settings.APPROVAL_THRESHOLD:
+            logger.info(
+                "[APPROVAL] Trade value %.2f <= APPROVAL_THRESHOLD %.2f but auto-threshold "
+                "is disabled for non-paper lanes; requiring explicit human approval "
+                "(force_manual=%s).",
+                float(trade_value),
+                float(settings.APPROVAL_THRESHOLD),
+                force_manual,
+            )
+
         correlation_id = str(uuid.uuid4())[:8]
         keyboard = [
             [

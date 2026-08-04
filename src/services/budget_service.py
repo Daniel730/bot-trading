@@ -34,11 +34,16 @@ class BudgetService:
         }
 
     def update_used_budget(self, venue: str, amount: float):
-        """Increments the used budget for a venue."""
-        current_used = float(self.persistence.get_system_state(f"budget_used_{venue}", 0.0))
-        new_used = current_used + amount
-        self.persistence.set_system_state(f"budget_used_{venue}", new_used)
-        logger.info(f"BudgetService: Venue {venue} used budget updated to ${new_used:.2f} (+${amount:.2f})")
+        """Atomically increments the used budget for a venue (F-020)."""
+        new_used = self.persistence.increment_system_state_float(
+            f"budget_used_{venue}", float(amount), default=0.0
+        )
+        logger.info(
+            "BudgetService: Venue %s used budget updated to $%.2f (+$%.2f)",
+            venue,
+            new_used,
+            amount,
+        )
 
     def reset_budget(self, venue: str):
         """Resets the used budget for a venue to 0."""

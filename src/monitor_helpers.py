@@ -61,14 +61,23 @@ def resolve_hedge_ratio(
     *,
     kalman_beta: float | None = None,
 ) -> float:
-    """Prefer live Kalman beta; fall back to pair's stored hedge ratio."""
+    """Prefer live Kalman beta; fall back to pair's stored hedge ratio.
+
+    Kalman/OLS betas are signed regression coefficients. Sizing uses the
+    absolute hedge (|β|); trade direction comes from the z-score separately.
+    Discarding negatives (historically falling back to 1.0) mis-sizes pairs
+    like ETH/SOL when β ≈ -8.
+    """
     for candidate in (kalman_beta, pair.get("dynamic_beta"), pair.get("hedge_ratio")):
         try:
             value = float(candidate)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             continue
-        if value > 0:
-            return value
+        if value != value:  # NaN
+            continue
+        abs_value = abs(value)
+        if abs_value > 0.0:
+            return abs_value
     return 1.0
 
 

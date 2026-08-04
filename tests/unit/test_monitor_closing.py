@@ -4,6 +4,7 @@ import uuid
 
 from src.config import settings
 from src.services.persistence_service import ExitReason, OrderStatus
+from src.services.execution_lane import LANE_LIVE
 
 
 @pytest.mark.asyncio
@@ -12,6 +13,9 @@ async def test_close_position_success(monitor):
     S-07: Test _close_position path.
     """
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": str(uuid.uuid4()),
         "legs": [
             {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
@@ -47,6 +51,9 @@ async def test_close_position_success(monitor):
 async def test_close_position_does_not_close_ledger_until_all_close_orders_fill(monitor):
     signal_id = str(uuid.uuid4())
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": signal_id,
         "legs": [
             {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
@@ -89,6 +96,9 @@ async def test_close_position_does_not_close_ledger_until_all_close_orders_fill(
 async def test_close_position_does_not_close_ledger_on_short_close_fill_quantity(monitor):
     signal_id = str(uuid.uuid4())
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": signal_id,
         "legs": [
             {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
@@ -131,6 +141,9 @@ async def test_close_position_does_not_close_ledger_on_short_close_fill_quantity
 async def test_close_position_does_not_close_ledger_when_broker_reports_residual_position(monitor):
     signal_id = str(uuid.uuid4())
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": signal_id,
         "legs": [
             {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
@@ -176,6 +189,9 @@ async def test_close_position_does_not_close_ledger_when_broker_reports_residual
 async def test_close_position_closes_ledger_when_residual_ignored(monitor):
     signal_id = str(uuid.uuid4())
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": signal_id,
         "legs": [
             {"ticker": "BTC-USD", "quantity": 0.000732, "side": "BUY", "price": 65000.0},
@@ -223,6 +239,9 @@ async def test_close_position_closes_ledger_when_residual_ignored(monitor):
 async def test_close_position_retries_with_new_client_order_id_on_terminal_duplicate(monitor):
     signal_id = str(uuid.uuid4())
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": signal_id,
         "legs": [
             {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
@@ -268,6 +287,9 @@ async def test_close_position_retries_with_new_client_order_id_on_terminal_dupli
 @pytest.mark.asyncio
 async def test_close_position_skips_sell_when_broker_has_no_shares(monitor):
     signal = {
+        "execution_lane": LANE_LIVE,
+        "is_shadow": False,
+        "paper_trade": False,
         "signal_id": str(uuid.uuid4()),
         "legs": [
             {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},

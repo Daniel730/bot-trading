@@ -18,6 +18,19 @@ ACTIVE_BROKERAGE_PROVIDER = "ALPACA"
 MONITOR_ENTRY_ZSCORE_MIN = 1.0
 _logger = logging.getLogger(__name__)
 
+def _guard_kalman_delta(value: Any) -> float:
+    """Clamp Kalman process-noise delta to (0, 1) exclusive (F-021)."""
+    try:
+        delta = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"KALMAN_DELTA must be a float, got {value!r}") from exc
+    if not (0.0 < delta < 1.0):
+        raise ValueError(
+            f"KALMAN_DELTA must be in (0, 1) exclusive to avoid Q=delta/(1-delta) blow-up; got {delta}"
+        )
+    return delta
+
+
 def _guard_monitor_entry_zscore(value: Any) -> float:
     """Clamp MONITOR_ENTRY_ZSCORE so env/bot_settings/dashboard cannot run below the floor."""
     z = float(value)
@@ -43,6 +56,31 @@ def _load_settings_override():
     except Exception:
         return None
 
+def _atomic_json_write(path, payload: dict) -> None:
+    """Write JSON via temp file + os.replace (F-019)."""
+    import os
+    import tempfile
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def save_settings_override(new_settings: dict) -> None:
     BOT_SETTINGS_OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
     existing = _load_settings_override() or {}
@@ -51,9 +89,11 @@ def save_settings_override(new_settings: dict) -> None:
         new_settings["MONITOR_ENTRY_ZSCORE"] = _guard_monitor_entry_zscore(
             new_settings["MONITOR_ENTRY_ZSCORE"]
         )
+    if "KALMAN_DELTA" in new_settings:
+        new_settings = dict(new_settings)
+        new_settings["KALMAN_DELTA"] = _guard_kalman_delta(new_settings["KALMAN_DELTA"])
     existing.update(new_settings)
-    with BOT_SETTINGS_OVERRIDE_PATH.open("w", encoding="utf-8") as fh:
-        json.dump(existing, fh, indent=2)
+    _atomic_json_write(BOT_SETTINGS_OVERRIDE_PATH, existing)
 
 
 def _strip_wrapping_quotes(value: str) -> str:
@@ -99,12 +139,10 @@ def _load_pairs_override():
 
 def save_pairs_override(arbitrage_pairs: list, crypto_test_pairs=None) -> None:
     """Persist a new pair universe to data/pairs.json. Creates dir if needed."""
-    PAIRS_OVERRIDE_PATH.parent.mkdir(parents=True, exist_ok=True)
     payload = {"ARBITRAGE_PAIRS": arbitrage_pairs}
     if crypto_test_pairs is not None:
         payload["CRYPTO_TEST_PAIRS"] = crypto_test_pairs
-    with PAIRS_OVERRIDE_PATH.open("w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2)
+    _atomic_json_write(PAIRS_OVERRIDE_PATH, payload)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -240,6 +278,10 @@ class Settings(BaseSettings):
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
     # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Admission-only floor on |OLS hedge|. Exact 0.0 was already rejected; near-zero
+    # betas (e.g. AVAX/LTC ≈ -0.002) still admit and make sizing fragile. Live
+    # Kalman scans do not use this floor (see KALMAN_BETA_CLIP_MIN separately).
+    PAIR_DISCOVERY_MIN_ABS_HEDGE: float = Field(default=0.05, validation_alias="PAIR_DISCOVERY_MIN_ABS_HEDGE")
     # Scout/promote quality floors (pair-internal correlation + cointegration p-value).
     PAIR_DISCOVERY_MIN_CORRELATION: float = Field(
         default=0.70,
@@ -969,8 +1011,19 @@ class Settings(BaseSettings):
 
     @property
     def is_alpaca_paper_endpoint(self) -> bool:
-        """True when ALPACA_BASE_URL points at Alpaca's paper API host."""
-        return "paper-api.alpaca.markets" in (self.ALPACA_BASE_URL or "").lower()
+        """True when ALPACA_BASE_URL hostname is exactly Alpaca's paper API host.
+
+        Uses urlparse hostname equality (F-005) — never a substring match, which
+        would treat ``https://evil.example/paper-api.alpaca.markets`` as paper.
+        """
+        from urllib.parse import urlparse
+
+        raw = (self.ALPACA_BASE_URL or "").strip()
+        if not raw:
+            return False
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+        host = (parsed.hostname or "").lower().rstrip(".")
+        return host == "paper-api.alpaca.markets"
 
     @property
     def is_broker_paper_trading(self) -> bool:
@@ -1077,11 +1130,18 @@ class Settings(BaseSettings):
             raise ValueError("DASHBOARD_TOKEN must be set to a non-default secret")
         if not self.PAPER_TRADING and not self.LIVE_CAPITAL_DANGER:
             raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
+        # F-003: DEV_MODE randomizes prices — never combine with broker/live lanes.
+        if self.DEV_MODE and not self.PAPER_TRADING:
+            raise ValueError(
+                "DEV_MODE=true requires PAPER_TRADING=true (shadow only); "
+                "refusing broker/live execution with randomized prices"
+            )
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
         # Env + bot_settings + dashboard all funnel through validate_secrets; never leave
         # MONITOR_ENTRY_ZSCORE below the safe floor on the live Settings object.
         self.MONITOR_ENTRY_ZSCORE = _guard_monitor_entry_zscore(self.MONITOR_ENTRY_ZSCORE)
+        self.KALMAN_DELTA = _guard_kalman_delta(self.KALMAN_DELTA)
         # Force-exit must sit inside the TP band; values above TAKE_PROFIT collapse
         # friction-hold into always-exit and burn fees on every mean-reversion touch.
         if self.TAKE_PROFIT_FORCE_EXIT_ZSCORE < 0:
@@ -1136,6 +1196,9 @@ def validate_runtime_settings_update(updates: dict[str, Any]) -> None:
         value = updates[key]
         if key == "MONITOR_ENTRY_ZSCORE":
             value = _guard_monitor_entry_zscore(value)
+            updates[key] = value
+        if key == "KALMAN_DELTA":
+            value = _guard_kalman_delta(value)
             updates[key] = value
         if hasattr(settings, key):
             originals[key] = getattr(settings, key)

@@ -1,5 +1,6 @@
 import pytest
 from fastapi import HTTPException
+from unittest.mock import AsyncMock
 
 from src.config import settings
 from src.services.dashboard_service import dashboard_service
@@ -43,7 +44,7 @@ def test_dashboard_config_exposes_take_profit_force_exit():
     items = {item["key"]: item for item in config["items"]}
 
     assert "TAKE_PROFIT_FORCE_EXIT_ZSCORE" in items
-    assert items["TAKE_PROFIT_FORCE_EXIT_ZSCORE"]["sensitive"] is False
+    assert items["TAKE_PROFIT_FORCE_EXIT_ZSCORE"]["sensitive"] is True
     assert items["TAKE_PROFIT_FORCE_EXIT_ZSCORE"]["value"] == settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE
 
 
@@ -52,6 +53,8 @@ async def test_dashboard_config_clamps_dangerous_entry_zscore(monkeypatch):
     """bot_settings / dashboard must not leave MONITOR_ENTRY_ZSCORE < 1.0 on settings."""
     monkeypatch.setattr(settings, "MONITOR_ENTRY_ZSCORE", 2.0)
     monkeypatch.setattr(dashboard_service, "get_dashboard_config", lambda: {"ok": True})
+    monkeypatch.setattr(dashboard_service.totp, "public_status", lambda: {"enabled": True})
+    monkeypatch.setattr(dashboard_service.totp, "verify_token_or_backup", lambda token: True)
 
     saved_overrides = []
     monkeypatch.setattr(
@@ -69,15 +72,15 @@ async def test_dashboard_config_clamps_dangerous_entry_zscore(monkeypatch):
 
     monkeypatch.setattr(dashboard_service.dashboard_state, "add_message", add_message)
 
+    # F-022: MONITOR_ENTRY_ZSCORE is sensitive — step-up required.
     await dashboard_service.update_dashboard_config(
         actor="test",
         updates={"MONITOR_ENTRY_ZSCORE": 0.5},
-        otp_token=None,
+        otp_token="123456",
     )
 
     assert settings.MONITOR_ENTRY_ZSCORE == 1.0
     assert saved_overrides == [{"MONITOR_ENTRY_ZSCORE": 1.0}]
-
 
 @pytest.mark.asyncio
 async def test_dashboard_config_rejects_live_mode_without_live_capital_danger(monkeypatch):
@@ -103,6 +106,12 @@ async def test_dashboard_config_rejects_live_mode_without_live_capital_danger(mo
         raise AssertionError("invalid live-mode updates must fail before dashboard broadcast")
 
     monkeypatch.setattr(dashboard_service.dashboard_state, "add_message", add_message)
+
+    # Open-book check for lane flips (F-004).
+    monkeypatch.setattr(
+        "src.services.persistence_service.persistence_service.get_open_signals",
+        AsyncMock(return_value=[]),
+    )
 
     with pytest.raises(HTTPException) as exc:
         await dashboard_service.update_dashboard_config(

@@ -398,6 +398,14 @@ class ArbitrageMonitor:
                 await notification_service.send_message(msg)
             return True
 
+        # F-015: treat in-flight reservations as occupied slots.
+        try:
+            from src.services.open_slot_reservation import open_slot_reservation_service
+
+            open_signals = list(open_signals or []) + open_slot_reservation_service.active_as_open_signals()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not load open-slot reservations: %s", exc)
+
         for signal in open_signals or []:
             leg_symbols = {
                 self._canonical_position_symbol(leg.get("ticker"))
@@ -969,12 +977,18 @@ class ArbitrageMonitor:
 
                 pair_id = f"{ticker_a}_{ticker_b}"
 
-                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                if not is_hedge_ratio_sane(
+                    hedge,
+                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
+                ):
                     logger.warning(
-                        "SKIP %s/%s: extreme hedge_ratio=%.3f exceeds PAIR_DISCOVERY_MAX_ABS_HEDGE=%.1f",
+                        "SKIP %s/%s: insane hedge_ratio=%.6f "
+                        "(min_abs=%.3f max_abs=%.1f)",
                         ticker_a,
                         ticker_b,
                         float(hedge),
+                        settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     try:
@@ -1977,6 +1991,21 @@ class ArbitrageMonitor:
             # ever goes transiently invalid again in the future.
             self._kalman_rebuild_attempted.discard(pair['id'])
 
+            # Admission hedge cap must also apply to live Kalman beta. OLS can
+            # pass PAIR_DISCOVERY_MAX_ABS_HEDGE at warm-up while the filter drifts
+            # past it (observed BTC-USD/ETH-USD beta ~34 with max_abs=25).
+            from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+
+            if not is_hedge_ratio_sane(
+                state_vec[1], max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+            ):
+                return skip(
+                    "extreme_kalman_beta",
+                    stage="kalman",
+                    beta=float(state_vec[1]),
+                    max_abs_hedge=float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE),
+                )
+
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
 
@@ -2264,6 +2293,34 @@ class ArbitrageMonitor:
                         )
                         return diagnostic
 
+                    # F-015: claim pair/leg slot BEFORE approval wait so concurrent
+                    # approvals cannot both clear an empty ledger and double-open.
+                    from src.services.open_slot_reservation import open_slot_reservation_service
+
+                    try:
+                        open_for_claim = await persistence_service.get_open_signals()
+                    except Exception:
+                        open_for_claim = []
+                    claim = await open_slot_reservation_service.claim(
+                        signal_id=str(signal_id),
+                        ticker_a=t_a,
+                        ticker_b=t_b,
+                        open_signals=open_for_claim,
+                        canonicalize=self._canonical_position_symbol,
+                        metadata={"z_score": float(z_score), "gross_notional": float(legs.gross_notional)},
+                    )
+                    if not claim.get("ok"):
+                        diagnostic["verdict"] = "SKIPPED"
+                        diagnostic["confidence"] = final_confidence
+                        diagnostic["reason"] = f"slot_reservation:{claim.get('reason')}"
+                        decision_recorder.record(
+                            stage="slot_reservation",
+                            outcome="skip",
+                            reason=str(claim.get("reason")),
+                            signal_id=signal_id,
+                        )
+                        return diagnostic
+
                     await self._upsert_active_signal(
                         t_a,
                         t_b,
@@ -2272,85 +2329,100 @@ class ArbitrageMonitor:
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
                     )
-                    approved = await notification_service.request_approval(
-                        trade_summary,
-                        trade_value=float(legs.gross_notional),
-                        force_manual=True,
-                    )
-                    if approved:
-                        direction = "Short-Long" if z_score > 0 else "Long-Short"
-                        execution_result = await self.execute_trade(
-                            pair,
-                            direction,
-                            price_a,
-                            price_b,
-                            signal_id,
-                            entry_context={
-                                "z_score": z_score,
-                                "entry_zscore": entry_zscore,
-                                "confidence": final_confidence,
-                                "orchestrator_verdict": decision_state.get("final_verdict"),
-                            },
+                    approved = False
+                    execution_result = None
+                    direction = None
+                    try:
+                        approved = await notification_service.request_approval(
+                            trade_summary,
+                            trade_value=float(legs.gross_notional),
+                            force_manual=True,
                         )
-                        if execution_result:
-                            for field in SPREAD_GUARD_DETAIL_FIELDS:
-                                if field in execution_result:
-                                    diagnostic[field] = execution_result[field]
-                        if execution_result and execution_result.get("executed"):
-                            await self._upsert_active_signal(
-                                t_a,
-                                t_b,
-                                z_score=z_score,
-                                status="EXECUTED",
-                                confidence=final_confidence,
-                                hedge_ratio=hedge_ratio,
+                        if approved:
+                            direction = "Short-Long" if z_score > 0 else "Long-Short"
+                            execution_result = await self.execute_trade(
+                                pair,
+                                direction,
+                                price_a,
+                                price_b,
+                                signal_id,
+                                entry_context={
+                                    "z_score": z_score,
+                                    "entry_zscore": entry_zscore,
+                                    "confidence": final_confidence,
+                                    "orchestrator_verdict": decision_state.get("final_verdict"),
+                                },
                             )
-                            diagnostic["verdict"] = "EXECUTED"
-                            diagnostic["reason"] = execution_result.get("reason", "executed")
-                            decision_recorder.record(
-                                stage="execute",
-                                outcome="execute",
-                                reason=diagnostic["reason"],
-                                inputs={"direction": direction},
-                                signal_id=signal_id,
-                            )
+                            if execution_result:
+                                for field in SPREAD_GUARD_DETAIL_FIELDS:
+                                    if field in execution_result:
+                                        diagnostic[field] = execution_result[field]
+                            if execution_result and execution_result.get("executed"):
+                                await self._upsert_active_signal(
+                                    t_a,
+                                    t_b,
+                                    z_score=z_score,
+                                    status="EXECUTED",
+                                    confidence=final_confidence,
+                                    hedge_ratio=hedge_ratio,
+                                )
+                                diagnostic["verdict"] = "EXECUTED"
+                                diagnostic["reason"] = execution_result.get("reason", "executed")
+                                decision_recorder.record(
+                                    stage="execute",
+                                    outcome="execute",
+                                    reason=diagnostic["reason"],
+                                    inputs={"direction": direction},
+                                    signal_id=signal_id,
+                                )
+                            else:
+                                await self._upsert_active_signal(
+                                    t_a,
+                                    t_b,
+                                    z_score=z_score,
+                                    status="EXECUTION_BLOCKED",
+                                    confidence=final_confidence,
+                                    hedge_ratio=hedge_ratio,
+                                )
+                                diagnostic["verdict"] = "EXECUTION_BLOCKED"
+                                diagnostic["reason"] = (
+                                    execution_result.get("reason", "execution_blocked")
+                                    if execution_result
+                                    else "execution_blocked"
+                                )
+                                decision_recorder.record(
+                                    stage="execute",
+                                    outcome="anomaly",
+                                    reason=diagnostic["reason"],
+                                    signal_id=signal_id,
+                                )
                         else:
                             await self._upsert_active_signal(
                                 t_a,
                                 t_b,
                                 z_score=z_score,
-                                status="EXECUTION_BLOCKED",
+                                status="REJECTED",
                                 confidence=final_confidence,
                                 hedge_ratio=hedge_ratio,
                             )
-                            diagnostic["verdict"] = "EXECUTION_BLOCKED"
-                            diagnostic["reason"] = (
-                                execution_result.get("reason", "execution_blocked")
-                                if execution_result
-                                else "execution_blocked"
-                            )
+                            diagnostic["verdict"] = "REJECTED"
+                            diagnostic["reason"] = "approval_denied"
                             decision_recorder.record(
-                                stage="execute",
-                                outcome="anomaly",
-                                reason=diagnostic["reason"],
+                                stage="approval_gate",
+                                outcome="reject",
+                                reason="approval_denied",
                                 signal_id=signal_id,
                             )
-                    else:
-                        await self._upsert_active_signal(
-                            t_a,
-                            t_b,
-                            z_score=z_score,
-                            status="REJECTED",
-                            confidence=final_confidence,
-                            hedge_ratio=hedge_ratio,
-                        )
-                        diagnostic["verdict"] = "REJECTED"
-                        diagnostic["reason"] = "approval_denied"
-                        decision_recorder.record(
-                            stage="approval",
-                            outcome="veto",
-                            reason="approval_denied",
-                            signal_id=signal_id,
+                    finally:
+                        await open_slot_reservation_service.release(
+                            str(signal_id),
+                            reason=(
+                                "approved_executed"
+                                if (approved and execution_result and execution_result.get("executed"))
+                                else "approval_denied_or_timeout"
+                                if not approved
+                                else "execution_blocked"
+                            ),
                         )
 
                 diagnostic["confidence"] = final_confidence
@@ -2385,6 +2457,34 @@ class ArbitrageMonitor:
 
         entry_context = entry_context or {}
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
+
+        # F-002: daily / drawdown capital halt — block new opens only.
+        try:
+            from src.services.capital_halt_service import enforce_capital_halt_or_raise_state
+            from src.services.performance_service import performance_service as _perf
+
+            halt = await enforce_capital_halt_or_raise_state(
+                persistence_service=persistence_service,
+                performance_service=_perf,
+                notification_service=notification_service,
+            )
+            if halt.get("halt"):
+                logger.critical(
+                    "CAPITAL HALT: refusing open %s/%s (%s)",
+                    t_a,
+                    t_b,
+                    halt.get("reason"),
+                )
+                return execution_result(
+                    False,
+                    "capital_halt",
+                    halt_reason=halt.get("reason"),
+                    halt_details=halt.get("details"),
+                )
+        except Exception as halt_exc:
+            logger.error("CAPITAL HALT check failed open-fail-closed: %s", halt_exc)
+            return execution_result(False, "capital_halt_check_failed")
+
         if await self._has_active_pair_or_pending_order(t_a, t_b):
             return execution_result(False, "active_pair_or_pending_order")
 
@@ -2677,6 +2777,19 @@ class ArbitrageMonitor:
             )
             return execution_result(False, "lane_guard_open_signals_unavailable")
 
+        try:
+            from src.services.open_slot_reservation import open_slot_reservation_service
+
+            # Exclude *this* signal's reservation from the count/conflict set.
+            reserved = [
+                s
+                for s in open_slot_reservation_service.active_as_open_signals()
+                if str(s.get("signal_id")) != str(signal_id)
+            ]
+            open_for_lane = list(open_for_lane or []) + reserved
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("execute_trade: reservation merge failed: %s", exc)
+
         slot_check = check_max_open_pairs(len(open_for_lane or []), settings.MAX_OPEN_PAIRS)
         if not slot_check["allowed"]:
             logger.warning(
@@ -2779,41 +2892,80 @@ class ArbitrageMonitor:
             return execution_result(True, "paper_shadow_executed")
 
         lane_label = settings.execution_lane
+        # F-004: freeze lane knobs for this execution; abort if hot-reload flips mid-flight.
+        lane_snapshot = {
+            "paper_trading": bool(settings.PAPER_TRADING),
+            "alpaca_base_url": (settings.ALPACA_BASE_URL or "").strip(),
+            "live_capital_danger": bool(settings.LIVE_CAPITAL_DANGER),
+            "execution_lane": settings.execution_lane,
+        }
         logger.info(
             "%s EXECUTION: Placing broker orders for %s/%s - %s",
             lane_label, exec_t_a, exec_t_b, direction,
         )
 
+        def _lane_drifted() -> bool:
+            return (
+                bool(settings.PAPER_TRADING) != lane_snapshot["paper_trading"]
+                or (settings.ALPACA_BASE_URL or "").strip() != lane_snapshot["alpaca_base_url"]
+                or bool(settings.LIVE_CAPITAL_DANGER) != lane_snapshot["live_capital_danger"]
+            )
+
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
+        # F-007/F-016: persist ORDER_SUBMITTED with client_order_id BEFORE broker submit.
+        client_order_id_a = f"{signal_id}-A"
+        await persistence_service.log_trade({
+            "order_id": client_order_id_a,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_a,
+            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+            "quantity": size_a,
+            "price": price_a,
+            "status": OrderStatus.ORDER_SUBMITTED,
+            "venue": venue,
+            "metadata_json": {
+                "client_order_id": client_order_id_a,
+                "pending_broker_submit": True,
+                "submitted_qty": size_a,
+                "side": side_a,
+                "symbol": t_a,
+                "execution_lane": lane_snapshot["execution_lane"],
+                "lane_snapshot": lane_snapshot,
+            },
+        })
+        if _lane_drifted():
+            await persistence_service.update_signal_status(
+                uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION
+            )
+            return execution_result(False, "execution_lane_changed_mid_flight")
+
         # Leg A
         res_a = await self.brokerage.place_value_order(
             exec_t_a,
             target_cash_a,
             side_a,
             price=price_a,
-            client_order_id=f"{signal_id}-A",
+            client_order_id=client_order_id_a,
+            intent="open",
         )
-        order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or str(uuid.uuid4())
+        order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or client_order_id_a
 
         if res_a.get("requires_reconciliation") or res_a.get("status") == "unknown":
-            await persistence_service.log_trade({
-                "order_id": order_id_a,
-                "signal_id": uuid.UUID(signal_id),
-                "ticker": t_a,
-                "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-                "quantity": size_a,
-                "price": price_a,
-                "status": OrderStatus.NEEDS_MANUAL_RECONCILIATION,
-                "venue": venue,
-                "metadata_json": {
+            await persistence_service.attach_broker_order_id(
+                uuid.UUID(signal_id),
+                client_order_id_a,
+                broker_order_id=str(order_id_a),
+                status=OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                metadata_updates={
                     "broker_order_id": order_id_a,
+                    "pending_broker_submit": False,
                     "submitted_qty": size_a,
                     "side": side_a,
                     "symbol": t_a,
                     "status": "unknown",
                     "broker_response": res_a,
-                }
-            })
+                },
+            )
             await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
             alert = (
                 f"Leg A ({exec_t_a}) submission state is UNKNOWN. Leg B NOT placed. "
@@ -2832,28 +2984,37 @@ class ArbitrageMonitor:
                 f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. "
                 f"No position opened. Broker response: {broker_msg}"
             )
+            await persistence_service.attach_broker_order_id(
+                uuid.UUID(signal_id),
+                client_order_id_a,
+                broker_order_id=str(order_id_a),
+                status=OrderStatus.LEG_A_REJECTED,
+                metadata_updates={
+                    "pending_broker_submit": False,
+                    "broker_response": res_a,
+                    "status": "rejected",
+                },
+            )
             await notification_service.send_message(
                 f"Execution aborted: Leg A failed for {exec_t_a}. Broker response: {broker_msg}"
             )
             return execution_result(False, "leg_a_rejected")
-        await persistence_service.log_trade({
-            "order_id": order_id_a,
-            "signal_id": uuid.UUID(signal_id),
-            "ticker": t_a,
-            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-            "quantity": size_a,
-            "price": price_a,
-            "status": OrderStatus.LEG_A_SUBMITTED,
-            "venue": venue,
-            "metadata_json": {
+        # Promote the pre-submit ORDER_SUBMITTED row (matched by client_order_id).
+        await persistence_service.attach_broker_order_id(
+            uuid.UUID(signal_id),
+            client_order_id_a,
+            broker_order_id=str(order_id_a),
+            status=OrderStatus.LEG_A_SUBMITTED,
+            metadata_updates={
                 "broker_order_id": order_id_a,
+                "pending_broker_submit": False,
                 "submitted_qty": size_a,
                 "side": side_a,
                 "symbol": t_a,
                 "status": "submitted",
                 "broker_response": res_a,
-            }
-        })
+            },
+        )
 
         # PATCH 5: Confirm Leg A is filled before placing Leg B.
         # Alpaca submit_order returns 'success' when order is QUEUED, not FILLED.
@@ -2925,6 +3086,7 @@ class ArbitrageMonitor:
                         close_side_a,
                         price=close_price_a,
                         client_order_id=f"{signal_id}-A-PARTIAL-CLOSE",
+                        intent="close",
                     )
                     close_status = str(close_res.get("status", "")).lower()
                     close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
@@ -3122,6 +3284,7 @@ class ArbitrageMonitor:
                 close_side_a,
                 price=close_price_a,
                 client_order_id=f"{signal_id}-A-EMERGENCY-CLOSE",
+                intent="close",
             )
             close_status = str(close_res.get("status", "")).lower()
             close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
@@ -3332,6 +3495,7 @@ class ArbitrageMonitor:
                         close_side_b,
                         price=close_price_b,
                         client_order_id=f"{signal_id}-B-PARTIAL-CLOSE",
+                        intent="close",
                     )
                     close_b_status = str(close_b_res.get("status", "")).lower()
                     close_b_unknown = (
@@ -3531,11 +3695,14 @@ class ArbitrageMonitor:
             from src.services.pair_discovery_helpers import is_hedge_ratio_sane
 
             if hedge is not None and not is_hedge_ratio_sane(
-                hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+                hedge,
+                max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
             ):
                 msg = (
-                    f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} exceeds "
-                    f"PAIR_DISCOVERY_MAX_ABS_HEDGE={settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}. "
+                    f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} outside "
+                    f"[{settings.PAIR_DISCOVERY_MIN_ABS_HEDGE:.3f}, "
+                    f"{settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}] abs. "
                     f"Pair benched to free Active slot."
                 )
                 logger.warning(msg)
@@ -4465,6 +4632,7 @@ class ArbitrageMonitor:
                         order["side"],
                         price=order["price"],
                         client_order_id=client_order_id,
+                        intent="close",
                     )
                     # Dead prior close order (rejected/canceled) keeps the same
                     # client_order_id reserved — retry once with a unique suffix.
@@ -4486,6 +4654,7 @@ class ArbitrageMonitor:
                             order["side"],
                             price=order["price"],
                             client_order_id=client_order_id,
+                            intent="close",
                         )
                     order_id = res.get("order_id") or res.get("orderId") or res.get("client_order_id") or client_order_id
 

@@ -22,8 +22,8 @@ export const CONFIG_METADATA: Record<string, ConfigMetadata> = {
 
   // --- Strategy & Execution ---
   'APPROVAL_THRESHOLD': {
-    label: 'Auto-Approve Threshold (USD)',
-    description: 'Live trades at or below this notional auto-approve after Telegram is configured. Pair signals still force manual approval.',
+    label: 'Approval Reference Threshold (USD)',
+    description: 'Reference notional for ops visibility. Does not auto-approve live trades — live capital always requires explicit human approval (Telegram or dashboard + 2FA). Shadow/Alpaca paper still auto-approve via paper lanes.',
   },
   'MONITOR_ENTRY_ZSCORE': { label: 'Entry Z-Score', description: 'Statistical threshold for pair divergence. Higher means more conservative entries.' },
   'TAKE_PROFIT_ZSCORE': { label: 'Take Profit Z-Score', description: 'The z-score target where the bot will close a profitable position.' },
