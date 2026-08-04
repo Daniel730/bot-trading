@@ -73,13 +73,118 @@ def _pair_discovery_status() -> dict:
         ),
         None,
     )
+
+    # Terminal messages carry promote/bench counts after a successful scout+rotate.
+    last_terminal = next(
+        (
+            msg
+            for msg in reversed(dashboard_state.terminal_messages)
+            if (msg.get("metadata") or {}).get("type") == "pair_discovery"
+            and (msg.get("metadata") or {}).get("status")
+            in {"completed", "failed", "cancelled"}
+        ),
+        None,
+    )
+    last_meta = (last_terminal or {}).get("metadata") or {}
+    last_status = last_meta.get("status") or (last_event.get("status") if last_event else None)
+    last_finished_at = None
+    if last_terminal and last_terminal.get("timestamp"):
+        last_finished_at = last_terminal.get("timestamp")
+    elif last_event:
+        last_finished_at = last_event.get("finished_at")
+    last_message = None
+    if last_terminal and last_terminal.get("text"):
+        last_message = last_terminal.get("text")
+    elif last_event:
+        last_message = last_event.get("message")
+
+    promoted = last_meta.get("promoted") if isinstance(last_meta.get("promoted"), list) else []
+    benched = last_meta.get("benched") if isinstance(last_meta.get("benched"), list) else []
+
     return {
         "active": bool(active),
         "active_count": len(active),
-        "last_status": last_event.get("status") if last_event else None,
-        "last_finished_at": last_event.get("finished_at") if last_event else None,
-        "last_message": last_event.get("message") if last_event else None,
+        "enabled": bool(settings.PAIR_DISCOVERY_ENABLED),
+        "auto_promote": bool(settings.PAIR_DISCOVERY_AUTO_PROMOTE),
+        "last_status": last_status,
+        "last_finished_at": last_finished_at,
+        "last_message": last_message,
+        "promoted": promoted,
+        "benched": benched,
     }
+
+
+def _denylist_display() -> list[str]:
+    """Operator-facing denylist entries (one ordering per pair)."""
+    from src.services.pair_discovery_helpers import (
+        canonical_pair_id,
+        pair_id_aliases,
+        parse_denylist_env,
+        parse_pair_id,
+    )
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for entry in parse_denylist_env(settings.PAIR_DENYLIST):
+        aliases = pair_id_aliases(entry)
+        if not aliases or (aliases & seen):
+            continue
+        seen |= aliases
+        try:
+            a, b = parse_pair_id(entry)
+            out.append(canonical_pair_id(a, b))
+        except ValueError:
+            canon = str(entry).strip().upper()
+            if canon:
+                out.append(canon)
+    return out
+
+
+async def _serialize_scout_candidates(active_ids: set[str]) -> list[dict]:
+    """Top scout candidates for the operator surface (Active vs candidates)."""
+    from src.services.pair_discovery_helpers import (
+        is_pair_denied,
+        pair_id_aliases,
+        parse_pair_id,
+    )
+    from src.services.persistence_service import persistence_service
+
+    try:
+        rows = await persistence_service.get_top_candidates(
+            limit=max(settings.MAX_ACTIVE_PAIRS * 2, 20)
+        )
+    except Exception as exc:
+        logger.warning("DASHBOARD: Could not load scout candidates: %s", exc)
+        return []
+
+    active_aliases: set[str] = set()
+    for aid in active_ids:
+        active_aliases |= pair_id_aliases(aid)
+
+    denied = settings.pair_denylist_ids
+    out: list[dict] = []
+    for row in rows or []:
+        pair_id = str(row.get("pair_id") or "")
+        if not pair_id:
+            continue
+        ticker_a = ticker_b = ""
+        try:
+            ticker_a, ticker_b = parse_pair_id(pair_id)
+        except ValueError:
+            pass
+        out.append(
+            {
+                "pair_id": pair_id,
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "sector": row.get("sector") or "",
+                "sortino": _safe_float(row.get("sortino")),
+                "p_value": _safe_float(row.get("p_value")),
+                "is_active": bool(pair_id_aliases(pair_id) & active_aliases),
+                "denied": is_pair_denied(pair_id=pair_id, denylist=denied),
+            }
+        )
+    return out
 
 
 def _scrub_non_finite(obj):
@@ -2563,7 +2668,10 @@ async def list_pairs(token: str = Query(None), session: str = Query(None)):
     - `active_pairs`: list of pair objects augmented with `last_cointegration_check` (ISO 8601 string or `None`) and `last_z_score` (float or `None`).
     - `configured_pairs`: list of pairs configured in settings (`settings.ARBITRAGE_PAIRS`).
     - `crypto_test_pairs`: list of crypto test pairs from settings (`settings.CRYPTO_TEST_PAIRS`).
+    - `scout_candidates`: top persisted scout candidates (Sortino-ranked) with Active/denied flags.
+    - `denylist`: operator-facing quarantined pair ids.
     - `dev_mode`: boolean flag from settings (`settings.DEV_MODE`).
+    - `discovery`: background scout status including last promote/bench summary when available.
 
     Returns:
         dict: A scrubbed response object with the keys above; non-finite numeric values are replaced with `None`.
@@ -2598,16 +2706,25 @@ async def list_pairs(token: str = Query(None), session: str = Query(None)):
     except Exception as exc:
         logger.warning("DASHBOARD: Could not fetch z-scores from Redis: %s", exc)
 
+    from src.services.pair_discovery_helpers import is_pair_denied
+
+    denied = settings.pair_denylist_ids
     for entry in active_serialized:
         pid = entry["id"]
         entry["last_cointegration_check"] = last_check_map.get(pid)
         entry["last_z_score"] = z_score_map.get(pid)
+        entry["denied"] = is_pair_denied(pair_id=pid, denylist=denied)
+
+    active_ids = {str(p.get("id") or "") for p in active_serialized if p.get("id")}
+    scout_candidates = await _serialize_scout_candidates(active_ids)
 
     return _scrub_non_finite(
         {
             "active_pairs": active_serialized,
             "configured_pairs": settings.ARBITRAGE_PAIRS,
             "crypto_test_pairs": settings.CRYPTO_TEST_PAIRS,
+            "scout_candidates": scout_candidates,
+            "denylist": _denylist_display(),
             "dev_mode": settings.DEV_MODE,
             "discovery": _pair_discovery_status(),
         }

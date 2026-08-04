@@ -24,6 +24,7 @@ import {
   type PairInfo,
   type PairConfigEntry,
   type PairsResponse,
+  type ScoutCandidate,
 } from '../services/api';
 import { useAutoDismiss } from '../hooks/useAutoDismiss';
 
@@ -36,6 +37,7 @@ interface PairsPanelProps {
 type EditorTab = 'stocks' | 'crypto';
 type ListFilter = 'all' | 'stocks' | 'crypto' | 'coint' | 'broken';
 const ACTIVE_PAIRS_PAGE_SIZE = 12;
+const SCOUT_CANDIDATES_PAGE_SIZE = 8;
 
 const formatNum = (val: number | null | undefined, decimals = 3): string => {
   if (val === null || val === undefined || Number.isNaN(val)) return '—';
@@ -117,6 +119,7 @@ const PairRow: React.FC<PairRowProps> = ({ p }) => {
           <span className={`badge ${pairStatusBadgeClass(p.is_cointegrated)}`}>
             {pairStatusLabel(p.is_cointegrated)}
           </span>
+          {p.denied ? <span className="badge badge-red">DENIED</span> : null}
         </div>
 
         <ChevronDown
@@ -172,9 +175,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
   const [activePairs, setActivePairs] = useState<PairInfo[]>([]);
   const [configuredStocks, setConfiguredStocks] = useState<PairConfigEntry[]>([]);
   const [configuredCrypto, setConfiguredCrypto] = useState<PairConfigEntry[]>([]);
+  const [scoutCandidates, setScoutCandidates] = useState<ScoutCandidate[]>([]);
+  const [denylist, setDenylist] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState<ListFilter>('all');
   const [activePairsPage, setActivePairsPage] = useState(1);
+  const [candidatesPage, setCandidatesPage] = useState(1);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorTab, setEditorTab] = useState<EditorTab>('stocks');
@@ -204,6 +210,8 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
       setActivePairs(data.active_pairs || []);
       setConfiguredStocks(data.configured_pairs || []);
       setConfiguredCrypto(data.crypto_test_pairs || []);
+      setScoutCandidates(data.scout_candidates || []);
+      setDenylist(data.denylist || []);
       setDiscoveryStatus(data.discovery || null);
     } catch (err) {
       console.error('Failed to fetch pairs:', err);
@@ -269,13 +277,48 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
   }, [activePairs]);
 
   const [discovering, setDiscovering] = useState(false);
+  const autoPromote = discoveryStatus?.auto_promote !== false;
+  const discoverBusy = discovering || Boolean(discoveryStatus?.active);
+  const discoverButtonLabel = discoverBusy
+    ? 'Scanning...'
+    : autoPromote
+      ? 'Discover & Promote'
+      : 'Discover Candidates';
+  const discoverButtonTitle = autoPromote
+    ? 'Scout cointegrated pairs and promote them into Active slots'
+    : 'Scout cointegrated pairs into the candidate pool (auto-promote off)';
+
+  const waitingCandidates = useMemo(
+    () => scoutCandidates.filter((c) => !c.is_active),
+    [scoutCandidates],
+  );
+  const totalCandidatePages = Math.max(1, Math.ceil(waitingCandidates.length / SCOUT_CANDIDATES_PAGE_SIZE));
+  const pagedCandidates = useMemo(() => {
+    const start = (candidatesPage - 1) * SCOUT_CANDIDATES_PAGE_SIZE;
+    return waitingCandidates.slice(start, start + SCOUT_CANDIDATES_PAGE_SIZE);
+  }, [candidatesPage, waitingCandidates]);
+
+  useEffect(() => {
+    if (candidatesPage > totalCandidatePages) {
+      setCandidatesPage(totalCandidatePages);
+    }
+  }, [candidatesPage, totalCandidatePages]);
 
   const discoveryMessage = useMemo(() => {
     if (discovering || discoveryStatus?.active) {
-      return 'Pair discovery is running. This panel will update when it finishes.';
+      return autoPromote
+        ? 'Pair discovery is running. Scouts will be promoted into Active when the scan finishes.'
+        : 'Pair discovery is running. Candidates will appear here when the scan finishes.';
     }
     if (discoveryStatus?.last_status === 'completed') {
-      return `Pair discovery completed ${formatRelative(discoveryStatus.last_finished_at)}.`;
+      const promoted = discoveryStatus.promoted?.length ?? 0;
+      const benched = discoveryStatus.benched?.length ?? 0;
+      const when = formatRelative(discoveryStatus.last_finished_at);
+      if (promoted > 0 || benched > 0) {
+        return `Discovery completed ${when}: promoted ${promoted}, benched ${benched}.`;
+      }
+      return discoveryStatus.last_message
+        || `Pair discovery completed ${when}.`;
     }
     if (discoveryStatus?.last_status === 'failed') {
       return `Pair discovery failed ${formatRelative(discoveryStatus.last_finished_at)}: ${discoveryStatus.last_message || 'unknown error'}`;
@@ -284,7 +327,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
       return `Pair discovery was cancelled ${formatRelative(discoveryStatus.last_finished_at)}.`;
     }
     return null;
-  }, [discovering, discoveryStatus]);
+  }, [autoPromote, discovering, discoveryStatus]);
 
   const handleDiscover = async () => {
     setDiscovering(true);
@@ -409,7 +452,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
               className={`pair-filter-chip ${filter === 'all' ? 'active' : ''}`}
               onClick={() => setFilter('all')}
             >
-              All ({activePairs.length})
+              Active ({activePairs.length})
             </button>
             <button
               data-kind="stocks"
@@ -457,12 +500,58 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
           </button>
         </div>
         <div className="panel-body">
+          <div className="discovery-strip">
+            <div className="discovery-strip-meta">
+              <strong>Pair discovery</strong>
+              <span>
+                {autoPromote ? 'Scout → promote into Active' : 'Scout only (auto-promote off)'}
+                {denylist.length > 0 ? ` · denylist ${denylist.length}` : ''}
+              </span>
+            </div>
+            <button
+              className="editor-discover-btn"
+              onClick={handleDiscover}
+              disabled={discoverBusy}
+              title={discoverButtonTitle}
+            >
+              <RefreshCw size={12} className={discoverBusy ? 'spin' : ''} />
+              {discoverButtonLabel}
+            </button>
+          </div>
+
+          {discoveryMessage && (
+            <div className={`editor-msg ${discoveryStatus?.last_status === 'failed' ? 'error' : 'ok'}`}>
+              {discoveryStatus?.last_status === 'failed' ? (
+                <AlertTriangle size={12} />
+              ) : (
+                <CheckCircle2 size={12} />
+              )}
+              {discoveryMessage}
+            </div>
+          )}
+          {saveOk && !editorOpen && (
+            <div className="editor-msg ok">
+              <CheckCircle2 size={12} /> {saveOk}
+            </div>
+          )}
+          {saveError && !editorOpen && (
+            <div className="editor-msg error">
+              <AlertTriangle size={12} /> {saveError}
+            </div>
+          )}
+          {denylist.length > 0 && (
+            <div className="denylist-strip" title="Quarantined pairs are never promoted and are benched if Active">
+              <AlertTriangle size={12} />
+              <span>Denylist: {denylist.join(', ')}</span>
+            </div>
+          )}
+
           <div className="wallet-sync-strip">
             <div className="wallet-sync-meta">
               <Wallet size={16} />
               <div>
                 <strong>Broker Wallet</strong>
-                <span>{activePairs.length} pairs / {allEquityTickers.length} tickers</span>
+                <span>{activePairs.length} active / {waitingCandidates.length} candidates / {allEquityTickers.length} tickers</span>
               </div>
             </div>
             <div className="wallet-sync-controls">
@@ -504,10 +593,11 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
             </div>
           )}
 
+          <div className="pairs-section-label">Active trading pairs</div>
           {filteredActive.length === 0 ? (
             <div className="empty-state">
               <Layers size={28} style={{ opacity: 0.3 }} />
-              <span>{loading ? 'Loading pairs…' : 'No pairs in this view'}</span>
+              <span>{loading ? 'Loading pairs…' : 'No active pairs in this view'}</span>
             </div>
           ) : (
             <div className="pair-table">
@@ -540,6 +630,70 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
                 disabled={activePairsPage >= totalActivePairPages}
                 onClick={() => setActivePairsPage((current) => Math.min(totalActivePairPages, current + 1))}
                 title="Next page"
+              >
+                Next
+              </button>
+            </div>
+          )}
+
+          <div className="pairs-section-label">
+            Scout candidates
+            <span className="panel-count">{waitingCandidates.length}</span>
+          </div>
+          {waitingCandidates.length === 0 ? (
+            <div className="empty-state empty-state-compact">
+              <span>{loading ? 'Loading candidates…' : 'No scout candidates waiting for promotion'}</span>
+            </div>
+          ) : (
+            <div className="pair-table candidate-table">
+              <div className="pair-table-header candidate-table-header">
+                <span>Pair</span>
+                <span>Sortino</span>
+                <span>Sector</span>
+                <span>Flags</span>
+              </div>
+              {pagedCandidates.map((c) => (
+                <div className={`pair-row candidate-row ${c.denied ? 'pair-denied' : ''}`} key={c.pair_id}>
+                  <div className="pair-row-main candidate-row-main">
+                    <span className="pair-row-name">
+                      {c.ticker_a || c.pair_id}
+                      {c.ticker_b ? (
+                        <>
+                          <span className="pair-row-slash"> / </span>
+                          {c.ticker_b}
+                        </>
+                      ) : null}
+                    </span>
+                    <span className="pair-col-z">{formatNum(c.sortino, 2)}</span>
+                    <span className="candidate-sector">{c.sector || '—'}</span>
+                    <div className="pair-col-badge">
+                      {c.denied ? <span className="badge badge-red">DENIED</span> : (
+                        <span className="badge badge-blue">SCOUT</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {waitingCandidates.length > SCOUT_CANDIDATES_PAGE_SIZE && (
+            <div className="list-pagination">
+              <button
+                className="panel-action-btn"
+                disabled={candidatesPage <= 1}
+                onClick={() => setCandidatesPage((current) => Math.max(1, current - 1))}
+                title="Previous candidates page"
+              >
+                Prev
+              </button>
+              <span className="list-pagination-label">
+                Page {candidatesPage} / {totalCandidatePages}
+              </span>
+              <button
+                className="panel-action-btn"
+                disabled={candidatesPage >= totalCandidatePages}
+                onClick={() => setCandidatesPage((current) => Math.min(totalCandidatePages, current + 1))}
+                title="Next candidates page"
               >
                 Next
               </button>
@@ -684,12 +838,12 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
                   <button
                     className="editor-discover-btn"
                     onClick={handleDiscover}
-                    disabled={discovering || Boolean(discoveryStatus?.active)}
-                    title="Search for new cointegrated pairs in background"
+                    disabled={discoverBusy}
+                    title={discoverButtonTitle}
                     style={{ marginRight: 'auto' }}
                   >
-                    <RefreshCw size={12} className={discovering || discoveryStatus?.active ? 'spin' : ''} />
-                    {discovering || discoveryStatus?.active ? 'Scanning...' : 'Search & Update Eligibles'}
+                    <RefreshCw size={12} className={discoverBusy ? 'spin' : ''} />
+                    {discoverButtonLabel}
                   </button>
                   <label className="editor-apply-label">
                     <input

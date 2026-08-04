@@ -103,9 +103,14 @@ const BotControlPage: React.FC<BotControlPageProps> = ({
           <RefreshCw size={14} className={pendingAction === 'restart' ? 'spin' : ''} />
           {pendingAction === 'restart' ? 'Restarting...' : 'Restart'}
         </button>
-        <button className="ghost-btn" disabled={isBusy} onClick={handleDiscoverPairs} title="Run cointegration tests on S&P 500 and Top Crypto">
+        <button
+          className="ghost-btn"
+          disabled={isBusy}
+          onClick={handleDiscoverPairs}
+          title="Scout cointegrated pairs and promote them into Active slots (auto-promote when enabled)"
+        >
           <RefreshCw size={14} />
-          Search & Update Eligibles
+          Discover & Promote
         </button>
       </div>
 

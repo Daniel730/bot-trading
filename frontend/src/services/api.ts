@@ -109,6 +109,7 @@ export interface PairInfo {
   sector: string;
   last_cointegration_check: string | null;
   last_z_score: number | null;
+  denied?: boolean;
 }
 
 export interface PairConfigEntry {
@@ -116,17 +117,34 @@ export interface PairConfigEntry {
   ticker_b: string;
 }
 
+export interface ScoutCandidate {
+  pair_id: string;
+  ticker_a: string;
+  ticker_b: string;
+  sector: string;
+  sortino: number | null;
+  p_value: number | null;
+  is_active: boolean;
+  denied: boolean;
+}
+
 export interface PairsResponse {
   active_pairs: PairInfo[];
   configured_pairs: PairConfigEntry[];
   crypto_test_pairs: PairConfigEntry[];
+  scout_candidates?: ScoutCandidate[];
+  denylist?: string[];
   dev_mode: boolean;
   discovery?: {
     active: boolean;
     active_count: number;
+    enabled?: boolean;
+    auto_promote?: boolean;
     last_status?: 'completed' | 'failed' | 'cancelled' | null;
     last_finished_at?: string | null;
     last_message?: string | null;
+    promoted?: string[];
+    benched?: string[];
   };
 }
 

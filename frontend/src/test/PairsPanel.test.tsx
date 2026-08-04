@@ -1,11 +1,12 @@
 /**
- * Tests for PairsPanel.tsx changes in this PR:
+ * Tests for PairsPanel.tsx:
  *
  * - Uses syncWallet from api.ts
  * - Wallet section label is "Broker Wallet"
  * - Button title is "Buy missing broker tickers"
  * - Confirm dialog says "Place broker BUY orders for missing stock tickers..."
  * - Error fallback message is "Failed to sync broker wallet"
+ * - Discovery shows Active vs scout candidates and promote feedback
  */
 
 import React from 'react';
@@ -50,13 +51,40 @@ function makePairsResponse(extraPairs = []) {
     ],
     configured_pairs: [{ ticker_a: 'AAPL', ticker_b: 'MSFT' }],
     crypto_test_pairs: [],
+    scout_candidates: [
+      {
+        pair_id: 'KO_PEP',
+        ticker_a: 'KO',
+        ticker_b: 'PEP',
+        sector: 'Consumer',
+        sortino: 1.4,
+        p_value: 0.01,
+        is_active: false,
+        denied: false,
+      },
+      {
+        pair_id: 'BTC-USD_BCH-USD',
+        ticker_a: 'BTC-USD',
+        ticker_b: 'BCH-USD',
+        sector: 'Crypto',
+        sortino: 0.2,
+        p_value: 0.4,
+        is_active: false,
+        denied: true,
+      },
+    ],
+    denylist: ['BTC-USD_BCH-USD'],
     dev_mode: false,
     discovery: {
       active: false,
       active_count: 0,
+      enabled: true,
+      auto_promote: true,
       last_status: null,
       last_finished_at: null,
       last_message: null,
+      promoted: [],
+      benched: [],
     },
   };
 }
@@ -98,7 +126,7 @@ describe('PairsPanel pair discovery status', () => {
     mockFetchPairs.mockResolvedValue(makePairsResponse());
     mockDiscoverPairs.mockResolvedValue({
       status: 'accepted',
-      message: 'Discovery cycle started. Completion will be reported in the terminal feed.',
+      message: 'Discovery cycle started. Cointegrated scouts will be promoted into Active pairs when the scan finishes (see terminal feed).',
     });
   });
 
@@ -110,11 +138,10 @@ describe('PairsPanel pair discovery status', () => {
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
 
     await waitFor(() => {
-      expect(screen.getByTitle('Edit pairs')).toBeInTheDocument();
+      expect(screen.getAllByTitle(/Scout cointegrated pairs and promote/i).length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(screen.getByTitle('Edit pairs'));
-    fireEvent.click(screen.getByTitle('Search for new cointegrated pairs in background'));
+    fireEvent.click(screen.getAllByTitle(/Scout cointegrated pairs and promote/i)[0]);
 
     await waitFor(() => {
       expect(mockDiscoverPairs).toHaveBeenCalledOnce();
@@ -122,27 +149,47 @@ describe('PairsPanel pair discovery status', () => {
     });
   });
 
-  it('shows the last completed discovery result from the pairs endpoint', async () => {
+  it('shows promote and bench counts from the last discovery result', async () => {
     mockFetchPairs.mockResolvedValue({
       ...makePairsResponse(),
       discovery: {
         active: false,
         active_count: 0,
+        enabled: true,
+        auto_promote: true,
         last_status: 'completed',
         last_finished_at: new Date().toISOString(),
-        last_message: null,
+        last_message: 'Pair discovery completed for dashboard. promoted=2 benched=1.',
+        promoted: ['KO_PEP', 'XOM_CVX'],
+        benched: ['BTC-USD_BCH-USD'],
       },
     });
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
 
     await waitFor(() => {
-      expect(screen.getByTitle('Edit pairs')).toBeInTheDocument();
+      expect(screen.getByText(/Discovery completed .*promoted 2, benched 1/i)).toBeInTheDocument();
     });
+  });
 
-    fireEvent.click(screen.getByTitle('Edit pairs'));
+  it('renders Active pairs and waiting scout candidates separately', async () => {
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
 
-    expect(screen.getByText(/Pair discovery completed/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Active trading pairs')).toBeInTheDocument();
+      expect(screen.getByText('Scout candidates')).toBeInTheDocument();
+      expect(screen.getByText(/KO/)).toBeInTheDocument();
+      expect(screen.getByText('Denylist: BTC-USD_BCH-USD')).toBeInTheDocument();
+      expect(screen.getAllByText('DENIED').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('labels the discover button Discover & Promote when auto-promote is on', async () => {
+    render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /Discover & Promote/i }).length).toBeGreaterThan(0);
+    });
   });
 });
 
@@ -352,6 +399,8 @@ describe('PairsPanel buy button disabled state', () => {
       ],
       configured_pairs: [],
       crypto_test_pairs: [],
+      scout_candidates: [],
+      denylist: [],
       dev_mode: false,
     });
 
@@ -379,6 +428,8 @@ describe('PairsPanel buy button disabled state', () => {
       active_pairs: [],
       configured_pairs: [],
       crypto_test_pairs: [],
+      scout_candidates: [],
+      denylist: [],
       dev_mode: false,
     });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
