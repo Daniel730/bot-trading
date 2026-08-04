@@ -11,6 +11,7 @@ import re
 import secrets
 import socket
 import time
+import uuid
 from collections import deque
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
@@ -936,6 +937,7 @@ class TOTPManager:
 class CommandRequest(BaseModel):
     command: str
     metadata: Optional[dict] = None
+    otp_token: Optional[str] = None
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -1053,24 +1055,24 @@ class DashboardService:
         self.totp = TOTPManager(self.persistence)
         self.editable_config: Dict[str, dict] = {
             "REGION": {"type": "str", "sensitive": False, "options": ["US", "EU"]},
-            "APPROVAL_THRESHOLD": {"type": "float", "sensitive": True},
+            "APPROVAL_THRESHOLD": {"type": "float", "sensitive": True, "masked": False},
             "SCAN_INTERVAL_SECONDS": {"type": "int", "sensitive": False},
             "SCAN_PAIR_CONCURRENCY": {"type": "int", "sensitive": False},
             "SCAN_EXIT_CONCURRENCY": {"type": "int", "sensitive": False},
             "SCAN_COINT_RECHECK_CONCURRENCY": {"type": "int", "sensitive": False},
             "MARKET_DATA_TIMEOUT_SECONDS": {"type": "float", "sensitive": False},
-            "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
-            "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": False},
+            "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
+            "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
             # Missing from editable set historically broke CI patches that expected
             # operators to tune the force-exit floor via dashboard / bot_settings.
-            "TAKE_PROFIT_FORCE_EXIT_ZSCORE": {"type": "float", "sensitive": False},
-            "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": False},
-            "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True},
-            "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True},
-            "MAX_DRAWDOWN": {"type": "float", "sensitive": True},
-            "FINANCIAL_KILL_SWITCH_PCT": {"type": "float", "sensitive": True},
+            "TAKE_PROFIT_FORCE_EXIT_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
+            "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": True, "masked": False},
+            "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True, "masked": False},
+            "MAX_RISK_PER_TRADE": {"type": "float", "sensitive": True, "masked": False},
+            "MAX_DRAWDOWN": {"type": "float", "sensitive": True, "masked": False},
+            "FINANCIAL_KILL_SWITCH_PCT": {"type": "float", "sensitive": True, "masked": False},
             "COINTEGRATION_PVALUE_THRESHOLD": {"type": "float", "sensitive": False},
-            "KALMAN_DELTA": {"type": "float", "sensitive": False},
+            "KALMAN_DELTA": {"type": "float", "sensitive": True, "masked": False},
             "KALMAN_R": {"type": "float", "sensitive": False},
             "BROKERAGE_PROVIDER": {
                 "type": "str",
@@ -1078,11 +1080,11 @@ class DashboardService:
                 "masked": False,
                 "options": ["ALPACA"],
             },
-            "ALPACA_BUDGET_USD": {"type": "float", "sensitive": False},
-            "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True},
-            "PAPER_TRADING": {"type": "bool", "sensitive": True},
-            "DEV_MODE": {"type": "bool", "sensitive": True},
-            "IGNORE_UNMANAGED_POSITIONS": {"type": "bool", "sensitive": False},
+            "ALPACA_BUDGET_USD": {"type": "float", "sensitive": True, "masked": False},
+            "LIVE_CAPITAL_DANGER": {"type": "bool", "sensitive": True, "masked": False},
+            "PAPER_TRADING": {"type": "bool", "sensitive": True, "masked": False},
+            "DEV_MODE": {"type": "bool", "sensitive": True, "masked": False},
+            "IGNORE_UNMANAGED_POSITIONS": {"type": "bool", "sensitive": True, "masked": False},
             "OPENAI_API_KEY": {"type": "str", "sensitive": True},
             "GEMINI_API_KEY": {"type": "str", "sensitive": True},
             "POLYGON_API_KEY": {"type": "str", "sensitive": True},
@@ -1662,10 +1664,17 @@ class DashboardService:
                 "status": "pending",
             }
             try:
+                # F-017: stable client_order_id so ambiguous submits can reconcile.
+                client_order_id = (
+                    f"WALLET-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+                    f"-{ticker}-{idx}-{uuid.uuid4().hex[:8]}"
+                )
                 result = await brokerage_service.place_value_order(
                     ticker,
                     float(amount),
-                    "BUY"
+                    "BUY",
+                    client_order_id=client_order_id,
+                    intent="manual",
                 )
                 if result.get("status") == "error":
                     failures += 1
@@ -2008,6 +2017,28 @@ class DashboardService:
             validate_runtime_settings_update(normalized_updates)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # F-004: refuse lane/mode flips while open positions exist.
+        lane_keys = {"PAPER_TRADING", "ALPACA_BASE_URL", "LIVE_CAPITAL_DANGER", "DEV_MODE"}
+        if lane_keys.intersection(normalized_updates):
+            from src.services.persistence_service import persistence_service as _ps
+
+            try:
+                open_signals = await _ps.get_open_signals()
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Cannot verify open positions before lane change: {exc}",
+                ) from exc
+            if open_signals:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Refuse PAPER_TRADING/ALPACA_BASE_URL/LIVE_CAPITAL_DANGER/DEV_MODE "
+                        f"change while {len(open_signals)} open signal(s) exist. "
+                        "Close or reconcile positions first."
+                    ),
+                )
 
         for key, value in normalized_updates.items():
             old_value = getattr(settings, key)
@@ -2623,6 +2654,21 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None), ses
 async def terminal_command(request: CommandRequest, token: str = Query(None), session: str = Query(None)):
     verify_token(token, session)
     from src.services.notification_service import notification_service
+
+    # F-014: terminal /approve|/reject|/set_threshold must not bypass F-010 step-up.
+    cmd = (request.command or "").strip().lower()
+    if cmd.startswith("/approve"):
+        require_step_up_2fa(request.otp_token, action="approving a pending trade via terminal")
+    elif cmd.startswith("/reject"):
+        require_step_up_2fa(request.otp_token, action="rejecting a pending trade via terminal")
+    elif cmd.startswith("/set_threshold"):
+        require_step_up_2fa(request.otp_token, action="updating APPROVAL_THRESHOLD via terminal")
+        status = dashboard_service.totp.public_status()
+        if not status.get("enabled"):
+            raise HTTPException(
+                status_code=412,
+                detail="Two-factor authentication must be configured before changing APPROVAL_THRESHOLD.",
+            )
 
     result = await notification_service.handle_dashboard_command(request.command, request.metadata)
     if result.get("status") == "error":

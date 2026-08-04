@@ -671,11 +671,17 @@ export const cancelLogin = async (challengeId: string): Promise<{ status: string
 export const logout = async (token: string | null, sessionToken: string | null) =>
   requestJson<{ status: string }>('/api/auth/logout', token, { method: 'POST' }, sessionToken);
 
-export const sendTerminalCommand = async (command: string, token: string | null, sessionToken: string | null, metadata?: any) =>
+export const sendTerminalCommand = async (
+  command: string,
+  token: string | null,
+  sessionToken: string | null,
+  metadata?: any,
+  otpToken?: string,
+) =>
   requestJson<{ status: string; message: string }>('/api/terminal/command', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command, metadata }),
+    body: JSON.stringify({ command, metadata, otp_token: otpToken || undefined }),
   }, sessionToken);
 
 export interface PendingApproval {
