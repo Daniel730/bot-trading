@@ -451,6 +451,52 @@ class PersistenceService:
                 stmt = update(TradeLedger).where(TradeLedger.signal_id == signal_id).values(status=status)
                 await session.execute(stmt)
 
+    async def attach_broker_order_id(
+        self,
+        signal_id: uuid.UUID,
+        client_order_id: str,
+        *,
+        broker_order_id: str,
+        status: Optional[OrderStatus] = None,
+        metadata_updates: Optional[dict] = None,
+    ) -> int:
+        """Promote a pre-submit ledger row from client_order_id to broker order_id.
+
+        Used after ORDER_SUBMITTED is persisted before ``place_*`` (F-007/F-016) so
+        crash recovery can see the intent, then the row is updated in place.
+        Returns the number of rows updated.
+        """
+        from sqlalchemy import select, update
+
+        if isinstance(signal_id, str):
+            signal_id = uuid.UUID(signal_id)
+
+        values: dict = {"order_id": broker_order_id}
+        if status is not None:
+            values["status"] = status
+
+        async with self.AsyncSessionLocal() as session:
+            async with session.begin():
+                existing_rows = (
+                    await session.execute(
+                        select(TradeLedger.id, TradeLedger.metadata_json)
+                        .where(TradeLedger.signal_id == signal_id)
+                        .where(TradeLedger.order_id == client_order_id)
+                    )
+                ).all()
+                for row in existing_rows:
+                    existing_metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+                    stmt = (
+                        update(TradeLedger)
+                        .where(TradeLedger.id == row.id)
+                        .values(
+                            **values,
+                            metadata_json={**existing_metadata, **(metadata_updates or {})},
+                        )
+                    )
+                    await session.execute(stmt)
+                return len(existing_rows)
+
     async def update_trade_fill(
         self,
         signal_id: uuid.UUID,
