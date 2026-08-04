@@ -69,7 +69,7 @@ Table `execution_intents`:
 - `PRIMARY KEY (client_order_id)`
 - `UNIQUE (signal_id, leg)`
 
-`Monitor.execute_trade` calls `begin_intent` before Leg A / Leg B submit. Duplicate deliveries return `exactly_once:*` without placing.
+`Monitor.execute_trade` calls `begin_intent` before Leg A / Leg B submit. Duplicate deliveries return `exactly_once:*` without placing. Inserts use `ON CONFLICT DO NOTHING` so concurrent identical deliveries cannot raise UniqueViolation — losers get an idempotent refuse.
 
 Channels covered by the same gate once they reach `execute_trade` (REST approve → monitor, Telegram refusal on LIVE, MCP execute disabled, historical replay via intents).
 

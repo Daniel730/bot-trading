@@ -46,6 +46,29 @@ class ExecutionIntentService:
         meta = json.dumps(dict(metadata or {}), default=str)
         async with self.store._sessions()() as session:
             async with session.begin():
+                inserted = (
+                    await session.execute(
+                        text(
+                            """
+                            INSERT INTO execution_intents (
+                                client_order_id, signal_id, leg, status, metadata
+                            ) VALUES (
+                                :c, :sid, :leg, 'INTENT', CAST(:meta AS jsonb)
+                            )
+                            ON CONFLICT DO NOTHING
+                            RETURNING client_order_id
+                            """
+                        ),
+                        {"c": coid, "sid": sid, "leg": leg_norm, "meta": meta},
+                    )
+                ).first()
+                if inserted:
+                    return {
+                        "ok": True,
+                        "reason": "intent_created",
+                        "client_order_id": coid,
+                    }
+
                 existing = (
                     await session.execute(
                         text(
@@ -80,19 +103,12 @@ class ExecutionIntentService:
                         "existing": dict(by_coid),
                         "idempotent": True,
                     }
-                await session.execute(
-                    text(
-                        """
-                        INSERT INTO execution_intents (
-                            client_order_id, signal_id, leg, status, metadata
-                        ) VALUES (
-                            :c, :sid, :leg, 'INTENT', CAST(:meta AS jsonb)
-                        )
-                        """
-                    ),
-                    {"c": coid, "sid": sid, "leg": leg_norm, "meta": meta},
-                )
-        return {"ok": True, "reason": "intent_created", "client_order_id": coid}
+                # Race: conflict fired but row not visible yet — still idempotent refuse.
+                return {
+                    "ok": False,
+                    "reason": "duplicate_race",
+                    "idempotent": True,
+                }
 
     async def mark_submitted(
         self, client_order_id: str, *, broker_order_id: Optional[str] = None
