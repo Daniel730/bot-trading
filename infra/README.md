@@ -82,7 +82,7 @@ IMAGE_OWNER=my-ghcr-owner IMAGE_TAG=my-tag docker compose -f infra/docker-compos
 |---|---:|---|---|
 | `frontend` | `80` | `3000` | nginx static app and API proxy (LAN/Tailscale OK) |
 | `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | monitor + dashboard API |
-| `mcp-server` | `8000` | `127.0.0.1:8000` | FastMCP; no auth — loopback only |
+| `mcp-server` | `8000` | `127.0.0.1:8000` | FastMCP; process defaults to loopback; optional `MCP_TOOL_TOKEN`; host publish loopback only |
 | `execution-engine` | `50051` | `127.0.0.1:50051` | Java gRPC dry-run sidecar — loopback only |
 | `redis` | `6379` | `127.0.0.1:6379` | requirepass via `REDIS_PASSWORD`; clients use host `redis` on the compose network |
 | `postgres` | `5432` | `127.0.0.1:5433` | ledger/audit DB — loopback only |
