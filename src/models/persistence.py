@@ -27,10 +27,18 @@ class PersistenceManager:
 
     def _connect(self):
         if self._memory_uri:
-            conn = sqlite3.connect(self._memory_uri, uri=True)
+            conn = sqlite3.connect(self._memory_uri, uri=True, timeout=30.0)
         else:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.row_factory = sqlite3.Row
+        # F-020: WAL + busy timeout for crash-safe concurrent readers/writers.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("PRAGMA foreign_keys=ON")
+        except sqlite3.Error as exc:
+            logger.warning("PersistenceManager: pragma setup failed: %s", exc)
         return conn
 
     def _init_db(self):
@@ -161,10 +169,41 @@ class PersistenceManager:
 
     def set_system_state(self, key: str, value: Any):
         conn = self._get_connection()
-        conn.execute("INSERT OR REPLACE INTO system_state VALUES (?, ?)", (key, str(value)))
-        conn.commit()
-        conn.close()
-        
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT OR REPLACE INTO system_state(key, value) VALUES (?, ?)",
+                (key, str(value)),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def increment_system_state_float(self, key: str, delta: float, default: float = 0.0) -> float:
+        """Atomic float increment under BEGIN IMMEDIATE (F-020 budget path)."""
+        conn = self._get_connection()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT value FROM system_state WHERE key = ?", (key,)
+            ).fetchone()
+            current = float(row[0]) if row and row[0] is not None else float(default)
+            new_value = current + float(delta)
+            conn.execute(
+                "INSERT OR REPLACE INTO system_state(key, value) VALUES (?, ?)",
+                (key, str(new_value)),
+            )
+            conn.commit()
+            return new_value
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def save_portfolio_strategy(self, strategy_id: str, ticker: str, weight: float, risk_profile: str):
         conn = self._get_connection()
         conn.execute("INSERT INTO portfolio_strategies (strategy_id, ticker, weight, risk_profile) VALUES (?, ?, ?, ?)", 

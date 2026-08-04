@@ -798,20 +798,32 @@ class TOTPManager:
     def __init__(self, persistence: PersistenceManager):
         self.persistence = persistence
 
+    _SECRET_PREFIX_FERNET = "fernet:"
+
     def _key_bytes(self) -> bytes:
-        return hashlib.sha256(settings.DASHBOARD_TOKEN.encode("utf-8")).digest()
+        # F-025: prefer dedicated TOTP_ENCRYPTION_KEY when present.
+        dedicated = (os.getenv("TOTP_ENCRYPTION_KEY") or "").strip()
+        material = dedicated.encode("utf-8") if dedicated else settings.DASHBOARD_TOKEN.encode("utf-8")
+        return hashlib.sha256(material).digest()
+
+    def _fernet(self):
+        from cryptography.fernet import Fernet
+        return Fernet(base64.urlsafe_b64encode(self._key_bytes()))
 
     def _protect_secret(self, secret: str) -> str:
-        secret_bytes = secret.encode("utf-8")
-        key = self._key_bytes()
-        masked = bytes(b ^ key[i % len(key)] for i, b in enumerate(secret_bytes))
-        return base64.urlsafe_b64encode(masked).decode("ascii")
+        token = self._fernet().encrypt(secret.encode("utf-8")).decode("ascii")
+        return f"{self._SECRET_PREFIX_FERNET}{token}"
 
     def _unprotect_secret(self, payload: str) -> str:
-        masked = base64.urlsafe_b64decode(payload.encode("ascii"))
+        raw = str(payload or "")
+        if raw.startswith(self._SECRET_PREFIX_FERNET):
+            token = raw[len(self._SECRET_PREFIX_FERNET):]
+            return self._fernet().decrypt(token.encode("ascii")).decode("utf-8")
+        # Legacy XOR (pre-F-025) — still decryptable for migration.
+        masked = base64.urlsafe_b64decode(raw.encode("ascii"))
         key = self._key_bytes()
-        raw = bytes(b ^ key[i % len(key)] for i, b in enumerate(masked))
-        return raw.decode("utf-8")
+        plain = bytes(b ^ key[i % len(key)] for i, b in enumerate(masked))
+        return plain.decode("utf-8")
 
     def _normalize_token(self, token: str) -> str:
         return "".join(ch for ch in str(token or "") if ch.isdigit())
@@ -844,8 +856,26 @@ class TOTPManager:
                 return True
         return False
 
-    def hash_backup_code(self, code: str) -> str:
-        return hashlib.sha256(code.encode("utf-8")).hexdigest()
+    def hash_backup_code(self, code: str, salt: str | None = None) -> str:
+        """Salted HMAC-SHA256 backup hash (F-025). Format: salt$hexdigest."""
+        normalized = str(code or "").strip().upper()
+        salt_hex = salt or secrets.token_hex(16)
+        digest = hmac.new(
+            self._key_bytes(),
+            f"{salt_hex}:{normalized}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return f"{salt_hex}${digest}"
+
+    def _backup_hash_matches(self, stored: str, code: str) -> bool:
+        stored = str(stored or "")
+        normalized = str(code or "").strip().upper()
+        if "$" in stored:
+            salt, _digest = stored.split("$", 1)
+            return hmac.compare_digest(self.hash_backup_code(normalized, salt=salt), stored)
+        # Legacy unsalted SHA-256.
+        legacy = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(legacy, stored)
 
     def generate_backup_codes(self, count: int = 8) -> List[str]:
         return [secrets.token_hex(4).upper() for _ in range(count)]
@@ -912,16 +942,27 @@ class TOTPManager:
         state = self.get_state()
         if not state.get("enabled") or not state.get("secret_encrypted"):
             return False
-        secret = self._unprotect_secret(state["secret_encrypted"])
+        payload = state["secret_encrypted"]
+        secret = self._unprotect_secret(payload)
+        # Migrate legacy XOR ciphertext to Fernet after successful decrypt.
+        if not str(payload).startswith(self._SECRET_PREFIX_FERNET):
+            try:
+                state["secret_encrypted"] = self._protect_secret(secret)
+                self.save_state(state)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("TOTP: Fernet migration save failed: %s", exc)
         if self.verify_totp(secret, token):
             return True
-        hashed = self.hash_backup_code(str(token or "").strip().upper())
+        normalized = str(token or "").strip().upper()
         backups = list(state.get("backup_code_hashes", []))
-        if hashed in backups:
-            backups.remove(hashed)
-            state["backup_code_hashes"] = backups
-            self.save_state(state)
-            return True
+        for idx, stored in enumerate(list(backups)):
+            if self._backup_hash_matches(stored, normalized):
+                # Upgrade legacy hash to salted form when consuming... actually
+                # consume (single-use) either way.
+                backups.pop(idx)
+                state["backup_code_hashes"] = backups
+                self.save_state(state)
+                return True
         return False
 
     def public_status(self) -> dict:
@@ -953,6 +994,7 @@ class PairsUpdateRequest(BaseModel):
     pairs: List[PairConfig]
     crypto_pairs: Optional[List[PairConfig]] = None
     apply_now: bool = True
+    otp_token: Optional[str] = None
 
 
 class WalletSyncRequest(BaseModel):
@@ -2898,16 +2940,27 @@ async def verify_2fa(request: TOTPVerifyRequest, token: str = Query(None), sessi
     raise HTTPException(status_code=403, detail="Invalid 2FA token.")
 
 @app.post("/api/pairs/discover")
-async def discover_pairs(token: str = Query(None), session: str = Query(None)):
+async def discover_pairs(
+    request: Request,
+    token: str = Query(None),
+    session: str = Query(None),
+    otp_token: str = Query(None),
+):
     """
     Initiates a background pair discovery task for the dashboard.
 
     Starts the pair discovery workflow and returns a record describing the initiated request and its acceptance status.
-
-    Returns:
-    	A serializable object (typically a dict) describing the scheduled discovery task and its acceptance/status metadata.
+    Requires step-up 2FA when enrolled (universe mutation adjacency).
     """
     verify_token(token, session)
+    body_otp = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            body_otp = body.get("otp_token") or body.get("otp")
+    except Exception:
+        body_otp = None
+    require_step_up_2fa(otp_token or body_otp, action="triggering pair discovery")
     return await dashboard_service.trigger_pair_discovery(actor="dashboard")
 
 @app.get("/api/pairs")
@@ -2992,11 +3045,13 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
             - `pairs`: list of pair objects; each pair must contain two distinct tickers.
             - `crypto_pairs` (optional): list of crypto pair objects; validated similarly to `pairs`.
             - `apply_now` (bool): if true and a monitor is attached, attempts to hot-reload pairs immediately.
+            - `otp_token`: step-up 2FA when authenticator is enrolled (F-023).
         token (str): Dashboard security token (from query/header; validated via verify_token). Omit documenting if provided by middleware.
         session (str): Dashboard session token (from query/header; validated via verify_token). Omit documenting if provided by middleware.
 
     Raises:
         HTTPException: 400 if no valid pairs are provided or if any pair has identical tickers.
+        HTTPException: 403 if step-up 2FA is required and missing/invalid.
 
     Returns:
         dict: {
@@ -3007,6 +3062,8 @@ async def update_pairs(request: PairsUpdateRequest, token: str = Query(None), se
         }
     """
     verify_token(token, session)
+    # F-023: pair universe mutation is capital-adjacent — require step-up 2FA.
+    require_step_up_2fa(request.otp_token, action="mutating trading pairs")
 
     seen = set()
     cleaned: list = []

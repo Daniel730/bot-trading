@@ -729,15 +729,21 @@ export const rejectPendingTrade = async (
 export const fetchPairs = async (token: string | null, sessionToken?: string | null): Promise<PairsResponse> =>
   requestJson<PairsResponse>('/api/pairs', token, undefined, sessionToken);
 
-export const discoverPairs = async (token: string | null, sessionToken: string | null): Promise<{ status: string; message: string }> =>
+export const discoverPairs = async (
+  token: string | null,
+  sessionToken: string | null,
+  otpToken?: string,
+): Promise<{ status: string; message: string }> =>
   requestJson('/api/pairs/discover', token, {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp_token: otpToken }),
   }, sessionToken);
 
 export const updatePairs = async (
   token: string | null,
   pairs: PairConfigEntry[],
-  options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[] } = {},
+  options: { applyNow?: boolean; cryptoPairs?: PairConfigEntry[]; otpToken?: string } = {},
   sessionToken?: string | null,
 ): Promise<{ status: string; saved_pairs: number; reloaded: boolean; reload_error: string | null }> =>
   requestJson('/api/pairs', token, {
@@ -747,6 +753,7 @@ export const updatePairs = async (
       pairs,
       crypto_pairs: options.cryptoPairs,
       apply_now: options.applyNow ?? true,
+      otp_token: options.otpToken,
     }),
   }, sessionToken);
 

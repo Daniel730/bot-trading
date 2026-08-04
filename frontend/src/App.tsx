@@ -345,7 +345,23 @@ function App() {
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await discoverPairs(securityToken, sessionToken);
+      let result;
+      try {
+        result = await discoverPairs(securityToken, sessionToken);
+      } catch (firstErr: any) {
+        const errMsg = firstErr?.message || '';
+        const needsOtp =
+          firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg);
+        if (needsOtp) {
+          const otp = window.prompt(
+            'Step-up 2FA required to start pair discovery.\nEnter authenticator or backup code:',
+          );
+          if (!otp?.trim()) throw firstErr;
+          result = await discoverPairs(securityToken, sessionToken, otp.trim());
+        } else {
+          throw firstErr;
+        }
+      }
       setSystemMessage(result.message || 'Pair discovery started. Completion will appear in the terminal feed.');
     } catch (err: any) {
       if (handleAuthFailure(err)) return;

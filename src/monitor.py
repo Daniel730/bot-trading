@@ -398,6 +398,14 @@ class ArbitrageMonitor:
                 await notification_service.send_message(msg)
             return True
 
+        # F-015: treat in-flight reservations as occupied slots.
+        try:
+            from src.services.open_slot_reservation import open_slot_reservation_service
+
+            open_signals = list(open_signals or []) + open_slot_reservation_service.active_as_open_signals()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not load open-slot reservations: %s", exc)
+
         for signal in open_signals or []:
             leg_symbols = {
                 self._canonical_position_symbol(leg.get("ticker"))
@@ -2285,6 +2293,34 @@ class ArbitrageMonitor:
                         )
                         return diagnostic
 
+                    # F-015: claim pair/leg slot BEFORE approval wait so concurrent
+                    # approvals cannot both clear an empty ledger and double-open.
+                    from src.services.open_slot_reservation import open_slot_reservation_service
+
+                    try:
+                        open_for_claim = await persistence_service.get_open_signals()
+                    except Exception:
+                        open_for_claim = []
+                    claim = await open_slot_reservation_service.claim(
+                        signal_id=str(signal_id),
+                        ticker_a=t_a,
+                        ticker_b=t_b,
+                        open_signals=open_for_claim,
+                        canonicalize=self._canonical_position_symbol,
+                        metadata={"z_score": float(z_score), "gross_notional": float(legs.gross_notional)},
+                    )
+                    if not claim.get("ok"):
+                        diagnostic["verdict"] = "SKIPPED"
+                        diagnostic["confidence"] = final_confidence
+                        diagnostic["reason"] = f"slot_reservation:{claim.get('reason')}"
+                        decision_recorder.record(
+                            stage="slot_reservation",
+                            outcome="skip",
+                            reason=str(claim.get("reason")),
+                            signal_id=signal_id,
+                        )
+                        return diagnostic
+
                     await self._upsert_active_signal(
                         t_a,
                         t_b,
@@ -2293,85 +2329,100 @@ class ArbitrageMonitor:
                         confidence=final_confidence,
                         hedge_ratio=hedge_ratio,
                     )
-                    approved = await notification_service.request_approval(
-                        trade_summary,
-                        trade_value=float(legs.gross_notional),
-                        force_manual=True,
-                    )
-                    if approved:
-                        direction = "Short-Long" if z_score > 0 else "Long-Short"
-                        execution_result = await self.execute_trade(
-                            pair,
-                            direction,
-                            price_a,
-                            price_b,
-                            signal_id,
-                            entry_context={
-                                "z_score": z_score,
-                                "entry_zscore": entry_zscore,
-                                "confidence": final_confidence,
-                                "orchestrator_verdict": decision_state.get("final_verdict"),
-                            },
+                    approved = False
+                    execution_result = None
+                    direction = None
+                    try:
+                        approved = await notification_service.request_approval(
+                            trade_summary,
+                            trade_value=float(legs.gross_notional),
+                            force_manual=True,
                         )
-                        if execution_result:
-                            for field in SPREAD_GUARD_DETAIL_FIELDS:
-                                if field in execution_result:
-                                    diagnostic[field] = execution_result[field]
-                        if execution_result and execution_result.get("executed"):
-                            await self._upsert_active_signal(
-                                t_a,
-                                t_b,
-                                z_score=z_score,
-                                status="EXECUTED",
-                                confidence=final_confidence,
-                                hedge_ratio=hedge_ratio,
+                        if approved:
+                            direction = "Short-Long" if z_score > 0 else "Long-Short"
+                            execution_result = await self.execute_trade(
+                                pair,
+                                direction,
+                                price_a,
+                                price_b,
+                                signal_id,
+                                entry_context={
+                                    "z_score": z_score,
+                                    "entry_zscore": entry_zscore,
+                                    "confidence": final_confidence,
+                                    "orchestrator_verdict": decision_state.get("final_verdict"),
+                                },
                             )
-                            diagnostic["verdict"] = "EXECUTED"
-                            diagnostic["reason"] = execution_result.get("reason", "executed")
-                            decision_recorder.record(
-                                stage="execute",
-                                outcome="execute",
-                                reason=diagnostic["reason"],
-                                inputs={"direction": direction},
-                                signal_id=signal_id,
-                            )
+                            if execution_result:
+                                for field in SPREAD_GUARD_DETAIL_FIELDS:
+                                    if field in execution_result:
+                                        diagnostic[field] = execution_result[field]
+                            if execution_result and execution_result.get("executed"):
+                                await self._upsert_active_signal(
+                                    t_a,
+                                    t_b,
+                                    z_score=z_score,
+                                    status="EXECUTED",
+                                    confidence=final_confidence,
+                                    hedge_ratio=hedge_ratio,
+                                )
+                                diagnostic["verdict"] = "EXECUTED"
+                                diagnostic["reason"] = execution_result.get("reason", "executed")
+                                decision_recorder.record(
+                                    stage="execute",
+                                    outcome="execute",
+                                    reason=diagnostic["reason"],
+                                    inputs={"direction": direction},
+                                    signal_id=signal_id,
+                                )
+                            else:
+                                await self._upsert_active_signal(
+                                    t_a,
+                                    t_b,
+                                    z_score=z_score,
+                                    status="EXECUTION_BLOCKED",
+                                    confidence=final_confidence,
+                                    hedge_ratio=hedge_ratio,
+                                )
+                                diagnostic["verdict"] = "EXECUTION_BLOCKED"
+                                diagnostic["reason"] = (
+                                    execution_result.get("reason", "execution_blocked")
+                                    if execution_result
+                                    else "execution_blocked"
+                                )
+                                decision_recorder.record(
+                                    stage="execute",
+                                    outcome="anomaly",
+                                    reason=diagnostic["reason"],
+                                    signal_id=signal_id,
+                                )
                         else:
                             await self._upsert_active_signal(
                                 t_a,
                                 t_b,
                                 z_score=z_score,
-                                status="EXECUTION_BLOCKED",
+                                status="REJECTED",
                                 confidence=final_confidence,
                                 hedge_ratio=hedge_ratio,
                             )
-                            diagnostic["verdict"] = "EXECUTION_BLOCKED"
-                            diagnostic["reason"] = (
-                                execution_result.get("reason", "execution_blocked")
-                                if execution_result
-                                else "execution_blocked"
-                            )
+                            diagnostic["verdict"] = "REJECTED"
+                            diagnostic["reason"] = "approval_denied"
                             decision_recorder.record(
-                                stage="execute",
-                                outcome="anomaly",
-                                reason=diagnostic["reason"],
+                                stage="approval_gate",
+                                outcome="reject",
+                                reason="approval_denied",
                                 signal_id=signal_id,
                             )
-                    else:
-                        await self._upsert_active_signal(
-                            t_a,
-                            t_b,
-                            z_score=z_score,
-                            status="REJECTED",
-                            confidence=final_confidence,
-                            hedge_ratio=hedge_ratio,
-                        )
-                        diagnostic["verdict"] = "REJECTED"
-                        diagnostic["reason"] = "approval_denied"
-                        decision_recorder.record(
-                            stage="approval",
-                            outcome="veto",
-                            reason="approval_denied",
-                            signal_id=signal_id,
+                    finally:
+                        await open_slot_reservation_service.release(
+                            str(signal_id),
+                            reason=(
+                                "approved_executed"
+                                if (approved and execution_result and execution_result.get("executed"))
+                                else "approval_denied_or_timeout"
+                                if not approved
+                                else "execution_blocked"
+                            ),
                         )
 
                 diagnostic["confidence"] = final_confidence
@@ -2725,6 +2776,19 @@ class ArbitrageMonitor:
                 t_a, t_b, exc,
             )
             return execution_result(False, "lane_guard_open_signals_unavailable")
+
+        try:
+            from src.services.open_slot_reservation import open_slot_reservation_service
+
+            # Exclude *this* signal's reservation from the count/conflict set.
+            reserved = [
+                s
+                for s in open_slot_reservation_service.active_as_open_signals()
+                if str(s.get("signal_id")) != str(signal_id)
+            ]
+            open_for_lane = list(open_for_lane or []) + reserved
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("execute_trade: reservation merge failed: %s", exc)
 
         slot_check = check_max_open_pairs(len(open_for_lane or []), settings.MAX_OPEN_PAIRS)
         if not slot_check["allowed"]:
