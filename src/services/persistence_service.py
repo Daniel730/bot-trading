@@ -250,6 +250,21 @@ class PersistenceService:
             ticker = trade_data.get("ticker", "").upper()
             trade_data["venue"] = "ALPACA"
 
+        # Stamp a single execution lane so shadow vs broker paper never mix in closes/PnL.
+        from src.services.execution_lane import stamp_trade_metadata
+
+        trade_data["metadata_json"] = stamp_trade_metadata(
+            trade_data.get("metadata_json"),
+            execution_lane=settings.execution_lane,
+            broker_paper_trading=bool(settings.is_broker_paper_trading),
+        )
+        meta = trade_data["metadata_json"] if isinstance(trade_data.get("metadata_json"), dict) else {}
+        # Dual-write first-class columns (readers prefer these, fall back to metadata).
+        if trade_data.get("execution_lane") is None:
+            trade_data["execution_lane"] = meta.get("execution_lane")
+        if trade_data.get("is_shadow") is None:
+            trade_data["is_shadow"] = meta.get("is_shadow")
+
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
                 trade = TradeLedger(**trade_data)
@@ -555,21 +570,38 @@ class PersistenceService:
             signals = {}
             for t in trades:
                 sig = str(t.signal_id)
+                meta = t.metadata_json if isinstance(t.metadata_json, dict) else {}
+                # Prefer first-class columns; fall back to stamped metadata for legacy rows.
+                if t.is_shadow is not None:
+                    leg_is_shadow = bool(t.is_shadow)
+                else:
+                    leg_is_shadow = bool(meta.get("is_shadow"))
+                leg_lane = t.execution_lane or meta.get("execution_lane")
                 if sig not in signals:
                     signals[sig] = {
                         "signal_id": sig,
                         "legs": [],
                         "total_cost_basis": 0.0,
-                        "venue": t.venue
+                        "venue": t.venue,
+                        "is_shadow": leg_is_shadow,
+                        "execution_lane": leg_lane,
                     }
                 signals[sig]["legs"].append({
                     "ticker": t.ticker,
                     "side": t.side.value,
                     "quantity": float(t.quantity),
                     "price": float(t.price),
-                    "execution_timestamp": t.execution_timestamp
+                    "execution_timestamp": t.execution_timestamp,
+                    "metadata": meta,
+                    "is_shadow": leg_is_shadow,
+                    "execution_lane": leg_lane,
                 })
                 signals[sig]["total_cost_basis"] += float(t.quantity * t.price)
+                if leg_is_shadow:
+                    signals[sig]["is_shadow"] = True
+                    signals[sig]["execution_lane"] = "SHADOW"
+                elif not signals[sig].get("execution_lane") and leg_lane:
+                    signals[sig]["execution_lane"] = leg_lane
 
             return list(signals.values())
 

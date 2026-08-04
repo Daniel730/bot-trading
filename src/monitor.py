@@ -44,17 +44,28 @@ import pytz
 import inspect
 from src.monitor_helpers import (
     is_crypto_pair,
+    is_executable_bid_ask,
     resolve_pair_sector,
     resolve_kalman_pair_id,
     resolve_hedge_ratio,
+    resolve_profit_guard_friction_pct,
     compute_entry_zscore,
+    should_take_profit_exit,
 )
 from src.monitor_scan_helpers import (
     build_candidate_pairs,
     build_scan_pairs,
+    gather_bounded,
+    normalize_scan_results,
+    open_signal_tickers,
     summarize_scan_iteration,
     build_close_orders,
     calculate_realized_pnl,
+)
+from src.services.execution_lane import (
+    LANE_SHADOW,
+    close_uses_broker,
+    signal_is_shadow,
 )
 
 # Initialize Rich Console with a custom theme
@@ -219,6 +230,10 @@ class ArbitrageMonitor:
         self._crypto_snapshot_pair_prices: dict[str, tuple[tuple[float, float], int]] = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
+        # Serialize heavy daily cointegration history pulls on shared Mini PC hosts.
+        self._coint_recheck_sem = asyncio.Semaphore(
+            max(1, int(settings.SCAN_COINT_RECHECK_CONCURRENCY))
+        )
         self.trade_decision_report_path = Path("logs") / "trade_decision_reports.jsonl"
 
     async def _await_order_fill(self, order_id: str, timeout: float = 30) -> dict | None:
@@ -334,6 +349,40 @@ class ArbitrageMonitor:
                 if notify:
                     await notification_service.send_message(msg)
                 return True
+
+        if settings.BLOCK_SHARED_LEG_OPENS:
+            from src.services.portfolio_book_guards import find_shared_leg_conflict
+
+            conflict = find_shared_leg_conflict(
+                ticker_a,
+                ticker_b,
+                open_signals,
+                canonicalize=self._canonical_position_symbol,
+            )
+            if conflict:
+                msg = (
+                    f"Shared-leg entry blocked for {ticker_a}/{ticker_b}: "
+                    f"overlap {conflict['overlap']} with open signal "
+                    f"{conflict.get('signal_id')}."
+                )
+                logger.warning(msg)
+                if notify:
+                    await notification_service.send_message(msg)
+                return True
+
+        open_count = len(open_signals or [])
+        from src.services.portfolio_book_guards import check_max_open_pairs
+
+        slot_check = check_max_open_pairs(open_count, settings.MAX_OPEN_PAIRS)
+        if not slot_check["allowed"]:
+            msg = (
+                f"Open-pair slot limit blocked for {ticker_a}/{ticker_b}: "
+                f"{slot_check['reason']}."
+            )
+            logger.warning(msg)
+            if notify:
+                await notification_service.send_message(msg)
+            return True
 
         if settings.PAPER_TRADING:
             return False
@@ -579,9 +628,11 @@ class ArbitrageMonitor:
         mode = runtime["mode"]
         next_open = self.next_market_open()
         logger.info(
-            "Runtime mode resolved: execution_mode=%s broker_paper_trading=%s "
-            "alpaca_endpoint_class=%s paper_trading=%s live_capital_danger=%s",
+            "Runtime mode resolved: execution_mode=%s execution_lane=%s "
+            "broker_paper_trading=%s alpaca_endpoint_class=%s paper_trading=%s "
+            "live_capital_danger=%s",
             runtime["execution_mode"],
+            runtime.get("execution_lane", settings.execution_lane),
             runtime["broker_paper_trading"],
             runtime["alpaca_endpoint_class"],
             runtime["paper_trading"],
@@ -591,6 +642,10 @@ class ArbitrageMonitor:
         table = Table(title="Bot Pre-flight Configuration", show_header=False, box=None)
         table.add_row("Mode", f"[bold cyan]{mode}[/]")
         table.add_row("Execution Mode", f"[bold cyan]{runtime['execution_mode']}[/]")
+        table.add_row(
+            "Execution Lane",
+            f"[bold cyan]{runtime.get('execution_lane', settings.execution_lane)}[/]",
+        )
         table.add_row("Alpaca Endpoint", f"{runtime['alpaca_endpoint_class']}")
         table.add_row("Dev Mode", f"{'[green]Enabled[/]' if settings.DEV_MODE else '[yellow]Disabled[/]'}")
 
@@ -733,6 +788,10 @@ class ArbitrageMonitor:
             block_cross_currency=settings.BLOCK_CROSS_CURRENCY_PAIRS,
             block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
             allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
+            denylist=settings.pair_denylist_ids,
+            max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+            min_correlation=settings.PAIR_DISCOVERY_MIN_CORRELATION,
+            max_pvalue=settings.PAIR_DISCOVERY_MAX_PVALUE,
         )
 
         # US1: Verify entropy baselines ONLY for actual live broker endpoints.
@@ -910,7 +969,7 @@ class ArbitrageMonitor:
                     arbitrage_service.filters.pop(pair_id, None)
                     arbitrage_service.filter_fingerprints.pop(pair_id, None)
                     try:
-                        await redis_service.client.delete(f"kalman:{pair_id}")
+                        await redis_service.delete_kalman_state(pair_id)
                     except Exception as exc:
                         logger.warning("KALMAN QUARANTINE: Redis state delete failed for %s: %s", pair_id, exc)
 
@@ -1524,7 +1583,7 @@ class ArbitrageMonitor:
                 arbitrage_service.filters.pop(pair['id'], None)
                 arbitrage_service.filter_fingerprints.pop(pair['id'], None)
                 try:
-                    await redis_service.client.delete(f"kalman:{pair['id']}")
+                    await redis_service.delete_kalman_state(pair['id'])
                 except Exception as exc:
                     logger.warning(
                         "KALMAN GUARD [%s/%s]: failed to delete Redis state for quarantine: %s",
@@ -1762,9 +1821,13 @@ class ArbitrageMonitor:
                     gross_notional=desired_notional,
                     direction=direction,
                 )
-                est_friction_pct = max(
-                    float(risk_res["fee_status"].get("total_friction_percent", 0.0)),
-                    float(pair.get("estimated_cost_pct") or 0.0),
+                est_friction_pct = resolve_profit_guard_friction_pct(
+                    fee_friction_pct=float(
+                        risk_res["fee_status"].get("total_friction_percent", 0.0) or 0.0
+                    ),
+                    pair_estimated_cost_pct=float(pair.get("estimated_cost_pct") or 0.0),
+                    gross_notional=float(legs.gross_notional),
+                    flat_order_friction_usd=float(settings.FLAT_ORDER_FRICTION_USD),
                 )
                 preview = estimate_pair_profit(
                     quantity_a=legs.quantity_a,
@@ -1987,7 +2050,11 @@ class ArbitrageMonitor:
             ask_a = float(ask_a)
             bid_b = float(bid_b)
             ask_b = float(ask_b)
-            valid_bid_ask = bid_a > 0 and ask_a > 0 and bid_b > 0 and ask_b > 0
+            # Crossed quotes (ask < bid) previously produced a negative leg spread
+            # and failed open under the combined threshold — reject them.
+            valid_bid_ask = is_executable_bid_ask(bid_a, ask_a) and is_executable_bid_ask(
+                bid_b, ask_b
+            )
         except (TypeError, ValueError):
             valid_bid_ask = False
 
@@ -2196,30 +2263,45 @@ class ArbitrageMonitor:
             legs.gross_notional, target_cash_a, target_cash_b, t_a, t_b, hedge_ratio, risk_res["kelly_fraction"], sizing_base, risk_res["max_allowed_fiat"], effective_cash
         )
 
-        # Feature 008 - Sector Cluster Guard (prospective, race-condition-safe).
-        # Both legs are counted as new exposure (target_cash each) so the check
-        # is evaluated BEFORE the trade is placed, not after.  This prevents two
-        # signals in the same scan window from independently passing the 30 % cap
-        # and then together pushing the sector to 60 %.
+        # Feature 008 - Sector Cluster Guard + book overcrowding gates.
+        # Evaluate BEFORE the trade is placed. Open signals are loaded once and
+        # reused for lane / slot / shared-leg / gross-book checks.
         pair_sector = resolve_pair_sector(pair["id"], t_a, t_b, settings.PAIR_SECTORS)
         current_portfolio = await shadow_service.get_active_portfolio_with_sectors()
-        total_size = sum(p['size'] for p in current_portfolio)
-        sector_size = sum(p['size'] for p in current_portfolio if p['sector'] == pair_sector)
         new_trade_size = target_cash_a + target_cash_b  # sum of both legs
 
-        # Feature 008 Fix: prevent "Empty Portfolio Trap" where the first trade
-        # is always 100% exposure. We use the larger of actual total size or
-        # a theoretical 'full portfolio' base (e.g. 5x target leg cash).
-        denominador = max(total_size + new_trade_size, sizing_base)
-        projected_exposure = (sector_size + new_trade_size) / denominador
+        from src.services.portfolio_book_guards import (
+            check_portfolio_gross_notional,
+            check_projected_sector_exposure,
+            find_shared_leg_conflict,
+            gross_notional_from_signals,
+            check_max_open_pairs,
+        )
 
-        if projected_exposure > settings.MAX_SECTOR_EXPOSURE:
+        sector_check = check_projected_sector_exposure(
+            current_portfolio,
+            pair_sector=pair_sector,
+            new_trade_size=new_trade_size,
+            sizing_base=sizing_base,
+            max_sector_exposure=settings.MAX_SECTOR_EXPOSURE,
+        )
+        if not sector_check["allowed"]:
             logger.warning(
-                f"CLUSTER GUARD: Rejecting {t_a}/{t_b}. Adding this trade would push "
-                f"'{pair_sector}' exposure to {projected_exposure:.1%} (base: ${denominador:.2f}), "
-                f"exceeding the {settings.MAX_SECTOR_EXPOSURE:.0%} cap."
+                "CLUSTER GUARD: Rejecting %s/%s. %s",
+                t_a,
+                t_b,
+                sector_check["reason"],
             )
             return execution_result(False, "sector_exposure_guard")
+
+        if risk_service.is_sector_frozen(sector_check["sector"]):
+            logger.warning(
+                "SECTOR FREEZE: Rejecting %s/%s — sector '%s' is frozen.",
+                t_a,
+                t_b,
+                sector_check["sector"],
+            )
+            return execution_result(False, "sector_frozen")
 
         # Capture market regime for journal — logged after broker execution
         regime_info = await market_regime_service.classify_current_regime(t_a)
@@ -2236,9 +2318,82 @@ class ArbitrageMonitor:
         exec_t_a = settings.DEV_EXECUTION_TICKERS.get(t_a, t_a) if settings.DEV_MODE else t_a
         exec_t_b = settings.DEV_EXECUTION_TICKERS.get(t_b, t_b) if settings.DEV_MODE else t_b
 
+        # Mutual exclusion: SHADOW (PAPER_TRADING) XOR broker path (ALPACA_PAPER / LIVE).
+        # Refuse opens that would mix shadow and broker ledger exposure in one book.
+        opening_shadow = bool(settings.PAPER_TRADING)
+        try:
+            open_for_lane = await persistence_service.get_open_signals()
+        except Exception as exc:
+            logger.critical(
+                "Execution blocked for %s/%s: could not load open signals for lane guard (%s).",
+                t_a, t_b, exc,
+            )
+            return execution_result(False, "lane_guard_open_signals_unavailable")
+
+        slot_check = check_max_open_pairs(len(open_for_lane or []), settings.MAX_OPEN_PAIRS)
+        if not slot_check["allowed"]:
+            logger.warning(
+                "OPEN PAIR CAP: Rejecting %s/%s. %s",
+                t_a,
+                t_b,
+                slot_check["reason"],
+            )
+            return execution_result(False, "max_open_pairs_guard")
+
+        if settings.BLOCK_SHARED_LEG_OPENS:
+            conflict = find_shared_leg_conflict(
+                t_a,
+                t_b,
+                open_for_lane,
+                canonicalize=self._canonical_position_symbol,
+            )
+            if conflict:
+                logger.warning(
+                    "SHARED LEG GUARD: Rejecting %s/%s — overlap %s with open signal %s.",
+                    t_a,
+                    t_b,
+                    conflict["overlap"],
+                    conflict.get("signal_id"),
+                )
+                return execution_result(False, "shared_leg_guard")
+
+        gross_check = check_portfolio_gross_notional(
+            gross_notional_from_signals(open_for_lane),
+            legs.gross_notional,
+            settings.MAX_PORTFOLIO_GROSS_NOTIONAL_USD,
+        )
+        if not gross_check["allowed"]:
+            logger.warning(
+                "BOOK GROSS CAP: Rejecting %s/%s. %s",
+                t_a,
+                t_b,
+                gross_check["reason"],
+            )
+            return execution_result(False, "portfolio_gross_notional_guard")
+
+        for existing in open_for_lane or []:
+            existing_shadow = signal_is_shadow(existing)
+            if opening_shadow and not existing_shadow:
+                msg = (
+                    f"Execution blocked for {t_a}/{t_b}: open broker-lane signal "
+                    f"{existing.get('signal_id')} would mix with SHADOW fills "
+                    f"(no double-counting / dual ledger)."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return execution_result(False, "mixed_execution_lane_blocked")
+            if not opening_shadow and existing_shadow:
+                msg = (
+                    f"Execution blocked for {t_a}/{t_b}: open SHADOW signal "
+                    f"{existing.get('signal_id')} must be closed before broker-lane fills."
+                )
+                logger.warning(msg)
+                await notification_service.send_message(msg)
+                return execution_result(False, "mixed_execution_lane_blocked")
+
         # Feature 037: only paper mode is forced to shadow execution. In live
         # mode, crypto routes through the configured brokerage provider.
-        if settings.PAPER_TRADING:
+        if opening_shadow:
             await persistence_service.log_trade_journal({
                 "signal_id": uuid.UUID(signal_id),
                 "entry_regime": regime_info["regime"],
@@ -2259,6 +2414,8 @@ class ArbitrageMonitor:
                     "max_allowed_fiat": risk_res.get("max_allowed_fiat"),
                     "direction": direction,
                     "paper_trade": True,
+                    "execution_lane": LANE_SHADOW,
+                    "broker_paper_trading": False,
                 }
             })
             # Em paper trading, simplesmente simulamos o trade usando o shadow_service.
@@ -2274,7 +2431,11 @@ class ArbitrageMonitor:
             )
             return execution_result(True, "paper_shadow_executed")
 
-        logger.info(f"LIVE EXECUTION: Placing orders for {exec_t_a}/{exec_t_b} - {direction}")
+        lane_label = settings.execution_lane
+        logger.info(
+            "%s EXECUTION: Placing broker orders for %s/%s - %s",
+            lane_label, exec_t_a, exec_t_b, direction,
+        )
 
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
         # Leg A
@@ -2895,10 +3056,16 @@ class ArbitrageMonitor:
             "signal_id": uuid.UUID(signal_id),
             "entry_regime": regime_info["regime"],
             "metrics_at_entry": {
-                "z_score": risk_res.get("z_score", 0.0),
+                "z_score": float(entry_context.get("z_score", risk_res.get("z_score", 0.0)) or 0.0),
+                "entry_zscore": entry_context.get("entry_zscore"),
+                "confidence": entry_context.get("confidence"),
+                "orchestrator_verdict": entry_context.get("orchestrator_verdict"),
                 "win_prob": settings.DEFAULT_WIN_PROBABILITY,
                 "regime_confidence": regime_info["confidence"],
-                "features": regime_info["features"]
+                "features": regime_info["features"],
+                "paper_trade": False,
+                "execution_lane": settings.execution_lane,
+                "broker_paper_trading": bool(settings.is_broker_paper_trading),
             }
         })
 
@@ -2985,6 +3152,10 @@ class ArbitrageMonitor:
         """
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
         pair_id = str(pair.get("id") or f"{t_a}_{t_b}")
+        async with self._coint_recheck_sem:
+            await self._recheck_cointegration_body(pair, pair_id=pair_id, t_a=t_a, t_b=t_b)
+
+    async def _recheck_cointegration_body(self, pair: dict, *, pair_id: str, t_a: str, t_b: str):
         try:
             hist_data = await data_service.get_historical_data_async([t_a, t_b], "30d", "1h")
             if hist_data is None or hist_data.empty:
@@ -3266,6 +3437,8 @@ class ArbitrageMonitor:
         canonical_symbol: str,
         quantity: float,
         matched_signal_ids: list[str],
+        *,
+        ignore_unmanaged: bool = False,
     ) -> str:
         available_quantity = self._broker_position_float(
             position,
@@ -3277,11 +3450,13 @@ class ArbitrageMonitor:
         market_value = self._broker_position_float(position, "marketValue", "market_value")
         ledger_match = "yes" if matched_signal_ids else "no"
         signal_ids = ",".join(matched_signal_ids) if matched_signal_ids else "none"
-        suggested_action = (
-            "VERIFY_LEDGER_MATCH"
-            if matched_signal_ids
-            else "IMPORT_OR_CLOSE_MANUALLY_BEFORE_RESTART"
-        )
+        if matched_signal_ids:
+            suggested_action = "VERIFY_LEDGER_MATCH"
+        elif ignore_unmanaged:
+            # Flag allows scan to continue — never imply overnight auto-flatten.
+            suggested_action = "IMPORT_OR_CLOSE_MANUALLY_NO_AUTO_FLATTEN"
+        else:
+            suggested_action = "IMPORT_OR_CLOSE_MANUALLY_BEFORE_RESTART"
         return (
             f"broker_symbol={raw_symbol} canonical_symbol={canonical_symbol} "
             f"quantity={quantity} available_quantity={available_quantity} "
@@ -3289,6 +3464,47 @@ class ArbitrageMonitor:
             f"ledger_match={ledger_match} signal_ids={signal_ids} "
             f"suggested_action={suggested_action}"
         )
+
+    async def _alert_ignored_unmanaged_positions(
+        self,
+        unmanaged_symbols: list[str],
+        audit_lines: list[str],
+    ) -> None:
+        """Surface ignored foreign broker inventory without pausing or flattening."""
+        symbols = ", ".join(sorted(unmanaged_symbols))
+        msg = (
+            f"RISK ALERT: Broker has unmanaged position(s) outside the bot ledger: {symbols}. "
+            "Continuing because IGNORE_UNMANAGED_POSITIONS=True — NOT auto-flattening overnight. "
+            "Import into the ledger or close manually. "
+            "Set IGNORE_UNMANAGED_POSITIONS=false before unattended live execution."
+        )
+        if audit_lines:
+            msg = f"{msg} Broker/ledger reconciliation audit: {'; '.join(audit_lines)}"
+
+        # Live real-money (non paper-api) is critical; broker-paper still warrants error.
+        live_real_money = bool(
+            settings.LIVE_CAPITAL_DANGER and not settings.is_broker_paper_trading
+        )
+        if live_real_money:
+            logger.critical(msg)
+        else:
+            logger.error(msg)
+
+        unmanaged_audit = [line for line in audit_lines if "ledger_match=no" in line]
+        state_payload = {
+            "ignored": True,
+            "auto_flatten": False,
+            "count": len(unmanaged_symbols),
+            "symbols": sorted(unmanaged_symbols),
+            "audit": unmanaged_audit,
+        }
+        await persistence_service.set_system_state(
+            "unmanaged_broker_positions",
+            json.dumps(state_payload, separators=(",", ":"))[:4000],
+        )
+        # Do not set operational_status to PAUSED — ignore means continue scanning.
+        await notification_service.send_message(msg)
+        await dashboard_service.update("UNMANAGED_POSITIONS_IGNORED", msg)
 
     async def _fail_fast_on_broker_ledger_mismatch(self) -> bool:
         if settings.PAPER_TRADING:
@@ -3311,6 +3527,7 @@ class ArbitrageMonitor:
             await dashboard_service.update("PAUSED_REQUIRES_MANUAL_REVIEW", msg)
             return False
 
+        ignore_unmanaged = bool(getattr(settings, "IGNORE_UNMANAGED_POSITIONS", True))
         ledger_matches = {}
         for signal in open_signals:
             signal_id = str(signal.get("signal_id") or "unknown")
@@ -3342,20 +3559,18 @@ class ArbitrageMonitor:
                         canonical_symbol,
                         quantity,
                         matched_signal_ids,
+                        ignore_unmanaged=ignore_unmanaged,
                     )
                 )
             if canonical_symbol and canonical_symbol not in ledger_symbols:
                 unmanaged_symbols.append(str(raw_symbol))
 
         if not unmanaged_symbols:
+            await persistence_service.set_system_state("unmanaged_broker_positions", "")
             return True
 
-        if getattr(settings, 'IGNORE_UNMANAGED_POSITIONS', True):
-            msg = (
-                f"Broker has unmanaged position(s): {', '.join(sorted(unmanaged_symbols))}. "
-                "Ignoring due to IGNORE_UNMANAGED_POSITIONS=True."
-            )
-            logger.warning(msg)
+        if ignore_unmanaged:
+            await self._alert_ignored_unmanaged_positions(unmanaged_symbols, audit_lines)
             return True
 
         await persistence_service.set_system_state(
@@ -3541,24 +3756,22 @@ class ArbitrageMonitor:
                         logger.error(f"Error pushing metrics to dashboard: {e}")
                         await dashboard_service.update("Monitoring", f"Scanning {len(self.active_pairs)} pairs...")
 
-                    # Exit Strategy Loop - M-06: run all exit evaluations concurrently
+                    # Exit + scan share one price fetch; concurrency is semaphore-capped
+                    # so Mini PC CPU/RAM cannot be saturated by gather storms. Every open
+                    # signal and every scannable pair still runs each cycle.
                     open_signals = []
                     try:
-                        progress.update(scan_task, description="Checking open positions...")
+                        progress.update(scan_task, description="Loading open positions...")
                         open_signals = await persistence_service.get_open_signals()
-                        if open_signals:
-                            await asyncio.gather(
-                                *[self._evaluate_exit_conditions(signal) for signal in open_signals],
-                                return_exceptions=True  # one signal failing doesn't block the rest
-                            )
                     except Exception as e:
-                        logger.error(f"Error evaluating open signals for exits: {e}")
+                        logger.error(f"Error loading open signals for exits: {e}")
+                        open_signals = []
 
                     if not self.active_pairs:
                         logger.warning("No active pairs loaded; attempting pair reload before scanning.")
                         await self.reload_pairs()
                         progress.update(scan_task, total=len(self.active_pairs), completed=0)
-                        if not self.active_pairs:
+                        if not self.active_pairs and not open_signals:
                             await dashboard_service.update(
                                 "NO_ACTIVE_PAIRS",
                                 "No active pairs are loaded. Check pair initialization logs and configured crypto pairs.",
@@ -3571,6 +3784,36 @@ class ArbitrageMonitor:
                         self.active_pairs,
                         is_market_open=self.is_market_open,
                     )
+                    exit_tickers = open_signal_tickers(open_signals)
+                    price_tickers = list(dict.fromkeys([*all_tickers, *exit_tickers]))
+
+                    latest_prices: dict = {}
+                    if price_tickers:
+                        progress.update(
+                            scan_task,
+                            description=f"Fetching prices for {len(price_tickers)} tickers...",
+                            completed=0,
+                            total=max(len(scan_pairs), 1),
+                        )
+                        latest_prices = await data_service.get_latest_price_async(price_tickers)
+
+                    if open_signals:
+                        progress.update(scan_task, description="Checking open positions...")
+                        try:
+                            await gather_bounded(
+                                (
+                                    self._evaluate_exit_conditions(
+                                        signal,
+                                        latest_prices=latest_prices,
+                                    )
+                                    for signal in open_signals
+                                ),
+                                limit=settings.SCAN_EXIT_CONCURRENCY,
+                                return_exceptions=True,
+                            )
+                        except Exception as e:
+                            logger.error(f"Error evaluating open signals for exits: {e}")
+
                     if not scan_pairs:
                         msg = (
                             f"No active pairs are currently scannable "
@@ -3587,13 +3830,6 @@ class ArbitrageMonitor:
                         await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
                         continue
 
-                    progress.update(scan_task, description=f"Fetching prices for {len(all_tickers)} tickers...", completed=0, total=len(scan_pairs))
-                    latest_prices = (
-                        await data_service.get_latest_price_async(list(dict.fromkeys(all_tickers)))
-                        if all_tickers
-                        else {}
-                    )
-
                     # Daily Global Reset
                     today = datetime.now().date()
                     if self.current_day != today:
@@ -3602,7 +3838,7 @@ class ArbitrageMonitor:
                         self.bumped_pairs_today = {} # Reset Kalman bumps for the new day
 
 
-                    # Daily cointegration re-validation
+                    # Daily cointegration re-validation (tasks queue behind _coint_recheck_sem)
                     today = datetime.now().date()
                     for pair in self.active_pairs:
                         if self.last_cointegration_check.get(pair['id']) != today:
@@ -3613,10 +3849,10 @@ class ArbitrageMonitor:
                             )
                             self.last_cointegration_check[pair['id']] = today
 
-                    results = []
                     # Fetch sizing base once per iteration to avoid API spam in process_pair
                     current_sizing_base = await self._get_sizing_base()
                     scan_id = decision_recorder.begin_scan()
+                    pair_concurrency = max(1, int(settings.SCAN_PAIR_CONCURRENCY))
                     decision_recorder.record(
                         stage="scan",
                         outcome="continue",
@@ -3624,19 +3860,37 @@ class ArbitrageMonitor:
                         inputs={
                             "pairs": len(scan_pairs),
                             "scan_id": scan_id,
+                            "pair_concurrency": pair_concurrency,
+                            "exit_concurrency": max(1, int(settings.SCAN_EXIT_CONCURRENCY)),
                         },
                         scan_id=scan_id,
                     )
 
-                    for i, pair in enumerate(scan_pairs):
-                        progress.update(scan_task, description=f"Scanning [magenta]{pair['ticker_a']}/{pair['ticker_b']}[/]", completed=i)
-                        res = await self.process_pair(pair, latest_prices, sizing_base=current_sizing_base)
-                        results.append(res)
-                        # Small delay between pairs to spread out API load
-                        if i < len(scan_pairs) - 1:
-                            # Use a sub-task for the delay so it's visible? Or just update description.
-                            progress.update(scan_task, description=f"Waiting 2s... ([dim]{pair['ticker_a']}/{pair['ticker_b']} done[/])")
-                            await asyncio.sleep(2.0)
+                    progress.update(
+                        scan_task,
+                        description=(
+                            f"Scanning {len(scan_pairs)} pairs "
+                            f"(concurrency={pair_concurrency})..."
+                        ),
+                        completed=0,
+                        total=len(scan_pairs),
+                    )
+                    raw_results = await gather_bounded(
+                        (
+                            self.process_pair(
+                                pair,
+                                latest_prices,
+                                sizing_base=current_sizing_base,
+                            )
+                            for pair in scan_pairs
+                        ),
+                        limit=pair_concurrency,
+                        return_exceptions=True,
+                    )
+                    for item in raw_results:
+                        if isinstance(item, Exception):
+                            logger.error("Scan pair task failed: %s", item)
+                    results = normalize_scan_results(raw_results)
 
                     progress.update(scan_task, completed=len(scan_pairs), description="Scan iteration complete")
 
@@ -3691,7 +3945,11 @@ class ArbitrageMonitor:
             await redis_service.client.aclose()
             logger.info("Service shutdown complete.")
 
-    async def _evaluate_exit_conditions(self, signal: dict):
+    async def _evaluate_exit_conditions(
+        self,
+        signal: dict,
+        latest_prices: dict | None = None,
+    ):
         """Monitors open positions for Take Profit or Stop Loss."""
         sig_id = signal["signal_id"]
         legs = signal.get("legs", [])
@@ -3700,8 +3958,10 @@ class ArbitrageMonitor:
         leg_a, leg_b = legs[0], legs[1]
         t_a, t_b = leg_a["ticker"], leg_b["ticker"]
 
-        # Get real-time prices
-        prices = await data_service.get_latest_price_async([t_a, t_b])
+        # Prefer the scan-loop shared snapshot to avoid N concurrent price storms.
+        prices = latest_prices if latest_prices is not None else {}
+        if t_a not in prices or t_b not in prices:
+            prices = await data_service.get_latest_price_async([t_a, t_b])
         if t_a not in prices or t_b not in prices: return
 
         p_a, p_b = prices[t_a], prices[t_b]
@@ -3755,18 +4015,33 @@ class ArbitrageMonitor:
             )
             friction_pct = estimate_round_trip_cost_pct(t_a, t_b)
             estimated_friction = gross_notional * friction_pct
-            if directional_pnl <= estimated_friction:
+            should_close, tp_reason = should_take_profit_exit(
+                abs_z_score=abs(float(z_score)),
+                take_profit_zscore=settings.TAKE_PROFIT_ZSCORE,
+                directional_pnl=float(directional_pnl),
+                estimated_friction=float(estimated_friction),
+                force_exit_zscore=settings.TAKE_PROFIT_FORCE_EXIT_ZSCORE,
+            )
+            if not should_close:
                 logger.info(
                     "TAKE PROFIT z-threshold met for %s/%s (Z=%.2f) but gross PnL "
-                    "($%.2f) would not clear est. round-trip friction ($%.2f); holding.",
+                    "($%.2f) would not clear est. round-trip friction ($%.2f); holding "
+                    "(%s).",
                     t_a,
                     t_b,
                     z_score,
                     directional_pnl,
                     estimated_friction,
+                    tp_reason,
                 )
             else:
-                logger.info(f"TAKE PROFIT reached for {t_a}/{t_b} (Z-Score: {z_score:.2f}).")
+                logger.info(
+                    "TAKE PROFIT reached for %s/%s (Z-Score: %.2f, reason=%s).",
+                    t_a,
+                    t_b,
+                    z_score,
+                    tp_reason,
+                )
                 await self._close_position(signal, p_a, p_b, reason=ExitReason.TAKE_PROFIT, prices_by_ticker=prices_by_ticker)
 
         # Statistical Stop Loss (Cointegration break)
@@ -3814,7 +4089,14 @@ class ArbitrageMonitor:
                 dev_execution_tickers=settings.DEV_EXECUTION_TICKERS,
             )
 
-            if not settings.PAPER_TRADING:
+            # Close via broker only when the *open* was broker-lane (metadata), not merely
+            # when PAPER_TRADING is currently false — avoids orphaning Alpaca paper fills
+            # after a mode flip or submitting broker closes for SHADOW ledger rows.
+            use_broker_close = close_uses_broker(
+                signal,
+                paper_trading=bool(settings.PAPER_TRADING),
+            )
+            if use_broker_close:
                 sell_orders = [order for order in close_orders if order["side"] == "SELL"]
                 if sell_orders and not await self._preflight_live_sell_inventory(sell_orders):
                     # Restore to OPEN so subsequent close attempts are not blocked
@@ -3947,15 +4229,15 @@ class ArbitrageMonitor:
 
                     if abs(remaining_qty) > 1e-9:
                         if getattr(settings, "IGNORE_UNMANAGED_POSITIONS", True):
-                            logger.warning(
-                                "Close fill confirmed for %s %s but broker still reports "
-                                "%.6f remaining %s; continuing ledger close because "
-                                "IGNORE_UNMANAGED_POSITIONS=True.",
-                                sig_id_str,
-                                order["side"],
-                                remaining_qty,
-                                order["display_ticker"],
+                            msg = (
+                                f"Close fill confirmed for {sig_id_str}: {order['display_ticker']} "
+                                f"{order['side']} but broker still reports {remaining_qty:.6f} remaining; "
+                                "continuing ledger close because IGNORE_UNMANAGED_POSITIONS=True. "
+                                "Residual NOT auto-flattened — manual broker reconciliation required "
+                                "for unmanaged inventory."
                             )
+                            logger.error(msg)
+                            await notification_service.send_message(msg)
                             continue
                         msg = (
                             f"Close position verification failed for {sig_id_str}: broker still reports "
@@ -3980,11 +4262,10 @@ class ArbitrageMonitor:
                 },
             )
 
-            # N2 fix: in paper mode, route through shadow_service so the shadow ledger
-            # gets a proper close log with directional PnL breakdown.
-            # shadow_service.close_simulated_trade does NOT call persistence - we handle
-            # DB writes once here for both live and paper paths to preserve exit_reason.
-            if settings.PAPER_TRADING:
+            # N2 fix: shadow-lane closes log directional PnL via shadow_service, then a
+            # single persistence.close_trade write (shared with broker closes) so PnL is
+            # not double-counted in TradeLedger. close_simulated_trade does NOT persist.
+            if not use_broker_close:
                 direction = "Short-Long" if leg_a["side"] == "SELL" else "Long-Short"
                 await shadow_service.close_simulated_trade(
                     pair_id=f"{leg_a['ticker']}_{leg_b['ticker']}",

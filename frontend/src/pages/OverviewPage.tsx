@@ -28,9 +28,9 @@ const OverviewPage: React.FC<OverviewPageProps> = ({
     <>
       <SectionHeader title="Real-Time Overview" subtitle="Status strip and recent activity. Charts live under Analytics." />
 
-      {(marketRegime || risk) && (
+      {(marketRegime || risk || globalAccuracy != null) && (
         <IntelligenceHub
-          regime={marketRegime ?? 'STABLE'}
+          regime={marketRegime ?? 'UNKNOWN'}
           confidence={marketRegimeConfidence}
           accuracy={globalAccuracy}
         />

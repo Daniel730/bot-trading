@@ -133,6 +133,10 @@ class MacroEconomicAgent:
             
             # Update Cache
             self._regime_cache[ticker] = (regime, now)
+            if len(self._regime_cache) > 64:
+                oldest = sorted(self._regime_cache.items(), key=lambda item: item[1][1])
+                for key, _value in oldest[: max(0, len(self._regime_cache) - 64)]:
+                    self._regime_cache.pop(key, None)
             return regime
         except Exception as e:
             self.logger.error(f"Error calculating regime for {ticker}: {e}")

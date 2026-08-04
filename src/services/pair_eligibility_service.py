@@ -24,6 +24,13 @@ allocated. The rules are:
    FX + stamp duty + spread before any z-score signal can fire.
 4. LSE pairs may be excluded for short-hold strategies because of the 0.5 %
    SDRT (UK stamp duty) on every buy leg.
+5. Operator denylist (default BTC/BCH both orders) is fail-closed so quarantine
+   cannot be bypassed by a call site that forgets the scout/monitor pre-check.
+6. Optional quality metrics — when callers supply hedge / correlation /
+   cointegration p-value — must satisfy the same floors as pair discovery
+   (`PAIR_DISCOVERY_MAX_ABS_HEDGE`, `PAIR_DISCOVERY_MIN_CORRELATION`,
+   `PAIR_DISCOVERY_MAX_PVALUE`). Extreme hedge alone is also applied from
+   pair dicts in ``filter_pair_universe`` (BTC/BCH-scale betas ~285).
 
 Crypto pairs share a single 24/7 session, but they still have to be active on
 Alpaca before entering the live universe.
@@ -32,6 +39,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from typing import Iterable, Optional
 
 from src.services.venue_metadata import (
     estimate_round_trip_cost_pct,
@@ -40,6 +48,11 @@ from src.services.venue_metadata import (
     same_session,
 )
 from src.services.brokerage_service import brokerage_service
+from src.services.pair_discovery_helpers import (
+    canonical_pair_id,
+    is_pair_denied,
+    normalize_denylist,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +77,95 @@ def _is_crypto(ticker: str) -> bool:
     return "-USD" in ticker.upper()
 
 
+def _default_denylist() -> set[str]:
+    from src.config import settings
+
+    return set(settings.pair_denylist_ids)
+
+
+def _default_max_abs_hedge() -> float:
+    from src.config import settings
+
+    return float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE)
+
+
+def _default_min_correlation() -> float:
+    from src.config import settings
+
+    return float(settings.PAIR_DISCOVERY_MIN_CORRELATION)
+
+
+def _default_max_pvalue() -> float:
+    from src.config import settings
+
+    return float(settings.PAIR_DISCOVERY_MAX_PVALUE)
+
+
+def _extreme_hedge_reason(
+    hedge_ratio: float | None,
+    *,
+    max_abs_hedge: float,
+) -> Optional[str]:
+    """Reject only insane betas; leave missing/zero for later cointegration warm-up."""
+    if hedge_ratio is None:
+        return None
+    try:
+        value = float(hedge_ratio)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if value != value:  # NaN
+        return "hedge_ratio_invalid:nan"
+    # Zero / unset bootstrap hedges must still reach cointegration warm-up.
+    if value == 0.0:
+        return None
+    if abs(value) > float(max_abs_hedge):
+        return f"hedge_ratio_extreme:{value:.3f}>{float(max_abs_hedge):.1f}"
+    return None
+
+
+def _quality_rejection_reason(
+    *,
+    hedge_ratio: float | None,
+    correlation: float | None,
+    p_value: float | None,
+    is_cointegrated: bool | None,
+    max_abs_hedge: float,
+    min_correlation: float,
+    max_pvalue: float,
+) -> Optional[str]:
+    """Apply discovery-aligned quality gates when metrics are supplied."""
+    extreme = _extreme_hedge_reason(hedge_ratio, max_abs_hedge=max_abs_hedge)
+    if extreme:
+        return extreme
+
+    if correlation is not None:
+        try:
+            corr = float(correlation)
+        except (TypeError, ValueError):
+            return "correlation_invalid"
+        if corr != corr:
+            return "correlation_invalid:nan"
+        if corr < float(min_correlation):
+            return f"correlation_below_floor:{corr:.3f}<{float(min_correlation):.3f}"
+
+    if p_value is not None:
+        try:
+            pval = float(p_value)
+        except (TypeError, ValueError):
+            return "pvalue_invalid"
+        if pval != pval:
+            return "pvalue_invalid:nan"
+        if pval > float(max_pvalue):
+            return f"pvalue_above_ceiling:{pval:.4f}>{float(max_pvalue):.4f}"
+
+    # Only enforce when the caller explicitly asserts non-cointegration.
+    # Fresh Active rows often persist is_cointegrated=False until warm-up.
+    if is_cointegrated is False:
+        return "not_cointegrated"
+
+    return None
+
+
 async def evaluate_pair(
     ticker_a: str,
     ticker_b: str,
@@ -73,14 +175,63 @@ async def evaluate_pair(
     block_cross_currency: bool = True,
     block_lse_short_hold: bool = True,
     allow_eu_continental_overlap: bool = False,
+    denylist: Iterable[str] | None = None,
+    hedge_ratio: float | None = None,
+    correlation: float | None = None,
+    p_value: float | None = None,
+    is_cointegrated: bool | None = None,
+    max_abs_hedge: float | None = None,
+    min_correlation: float | None = None,
+    max_pvalue: float | None = None,
 ) -> EligibilityResult:
     """Decide whether (ticker_a, ticker_b) should be admitted to the universe.
+
+    Spec 037/038 venue + cost gates, plus discovery-aligned denylist / quality
+    gates (PAIR_DENYLIST, PAIR_DISCOVERY_MAX_ABS_HEDGE,
+    PAIR_DISCOVERY_MIN_CORRELATION, PAIR_DISCOVERY_MAX_PVALUE).
 
     Spec 038 - allow_eu_continental_overlap relaxes the session rule so XETRA,
     EURONEXT, BORSA_ITALIANA and SIX are treated as the same session group.
     """
     a = ticker_a.strip().upper()
     b = ticker_b.strip().upper()
+
+    denied = (
+        normalize_denylist(denylist)
+        if denylist is not None
+        else _default_denylist()
+    )
+    if is_pair_denied(ticker_a=a, ticker_b=b, denylist=denied):
+        return EligibilityResult(
+            False,
+            f"denylisted:{canonical_pair_id(a, b)}",
+            0.0,
+        )
+
+    hedge_cap = (
+        float(max_abs_hedge)
+        if max_abs_hedge is not None
+        else _default_max_abs_hedge()
+    )
+    corr_floor = (
+        float(min_correlation)
+        if min_correlation is not None
+        else _default_min_correlation()
+    )
+    pval_ceiling = (
+        float(max_pvalue) if max_pvalue is not None else _default_max_pvalue()
+    )
+    quality_reason = _quality_rejection_reason(
+        hedge_ratio=hedge_ratio,
+        correlation=correlation,
+        p_value=p_value,
+        is_cointegrated=is_cointegrated,
+        max_abs_hedge=hedge_cap,
+        min_correlation=corr_floor,
+        max_pvalue=pval_ceiling,
+    )
+    if quality_reason:
+        return EligibilityResult(False, quality_reason, 0.0)
 
     crypto_pair = _is_crypto(a) and _is_crypto(b)
 
@@ -122,6 +273,17 @@ async def evaluate_pair(
     return EligibilityResult(True, "crypto_pair" if crypto_pair else "admitted", cost)
 
 
+def _pair_metric(pair: dict, *keys: str) -> float | None:
+    for key in keys:
+        if key not in pair or pair[key] is None:
+            continue
+        try:
+            return float(pair[key])
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 async def filter_pair_universe(
     pairs: list,
     *,
@@ -130,11 +292,29 @@ async def filter_pair_universe(
     block_cross_currency: bool = True,
     block_lse_short_hold: bool = True,
     allow_eu_continental_overlap: bool = False,
+    denylist: Iterable[str] | None = None,
+    max_abs_hedge: float | None = None,
+    min_correlation: float | None = None,
+    max_pvalue: float | None = None,
+    enforce_stored_cointegration: bool = False,
 ):
-    """Split a candidate universe into (admitted, rejected) lists."""
+    """Split a candidate universe into (admitted, rejected) lists.
+
+    Denylist + extreme stored hedge ratios are always enforced. Correlation /
+    p-value are applied when present on the pair dict. Stored
+    ``is_cointegrated=False`` is ignored unless ``enforce_stored_cointegration``
+    is set, so fresh Active bootstrap rows can still warm Kalman.
+    """
     admitted = []
     rejected = []
     for pair in pairs:
+        hedge = _pair_metric(pair, "hedge_ratio")
+        corr = _pair_metric(pair, "correlation")
+        pval = _pair_metric(pair, "p_value", "pvalue")
+        coint = None
+        if enforce_stored_cointegration and "is_cointegrated" in pair:
+            coint = bool(pair.get("is_cointegrated"))
+
         verdict = await evaluate_pair(
             pair["ticker_a"],
             pair["ticker_b"],
@@ -143,6 +323,14 @@ async def filter_pair_universe(
             block_cross_currency=block_cross_currency,
             block_lse_short_hold=block_lse_short_hold,
             allow_eu_continental_overlap=allow_eu_continental_overlap,
+            denylist=denylist,
+            hedge_ratio=hedge,
+            correlation=corr,
+            p_value=pval,
+            is_cointegrated=coint,
+            max_abs_hedge=max_abs_hedge,
+            min_correlation=min_correlation,
+            max_pvalue=max_pvalue,
         )
         if verdict.admit:
             enriched = dict(pair)

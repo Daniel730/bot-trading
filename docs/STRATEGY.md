@@ -76,9 +76,9 @@ The orchestrator is an async Python ensemble, not a required LangGraph runtime p
 
 1. `DEGRADED_MODE` circuit-breaker check.
 2. Macro beacon fail-fast veto by sector.
-3. Bull and bear agent evaluation.
+3. Bull and bear agent evaluation. Default path is a labeled z-score heuristic (`source=heuristic_stub`), not LLM theater (legacy fixed 0.7/0.4 removed). Optional Gemini/OpenAI theme scoring requires `BULL_BEAR_LLM_ENABLED=true`, usable keys, and remaining hourly/daily caps; otherwise agents stay heuristic. Orchestrator telemetry uses `HEURISTIC` (not AI BULLISH/BEARISH) for non-LLM payloads and annotates `final_verdict` with a `THEME:` quality note.
 4. Cached SEC/fundamental integrity scores from Redis.
-5. Whale watcher status for crypto-sensitive flows. The current active implementation reports `INACTIVE` because cache-backed whale-flow analysis is legacy-disabled.
+5. Whale watcher status for crypto-sensitive flows. The hot-path implementation is a hard-dormant stub that reports `INACTIVE` (`active=False`). `WHALE_WATCHER_ENABLED` and related knobs are reserved; flipping the flag alone does not enable flow analysis. Cache-backed logic remains under `legacy/` (GitHub #91).
 6. Portfolio manager confidence adjustment.
 7. Historical global accuracy multiplier.
 8. Per-ticker beacon flash-crash veto.
@@ -87,8 +87,10 @@ Hard veto examples:
 
 - sector beacon is in `EXTREME_VOLATILITY`;
 - fundamental score is below `ORCH_FUNDAMENTAL_VETO_SCORE`;
-- active whale watcher returns a veto. Current active runtime reports whale watcher as `INACTIVE`, so no whale-flow veto is applied until the evaluator is restored;
+- an **active** whale watcher returns a veto (`active=True`). The current stub is inactive, so no whale-flow veto or confidence boost/penalty is applied; orchestrator ignores inactive payloads even if they carry veto/multiplier fields;
 - operational status is `DEGRADED_MODE`.
+
+Multi-armed bandit weights cover bull, bear, and SEC agents only — whale is not a MAB arm and does not consume Thompson-sampling weight.
 
 ## Risk Guards
 
@@ -101,7 +103,7 @@ Hard veto examples:
 | Live sell preflight | Blocks sell legs when available shares are insufficient. |
 | Atomic leg guard | Aborts after leg A failure; emergency-closes leg A when leg B fails. |
 | Kill switch | Closes positions when current value breaches `FINANCIAL_KILL_SWITCH_PCT`. |
-| Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE`; stop loss at `STOP_LOSS_ZSCORE`. |
+| Statistical exits | Take profit at `TAKE_PROFIT_ZSCORE` (friction hold until fees clear, or force exit at `TAKE_PROFIT_FORCE_EXIT_ZSCORE`); stop loss at `STOP_LOSS_ZSCORE`. |
 
 ## Execution Direction
 
@@ -128,5 +130,6 @@ Open positions are evaluated each loop:
 
 - financial kill switch first;
 - then Kalman-based take profit or stop loss;
-- paper exits also call `shadow_service.close_simulated_trade()` for shadow ledger consistency;
+- paper / shadow exits also call `shadow_service.close_simulated_trade()` for directional PnL logging only; durable close is a single `persistence.close_trade` write (broker paper / live closes skip the shadow log and use broker fill confirmation first);
+- close routing follows ledger `execution_lane` / `is_shadow` from open, not only the current `PAPER_TRADING` flag;
 - realized P&L is directional per leg.

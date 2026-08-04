@@ -1,9 +1,11 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import InvalidToken, Forbidden
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, ContextTypes
 from src.config import settings
 import asyncio
 import logging
 import re
+import time
 import uuid
 
 
@@ -11,6 +13,23 @@ logger = logging.getLogger(__name__)
 REDACTED_TELEGRAM_TOKEN = "<redacted-telegram-token>"
 _TELEGRAM_BOT_URL_RE = re.compile(r"(api\.telegram\.org/bot)[^/\s]+")
 _TELEGRAM_BOT_TOKEN_RE = re.compile(r"\b\d{6,}:[A-Za-z0-9_-]{20,}")
+# BotFather tokens are digits:secret. Placeholders like "your_bot_token" build() OK
+# but crash later with InvalidToken — reject them before enabling Telegram.
+_TELEGRAM_TOKEN_SHAPE_RE = re.compile(r"^\d{6,}:[A-Za-z0-9_-]{20,}$")
+_TELEGRAM_PLACEHOLDER_TOKENS = frozenset(
+    {
+        "",
+        "none",
+        "null",
+        "your_bot_token",
+        "your_token_here",
+        "your_telegram_bot_token",
+        "your_telegram_token",
+        "changeme",
+        "placeholder",
+    }
+)
+_ALERT_DEDUPE_SECONDS = 60.0
 _TELEGRAM_LOG_REDACTION_LOGGERS = (
     __name__,
     "httpx",
@@ -19,6 +38,14 @@ _TELEGRAM_LOG_REDACTION_LOGGERS = (
     "telegram.ext",
     "telegram.request",
 )
+
+
+def _is_usable_telegram_token(token) -> bool:
+    """True when token is present, not a template placeholder, and BotFather-shaped."""
+    normalized = str(token or "").strip()
+    if not normalized or normalized.lower() in _TELEGRAM_PLACEHOLDER_TOKENS:
+        return False
+    return bool(_TELEGRAM_TOKEN_SHAPE_RE.fullmatch(normalized))
 
 
 def _redact_telegram_sensitive_text(value, token: str = "") -> str:
@@ -40,6 +67,17 @@ def _is_telegram_markdown_parse_error(error) -> bool:
     text = str(error).lower()
     return "can't parse entities" in text or "can't parse message text" in text
 
+
+def _is_fatal_telegram_auth_error(error) -> bool:
+    """Invalid / revoked tokens must fall back to console-only (no boot crash loop)."""
+    if isinstance(error, (InvalidToken, Forbidden)):
+        return True
+    text = str(error).lower()
+    return (
+        "invalidtoken" in text
+        or "unauthorized" in text
+        or ("token" in text and "rejected" in text)
+    )
 
 class TelegramTokenRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -76,11 +114,12 @@ class NotificationService:
         self.pending_approval_summaries = {}  # correlation_id -> trade summary text
         self._telegram_enabled = False
         self.app = None
+        self._recent_alert_keys: dict[str, float] = {}
+        self._alert_dedupe_seconds = _ALERT_DEDUPE_SECONDS
 
-        # Guard: skip Telegram setup if token is absent or still a placeholder.
-        # This lets the bot run in paper-trading mode without a Telegram account.
-        _placeholder_tokens = {"", "None", "your_token_here", "YOUR_TELEGRAM_BOT_TOKEN"}
-        if not self.token or str(self.token).strip() in _placeholder_tokens:
+        # Guard: skip Telegram setup if token is absent, placeholder, or malformed.
+        # Empty / template tokens stay console-only — never call Telegram APIs.
+        if not _is_usable_telegram_token(self.token):
             print("TELEGRAM: Token not configured — Telegram notifications disabled. "
                   "Paper trading and console logging will still work.")
             return
@@ -101,9 +140,46 @@ class NotificationService:
                 "TELEGRAM: Failed to initialize (%s). Telegram notifications disabled.",
                 self._redact_sensitive_text(e),
             )
+            self.app = None
+            self._telegram_enabled = False
 
     def _redact_sensitive_text(self, value) -> str:
         return _redact_telegram_sensitive_text(value, self.token)
+
+    def _disable_telegram(self, reason: str) -> None:
+        """Fall back to console-only after auth/init failures (no hard crash)."""
+        was_enabled = self._telegram_enabled
+        self._telegram_enabled = False
+        if was_enabled:
+            logger.warning(
+                "TELEGRAM: Disabled (%s). Continuing in console-only mode.",
+                self._redact_sensitive_text(reason),
+            )
+            print(
+                f"TELEGRAM: Disabled ({self._redact_sensitive_text(reason)}); "
+                "console-only / dashboard notifications remain available."
+            )
+
+    def _should_emit_alert(self, message: str, *, force: bool = False) -> bool:
+        """Drop duplicate alerts within the dedupe window to limit Telegram spam."""
+        if force:
+            return True
+        key = str(message or "").strip()[:240]
+        if not key:
+            return True
+        now = time.monotonic()
+        last = self._recent_alert_keys.get(key)
+        if last is not None and (now - last) < self._alert_dedupe_seconds:
+            logger.debug("TELEGRAM: Suppressing duplicate alert within dedupe window.")
+            return False
+        self._recent_alert_keys[key] = now
+        # Bound memory: drop stale keys occasionally.
+        if len(self._recent_alert_keys) > 256:
+            cutoff = now - self._alert_dedupe_seconds
+            self._recent_alert_keys = {
+                k: ts for k, ts in self._recent_alert_keys.items() if ts >= cutoff
+            }
+        return True
 
     async def _handle_macro(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Displays macro economic summary."""
@@ -359,6 +435,20 @@ class NotificationService:
                     await query.edit_message_text(text=f"{query.message.text}\n\n✅ Resultado: {'APROVADO' if action == 'approve' else 'REJEITADO'}")
                 except Exception as e:
                     logger.warning("TELEGRAM: Could not edit message: %s", self._redact_sensitive_text(e))
+        else:
+            # Expired / already resolved — acknowledge so operators are not left guessing.
+            try:
+                base = query.message.text if query.message else ""
+                await query.edit_message_text(
+                    text=f"{base}\n\n⚠️ Approval expired or already resolved ({correlation_id})."
+                    if base
+                    else f"⚠️ Approval expired or already resolved ({correlation_id})."
+                )
+            except Exception as e:
+                logger.debug(
+                    "TELEGRAM: Could not edit expired approval message: %s",
+                    self._redact_sensitive_text(e),
+                )
 
     async def start_listening(self):
         """
@@ -376,17 +466,39 @@ class NotificationService:
             print("TELEGRAM: Listener active (cleared pending updates).")
 
             # Sprint J: Heartbeat Startup Message
-            await self.send_message("🚀 *Arbitrage Bot Online*\n\nMonitoring active. All health checks passed. System is in `Ready` mode.")
+            await self.send_message(
+                "🚀 *Arbitrage Bot Online*\n\nMonitoring active. All health checks passed. System is in `Ready` mode.",
+                force=True,
+            )
         except Exception as exc:
-            # Never take down dashboard/uvicorn because Telegram/DNS timed out.
+            # Never take down dashboard/uvicorn because Telegram/DNS timed out or token is invalid.
             logger.error(
                 "TELEGRAM: Listener failed to start (%s). Continuing with dashboard approvals only.",
                 self._redact_sensitive_text(exc),
             )
             print(f"TELEGRAM: Listener failed ({exc}); dashboard/API approvals remain available.")
+            self._disable_telegram(exc)
+            # Best-effort shutdown of a half-started Application so we do not leak tasks.
+            try:
+                if self.app is not None:
+                    updater = getattr(self.app, "updater", None)
+                    if updater is not None and getattr(updater, "running", False):
+                        await updater.stop()
+                    if getattr(self.app, "running", False):
+                        await self.app.stop()
+                    await self.app.shutdown()
+            except Exception as shutdown_exc:
+                logger.debug(
+                    "TELEGRAM: cleanup after failed start: %s",
+                    self._redact_sensitive_text(shutdown_exc),
+                )
 
-    async def send_message(self, message: str):
+    async def send_message(self, message: str, *, force: bool = False):
         """Sends a plain text message to the Telegram chat and dashboard."""
+        if not self._should_emit_alert(message, force=force):
+            # Still mirror suppressed duplicates to dashboard once? Skip both to cut spam.
+            return
+
         if not self._telegram_enabled:
             # Fallback: echo to console so operator still sees bot activity
             print(f"[BOT MSG] {message}")
@@ -405,7 +517,7 @@ class NotificationService:
                     parse_mode="Markdown"
                 )
             except Exception as e:
-                if not _is_telegram_markdown_parse_error(e):
+                if _is_fatal_telegram_auth_error(e) or not _is_telegram_markdown_parse_error(e):
                     raise
                 await self.app.bot.send_message(
                     chat_id=self.chat_id,
@@ -417,7 +529,19 @@ class NotificationService:
             await dashboard_state.add_message("BOT", message)
 
         except Exception as e:
+            if _is_fatal_telegram_auth_error(e):
+                self._disable_telegram(e)
             logger.warning("TELEGRAM ERROR (send_message): %s", self._redact_sensitive_text(e))
+            # Keep dashboard / console informed even when Telegram delivery fails.
+            try:
+                print(f"[BOT MSG] {message}")
+                from src.services.dashboard_service import dashboard_state
+                await dashboard_state.add_message("BOT", message)
+            except Exception as dash_exc:
+                logger.warning(
+                    "DASHBOARD ERROR (send_message after telegram failure): %s",
+                    self._redact_sensitive_text(dash_exc),
+                )
 
     async def send_dashboard_login_approval(self, correlation_id: str, summary: str) -> bool:
         """Send an interactive dashboard-login approval request."""
@@ -452,6 +576,8 @@ class NotificationService:
             )
             return True
         except Exception as e:
+            if _is_fatal_telegram_auth_error(e):
+                self._disable_telegram(e)
             logger.warning("TELEGRAM ERROR (login approval): %s", self._redact_sensitive_text(e))
             return False
 
@@ -462,15 +588,22 @@ class NotificationService:
         must simulate regardless of Telegram or dashboard health (FR-002).
         """
         text = "Trade auto-approved\n" + trade_summary
+        # Paper auto-approves can fire rapidly; dedupe Telegram/console spam.
+        # Dashboard still receives every event for the ops console.
+        emit_external = self._should_emit_alert(text, force=False)
         if self._telegram_enabled:
-            try:
-                await self.app.bot.send_message(chat_id=self.chat_id, text=text)
-            except Exception as e:
-                logger.warning(
-                    "TELEGRAM (paper-notify): send failed, non-fatal: %s",
-                    self._redact_sensitive_text(e),
-                )
-        else:
+            if emit_external:
+                try:
+                    await self.app.bot.send_message(chat_id=self.chat_id, text=text)
+                except Exception as e:
+                    if _is_fatal_telegram_auth_error(e):
+                        self._disable_telegram(e)
+                        print(f"[PAPER TRADE] {text}")
+                    logger.warning(
+                        "TELEGRAM (paper-notify): send failed, non-fatal: %s",
+                        self._redact_sensitive_text(e),
+                    )
+        elif emit_external:
             print(f"[PAPER TRADE] {text}")
         try:
             from src.services.dashboard_service import dashboard_state
@@ -558,6 +691,8 @@ class NotificationService:
                     reply_markup=reply_markup
                 )
             except Exception as tg_exc:
+                if _is_fatal_telegram_auth_error(tg_exc):
+                    self._disable_telegram(tg_exc)
                 logger.warning(
                     "TELEGRAM: approval notify failed for %s (%s); waiting on dashboard/API approve",
                     correlation_id,

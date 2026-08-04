@@ -1,31 +1,36 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { RiskTelemetry, ThoughtTelemetry, TelemetryMessage } from '../services/api';
+import { ApiError, type RiskTelemetry, type ThoughtTelemetry, type TelemetryMessage } from '../services/api';
 import { getRuntimeApiBase } from '../services/runtimeUrl';
 
 export type TelemetryRisk = RiskTelemetry;
 export type TelemetryThought = ThoughtTelemetry;
 
 const WS_BASE = getRuntimeApiBase(import.meta.env.VITE_API_URL).replace('http', 'ws');
+/** Backend closes unauthorized sockets with this code (see dashboard_service websocket_endpoint). */
+const WS_AUTH_REJECT_CODE = 4003;
 
 export const useTelemetry = (token: string | null, sessionToken?: string | null) => {
   const [isConnected, setIsConnected] = useState(false);
   const [risk, setRisk] = useState<RiskTelemetry | null>(null);
   const [thoughts, setThoughts] = useState<ThoughtTelemetry[]>([]);
   const [botState, setBotState] = useState<string>('IDLE');
-  
+  const [authError, setAuthError] = useState<ApiError | null>(null);
+
   const ws = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<number | null>(null);
   const retryCount = useRef(0);
   const connectRef = useRef<() => void>(() => {});
+  const intentionalClose = useRef(false);
 
   const connect = useCallback(() => {
     if (!sessionToken) return;
 
+    // Never put session/security tokens in the WebSocket URL (proxy/access-log leak surface).
     const url = new URL('/ws/telemetry', WS_BASE);
     const socket = new WebSocket(url.toString());
+    intentionalClose.current = false;
 
     socket.onopen = () => {
-      console.log('Telemetry WebSocket Connected');
       if (typeof socket.send === 'function') {
         socket.send(JSON.stringify({ type: 'auth', token: token || undefined, session: sessionToken }));
       }
@@ -36,13 +41,13 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
     socket.onmessage = (event) => {
       try {
         const message: TelemetryMessage = JSON.parse(event.data);
-        
+
         switch (message.type) {
           case 'risk':
             setRisk(message.data as RiskTelemetry);
             break;
           case 'thought':
-            setThoughts(prev => {
+            setThoughts((prev) => {
               const newThoughts = [...prev, message.data as ThoughtTelemetry];
               return newThoughts.slice(-100); // Ring-buffer: keep last 100
             });
@@ -56,11 +61,17 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
       }
     };
 
-    socket.onclose = () => {
-      console.log('Telemetry WebSocket Disconnected');
+    socket.onclose = (event) => {
       setIsConnected(false);
-      
-      // Exponential backoff reconnect
+
+      if (intentionalClose.current) return;
+
+      // Auth rejected — stop reconnect storms and surface a fail-closed session clear.
+      if (event.code === WS_AUTH_REJECT_CODE) {
+        setAuthError(new ApiError(401, 'Dashboard session expired. Please log in again.'));
+        return;
+      }
+
       const delay = Math.min(1000 * Math.pow(2, retryCount.current), 30000);
       reconnectTimeout.current = window.setTimeout(() => {
         retryCount.current++;
@@ -68,8 +79,7 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
       }, delay);
     };
 
-    socket.onerror = (err) => {
-      console.error('Telemetry WebSocket Error:', err);
+    socket.onerror = () => {
       socket.close();
     };
 
@@ -81,12 +91,23 @@ export const useTelemetry = (token: string | null, sessionToken?: string | null)
   }, [connect]);
 
   useEffect(() => {
+    if (!sessionToken) {
+      setAuthError(null);
+      intentionalClose.current = true;
+      if (ws.current) ws.current.close();
+      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
+      setIsConnected(false);
+      return;
+    }
+
+    setAuthError(null);
     connect();
     return () => {
+      intentionalClose.current = true;
       if (ws.current) ws.current.close();
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
     };
-  }, [connect]);
+  }, [connect, sessionToken]);
 
-  return { isConnected, risk, thoughts, botState, ws };
+  return { isConnected, risk, thoughts, botState, authError, ws };
 };

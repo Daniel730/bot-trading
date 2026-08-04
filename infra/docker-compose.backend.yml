@@ -14,6 +14,12 @@ services:
       - everysec
       - --requirepass
       - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      # Stay under mem_limit (128m). Prefer evicting keys that carry a TTL
+      # (prices, caches, kalman sliding TTL) before OOMing the container.
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - volatile-lru
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -85,7 +91,8 @@ services:
     # No `build:` block here so Compose doesn't redundantly re-run the build.
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     command: python src/mcp_server.py
-    # FastMCP has no auth layer; keep the host publish on loopback only.
+    # FastMCP has no network auth layer; keep the host publish on loopback only.
+    # Inside the container listen on 0.0.0.0 so Docker can map 127.0.0.1:8000.
     ports:
       - "127.0.0.1:8000:8000"
     env_file:
@@ -95,6 +102,8 @@ services:
       - bot_data:/app/data
     environment:
       REDIS_HOST: redis
+      MCP_HOST: "0.0.0.0"
+      MCP_ALLOW_NON_LOOPBACK: "true"
     restart: "no"
     mem_limit: 384m
     cpus: 0.75
@@ -155,7 +164,7 @@ services:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-    restart: "no"
+    restart: unless-stopped
     mem_limit: 640m
     cpus: 0.75
     depends_on:

@@ -3,6 +3,24 @@ import json
 from typing import Optional, Any
 from src.config import settings
 
+# Canonical Redis key namespaces and their lifecycle expectations.
+# Dashboard login sessions are JWT/in-process — they are NOT stored in Redis.
+REDIS_KEY_NAMESPACES = {
+    "price": {"pattern": "price:{ticker}", "ttl": "10s (set_price)"},
+    "kalman": {"pattern": "kalman:{pair_id}", "ttl": "KALMAN_STATE_TTL_SECONDS sliding"},
+    "sec:integrity": {"pattern": "sec:integrity:{ticker}", "ttl": "24h"},
+    "ratelimit": {"pattern": "ratelimit:{api}:{window}", "ttl": "rate window"},
+    "latency": {"pattern": "latency:metrics:raw", "ttl": "1h + LTRIM 1000"},
+    "cache": {"pattern": "cache:{name}", "ttl": "caller-supplied (e.g. tnx 1h)"},
+    "execution_attempt": {"pattern": "execution_attempt:{signal_id}", "ttl": "1h"},
+    "execution_attempt_lock": {"pattern": "execution_attempt_lock:{signal_id}", "ttl": "60s"},
+    "execution:inflight": {"pattern": "execution:inflight:{uuid}", "ttl": "1h (Java)"},
+    "l2": {"pattern": "l2:snapshot:{ticker} / l2:{ticker}", "ttl": "writer-supplied"},
+    "whale": {"pattern": "whale:*", "ttl": "WHALE_WATCHER_CACHE_TTL_SECONDS"},
+    "entropy_baseline": {"pattern": "entropy_baseline:{ticker}", "ttl": "persistent (live gate)"},
+}
+
+
 class RedisService:
     _instance = None
 
@@ -59,10 +77,14 @@ class RedisService:
         z_score: float,
         innovation_variance: float = 0.0,
         state_fingerprint: Optional[str] = None,
+        ttl_seconds: Optional[int] = None,
     ):
         """
         Saves the current Kalman filter state (vector x and matrix P) to a Redis Hash.
         Also stores the z_score and innovation_variance for monitoring and warm-start restoration.
+
+        Applies a sliding TTL so pairs that leave the universe (or stay quarantined)
+        do not accumulate unbounded orphan hashes after Redis AUTH / long uptime.
         """
         key = f"kalman:{ticker_pair}"
         state = {
@@ -74,6 +96,13 @@ class RedisService:
         if state_fingerprint:
             state["state_fingerprint"] = state_fingerprint
         await self.client.hset(key, mapping=state)
+        ttl = (
+            int(ttl_seconds)
+            if ttl_seconds is not None
+            else int(getattr(settings, "KALMAN_STATE_TTL_SECONDS", 14 * 24 * 3600))
+        )
+        if ttl > 0:
+            await self.client.expire(key, ttl)
 
     async def get_kalman_state(self, ticker_pair: str) -> Optional[dict]:
         """Retrieves the Kalman filter state from Redis."""
@@ -89,6 +118,10 @@ class RedisService:
             "innovation_variance": float(state.get("innovation_variance", 0.0)),
             "state_fingerprint": state.get("state_fingerprint")
         }
+
+    async def delete_kalman_state(self, ticker_pair: str) -> int:
+        """Deletes a Kalman hash (quarantine / universe removal)."""
+        return await self.client.delete(f"kalman:{ticker_pair}")
 
     async def check_rate_limit(self, api_name: str, limit: int, window: int = 3600) -> bool:
         """
@@ -181,6 +214,7 @@ class _LazyRedisService:
         z_score: float,
         innovation_variance: float = 0.0,
         state_fingerprint: Optional[str] = None,
+        ttl_seconds: Optional[int] = None,
     ):
         return await self._get_instance().save_kalman_state(
             ticker_pair,
@@ -189,10 +223,14 @@ class _LazyRedisService:
             z_score,
             innovation_variance=innovation_variance,
             state_fingerprint=state_fingerprint,
+            ttl_seconds=ttl_seconds,
         )
 
     async def get_kalman_state(self, ticker_pair: str) -> Optional[dict]:
         return await self._get_instance().get_kalman_state(ticker_pair)
+
+    async def delete_kalman_state(self, ticker_pair: str) -> int:
+        return await self._get_instance().delete_kalman_state(ticker_pair)
 
     async def check_rate_limit(self, api_name: str, limit: int, window: int = 3600) -> bool:
         return await self._get_instance().check_rate_limit(api_name, limit, window=window)

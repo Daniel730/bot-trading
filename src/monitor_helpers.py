@@ -50,6 +50,48 @@ def resolve_kalman_pair_id(
     return primary
 
 
+def is_executable_bid_ask(bid: float, ask: float) -> bool:
+    """True when both sides are positive and the quote is not crossed."""
+    try:
+        bid_value = float(bid)
+        ask_value = float(ask)
+    except (TypeError, ValueError):
+        return False
+    return bid_value > 0.0 and ask_value > 0.0 and ask_value >= bid_value
+
+
+def resolve_profit_guard_friction_pct(
+    *,
+    fee_friction_pct: float,
+    pair_estimated_cost_pct: float,
+    gross_notional: float,
+    flat_order_friction_usd: float,
+) -> float:
+    """Conservative friction floor for the pre-approval profit guard.
+
+    ``validate_trade`` often computes flat friction against portfolio cash, which
+    understates cost on the actual pair notional when ``estimated_cost_pct`` is
+    missing. Always take the max of fee %, venue estimate, and flat/notional.
+    """
+    try:
+        fee_pct = max(0.0, float(fee_friction_pct or 0.0))
+    except (TypeError, ValueError):
+        fee_pct = 0.0
+    try:
+        estimated_pct = max(0.0, float(pair_estimated_cost_pct or 0.0))
+    except (TypeError, ValueError):
+        estimated_pct = 0.0
+    flat_pct = 0.0
+    try:
+        notional = float(gross_notional or 0.0)
+        flat_usd = max(0.0, float(flat_order_friction_usd or 0.0))
+        if notional > 0.0 and flat_usd > 0.0:
+            flat_pct = flat_usd / notional
+    except (TypeError, ValueError):
+        flat_pct = 0.0
+    return max(fee_pct, estimated_pct, flat_pct)
+
+
 def compute_entry_zscore(
     base_entry_zscore: float,
     *,
@@ -71,3 +113,24 @@ def compute_entry_zscore(
         return base_entry_zscore * scale
     scale = min(pair_estimated_cost_pct / cost_baseline, scaling_cap)
     return base_entry_zscore * scale
+
+
+def should_take_profit_exit(
+    *,
+    abs_z_score: float,
+    take_profit_zscore: float,
+    directional_pnl: float,
+    estimated_friction: float,
+    force_exit_zscore: float,
+) -> tuple[bool, str]:
+    """Decide whether a TP-band exit should close despite friction.
+
+    Caller must already gate on ``abs_z_score <= take_profit_zscore``.
+    Returns ``(should_close, reason)``.
+    """
+    _ = take_profit_zscore  # documented precondition for callers
+    if float(directional_pnl) > float(estimated_friction):
+        return True, "covers_friction"
+    if float(abs_z_score) <= float(force_exit_zscore):
+        return True, "force_mean_reversion"
+    return False, "friction_hold"

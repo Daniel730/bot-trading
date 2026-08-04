@@ -116,3 +116,61 @@ async def test_spread_guard_rejects_entry_at_overnight_btc_bch_scale(monitor):
         assert result["total_spread_pct"] > result["max_spread_pct"]
         mock_validate.assert_not_called()
         monitor.brokerage.place_value_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_spread_guard_rejects_crossed_quotes(monitor):
+    """Crossed books must fail closed (previously negative spreads failed open)."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    signal_id = str(uuid.uuid4())
+    monitor.brokerage.place_value_order = AsyncMock()
+
+    with patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch(
+             "src.monitor.data_service.get_bid_ask",
+             new_callable=AsyncMock,
+             # Leg A crossed (ask < bid); leg B tight — must still reject.
+             side_effect=[(90010.0, 90000.0), (3500.0, 3500.5)],
+         ), \
+         patch("src.monitor.risk_service.validate_trade") as mock_validate, \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock):
+
+        result = await monitor.execute_trade(pair, "Short-Long", 90000.0, 3500.5, signal_id)
+
+        assert result["reason"] == "invalid_bid_ask"
+        mock_validate.assert_not_called()
+        monitor.brokerage.place_value_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_spread_guard_accepts_tight_alpaca_crypto_quotes(monitor):
+    """Realistic Alpaca-tight crypto spreads (~2 bps combined) must not false-reject."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    signal_id = str(uuid.uuid4())
+
+    with patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch(
+             "src.monitor.data_service.get_bid_ask",
+             new_callable=AsyncMock,
+             # ~1 bp + ~1 bp << 30 bp SPREAD_GUARD_MAX_PCT
+             side_effect=[(90000.0, 90009.0), (3500.0, 3500.35)],
+         ), \
+         patch("src.monitor.logger") as mock_logger, \
+         patch(
+             "src.monitor.risk_service.validate_trade",
+             return_value={"is_acceptable": False, "status": "REJECT", "rejection_reason": "test_stop"},
+         ) as mock_validate, \
+         patch("src.monitor.notification_service.send_message", new_callable=AsyncMock), \
+         patch.object(monitor.brokerage, "get_account_cash", return_value=2000.0), \
+         patch.object(monitor.brokerage, "get_account_equity", return_value=2000.0), \
+         patch.object(monitor.brokerage, "get_account_buying_power", return_value=2000.0), \
+         patch.object(monitor.brokerage, "get_pending_orders_value", return_value=0.0):
+
+        await monitor.execute_trade(pair, "Short-Long", 90009.0, 3500.35, signal_id)
+
+        rej_log = [
+            call for call in mock_logger.warning.call_args_list
+            if "SPREAD GUARD: Rejecting" in call[0][0]
+        ]
+        assert len(rej_log) == 0
+        assert mock_validate.called

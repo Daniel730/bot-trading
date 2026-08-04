@@ -44,6 +44,7 @@ import {
   isDashboardAuthError,
   readStoredDashboardSession,
   type StoredDashboardSession,
+  scrubAuthQueryParamsFromUrl,
   writeStoredDashboardSession,
 } from './services/dashboardSession';
 import { useTelemetry } from './hooks/useTelemetry';
@@ -81,8 +82,14 @@ function App() {
 
   const isAuthenticated = Boolean(sessionToken);
   const authToken = securityToken || null;
-  const { data, error } = useDashboardStream(isAuthenticated ? authToken : null, sessionToken);
-  const { isConnected, risk, thoughts, botState } = useTelemetry(isAuthenticated ? authToken : null, sessionToken);
+  const { data, error, authError: streamAuthError } = useDashboardStream(
+    isAuthenticated ? authToken : null,
+    isAuthenticated ? sessionToken : null,
+  );
+  const { isConnected, risk, thoughts, botState, authError: telemetryAuthError } = useTelemetry(
+    isAuthenticated ? authToken : null,
+    isAuthenticated ? sessionToken : null,
+  );
 
   const [page, setPageState] = useState<Page>(() => {
     const hash = window.location.hash.replace(/^#\/?/, '');
@@ -131,8 +138,10 @@ function App() {
     setLoginOtp('');
     setLoginChallengeId(null);
     setLoginNotice(null);
+    // LoginView only renders loginError — keep expiry/auth messages visible after logout.
+    setLoginError(message ?? null);
     setSystemMessage(null);
-    setSystemError(message ?? null);
+    setSystemError(null);
   }, []);
 
   const handleAuthFailure = useCallback((err: unknown) => {
@@ -141,6 +150,14 @@ function App() {
     clearAuthenticatedSession(message);
     return true;
   }, [clearAuthenticatedSession]);
+
+  useEffect(() => {
+    if (streamAuthError) handleAuthFailure(streamAuthError);
+  }, [streamAuthError, handleAuthFailure]);
+
+  useEffect(() => {
+    if (telemetryAuthError) handleAuthFailure(telemetryAuthError);
+  }, [telemetryAuthError, handleAuthFailure]);
 
   const establishAuthenticatedSession = useCallback((session: AuthSession, message: string) => {
     writeStoredDashboardSession(session);
@@ -156,11 +173,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const currentUrl = new URL(window.location.href);
-    if (!currentUrl.searchParams.has('token') && !currentUrl.searchParams.has('session')) return;
-    currentUrl.searchParams.delete('token');
-    currentUrl.searchParams.delete('session');
-    window.history.replaceState({}, document.title, currentUrl.toString());
+    // Defense in depth — also scrubbed synchronously in main.tsx before first paint.
+    scrubAuthQueryParamsFromUrl();
   }, []);
 
   useEffect(() => {

@@ -154,6 +154,13 @@ class Settings(BaseSettings):
     REDIS_DB: int = Field(default=0, validation_alias="REDIS_DB")
     REDIS_PASSWORD: str = Field(default="", validation_alias="REDIS_PASSWORD")
     REDIS_APPENDONLY: bool = Field(default=True, validation_alias="REDIS_APPENDONLY")
+    # Sliding TTL for kalman:{pair_id} hashes. Active pairs refresh on each save;
+    # orphaned keys (removed/quarantined pairs) expire instead of growing forever.
+    KALMAN_STATE_TTL_SECONDS: int = Field(
+        default=14 * 24 * 3600,
+        validation_alias="KALMAN_STATE_TTL_SECONDS",
+        ge=3600,
+    )
 
     POSTGRES_HOST: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, validation_alias="POSTGRES_PORT")
@@ -186,6 +193,18 @@ class Settings(BaseSettings):
     WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 15.0
     MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
+    # Hard cap on concurrent open pair signals (ledger). Separate from scan-universe
+    # MAX_ACTIVE_PAIRS — prevents overcrowding when many Active pairs fire together.
+    # 0 disables the gate.
+    MAX_OPEN_PAIRS: int = Field(default=8, validation_alias="MAX_OPEN_PAIRS")
+    # Book-wide gross notional ceiling (sum of open cost bases + new trade).
+    # Defaults to MAX_OPEN_PAIRS * MAX_PAIR_GROSS_NOTIONAL_USD scale; 0 disables.
+    MAX_PORTFOLIO_GROSS_NOTIONAL_USD: float = Field(
+        default=800.0,
+        validation_alias="MAX_PORTFOLIO_GROSS_NOTIONAL_USD",
+    )
+    # Reject opens that share a ticker with any already-open pair (correlated blowups).
+    BLOCK_SHARED_LEG_OPENS: bool = Field(default=True, validation_alias="BLOCK_SHARED_LEG_OPENS")
     SCOUT_INTERVAL_HOURS: int = Field(default=12, validation_alias="SCOUT_INTERVAL_HOURS")
     # Automatic pair discovery (S&P sector + crypto scout → universe_candidates → Active).
     # When false, the monitor skips the background scout loop; dashboard POST
@@ -204,6 +223,15 @@ class Settings(BaseSettings):
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
     # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Scout/promote quality floors (pair-internal correlation + cointegration p-value).
+    PAIR_DISCOVERY_MIN_CORRELATION: float = Field(
+        default=0.70,
+        validation_alias="PAIR_DISCOVERY_MIN_CORRELATION",
+    )
+    PAIR_DISCOVERY_MAX_PVALUE: float = Field(
+        default=0.05,
+        validation_alias="PAIR_DISCOVERY_MAX_PVALUE",
+    )
     # Hard denylist (either leg order). Comma-separated pair ids in env.
     # Default quarantines the known BTC/BCH spread-guard churner.
     PAIR_DENYLIST: str = Field(
@@ -220,6 +248,11 @@ class Settings(BaseSettings):
     IGNORE_UNMANAGED_POSITIONS: bool = Field(
         default=True,
         validation_alias="IGNORE_UNMANAGED_POSITIONS",
+        description=(
+            "When True, broker positions outside the bot ledger do not block startup; "
+            "alerts still fire with a full reconciliation audit and positions are never "
+            "auto-flattened. Set False before unattended live execution."
+        ),
     )
     # None = auto: enabled for PAPER_TRADING or Alpaca paper API URL; disabled for live URLs.
     AUTO_RECONCILE_FLAT_ORPHANS: Optional[bool] = Field(
@@ -341,11 +374,51 @@ class Settings(BaseSettings):
     ORCHESTRATOR_TIMEOUT_SECONDS: float = Field(default=60.0, validation_alias="ORCHESTRATOR_TIMEOUT_SECONDS")
     MARKET_DATA_TIMEOUT_SECONDS: float = Field(default=45.0, validation_alias="MARKET_DATA_TIMEOUT_SECONDS")
     MARKET_DATA_BATCH_SIZE: int = Field(default=30, validation_alias="MARKET_DATA_BATCH_SIZE")
-    MARKET_DATA_BATCH_CONCURRENCY: int = Field(default=3, validation_alias="MARKET_DATA_BATCH_CONCURRENCY")
+    MARKET_DATA_BATCH_CONCURRENCY: int = Field(
+        default=3,
+        validation_alias="MARKET_DATA_BATCH_CONCURRENCY",
+        ge=1,
+        le=8,
+    )
     SPREAD_GUARD_MAX_PCT: float = Field(default=0.003, validation_alias="SPREAD_GUARD_MAX_PCT")
     TAKE_PROFIT_ZSCORE: float = Field(default=0.5, validation_alias="TAKE_PROFIT_ZSCORE")
+    # When |z| is at/below this floor inside the TP band, exit even if gross PnL
+    # would not clear estimated round-trip friction (mean reversion is done).
+    TAKE_PROFIT_FORCE_EXIT_ZSCORE: float = Field(
+        default=0.25,
+        validation_alias="TAKE_PROFIT_FORCE_EXIT_ZSCORE",
+    )
     STOP_LOSS_ZSCORE: float = Field(default=3.5, validation_alias="STOP_LOSS_ZSCORE")
-    SCAN_INTERVAL_SECONDS: int = Field(default=15, validation_alias="SCAN_INTERVAL_SECONDS")
+    # Idle gap between full scan iterations. Floor avoids busy-spin; ceiling avoids
+    # multi-minute blind spots on kill-switch / stop-loss exits.
+    SCAN_INTERVAL_SECONDS: int = Field(
+        default=15,
+        validation_alias="SCAN_INTERVAL_SECONDS",
+        ge=5,
+        le=300,
+    )
+    # Cap concurrent process_pair work inside one scan iteration. Every scannable
+    # pair still runs each cycle; only parallelism is bounded (Mini PC: keep ≤2).
+    SCAN_PAIR_CONCURRENCY: int = Field(
+        default=2,
+        validation_alias="SCAN_PAIR_CONCURRENCY",
+        ge=1,
+        le=8,
+    )
+    # Cap concurrent open-position exit evaluations (kill-switch / TP / SL).
+    SCAN_EXIT_CONCURRENCY: int = Field(
+        default=2,
+        validation_alias="SCAN_EXIT_CONCURRENCY",
+        ge=1,
+        le=8,
+    )
+    # Cap concurrent daily cointegration rechecks (each pulls 30d history).
+    SCAN_COINT_RECHECK_CONCURRENCY: int = Field(
+        default=1,
+        validation_alias="SCAN_COINT_RECHECK_CONCURRENCY",
+        ge=1,
+        le=4,
+    )
     RISK_DRAWDOWN_ZERO_PCT: float = Field(default=0.15, validation_alias="RISK_DRAWDOWN_ZERO_PCT")
     RISK_SHARPE_FLOOR: float = Field(default=0.5, validation_alias="RISK_SHARPE_FLOOR")
     RISK_MULTIPLIER_CAP_LOW_SHARPE: float = Field(default=0.1, validation_alias="RISK_MULTIPLIER_CAP_LOW_SHARPE")
@@ -361,15 +434,56 @@ class Settings(BaseSettings):
     MARKET_REGIME_VOLATILITY_LOW: float = Field(default=0.10, validation_alias="MARKET_REGIME_VOLATILITY_LOW")
     MARKET_REGIME_ENTROPY_SPIKE: float = Field(default=0.85, validation_alias="MARKET_REGIME_ENTROPY_SPIKE")
     ORCH_AGENT_CONFIDENCE_THRESHOLD: float = Field(default=0.5, validation_alias="ORCH_AGENT_CONFIDENCE_THRESHOLD")
+    # Bull/bear theme agents default to labeled z-score heuristics (not LLM theater).
+    # Set BULL_BEAR_LLM_ENABLED=true only when deliberately spending Gemini/OpenAI budget;
+    # hourly/daily caps apply process-locally and fail closed to the heuristic.
+    BULL_BEAR_LLM_ENABLED: bool = Field(default=False, validation_alias="BULL_BEAR_LLM_ENABLED")
+    BULL_BEAR_LLM_MAX_CALLS_PER_HOUR: int = Field(
+        default=4,
+        validation_alias="BULL_BEAR_LLM_MAX_CALLS_PER_HOUR",
+    )
+    BULL_BEAR_LLM_MAX_CALLS_PER_DAY: int = Field(
+        default=20,
+        validation_alias="BULL_BEAR_LLM_MAX_CALLS_PER_DAY",
+    )
+    BULL_BEAR_LLM_MODEL_GEMINI: str = Field(
+        default="gemini-1.5-flash",
+        validation_alias="BULL_BEAR_LLM_MODEL_GEMINI",
+    )
+    BULL_BEAR_LLM_MODEL_OPENAI: str = Field(
+        default="gpt-4o-mini",
+        validation_alias="BULL_BEAR_LLM_MODEL_OPENAI",
+    )
     ORCH_FUNDAMENTAL_DEFAULT_SCORE: int = Field(default=50, validation_alias="ORCH_FUNDAMENTAL_DEFAULT_SCORE")
     ORCH_FUNDAMENTAL_VETO_SCORE: int = Field(default=40, validation_alias="ORCH_FUNDAMENTAL_VETO_SCORE")
+    # Treat Redis SEC scores older than this (or with unusable timestamps) as unknown.
+    # Matches redis_service fundamental TTL (24h) so live mode cannot trade on stale cache.
+    ORCH_FUNDAMENTAL_MAX_AGE_SECONDS: int = Field(
+        default=86400,
+        validation_alias="ORCH_FUNDAMENTAL_MAX_AGE_SECONDS",
+    )
+    # Skip re-analysis when a usable score is newer than this (worker only).
+    SEC_WORKER_REFRESH_SECONDS: int = Field(
+        default=43200,
+        validation_alias="SEC_WORKER_REFRESH_SECONDS",
+    )
+    SEC_WORKER_UNREACHABLE_THRESHOLD: int = Field(
+        default=3,
+        validation_alias="SEC_WORKER_UNREACHABLE_THRESHOLD",
+    )
+    SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS: int = Field(
+        default=1800,
+        validation_alias="SEC_WORKER_UNREACHABLE_BACKOFF_SECONDS",
+    )
     ORCH_ACCURACY_LOW_THRESHOLD: float = Field(default=0.4, validation_alias="ORCH_ACCURACY_LOW_THRESHOLD")
     ORCH_ACCURACY_HIGH_THRESHOLD: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_HIGH_THRESHOLD")
     ORCH_ACCURACY_LOW_MULTIPLIER: float = Field(default=0.7, validation_alias="ORCH_ACCURACY_LOW_MULTIPLIER")
     ORCH_ACCURACY_HIGH_MULTIPLIER: float = Field(default=1.1, validation_alias="ORCH_ACCURACY_HIGH_MULTIPLIER")
     GLOBAL_STRATEGY_ACCURACY_DEFAULT: float = Field(default=0.5, validation_alias="GLOBAL_STRATEGY_ACCURACY_DEFAULT")
 
-    # The active whale-flow evaluator is legacy/disabled; keep the knobs for a future restored service.
+    # The active whale-flow evaluator is a hard-dormant stub; knobs are reserved for
+    # a future restored service (GitHub #91). WHALE_WATCHER_ENABLED alone does not
+    # activate veto/boost — the stub ignores the flag.
     WHALE_WATCHER_ENABLED: bool = Field(default=False, validation_alias="WHALE_WATCHER_ENABLED")
     WHALE_WATCHER_ROLLING_WINDOW_SECONDS: int = Field(default=1800, validation_alias="WHALE_WATCHER_ROLLING_WINDOW_SECONDS")
     WHALE_WATCHER_CACHE_TTL_SECONDS: int = Field(default=3600, validation_alias="WHALE_WATCHER_CACHE_TTL_SECONDS")
@@ -382,6 +496,11 @@ class Settings(BaseSettings):
     WHALE_WATCHER_SUPPORT_MULTIPLIER: float = Field(default=1.05, validation_alias="WHALE_WATCHER_SUPPORT_MULTIPLIER")
     COINTEGRATION_MIN_OBSERVATIONS: int = Field(default=20, validation_alias="COINTEGRATION_MIN_OBSERVATIONS")
     COINTEGRATION_PVALUE_THRESHOLD: float = Field(default=0.05, validation_alias="COINTEGRATION_PVALUE_THRESHOLD")
+    # Crypto pairs are noisier; allow a slightly looser ADF gate than equities.
+    CRYPTO_COINTEGRATION_PVALUE_THRESHOLD: float = Field(
+        default=0.10,
+        validation_alias="CRYPTO_COINTEGRATION_PVALUE_THRESHOLD",
+    )
 
     # Spec 037: Rolling cointegration stability check. A pair must pass the
     # ADF test in at least COINTEGRATION_ROLLING_PASS_RATE of the rolling
@@ -440,7 +559,7 @@ class Settings(BaseSettings):
 
     PORTFOLIO_RISK_FREE_RATE: float = Field(default=0.02, validation_alias="PORTFOLIO_RISK_FREE_RATE")
 
-    MAX_SECTOR_EXPOSURE: float = 0.30
+    MAX_SECTOR_EXPOSURE: float = Field(default=0.30, validation_alias="MAX_SECTOR_EXPOSURE")
     PAIR_SECTORS: dict = {
         # --- Original equity pairs ---
         'KO_PEP': 'Consumer Staples', 'MA_V': 'Financials', 'XOM_CVX': 'Energy',
@@ -850,6 +969,16 @@ class Settings(BaseSettings):
         return self.is_alpaca_paper_endpoint
 
     @property
+    def execution_lane(self) -> str:
+        """Single fill path: SHADOW | BROKER_PAPER | LIVE (mutually exclusive)."""
+        from src.services.execution_lane import resolve_execution_lane
+
+        return resolve_execution_lane(
+            paper_trading=bool(self.PAPER_TRADING),
+            broker_paper_trading=bool(self.is_broker_paper_trading),
+        )
+
+    @property
     def should_auto_approve_trades(self) -> bool:
         """Shadow paper or Alpaca paper broker — never real-money live capital."""
         return bool(self.PAPER_TRADING or self.is_broker_paper_trading)
@@ -916,6 +1045,21 @@ class Settings(BaseSettings):
             raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
+        # Force-exit must sit inside the TP band; values above TAKE_PROFIT collapse
+        # friction-hold into always-exit and burn fees on every mean-reversion touch.
+        if self.TAKE_PROFIT_FORCE_EXIT_ZSCORE < 0:
+            _logger.warning(
+                "TAKE_PROFIT_FORCE_EXIT_ZSCORE %.4f is negative; clamping to 0.0",
+                self.TAKE_PROFIT_FORCE_EXIT_ZSCORE,
+            )
+            self.TAKE_PROFIT_FORCE_EXIT_ZSCORE = 0.0
+        if self.TAKE_PROFIT_FORCE_EXIT_ZSCORE > self.TAKE_PROFIT_ZSCORE:
+            _logger.warning(
+                "TAKE_PROFIT_FORCE_EXIT_ZSCORE %.4f exceeds TAKE_PROFIT_ZSCORE %.4f; clamping",
+                self.TAKE_PROFIT_FORCE_EXIT_ZSCORE,
+                self.TAKE_PROFIT_ZSCORE,
+            )
+            self.TAKE_PROFIT_FORCE_EXIT_ZSCORE = self.TAKE_PROFIT_ZSCORE
         return self
 
 settings = Settings()

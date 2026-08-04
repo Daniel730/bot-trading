@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+import time
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, patch
 from src.agents.orchestrator import Orchestrator
@@ -38,7 +39,14 @@ def _mock_slow_orchestrator_reads():
     stack.enter_context(
         patch(
             'src.agents.orchestrator.redis_service.get_fundamental_score',
-            new=AsyncMock(return_value={"score": 75}),
+            new=AsyncMock(
+                return_value={
+                    "score": 75,
+                    "source": "edgar",
+                    "available": True,
+                    "last_updated": time.time(),
+                }
+            ),
         )
     )
     stack.enter_context(

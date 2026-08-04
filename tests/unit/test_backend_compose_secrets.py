@@ -46,9 +46,11 @@ def test_backend_compose_restart_policies():
     assert services["redis"]["restart"] == "always"
     assert services["postgres"]["restart"] == "always"
 
-    # Trading Python workers stay manual-restart so a crash stays visible.
-    for service_name in ("bot", "mcp-server", "sec-worker"):
+    # Bot/MCP stay manual-restart so crashes stay visible to operators.
+    for service_name in ("bot", "mcp-server"):
         assert services[service_name]["restart"] == "no"
+    # SEC worker auto-recovers: empty Redis fundamentals silently block live equity entries.
+    assert services["sec-worker"]["restart"] == "unless-stopped"
     # Dry-run sidecar may recover without operator intervention.
     assert services["execution-engine"]["restart"] == "unless-stopped"
 
@@ -110,6 +112,9 @@ def test_mcp_server_uses_compose_redis_host():
     environment = compose["services"]["mcp-server"]["environment"]
 
     assert environment["REDIS_HOST"] == "redis"
+    # Container-internal all-interfaces listen is OK only with loopback host publish.
+    assert environment["MCP_HOST"] == "0.0.0.0"
+    assert environment["MCP_ALLOW_NON_LOOPBACK"] == "true"
 
 
 def test_sec_worker_uses_compose_redis_host():
@@ -164,5 +169,9 @@ def test_backend_compose_requires_redis_password_and_requirepass():
     )
     assert "--requirepass" in redis["command"]
     assert "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}" in redis["command"]
+    assert "--maxmemory" in redis["command"]
+    assert "96mb" in redis["command"]
+    assert "--maxmemory-policy" in redis["command"]
+    assert "volatile-lru" in redis["command"]
     health = redis["healthcheck"]["test"]
     assert any("REDIS_PASSWORD" in part for part in health if isinstance(part, str))

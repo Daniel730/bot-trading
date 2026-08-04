@@ -125,6 +125,12 @@ class MarketRegimeService:
                     time.monotonic(),
                     self._copy_regime_result(result),
                 )
+                # Bound ticker keys so long-running monitors do not retain every
+                # regime probe forever (SPY + pair legs accumulate slowly).
+                if len(self._regime_cache) > 64:
+                    oldest = sorted(self._regime_cache.items(), key=lambda item: item[1][0])
+                    for key, _value in oldest[: max(0, len(self._regime_cache) - 64)]:
+                        self._regime_cache.pop(key, None)
 
             return result
 

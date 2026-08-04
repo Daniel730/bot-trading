@@ -12,9 +12,11 @@ import pytest
 from src.monitor_helpers import (
     compute_entry_zscore,
     is_crypto_pair,
+    is_executable_bid_ask,
     resolve_hedge_ratio,
     resolve_kalman_pair_id,
     resolve_pair_sector,
+    resolve_profit_guard_friction_pct,
 )
 
 
@@ -228,3 +230,89 @@ class TestResolveHedgeRatio:
     def test_invalid_values_fall_back_to_one(self):
         assert resolve_hedge_ratio({}) == 1.0
         assert resolve_hedge_ratio({"hedge_ratio": 0.0, "dynamic_beta": -1.0}) == 1.0
+
+
+def test_should_take_profit_exit_covers_friction():
+    from src.monitor_helpers import should_take_profit_exit
+
+    ok, reason = should_take_profit_exit(
+        abs_z_score=0.3,
+        take_profit_zscore=0.5,
+        directional_pnl=20.0,
+        estimated_friction=10.0,
+        force_exit_zscore=0.25,
+    )
+    assert ok is True
+    assert reason == "covers_friction"
+
+
+def test_should_take_profit_exit_force_mean_reversion():
+    from src.monitor_helpers import should_take_profit_exit
+
+    ok, reason = should_take_profit_exit(
+        abs_z_score=0.1,
+        take_profit_zscore=0.5,
+        directional_pnl=1.0,
+        estimated_friction=12.0,
+        force_exit_zscore=0.25,
+    )
+    assert ok is True
+    assert reason == "force_mean_reversion"
+
+
+def test_should_take_profit_exit_friction_hold():
+    from src.monitor_helpers import should_take_profit_exit
+
+    ok, reason = should_take_profit_exit(
+        abs_z_score=0.3,
+        take_profit_zscore=0.5,
+        directional_pnl=1.0,
+        estimated_friction=12.0,
+        force_exit_zscore=0.25,
+    )
+    assert ok is False
+    assert reason == "friction_hold"
+
+
+# ---------------------------------------------------------------------------
+# executable bid/ask + profit-guard friction floor
+# ---------------------------------------------------------------------------
+
+
+class TestExecutableBidAsk:
+    def test_accepts_tight_and_locked_quotes(self):
+        assert is_executable_bid_ask(100.0, 100.05) is True
+        assert is_executable_bid_ask(100.0, 100.0) is True
+
+    def test_rejects_crossed_missing_or_non_numeric(self):
+        assert is_executable_bid_ask(100.05, 100.0) is False
+        assert is_executable_bid_ask(0.0, 100.0) is False
+        assert is_executable_bid_ask(100.0, 0.0) is False
+        assert is_executable_bid_ask("x", 100.0) is False
+
+
+class TestResolveProfitGuardFrictionPct:
+    def test_uses_estimated_cost_when_present(self):
+        assert resolve_profit_guard_friction_pct(
+            fee_friction_pct=0.00005,
+            pair_estimated_cost_pct=0.002,
+            gross_notional=1000.0,
+            flat_order_friction_usd=0.5,
+        ) == pytest.approx(0.002)
+
+    def test_floors_to_flat_over_pair_notional_when_estimate_missing(self):
+        # Portfolio-level fee_status understates pair friction; flat/notional must win.
+        assert resolve_profit_guard_friction_pct(
+            fee_friction_pct=0.00005,
+            pair_estimated_cost_pct=0.0,
+            gross_notional=500.0,
+            flat_order_friction_usd=0.5,
+        ) == pytest.approx(0.001)
+
+    def test_does_not_loosen_below_fee_status(self):
+        assert resolve_profit_guard_friction_pct(
+            fee_friction_pct=0.01,
+            pair_estimated_cost_pct=0.002,
+            gross_notional=1000.0,
+            flat_order_friction_usd=0.5,
+        ) == pytest.approx(0.01)
