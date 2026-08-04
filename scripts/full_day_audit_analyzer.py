@@ -24,17 +24,31 @@ def analyze() -> dict:
     text = MONITOR_LOG.read_text(encoding="utf-8", errors="replace") if MONITOR_LOG.exists() else ""
     lines = [_strip(l) for l in text.splitlines()]
     reasons = Counter()
-    for line in lines:
-        m = re.search(r"PAIR SKIP \[([^\]]+)\]: (\S+)", line)
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.search(r"PAIR SKIP \[([^\]]+)\]:\s*(\S+)?", line)
         if m:
-            reasons[m.group(2)] += 1
-        m = re.search(r"Iteration Complete \| Scanned: (\d+)/(\d+) \| Signals: (\d+) \| Vetoed: (\d+) \| Open: (\d+)", line)
+            reason = (m.group(2) or "").strip()
+            if not reason and i + 1 < len(lines):
+                # Rich console often wraps the reason onto the next indented line.
+                nxt = lines[i + 1].strip()
+                if nxt and "PAIR SKIP" not in nxt and "SCAN [" not in nxt:
+                    reason = nxt.split()[0]
+            if reason:
+                reasons[reason] += 1
+        i += 1
     iterations = len([l for l in lines if "Iteration Complete" in l])
     errors = len([l for l in lines if re.search(r"\bERROR\b|Traceback", l)])
     unauthorized = len([l for l in lines if "unauthorized" in l.lower()])
     signals = len([l for l in lines if "SIGNAL [" in l])
-    executed = len([l for l in lines if "EXECUTE" in l or "OPEN_PAIR" in l or "shadow" in l.lower() and "fill" in l.lower()])
-
+    executed = len(
+        [
+            l
+            for l in lines
+            if "OPEN_PAIR" in l or "CLOSE_PAIR" in l or re.search(r"shadow.*(fill|execute)", l, re.I)
+        ]
+    )
     rss_series = []
     sample_path = SAMPLES / f"soak_{datetime.now(timezone.utc).strftime('%Y%m%d')}.jsonl"
     if sample_path.exists():
