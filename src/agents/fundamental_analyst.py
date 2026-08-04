@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from src.services.sec_service import SECService
 from src.services.agent_log_service import AgentLogService
 from src.models.arbitrage_models import FundamentalSignal
-from src.services.notification_service import NotificationService
+from src.services.notification_service import notification_service
 from src.utils import extract_json
 
 class StructuralIntegrityResult(BaseModel):
@@ -18,7 +18,7 @@ class FundamentalAnalyst:
     def __init__(self, sec_service: SECService = None, log_service: AgentLogService = None):
         self.sec_service = sec_service or SECService()
         self.log_service = log_service or AgentLogService()
-        self.notification = NotificationService()
+        self.notification = notification_service
 
         self.model = self._build_gemini_model(os.getenv("GEMINI_API_KEY"))
 
