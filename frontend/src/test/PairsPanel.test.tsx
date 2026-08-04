@@ -304,7 +304,8 @@ describe('PairsPanel wallet sync interaction', () => {
 
   it('shows "Failed to sync broker wallet" on API error', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    mockSyncWallet.mockRejectedValue(new Error());
+    // Empty message exercises the component fallback string.
+    mockSyncWallet.mockRejectedValue(new Error(''));
 
     render(<PairsPanel token={TOKEN} sessionToken={SESSION} />);
 
@@ -315,8 +316,10 @@ describe('PairsPanel wallet sync interaction', () => {
     fireEvent.click(screen.getByTitle('Buy missing broker tickers'));
 
     await waitFor(() => {
-      expect(screen.getByText('Failed to sync broker wallet')).toBeInTheDocument();
+      expect(mockSyncWallet).toHaveBeenCalledOnce();
     });
+
+    expect(await screen.findByText('Failed to sync broker wallet')).toBeInTheDocument();
   });
 
   it('shows success message after successful sync', async () => {
