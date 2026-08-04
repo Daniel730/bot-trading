@@ -9,6 +9,11 @@ from __future__ import annotations
 from itertools import combinations
 from typing import Iterable, List, Optional, Sequence, Set, Tuple
 
+from src.services.portfolio_book_guards import (
+    candidate_shares_occupied_ticker,
+    occupied_tickers_from_pairs,
+)
+
 
 def parse_pair_id(pair_id: str) -> Tuple[str, str]:
     """Split ``TICKER_A_TICKER_B`` into legs.
@@ -112,6 +117,47 @@ def candidate_pair_combos(
     return list(combinations(cleaned, 2))
 
 
+def _candidate_sortino(candidate: dict) -> float:
+    try:
+        return float(candidate.get("sortino") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _candidate_passes_quality(
+    candidate: dict,
+    *,
+    sortino_threshold: float,
+    min_correlation: float,
+    max_pvalue: float,
+    max_abs_hedge: float,
+) -> bool:
+    """Quality gates for promotion — keep junk out of the Active squad."""
+    if _candidate_sortino(candidate) < float(sortino_threshold):
+        return False
+
+    corr = candidate.get("correlation")
+    if corr is not None:
+        try:
+            if float(corr) < float(min_correlation):
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    p_value = candidate.get("p_value")
+    if p_value is not None:
+        try:
+            if float(p_value) > float(max_pvalue):
+                return False
+        except (TypeError, ValueError):
+            return False
+
+    hedge = candidate.get("hedge_ratio")
+    if hedge is not None and not is_hedge_ratio_sane(hedge, max_abs_hedge=max_abs_hedge):
+        return False
+    return True
+
+
 def select_rotation_actions(
     active_pairs: Sequence[dict],
     candidates: Sequence[dict],
@@ -120,29 +166,45 @@ def select_rotation_actions(
     sortino_threshold: float = 0.0,
     denylist: Iterable[str] | None = None,
     max_abs_hedge: float = 25.0,
+    min_correlation: float = 0.0,
+    max_pvalue: float = 1.0,
 ) -> dict:
     """Decide which active pairs to bench and which candidates to promote.
 
     Policy (in order):
     1. Bench denylisted Active pairs immediately.
-    2. Fill open slots up to ``max_active_pairs`` from top candidates.
-    3. Replace non-cointegrated active pairs with remaining candidates.
+    2. Bench Active pairs with insane hedge ratios (BTC/BCH-scale betas).
+    3. Bench non-cointegrated Active pairs immediately (free scan slots even
+       when no replacement scout is ready).
+    4. Fill open slots up to ``max_active_pairs`` from top quality candidates.
 
-    Candidates on the denylist or with insane hedge ratios are never promoted.
+    Candidates on the denylist, below Sortino/correlation floors, above the
+    cointegration p-value ceiling, or with insane hedge ratios are never promoted.
     """
-    _ = sortino_threshold  # reserved for callers that gate fill quality
     denied = normalize_denylist(denylist)
     active = list(active_pairs or [])
-    scouts = list(candidates or [])
+    scouts = sorted(list(candidates or []), key=_candidate_sortino, reverse=True)
 
     to_bench: list[str] = []
     for pair in active:
         pair_id = str(pair.get("id") or "")
-        if pair_id and is_pair_denied(pair_id=pair_id, denylist=denied):
+        if not pair_id:
+            continue
+        if is_pair_denied(pair_id=pair_id, denylist=denied):
+            to_bench.append(pair_id)
+            continue
+        hedge = pair.get("hedge_ratio")
+        if hedge is not None and not is_hedge_ratio_sane(hedge, max_abs_hedge=max_abs_hedge):
+            to_bench.append(pair_id)
+            continue
+        # Dead equity / broken crypto must not keep occupying Active slots
+        # overnight while waiting for a replacement scout.
+        if not bool(pair.get("is_cointegrated", True)):
             to_bench.append(pair_id)
 
     remaining_active = [p for p in active if str(p.get("id") or "") not in to_bench]
     active_ids = {str(p.get("id") or "") for p in remaining_active}
+    occupied_tickers = occupied_tickers_from_pairs(remaining_active, id_key="id")
 
     eligible: list[dict] = []
     for candidate in scouts:
@@ -151,34 +213,35 @@ def select_rotation_actions(
             continue
         if is_pair_denied(pair_id=pair_id, denylist=denied):
             continue
-        hedge = candidate.get("hedge_ratio")
-        if hedge is not None and not is_hedge_ratio_sane(hedge, max_abs_hedge=max_abs_hedge):
+        if not _candidate_passes_quality(
+            candidate,
+            sortino_threshold=sortino_threshold,
+            min_correlation=min_correlation,
+            max_pvalue=max_pvalue,
+            max_abs_hedge=max_abs_hedge,
+        ):
+            continue
+        # Do not promote pairs that share a leg with remaining Active pairs —
+        # that overcrowds the scan book with correlated name exposure.
+        if candidate_shares_occupied_ticker(candidate, occupied_tickers):
             continue
         eligible.append(candidate)
 
-    to_promote: list[dict] = []
-
     open_slots = max(0, int(max_active_pairs) - len(remaining_active))
-    fill, eligible = eligible[:open_slots], eligible[open_slots:]
-    to_promote.extend(fill)
-
-    broken = [p for p in remaining_active if not bool(p.get("is_cointegrated", True))]
-    replace_count = min(len(broken), len(eligible))
-    for i in range(replace_count):
-        pair_id = str(broken[i].get("id") or "")
-        if not pair_id:
-            continue
-        to_bench.append(pair_id)
-        to_promote.append(eligible[i])
+    to_promote = eligible[:open_slots]
 
     seen_promote: set[str] = set()
     unique_promote: list[dict] = []
+    promote_occupied = set(occupied_tickers)
     for candidate in to_promote:
         pid = str(candidate.get("pair_id") or "")
         if not pid or pid in seen_promote:
             continue
+        if candidate_shares_occupied_ticker(candidate, promote_occupied):
+            continue
         seen_promote.add(pid)
         unique_promote.append(candidate)
+        promote_occupied |= occupied_tickers_from_pairs([{"pair_id": pid}], id_key="pair_id")
 
     # Deduplicate benches while preserving order.
     seen_bench: set[str] = set()
@@ -204,12 +267,16 @@ def pairs_from_promotions(candidates: Iterable[dict]) -> List[dict]:
             ticker_a, ticker_b = parse_pair_id(pair_id)
         except ValueError:
             continue
+        try:
+            hedge = float(candidate.get("hedge_ratio") or 0.0)
+        except (TypeError, ValueError):
+            hedge = 0.0
         out.append(
             {
                 "id": pair_id,
                 "ticker_a": ticker_a,
                 "ticker_b": ticker_b,
-                "hedge_ratio": float(candidate.get("hedge_ratio") or 0.0),
+                "hedge_ratio": hedge,
                 "is_cointegrated": True,
                 "status": "Active",
             }

@@ -154,6 +154,13 @@ class Settings(BaseSettings):
     REDIS_DB: int = Field(default=0, validation_alias="REDIS_DB")
     REDIS_PASSWORD: str = Field(default="", validation_alias="REDIS_PASSWORD")
     REDIS_APPENDONLY: bool = Field(default=True, validation_alias="REDIS_APPENDONLY")
+    # Sliding TTL for kalman:{pair_id} hashes. Active pairs refresh on each save;
+    # orphaned keys (removed/quarantined pairs) expire instead of growing forever.
+    KALMAN_STATE_TTL_SECONDS: int = Field(
+        default=14 * 24 * 3600,
+        validation_alias="KALMAN_STATE_TTL_SECONDS",
+        ge=3600,
+    )
 
     POSTGRES_HOST: str = Field(default="localhost", validation_alias="POSTGRES_HOST")
     POSTGRES_PORT: int = Field(default=5432, validation_alias="POSTGRES_PORT")
@@ -186,6 +193,18 @@ class Settings(BaseSettings):
     WEB3_BUDGET_USD: float = Field(default=0.0, validation_alias="WEB3_BUDGET_USD")
     MAX_ALLOCATION_PERCENTAGE: float = 15.0
     MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
+    # Hard cap on concurrent open pair signals (ledger). Separate from scan-universe
+    # MAX_ACTIVE_PAIRS — prevents overcrowding when many Active pairs fire together.
+    # 0 disables the gate.
+    MAX_OPEN_PAIRS: int = Field(default=8, validation_alias="MAX_OPEN_PAIRS")
+    # Book-wide gross notional ceiling (sum of open cost bases + new trade).
+    # Defaults to MAX_OPEN_PAIRS * MAX_PAIR_GROSS_NOTIONAL_USD scale; 0 disables.
+    MAX_PORTFOLIO_GROSS_NOTIONAL_USD: float = Field(
+        default=800.0,
+        validation_alias="MAX_PORTFOLIO_GROSS_NOTIONAL_USD",
+    )
+    # Reject opens that share a ticker with any already-open pair (correlated blowups).
+    BLOCK_SHARED_LEG_OPENS: bool = Field(default=True, validation_alias="BLOCK_SHARED_LEG_OPENS")
     SCOUT_INTERVAL_HOURS: int = Field(default=12, validation_alias="SCOUT_INTERVAL_HOURS")
     # Automatic pair discovery (S&P sector + crypto scout → universe_candidates → Active).
     # When false, the monitor skips the background scout loop; dashboard POST
@@ -204,6 +223,15 @@ class Settings(BaseSettings):
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
     # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Scout/promote quality floors (pair-internal correlation + cointegration p-value).
+    PAIR_DISCOVERY_MIN_CORRELATION: float = Field(
+        default=0.70,
+        validation_alias="PAIR_DISCOVERY_MIN_CORRELATION",
+    )
+    PAIR_DISCOVERY_MAX_PVALUE: float = Field(
+        default=0.05,
+        validation_alias="PAIR_DISCOVERY_MAX_PVALUE",
+    )
     # Hard denylist (either leg order). Comma-separated pair ids in env.
     # Default quarantines the known BTC/BCH spread-guard churner.
     PAIR_DENYLIST: str = Field(
@@ -401,6 +429,11 @@ class Settings(BaseSettings):
     WHALE_WATCHER_SUPPORT_MULTIPLIER: float = Field(default=1.05, validation_alias="WHALE_WATCHER_SUPPORT_MULTIPLIER")
     COINTEGRATION_MIN_OBSERVATIONS: int = Field(default=20, validation_alias="COINTEGRATION_MIN_OBSERVATIONS")
     COINTEGRATION_PVALUE_THRESHOLD: float = Field(default=0.05, validation_alias="COINTEGRATION_PVALUE_THRESHOLD")
+    # Crypto pairs are noisier; allow a slightly looser ADF gate than equities.
+    CRYPTO_COINTEGRATION_PVALUE_THRESHOLD: float = Field(
+        default=0.10,
+        validation_alias="CRYPTO_COINTEGRATION_PVALUE_THRESHOLD",
+    )
 
     # Spec 037: Rolling cointegration stability check. A pair must pass the
     # ADF test in at least COINTEGRATION_ROLLING_PASS_RATE of the rolling
@@ -459,7 +492,7 @@ class Settings(BaseSettings):
 
     PORTFOLIO_RISK_FREE_RATE: float = Field(default=0.02, validation_alias="PORTFOLIO_RISK_FREE_RATE")
 
-    MAX_SECTOR_EXPOSURE: float = 0.30
+    MAX_SECTOR_EXPOSURE: float = Field(default=0.30, validation_alias="MAX_SECTOR_EXPOSURE")
     PAIR_SECTORS: dict = {
         # --- Original equity pairs ---
         'KO_PEP': 'Consumer Staples', 'MA_V': 'Financials', 'XOM_CVX': 'Energy',

@@ -332,6 +332,8 @@ class RiskService:
         Calculates the sector exposure of the active portfolio as a percentage.
         portfolio format expected: [{"ticker": str, "size": float, "sector": str}]
         """
+        from src.services.portfolio_book_guards import normalize_sector_label
+
         if not portfolio:
             return {}
 
@@ -341,7 +343,7 @@ class RiskService:
 
         exposures = {}
         for p in portfolio:
-            sector = p.get("sector", "General")
+            sector = normalize_sector_label(p.get("sector", "Unassigned"))
             size = p.get("size", 0.0)
             exposures[sector] = exposures.get(sector, 0.0) + size
 

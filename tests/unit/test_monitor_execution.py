@@ -1224,3 +1224,172 @@ async def test_execute_trade_rejects_crypto_sell_without_inventory(monitor):
         assert result["executed"] is False
         assert result["reason"] == "insufficient_sell_inventory"
         monitor.brokerage.place_value_order.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_rejects_sector_overconcentration(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    signal_id = str(uuid.uuid4())
+    # Relative to PAPER_TRADING_STARTING_CASH=1000, 400 tech + ~100 new => ~50% > 30%.
+    crowded = [
+        {"ticker": "GOOGL", "size": 200.0, "sector": "Technology"},
+        {"ticker": "NVDA", "size": 200.0, "sector": "Technology"},
+    ]
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock, return_value=(150.0, 150.1)), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=crowded), \
+         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
+         patch("src.services.persistence_service.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock, return_value={"regime": "STABLE", "confidence": 0.9, "features": {}}), \
+         patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch.object(settings, "PAPER_TRADING", True), \
+         patch.object(settings, "PAPER_TRADING_STARTING_CASH", 1000.0), \
+         patch.object(settings, "ALPACA_BUDGET_USD", 0.0), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0), \
+         patch.object(settings, "MAX_SECTOR_EXPOSURE", 0.30):
+
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 100.0,
+            "fee_status": {"total_friction_percent": 0.001},
+        }
+        result = await monitor.execute_trade(pair, "Short-Long", 150.0, 300.0, signal_id)
+
+        assert result["executed"] is False
+        assert result["reason"] == "sector_exposure_guard"
+        mock_shadow_exec.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_rejects_shared_leg_overlap(monitor):
+    pair = {"ticker_a": "NVDA", "ticker_b": "INTC", "id": "NVDA_INTC"}
+    signal_id = str(uuid.uuid4())
+    open_signals = [
+        {
+            "signal_id": "existing",
+            "is_shadow": True,
+            "execution_lane": "SHADOW",
+            "legs": [{"ticker": "NVDA", "is_shadow": True}, {"ticker": "AMD", "is_shadow": True}],
+            "total_cost_basis": 100.0,
+        }
+    ]
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock, return_value=(100.0, 100.05)), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
+         patch("src.services.persistence_service.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=open_signals), \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock, return_value={"regime": "STABLE", "confidence": 0.9, "features": {}}), \
+         patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch.object(settings, "PAPER_TRADING", True), \
+         patch.object(settings, "BLOCK_SHARED_LEG_OPENS", True), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
+
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 100.0,
+            "fee_status": {"total_friction_percent": 0.001},
+        }
+        result = await monitor.execute_trade(pair, "Short-Long", 100.0, 50.0, signal_id)
+
+        assert result["executed"] is False
+        assert result["reason"] == "shared_leg_guard"
+        mock_shadow_exec.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_rejects_max_open_pairs(monitor):
+    pair = {"ticker_a": "KO", "ticker_b": "PEP", "id": "KO_PEP"}
+    signal_id = str(uuid.uuid4())
+    open_signals = [
+        {
+            "signal_id": f"sig-{i}",
+            "is_shadow": True,
+            "execution_lane": "SHADOW",
+            "legs": [{"ticker": f"T{i}A"}, {"ticker": f"T{i}B"}],
+            "total_cost_basis": 50.0,
+        }
+        for i in range(8)
+    ]
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock, return_value=(50.0, 50.05)), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
+         patch("src.services.persistence_service.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=open_signals), \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock, return_value={"regime": "STABLE", "confidence": 0.9, "features": {}}), \
+         patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch.object(settings, "PAPER_TRADING", True), \
+         patch.object(settings, "MAX_OPEN_PAIRS", 8), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
+
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 100.0,
+            "fee_status": {"total_friction_percent": 0.001},
+        }
+        result = await monitor.execute_trade(pair, "Short-Long", 50.0, 50.0, signal_id)
+
+        assert result["executed"] is False
+        assert result["reason"] == "max_open_pairs_guard"
+        mock_shadow_exec.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_trade_rejects_portfolio_gross_cap(monitor):
+    pair = {"ticker_a": "KO", "ticker_b": "PEP", "id": "KO_PEP"}
+    signal_id = str(uuid.uuid4())
+    open_signals = [
+        {
+            "signal_id": "big",
+            "is_shadow": True,
+            "execution_lane": "SHADOW",
+            "legs": [{"ticker": "XOM"}, {"ticker": "CVX"}],
+            "total_cost_basis": 750.0,
+        }
+    ]
+
+    with patch("src.monitor.data_service.get_bid_ask", new_callable=AsyncMock, return_value=(50.0, 50.05)), \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
+         patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
+         patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         patch("src.services.shadow_service.shadow_service.execute_simulated_trade", new_callable=AsyncMock) as mock_shadow_exec, \
+         patch("src.services.persistence_service.persistence_service.get_open_signals", new_callable=AsyncMock, return_value=open_signals), \
+         patch("src.services.persistence_service.persistence_service.log_trade_journal", new_callable=AsyncMock), \
+         patch("src.services.market_regime_service.market_regime_service.classify_current_regime", new_callable=AsyncMock, return_value={"regime": "STABLE", "confidence": 0.9, "features": {}}), \
+         patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch.object(settings, "PAPER_TRADING", True), \
+         patch.object(settings, "BLOCK_SHARED_LEG_OPENS", False), \
+         patch.object(settings, "MAX_OPEN_PAIRS", 20), \
+         patch.object(settings, "MAX_PORTFOLIO_GROSS_NOTIONAL_USD", 800.0), \
+         patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
+
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 100.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 100.0,
+            "fee_status": {"total_friction_percent": 0.001},
+        }
+        result = await monitor.execute_trade(pair, "Short-Long", 50.0, 50.0, signal_id)
+
+        assert result["executed"] is False
+        assert result["reason"] == "portfolio_gross_notional_guard"
+        mock_shadow_exec.assert_not_called()
