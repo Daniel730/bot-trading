@@ -209,7 +209,14 @@ async def test_close_position_closes_ledger_when_residual_ignored(monitor):
 
         mock_persistence.close_trade.assert_awaited_once()
         mock_persistence.update_signal_status.assert_not_awaited()
-        mock_notify.assert_not_awaited()
+        # Residual unmanaged inventory must alert — never silently swallow risk.
+        assert mock_notify.await_count >= 1
+        residual_alerts = [
+            call.args[0] for call in mock_notify.await_args_list if "remaining" in call.args[0]
+        ]
+        assert residual_alerts
+        assert "NOT auto-flattened" in residual_alerts[0]
+        assert "IGNORE_UNMANAGED_POSITIONS=True" in residual_alerts[0]
 
 
 @pytest.mark.asyncio
