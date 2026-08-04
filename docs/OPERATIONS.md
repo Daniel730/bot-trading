@@ -396,7 +396,7 @@ wiping Redis, Postgres, and dashboard 2FA state.
 
 | Date | Commits | Workflow | Notes |
 |---|---|---|---|
-| 2026-08-04 | `81e65b2` + claim/intent fixes | Deploy after Phase 4–5 merge | (1) quality_python: approval-denied got `SKIPPED` — distributed claim fail-closed on event-loop errors; paper/auto-approve now local+WAL fallback, LIVE stays fail-closed. (2) `test_exactly_once_100_duplicate_intents` raced on SELECT-then-INSERT; `begin_intent` now uses `ON CONFLICT DO NOTHING`. Added `infra/ops_postdeploy_health.sh`. |
+| 2026-08-04 | `81e65b2` + claim/intent/broker-test fixes | Deploy after Phase 4–5 merge | (1) claim fail-closed broke approval-denied unit test → paper/auto-approve local+WAL fallback. (2) exactly-once race UniqueViolation → `ON CONFLICT DO NOTHING`. (3) integration `test_brokerage_service_places_alpaca_market_order` hit new `_pre_submit_gate` under CI `PAPER_TRADING=true` → test now opts into broker-paper path like unit dispatcher tests. |
 | 2026-07-17 | `7e6f7b3`, `a5c5b63` | [run 29569493017](https://github.com/Daniel730/bot-trading/actions/runs/29569493017) | Profitability fixes: MAB, crypto orchestrator bypass, z-score clamp, take-profit guard, UI label. `force_python` + `force_frontend`. Smoke OK. |
 
 ## Host Memory / OOM (bot-server)
