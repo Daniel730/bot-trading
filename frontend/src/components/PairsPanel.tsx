@@ -442,7 +442,8 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
       await refresh();
     } catch (err) {
       const e = err as Error;
-      setWalletError(e.message || 'Failed to sync broker wallet');
+      const detail = typeof e?.message === 'string' ? e.message.trim() : '';
+      setWalletError(detail || 'Failed to sync broker wallet');
     } finally {
       setWalletSyncing(false);
     }
