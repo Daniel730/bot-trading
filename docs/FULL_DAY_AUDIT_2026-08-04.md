@@ -55,17 +55,38 @@ After F1 fix: health checks passed, discovery stayed OFF, continuous scan starte
 with **5 Active crypto pairs** (BTC/ETH, ETH/SOL, AVAX/DOT, AVAX/LTC, XRP/XLM).
 First iterations: all `below_entry_threshold`, no crashes.
 
-### F5 — Dashboard cash poll still hits Alpaca in shadow (noise)
+### F5 — Dashboard cash poll still hits Alpaca in shadow (FIXED)
 
-Even in SHADOW mode the dashboard periodically tries `get_account_cash` and logs
-`Alpaca failed to fetch account cash: unauthorized` / `DASHBOARD: Could not fetch
-ALPACA cash`. Non-fatal but noisy; consider short-circuiting cash fetch when
-`PAPER_TRADING=true` (use shadow cash).
+Even in SHADOW mode the dashboard periodically tried `get_account_cash` and logged
+`Alpaca failed to fetch account cash: unauthorized`. Fixed: metric polls use
+`PAPER_TRADING_STARTING_CASH` when `PAPER_TRADING=true`.
+
+### F6 — Live Kalman beta can exceed admission hedge cap (FIXED)
+
+`PAIR_DISCOVERY_MAX_ABS_HEDGE=25` is enforced on OLS hedge at warm-up, but the
+Kalman filter can drift past it while staying under the hard clip (0.001–1000).
+Observed on this soak:
+
+| Pair | Init OLS hedge | Live Kalman beta |
+|---|---|---|
+| BTC-USD/ETH-USD | ~12.6 | ~34.1 |
+| ETH-USD/SOL-USD | ~-8.9 | ~25.2 |
+
+**Fix:** `process_pair` now skips with `extreme_kalman_beta` when
+`abs(kalman_beta) > PAIR_DISCOVERY_MAX_ABS_HEDGE` (same helper as admission).
+
+### F7 — Near-zero OLS hedge still admits (WATCH)
+
+`AVAX-USD/LTC-USD` warmed with OLS hedge ≈ `-0.002` (passes `is_hedge_ratio_sane`
+because only exact `0.0` is rejected) and scans at Kalman beta ≈ `0.12`. Sizing
+with near-zero hedge is fragile. Consider a minimum `|hedge|` floor (e.g. 0.05)
+at admission — not changed in this PR yet.
 
 ## Soak harness
 
 - Monitor: tmux `audit-monitor` → `data/audit/logs/monitor.out`
 - Sampler: tmux `audit-sampler` → `data/audit/samples/soak_YYYYMMDD.jsonl`
+  (auth via `X-Dashboard-Session`)
 - Frontend: tmux `audit-frontend` → `:5173`
 
 Sampler authenticates with dashboard token + TOTP (`data/audit/`).
@@ -73,7 +94,7 @@ Sampler authenticates with dashboard token + TOTP (`data/audit/`).
 ## Residual watch list (in progress)
 
 1. RSS / prune valve over multi-hour window (#102 evidence)
-2. Signal → orchestrator → shadow fill path when |z| ≥ entry
+2. Signal → orchestrator → shadow fill path when |z| ≥ entry (and beta sane)
 3. Equity re-admit behavior once US cash session is open (still yfinance-only here)
-4. Kalman beta drift vs init hedge (BTC/ETH showed scan beta ≫ init hedge)
-5. AVAX/LTC near-zero hedge ratio sanity
+4. Optional min-abs hedge floor (F7)
+5. Rotate Alpaca keys and re-run broker-paper soak

@@ -1977,6 +1977,21 @@ class ArbitrageMonitor:
             # ever goes transiently invalid again in the future.
             self._kalman_rebuild_attempted.discard(pair['id'])
 
+            # Admission hedge cap must also apply to live Kalman beta. OLS can
+            # pass PAIR_DISCOVERY_MAX_ABS_HEDGE at warm-up while the filter drifts
+            # past it (observed BTC-USD/ETH-USD beta ~34 with max_abs=25).
+            from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+
+            if not is_hedge_ratio_sane(
+                state_vec[1], max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+            ):
+                return skip(
+                    "extreme_kalman_beta",
+                    stage="kalman",
+                    beta=float(state_vec[1]),
+                    max_abs_hedge=float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE),
+                )
+
             # Persist Kalman state to Redis
             await arbitrage_service.save_filter_state(pair['id'], kf, z_score)
 

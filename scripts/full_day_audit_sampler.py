@@ -139,15 +139,15 @@ def _summarize_pairs(data: object) -> dict:
 def _api_snapshot(client: httpx.Client) -> dict:
     out: dict = {"authenticated": False}
     session = _login(client)
-    headers = {"Authorization": f"Bearer {session}"} if session else {}
+    headers = {"X-Dashboard-Session": session} if session else {}
     out["authenticated"] = bool(session)
     paths = (
         "/api/system/health",
-        "/api/system/runtime",
         "/api/pairs",
-        "/api/portfolio",
-        "/api/signals/active",
-        "/api/discovery/status",
+        "/api/positions",
+        "/api/stats/summary",
+        "/api/approvals/pending",
+        "/api/config",
     )
     for path in paths:
         try:
