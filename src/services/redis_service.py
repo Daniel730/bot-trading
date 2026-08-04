@@ -96,7 +96,11 @@ class RedisService:
         if state_fingerprint:
             state["state_fingerprint"] = state_fingerprint
         await self.client.hset(key, mapping=state)
-        ttl = settings.KALMAN_STATE_TTL_SECONDS if ttl_seconds is None else int(ttl_seconds)
+        ttl = (
+            int(ttl_seconds)
+            if ttl_seconds is not None
+            else int(getattr(settings, "KALMAN_STATE_TTL_SECONDS", 14 * 24 * 3600))
+        )
         if ttl > 0:
             await self.client.expire(key, ttl)
 
