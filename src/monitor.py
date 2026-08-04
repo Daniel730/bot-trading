@@ -38,6 +38,7 @@ from src.services.trade_math import (
     estimate_pair_profit,
     is_broker_fill_complete,
 )
+import gc
 import uuid
 import pytz
 import inspect
@@ -809,7 +810,11 @@ class ArbitrageMonitor:
                     continue
 
                 is_crypto = is_crypto_pair(ticker_a, ticker_b)
-                p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+                p_thresh = (
+                    settings.CRYPTO_COINTEGRATION_PVALUE_THRESHOLD
+                    if is_crypto
+                    else settings.COINTEGRATION_PVALUE_THRESHOLD
+                )
                 pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
 
                 is_coint, p_val, hedge = arbitrage_service.check_cointegration(
@@ -834,7 +839,7 @@ class ArbitrageMonitor:
                         is_coint = False
                         logger.info(
                             "ROLLING COINT FAIL %s/%s: pass_rate=%.2f windows=%d median_p=%.3f "
-                            "→ pair admitted but trading suspended until stability returns.",
+                            "→ pair benched (does not occupy an Active scan slot).",
                             ticker_a,
                             ticker_b,
                             stability["pass_rate"],
@@ -849,6 +854,8 @@ class ArbitrageMonitor:
 
                 from src.services.pair_discovery_helpers import is_hedge_ratio_sane
 
+                pair_id = f"{ticker_a}_{ticker_b}"
+
                 if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
                     logger.warning(
                         "SKIP %s/%s: extreme hedge_ratio=%.3f exceeds PAIR_DISCOVERY_MAX_ABS_HEDGE=%.1f",
@@ -858,14 +865,46 @@ class ArbitrageMonitor:
                         settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
                     )
                     try:
-                        await persistence_service.update_pair_status(
-                            f"{ticker_a}_{ticker_b}", "Benched"
-                        )
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": ticker_a,
+                            "ticker_b": ticker_b,
+                            "hedge_ratio": float(hedge),
+                            "is_cointegrated": False,
+                            "status": "Benched",
+                        }])
                     except Exception:
-                        pass
+                        try:
+                            await persistence_service.update_pair_status(pair_id, "Benched")
+                        except Exception:
+                            pass
                     continue
 
-                pair_id = f"{ticker_a}_{ticker_b}"
+                # Failed static / rolling cointegration must free the Active slot.
+                # Soft-admit + skip used to leave dead equity/crypto burning MAX_ACTIVE_PAIRS.
+                if not is_coint:
+                    logger.warning(
+                        "SKIP %s/%s: not cointegrated (p=%.4f thresh=%.3f); benching Active slot.",
+                        ticker_a,
+                        ticker_b,
+                        float(p_val) if p_val is not None else float("nan"),
+                        float(p_thresh),
+                    )
+                    try:
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": ticker_a,
+                            "ticker_b": ticker_b,
+                            "hedge_ratio": float(hedge),
+                            "is_cointegrated": False,
+                            "status": "Benched",
+                        }])
+                    except Exception:
+                        try:
+                            await persistence_service.update_pair_status(pair_id, "Benched")
+                        except Exception:
+                            pass
+                    continue
 
                 if pair_id in self.kalman_quarantined_pairs:
                     arbitrage_service.filters.pop(pair_id, None)
@@ -995,6 +1034,42 @@ class ArbitrageMonitor:
                 await asyncio.sleep(3600) # Retry in 1 hour
 
 
+
+    def _maybe_relieve_memory_pressure(self, *, reason: str, threshold_mib: int = 900) -> None:
+        """Log RSS and force a GC cycle when the monitor process is near the compose mem_limit.
+
+        The bot container is capped at 1280m; without periodic reclaim, pandas/yfinance
+        scrap from scouts + scans can push the cgroup to the limit and eventually OOM-kill
+        (exit 137). This is a safety valve, not a substitute for fixing unbounded caches.
+        """
+        rss_mib = None
+        try:
+            with open("/proc/self/status", encoding="utf-8") as fh:
+                for line in fh:
+                    if line.startswith("VmRSS:"):
+                        # VmRSS is in kB on Linux.
+                        rss_mib = int(line.split()[1]) // 1024
+                        break
+        except Exception:
+            rss_mib = None
+        if rss_mib is None:
+            try:
+                import psutil
+
+                rss_mib = int(psutil.Process().memory_info().rss / (1024 * 1024))
+            except Exception:
+                return
+
+        if rss_mib < threshold_mib:
+            return
+        collected = gc.collect()
+        logger.warning(
+            "MEMORY PRESSURE [%s]: rss≈%dMiB (threshold=%dMiB); gc.collect() freed %d objects",
+            reason,
+            rss_mib,
+            threshold_mib,
+            collected,
+        )
 
     async def reload_pairs(self):
         """
@@ -1851,6 +1926,16 @@ class ArbitrageMonitor:
                                 signal_id=signal_id,
                             )
                     else:
+                        await self._upsert_active_signal(
+                            t_a,
+                            t_b,
+                            z_score=z_score,
+                            status="REJECTED",
+                            confidence=final_confidence,
+                            hedge_ratio=hedge_ratio,
+                        )
+                        diagnostic["verdict"] = "REJECTED"
+                        diagnostic["reason"] = "approval_denied"
                         decision_recorder.record(
                             stage="approval",
                             outcome="veto",
@@ -2482,9 +2567,8 @@ class ArbitrageMonitor:
         status_b = OrderStatus.LEG_B_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
 
         if status_b == OrderStatus.LEG_B_REJECTED:
-          await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
-          status_b = OrderStatus.ORDER_SUBMITTED if res_b.get("status") != "error" else OrderStatus.LEG_B_REJECTED
-          order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
+            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.LEG_A_FILLED)
+            order_id_b = res_b.get("order_id") or res_b.get("orderId") or str(uuid.uuid4())
 
         await persistence_service.log_trade({
             "order_id": order_id_b,
@@ -2493,14 +2577,18 @@ class ArbitrageMonitor:
             "side": OrderSide.BUY if side_b == "BUY" else OrderSide.SELL,
             "quantity": size_b,
             "price": price_b,
-            "status": OrderStatus.LEG_B_SUBMITTED,
+            "status": (
+                OrderStatus.LEG_B_REJECTED
+                if status_b == OrderStatus.LEG_B_REJECTED
+                else OrderStatus.LEG_B_SUBMITTED
+            ),
             "venue": venue,
             "metadata_json": {
                 "broker_order_id": order_id_b,
                 "submitted_qty": size_b,
                 "side": side_b,
                 "symbol": t_b,
-                "status": "submitted",
+                "status": "rejected" if status_b == OrderStatus.LEG_B_REJECTED else "submitted",
                 "broker_response": res_b,
             }
         })
@@ -2513,11 +2601,18 @@ class ArbitrageMonitor:
                 f"Placing emergency close on Leg A to prevent orphaned directional exposure."
             )
             close_side_a = "BUY" if side_a == "SELL" else "SELL"
+            # Close the actual filled exposure, not the pre-trade plan notional.
+            # Planned mid-price size can under-close when the broker overfills Leg A.
+            close_price_a = fill_price_a if fill_price_a > 0 else price_a
+            expected_close_qty = filled_qty_a if filled_qty_a > 0 else size_a
+            close_notional_a = round(float(expected_close_qty) * float(close_price_a), 2)
+            if close_notional_a <= 0:
+                close_notional_a = round(float(target_cash_a), 2)
             close_res = await self.brokerage.place_value_order(
                 exec_t_a,
-                target_cash_a,
+                close_notional_a,
                 close_side_a,
-                price=price_a,
+                price=close_price_a,
                 client_order_id=f"{signal_id}-A-EMERGENCY-CLOSE",
             )
             close_status = str(close_res.get("status", "")).lower()
@@ -2544,26 +2639,27 @@ class ArbitrageMonitor:
                     "signal_id": uuid.UUID(signal_id),
                     "ticker": exec_t_a,
                     "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-                    "quantity": size_a,
-                    "price": price_a,
+                    "quantity": expected_close_qty,
+                    "price": close_price_a,
                     "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
                     "metadata_json": {
                         "orphaned": True,
                         "reason": close_reason,
                         "broker_response": close_res,
+                        "expected_qty": expected_close_qty,
+                        "close_notional": close_notional_a,
                     },
                 })
             else:
                 close_fill = await self._await_order_fill(close_order_id, timeout=30)
                 close_status_raw = str((close_fill or {}).get("status", "")).lower()
                 close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
-                expected_close_qty = filled_qty_a if filled_qty_a > 0 else size_a
                 close_ok = is_broker_fill_complete(
                     status=close_status_raw,
                     filled_qty=close_filled_qty,
                     expected_qty=expected_close_qty,
-                    fill_price=float((close_fill or {}).get("filled_avg_price") or price_a),
-                    expected_notional=target_cash_a,
+                    fill_price=float((close_fill or {}).get("filled_avg_price") or close_price_a),
+                    expected_notional=close_notional_a,
                 )
                 if not close_ok:
                     orphan_msg = (
@@ -2583,8 +2679,8 @@ class ArbitrageMonitor:
                         "signal_id": uuid.UUID(signal_id),
                         "ticker": exec_t_a,
                         "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-                        "quantity": size_a,
-                        "price": price_a,
+                        "quantity": expected_close_qty,
+                        "price": close_price_a,
                         "status": OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
                         "metadata_json": {
                             "orphaned": True,
@@ -2593,6 +2689,7 @@ class ArbitrageMonitor:
                             "close_order_id": close_order_id,
                             "close_fill": close_fill,
                             "expected_qty": expected_close_qty,
+                            "close_notional": close_notional_a,
                         },
                     })
                 else:
@@ -2602,7 +2699,7 @@ class ArbitrageMonitor:
                     )
                     await persistence_service.close_trade(
                         uuid.UUID(signal_id),
-                        exit_prices={exec_t_a: price_a},
+                        exit_prices={exec_t_a: close_price_a},
                         pnl=0.0,
                         exit_reason=ExitReason.MANUAL,
                     )
@@ -2640,57 +2737,176 @@ class ArbitrageMonitor:
             logger.critical(alert)
             await notification_service.send_message(alert)
             return execution_result(False, "leg_b_fill_timeout")
+
+        status_raw_b = str(fill_b.get("status", "")).lower()
+        filled_qty_b = float(fill_b.get("filled_qty") or 0.0)
+        fill_price_b = float(fill_b.get("filled_avg_price") or 0.0)
+        expected_qty_b = float(size_b)
+        leg_b_fully_filled = is_broker_fill_complete(
+            status=status_raw_b,
+            filled_qty=filled_qty_b,
+            expected_qty=expected_qty_b,
+            fill_price=fill_price_b,
+            expected_notional=target_cash_b,
+        )
+        if status_raw_b in ("partially_filled", "partial_fill"):
+            status_b = OrderStatus.LEG_B_PARTIAL
+        elif status_raw_b in ("rejected", "canceled", "cancelled", "expired"):
+            status_b = OrderStatus.LEG_B_REJECTED
+        elif leg_b_fully_filled:
+            status_b = OrderStatus.LEG_B_FILLED
+            if expected_qty_b > 0 and filled_qty_b + 1e-9 < expected_qty_b:
+                logger.info(
+                    "Leg B (%s) filled with qty variance filled=%.8f expected=%.8f — accepting broker fill",
+                    exec_t_b, filled_qty_b, expected_qty_b,
+                )
         else:
-            status_raw_b = str(fill_b.get('status', '')).lower()
-            if status_raw_b in ("partially_filled", "partial_fill"):
-                status_b = OrderStatus.LEG_B_PARTIAL
-            elif status_raw_b in ("rejected", "canceled", "cancelled", "expired"):
-                status_b = OrderStatus.LEG_B_REJECTED
-            else:
-                status_b = OrderStatus.LEG_B_FILLED
-        filled_qty_b = float((fill_b or {}).get("filled_qty") or 0.0)
-        fill_price_b = float((fill_b or {}).get("filled_avg_price") or 0.0)
+            status_b = OrderStatus.NEEDS_MANUAL_RECONCILIATION
+
         if status_b == OrderStatus.LEG_B_REJECTED:
-            broker_msg_b = (fill_b or {}).get("message") or (fill_b or {}).get("error") or fill_b or res_b
+            broker_msg_b = fill_b.get("message") or fill_b.get("error") or fill_b or res_b
             await emergency_close_leg_a_after_leg_b_failure(broker_msg_b)
             return execution_result(False, "leg_b_rejected_after_submit")
-        leg_b_partial_fill = status_b == OrderStatus.LEG_B_PARTIAL
-        if leg_b_partial_fill:
-            await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.PARTIAL_EXPOSURE)
+
+        if status_b != OrderStatus.LEG_B_FILLED:
+            # Incomplete / shortfall Leg B: persist actual fills (never ghost the plan size)
+            # and flatten both legs to avoid leaving hedged imbalance as OPEN_PAIR.
+            await persistence_service.update_trade_fill(
+                uuid.UUID(signal_id),
+                order_id_a,
+                filled_quantity=filled_qty_a,
+                fill_price=fill_price_a,
+                status=OrderStatus.PARTIAL_EXPOSURE,
+                metadata_updates={
+                    "filled_qty": filled_qty_a,
+                    "filled_avg_price": fill_price_a,
+                    "order_status": status_a.value,
+                    "pair_status": OrderStatus.PARTIAL_EXPOSURE.value,
+                    "fill_snapshot": fill_a,
+                },
+            )
+            await persistence_service.update_trade_fill(
+                uuid.UUID(signal_id),
+                order_id_b,
+                filled_quantity=filled_qty_b,
+                fill_price=fill_price_b,
+                status=OrderStatus.PARTIAL_EXPOSURE,
+                metadata_updates={
+                    "filled_qty": filled_qty_b,
+                    "filled_avg_price": fill_price_b,
+                    "order_status": status_b.value,
+                    "pair_status": OrderStatus.PARTIAL_EXPOSURE.value,
+                    "fill_snapshot": fill_b,
+                },
+            )
+            await persistence_service.update_signal_status(
+                uuid.UUID(signal_id),
+                OrderStatus.PARTIAL_EXPOSURE,
+            )
             alert = (
-                f"Leg B ({exec_t_b}) partially filled. "
-                f"Signal remains PARTIAL_EXPOSURE and requires manual reconciliation. "
-                f"status={str((fill_b or {}).get('status', '')).lower() or 'unknown'} "
-                f"filled_qty={filled_qty_b} expected_qty={float(size_b)} "
-                f"order_id={order_id_b} signal_id={signal_id}"
+                f"Leg B ({exec_t_b}) was not confirmed as a full fill. "
+                f"status={status_raw_b or 'unknown'} "
+                f"filled_qty={filled_qty_b} expected_qty={expected_qty_b} "
+                f"order_id={order_id_b} signal_id={signal_id}. "
+                f"Flattening Leg A and any Leg B fill to clear imbalance."
             )
             logger.critical(alert)
             await notification_service.send_message(alert)
-        pair_status = (
-            OrderStatus.OPEN_PAIR
-            if status_a == OrderStatus.LEG_A_FILLED and status_b == OrderStatus.LEG_B_FILLED
-            else OrderStatus.PARTIAL_EXPOSURE
-        )
+
+            if filled_qty_b > 0:
+                close_side_b = "BUY" if side_b == "SELL" else "SELL"
+                close_price_b = fill_price_b if fill_price_b > 0 else price_b
+                close_notional_b = round(filled_qty_b * close_price_b, 2)
+                if close_notional_b > 0:
+                    close_b_res = await self.brokerage.place_value_order(
+                        exec_t_b,
+                        close_notional_b,
+                        close_side_b,
+                        price=close_price_b,
+                        client_order_id=f"{signal_id}-B-PARTIAL-CLOSE",
+                    )
+                    close_b_status = str(close_b_res.get("status", "")).lower()
+                    close_b_unknown = (
+                        close_b_res.get("requires_reconciliation") or close_b_status == "unknown"
+                    )
+                    if close_b_status == "error" or close_b_unknown:
+                        await persistence_service.update_signal_status(
+                            uuid.UUID(signal_id),
+                            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                        )
+                        orphan_msg = (
+                            f"CRITICAL - PARTIAL LEG B CLOSE "
+                            f"{'UNKNOWN' if close_b_unknown else 'FAILED'}\n"
+                            f"Signal: {signal_id}\n"
+                            f"Ticker: {exec_t_b}\n"
+                            f"Broker response: {close_b_res}"
+                        )
+                        logger.critical(orphan_msg)
+                        await notification_service.send_message(orphan_msg)
+                        await emergency_close_leg_a_after_leg_b_failure(close_b_res)
+                        return execution_result(False, "leg_b_partial_close_failed")
+
+                    close_b_order_id = (
+                        close_b_res.get("order_id")
+                        or close_b_res.get("orderId")
+                        or close_b_res.get("client_order_id")
+                        or f"{signal_id}-B-PARTIAL-CLOSE"
+                    )
+                    close_b_fill = await self._await_order_fill(close_b_order_id, timeout=30)
+                    close_b_status_raw = str((close_b_fill or {}).get("status", "")).lower()
+                    close_b_filled_qty = float((close_b_fill or {}).get("filled_qty") or 0.0)
+                    close_b_ok = is_broker_fill_complete(
+                        status=close_b_status_raw,
+                        filled_qty=close_b_filled_qty,
+                        expected_qty=filled_qty_b,
+                        fill_price=float(
+                            (close_b_fill or {}).get("filled_avg_price") or close_price_b
+                        ),
+                        expected_notional=close_notional_b,
+                    )
+                    if not close_b_ok:
+                        await persistence_service.update_signal_status(
+                            uuid.UUID(signal_id),
+                            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+                        )
+                        orphan_msg = (
+                            f"CRITICAL - PARTIAL LEG B CLOSE UNCONFIRMED\n"
+                            f"Signal: {signal_id}\n"
+                            f"Ticker: {exec_t_b}\n"
+                            f"Close order: {close_b_order_id}\n"
+                            f"Close status: {close_b_status_raw or 'unknown'} "
+                            f"filled_qty={close_b_filled_qty} expected_qty={filled_qty_b}"
+                        )
+                        logger.critical(orphan_msg)
+                        await notification_service.send_message(orphan_msg)
+                        await emergency_close_leg_a_after_leg_b_failure(orphan_msg)
+                        return execution_result(False, "leg_b_partial_close_unconfirmed")
+
+            await emergency_close_leg_a_after_leg_b_failure(
+                f"leg_b_incomplete status={status_raw_b} filled_qty={filled_qty_b}"
+            )
+            return execution_result(False, "leg_b_not_fully_filled")
+
+        pair_status = OrderStatus.OPEN_PAIR
         visible_status = pair_status
 
         # M-05: Journal written only after both broker legs have returned successfully
-        if not leg_b_partial_fill:
-            await persistence_service.log_trade_journal({
-                "signal_id": uuid.UUID(signal_id),
-                "entry_regime": regime_info["regime"],
-                "metrics_at_entry": {
-                    "z_score": risk_res.get("z_score", 0.0),
-                    "win_prob": settings.DEFAULT_WIN_PROBABILITY,
-                    "regime_confidence": regime_info["confidence"],
-                    "features": regime_info["features"]
-                }
-            })
+        await persistence_service.log_trade_journal({
+            "signal_id": uuid.UUID(signal_id),
+            "entry_regime": regime_info["regime"],
+            "metrics_at_entry": {
+                "z_score": risk_res.get("z_score", 0.0),
+                "win_prob": settings.DEFAULT_WIN_PROBABILITY,
+                "regime_confidence": regime_info["confidence"],
+                "features": regime_info["features"]
+            }
+        })
 
         await persistence_service.update_trade_fill(
             uuid.UUID(signal_id),
             order_id_a,
-            filled_quantity=filled_qty_a or size_a,
-            fill_price=fill_price_a or price_a,
+            filled_quantity=filled_qty_a if filled_qty_a > 0 else size_a,
+            fill_price=fill_price_a if fill_price_a > 0 else price_a,
             status=visible_status,
             metadata_updates={
                 "filled_qty": filled_qty_a,
@@ -2703,8 +2919,8 @@ class ArbitrageMonitor:
         await persistence_service.update_trade_fill(
             uuid.UUID(signal_id),
             order_id_b,
-            filled_quantity=filled_qty_b or size_b,
-            fill_price=fill_price_b or price_b,
+            filled_quantity=filled_qty_b if filled_qty_b > 0 else size_b,
+            fill_price=fill_price_b if fill_price_b > 0 else price_b,
             status=visible_status,
             metadata_updates={
                 "filled_qty": filled_qty_b,
@@ -2715,19 +2931,60 @@ class ArbitrageMonitor:
             },
         )
 
-        logger.info(f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}")
-        return execution_result(pair_status == OrderStatus.OPEN_PAIR, pair_status.value)
+        logger.info(
+            f"TRADE EXECUTED: {t_a}/{t_b} {direction} | Status: "
+            f"A={OrderStatus.LEG_A_FILLED.value}, B={OrderStatus.LEG_B_FILLED.value}"
+        )
+        return execution_result(True, pair_status.value)
+
+    async def _bench_pair_for_health(
+        self,
+        pair: dict,
+        *,
+        hedge_ratio: float | None = None,
+        reason: str,
+    ) -> None:
+        """Persist Benched + drop from in-memory Active so the slot can refill."""
+        pair_id = str(pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}")
+        ticker_a = pair.get("ticker_a")
+        ticker_b = pair.get("ticker_b")
+        try:
+            hedge = float(hedge_ratio if hedge_ratio is not None else pair.get("hedge_ratio") or 0.0)
+        except (TypeError, ValueError):
+            hedge = 0.0
+        pair["is_cointegrated"] = False
+        try:
+            await persistence_service.save_trading_pairs([{
+                "id": pair_id,
+                "ticker_a": ticker_a,
+                "ticker_b": ticker_b,
+                "hedge_ratio": hedge,
+                "is_cointegrated": False,
+                "status": "Benched",
+            }])
+        except Exception as persist_exc:
+            logger.warning("Failed to bench %s after %s: %s", pair_id, reason, persist_exc)
+            try:
+                await persistence_service.update_pair_status(pair_id, "Benched")
+            except Exception:
+                pass
+        # Drop from the live scan list without waiting for a full reload.
+        self.active_pairs = [p for p in self.active_pairs if str(p.get("id") or "") != pair_id]
+        self.last_cointegration_check.pop(pair_id, None)
+        logger.info("BENCHED %s (%s); Active now %d pairs.", pair_id, reason, len(self.active_pairs))
 
     async def _recheck_cointegration(self, pair: dict):
         """
         Re-validates the ADF cointegration test for a single pair using the
         last 30 days of hourly data.  Called once per calendar day per pair.
 
-        If the p-value rises above 0.10 the pair is marked is_cointegrated=False
-        and trading is suspended until the next re-check restores it.
-        A Telegram/console alert is fired on both break and restore events.
+        On break (static ADF or rolling stability), the pair is benched so it
+        no longer occupies an Active scan slot. Open positions still exit via
+        the separate open-signal exit loop. A Telegram/console alert is fired
+        on break events.
         """
         t_a, t_b = pair['ticker_a'], pair['ticker_b']
+        pair_id = str(pair.get("id") or f"{t_a}_{t_b}")
         try:
             hist_data = await data_service.get_historical_data_async([t_a, t_b], "30d", "1h")
             if hist_data is None or hist_data.empty:
@@ -2739,15 +2996,34 @@ class ArbitrageMonitor:
                 return
 
             is_crypto = is_crypto_pair(t_a, t_b)
-            p_thresh = 0.25 if is_crypto else settings.COINTEGRATION_PVALUE_THRESHOLD
+            p_thresh = (
+                settings.CRYPTO_COINTEGRATION_PVALUE_THRESHOLD
+                if is_crypto
+                else settings.COINTEGRATION_PVALUE_THRESHOLD
+            )
             pass_thresh = 0.2 if is_crypto else settings.COINTEGRATION_ROLLING_PASS_RATE
 
-            is_coint, p_val, _ = arbitrage_service.check_cointegration(
+            is_coint, p_val, hedge = arbitrage_service.check_cointegration(
                 hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
             )
 
+            from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+
+            if hedge is not None and not is_hedge_ratio_sane(
+                hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+            ):
+                msg = (
+                    f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} exceeds "
+                    f"PAIR_DISCOVERY_MAX_ABS_HEDGE={settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}. "
+                    f"Pair benched to free Active slot."
+                )
+                logger.warning(msg)
+                await self._bench_pair_for_health(pair, hedge_ratio=float(hedge), reason="extreme_hedge")
+                await notification_service.send_message(msg)
+                return
+
             # Spec 037: rolling-window stability. If the pair was statically
-            # cointegrated but rolling-window unstable, suspend it. The
+            # cointegrated but rolling-window unstable, bench it. The
             # daily re-check is the right place to apply this because it
             # already runs once per pair per day with a fresh history pull.
             if is_coint and settings.COINTEGRATION_ROLLING_ENABLED:
@@ -2773,29 +3049,37 @@ class ArbitrageMonitor:
             previously_coint = pair.get('is_cointegrated', True)
 
             if not is_coint:
-                pair['is_cointegrated'] = False
                 if previously_coint:
-                    # Only alert on a real break (True -> False transition).
-                    # If the pair was already non-cointegrated at startup, stay quiet.
                     msg = (
                         f"COINTEGRATION BREAK: {t_a}/{t_b} - "
-                        f"ADF p-value={p_val:.4f} > 0.05. "
-                        f"Pair suspended until cointegration is restored."
+                        f"ADF p-value={p_val:.4f} (thresh={p_thresh:.3f}). "
+                        f"Pair benched to free Active scan slot."
                     )
                     logger.warning(msg)
                     await notification_service.send_message(msg)
                 else:
                     logger.debug(
                         f"[{t_a}/{t_b}] Still non-cointegrated (p={p_val:.4f}). "
-                        f"Staying suspended."
+                        f"Benching Active slot."
                     )
+                await self._bench_pair_for_health(
+                    pair,
+                    hedge_ratio=float(hedge) if hedge is not None else None,
+                    reason="cointegration_break",
+                )
             else:
                 pair['is_cointegrated'] = True
+                if hedge is not None:
+                    try:
+                        pair["hedge_ratio"] = float(hedge)
+                    except (TypeError, ValueError):
+                        pass
                 if not previously_coint:
-                    # Alert only on a real restore (False -> True transition).
+                    # Soft restore in-memory only; promotion back to Active goes
+                    # through elite rotation / operator promote so quality gates apply.
                     msg = (
                         f"COINTEGRATION RESTORED: {t_a}/{t_b} - "
-                        f"ADF p-value={p_val:.4f}. Pair re-activated."
+                        f"ADF p-value={p_val:.4f}. Eligible for re-promotion."
                     )
                     logger.info(msg)
                     await notification_service.send_message(msg)
@@ -2803,6 +3087,18 @@ class ArbitrageMonitor:
                     logger.debug(
                         f"[{t_a}/{t_b}] Cointegration confirmed (p={p_val:.4f})."
                     )
+                    # Keep DB hedge / coint flag fresh for rotation audits.
+                    try:
+                        await persistence_service.save_trading_pairs([{
+                            "id": pair_id,
+                            "ticker_a": t_a,
+                            "ticker_b": t_b,
+                            "hedge_ratio": float(pair.get("hedge_ratio") or hedge or 0.0),
+                            "is_cointegrated": True,
+                            "status": "Active",
+                        }])
+                    except Exception as persist_exc:
+                        logger.debug("Cointegration confirm persist failed for %s: %s", pair_id, persist_exc)
         except Exception as e:
             logger.error(f"Error re-checking cointegration for {t_a}/{t_b}: {e}")
 
@@ -3374,6 +3670,7 @@ class ArbitrageMonitor:
                         logger.warning("TRADE DECISION REPORT: write failed: %s", e)
 
                     await self._reload_quarantined_pairs_if_requested()
+                    self._maybe_relieve_memory_pressure(reason="scan_iteration")
 
                     progress.update(scan_task, description=f"Idle (sleeping {settings.SCAN_INTERVAL_SECONDS}s)...")
                     await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
@@ -3535,6 +3832,27 @@ class ArbitrageMonitor:
                         price=order["price"],
                         client_order_id=client_order_id,
                     )
+                    # Dead prior close order (rejected/canceled) keeps the same
+                    # client_order_id reserved — retry once with a unique suffix.
+                    if res.get("terminal_duplicate"):
+                        retry_client_order_id = (
+                            f"{client_order_id}-R{uuid.uuid4().hex[:8]}"
+                        )
+                        logger.warning(
+                            "Close client_order_id %s bound to terminal broker order "
+                            "(%s); retrying once as %s",
+                            client_order_id,
+                            res.get("prior_order_status"),
+                            retry_client_order_id,
+                        )
+                        client_order_id = retry_client_order_id
+                        res = await self.brokerage.place_value_order(
+                            order["ticker"],
+                            round(notional, 2),
+                            order["side"],
+                            price=order["price"],
+                            client_order_id=client_order_id,
+                        )
                     order_id = res.get("order_id") or res.get("orderId") or res.get("client_order_id") or client_order_id
 
                     if res.get("requires_reconciliation") or res.get("status") == "unknown":

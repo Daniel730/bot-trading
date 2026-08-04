@@ -331,7 +331,7 @@ async def test_get_bid_ask_uses_alpaca_crypto_snapshot_when_yfinance_quote_is_ze
     class FakeSnapshot:
         latest_quote = FakeQuote()
 
-    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()), \
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()) as yf_ticker, \
          patch.object(
              service.alpaca_client,
              "get_crypto_snapshots",
@@ -340,6 +340,63 @@ async def test_get_bid_ask_uses_alpaca_crypto_snapshot_when_yfinance_quote_is_ze
         bid, ask = await service.get_bid_ask("BTC-USD")
 
     assert (bid, ask) == (90000.0, 90010.0)
+    # Crypto path prefers Alpaca; yfinance is only a fallback when Alpaca has no quote.
+    yf_ticker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_prefers_alpaca_crypto_over_wide_yfinance_quote():
+    """Stale/wide yfinance crypto spreads must not override venue quotes."""
+    service = DataService()
+
+    class FakeTicker:
+        def __init__(self):
+            self.info = {
+                "bid": 90000.0,
+                "ask": 92000.0,  # ~2.2% — would false-reject the 0.3% spread guard
+            }
+
+    class FakeQuote:
+        bp = 90000.0
+        ap = 90010.0
+
+    class FakeSnapshot:
+        latest_quote = FakeQuote()
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()) as yf_ticker, \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             return_value={"BTC/USD": FakeSnapshot()},
+         ):
+        bid, ask = await service.get_bid_ask("BTC-USD")
+
+    assert (bid, ask) == (90000.0, 90010.0)
+    yf_ticker.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_bid_ask_falls_back_to_yfinance_when_alpaca_crypto_raises():
+    """Alpaca crypto snapshot errors must not skip the yfinance fallback."""
+    service = DataService()
+
+    class FakeTicker:
+        def __init__(self):
+            self.info = {
+                "bid": 90100.0,
+                "ask": 90120.0,
+            }
+
+    with patch("src.services.data_service.yf.Ticker", return_value=FakeTicker()) as yf_ticker, \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_snapshots",
+             side_effect=RuntimeError("alpaca crypto unavailable"),
+         ):
+        bid, ask = await service.get_bid_ask("BTC-USD")
+
+    assert (bid, ask) == (90100.0, 90120.0)
+    yf_ticker.assert_called_once_with("BTC-USD")
 
 
 def test_get_latest_price_crypto_snapshot_does_not_require_exchange_kwarg():

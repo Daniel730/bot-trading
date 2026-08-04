@@ -147,6 +147,12 @@ The dashboard removes old `token`/`session` query params from the URL. API auth 
 | Dev | `DEV_MODE=true` | Crypto test universe, 24/7 scan, equity-hour bypass. Do not use for production decisions. |
 | Java dry run | `DRY_RUN=true` | Required. The Java engine rejects live-broker mode today. |
 
+## Host publish hardening (bot-server)
+
+Compose publishes Redis (`6379`), Postgres (`5433`), FastMCP (`8000`), and the Java gRPC engine (`50051`) on **`127.0.0.1` only**. Inter-container traffic still uses the Docker network (`redis` / `postgres` hostnames). Do not re-bind those ports to `0.0.0.0`/`[::]` — bot-server has LAN and public IPv6 addresses, and Redis currently runs without `requirepass`.
+
+Dashboard API (`BOT_HOST_PORT`, usually `8082`) and frontend (`3000`) remain host-reachable for Tailscale/operator access; API routes stay session/token protected (`/ping` is the unauthenticated liveness exception).
+
 ## Daily Checks
 
 - Confirm dashboard mode shows the expected `PAPER`, `LIVE`, or `DEV` state.
@@ -220,7 +226,12 @@ Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
 | `PAIR_DISCOVERY_ENABLED` | `true` (default) | Background scout + elite rotation |
 | `PAIR_DISCOVERY_AUTO_PROMOTE` | `true` (default) | Promote scouts into Active after discover |
 | `PAIR_DENYLIST` | includes `BTC-USD_BCH-USD` | Quarantine junk / spread-guard churners |
-| `PAIR_DISCOVERY_MAX_TICKERS` | `12` (default) | Bounds scout RAM/yfinance load |
+| `PAIR_DISCOVERY_MAX_TICKERS` | `12` (default); pin `8` on bot-server | Bounds scout RAM/yfinance load |
+| `PAIR_DISCOVERY_MIN_CORRELATION` | `0.70` (default) | Scout/promote correlation floor |
+| `PAIR_DISCOVERY_MAX_PVALUE` | `0.05` (default) | Promote only statistically cointegrated scouts |
+| `ELITE_ROTATION_SORTINO_THRESHOLD` | `2.0` (default) | Do not promote weak Sortino scouts |
+| `TAKE_PROFIT_FORCE_EXIT_ZSCORE` | `0.25` (default) | Exit when mean reversion is done even if fees not cleared |
+| `CRYPTO_COINTEGRATION_PVALUE_THRESHOLD` | `0.10` (default) | Tighter than legacy 0.25 crypto ADF gate |
 | `PAPER_TRADING` | `true` for paper Alpaca | Do not enable live real-money overnight |
 
 **Do not** set `MONITOR_ENTRY_ZSCORE=0.5` in env or `data/bot_settings.json` — the runtime
@@ -355,7 +366,57 @@ wiping Redis, Postgres, and dashboard 2FA state.
 |---|---|---|---|
 | 2026-07-17 | `7e6f7b3`, `a5c5b63` | [run 29569493017](https://github.com/Daniel730/bot-trading/actions/runs/29569493017) | Profitability fixes: MAB, crypto orchestrator bypass, z-score clamp, take-profit guard, UI label. `force_python` + `force_frontend`. Smoke OK. |
 
-## Troubleshooting
+## Host Memory / OOM (bot-server)
+
+bot-server has ~7.4 GiB RAM shared with Minecraft (`-Xmx2G`), AdGuard, Odysseus, Nextcloud, and the trading stack. A week-long outage (exit 137) happened when the bot grew without effective cgroup caps and the host OOM-killer stopped the monitor.
+
+### Guardrails already in compose
+
+| Service | `mem_limit` | `cpus` |
+|---|---|---|
+| `bot` | 1280m | 1.50 |
+| `sec-worker` | 640m | 0.75 |
+| `execution-engine` | 512m | 0.75 |
+| `mcp-server` | 384m | 0.75 |
+| `postgres` | 512m | 1.0 |
+| `redis` | 128m | 0.50 |
+| `frontend` | 64m | 0.25 |
+
+Verify live caps (non-zero `Mem=` / docker stats LIMIT column):
+
+```bash
+bash infra/ops_oom_probe.sh
+# or
+docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}'
+```
+
+Scout RAM is bounded by `PAIR_DISCOVERY_MAX_TICKERS` (pin `8` on the shared host; code default `12`). Prefer `PAIR_DISCOVERY_AUTO_PROMOTE=false` overnight if the bot is near its limit. On the shared 7.4 GiB host, set `PAIR_DISCOVERY_ENABLED=false` when the bot is climbing toward its 1280m cgroup cap (re-enable after the memory leak/growth path is fixed or the host has more free RAM).
+
+Host alert timer (`host-memory-alert.timer`) runs `~/infra-host/memory_alert.sh` every 5 minutes.
+
+### Recover after exit 137 / OOM (never wipe volumes)
+
+```bash
+# 1) Baseline + confirm what died
+bash infra/ops_oom_probe.sh
+
+# 2) Soft-cap neighbor stacks if they show Mem=0, then start/recreate trading app only
+bash infra/ops_oom_recover.sh --apply-soft-limits
+# If env pins changed (discovery bounds) and containers must reload .env.trading:
+bash infra/ops_recreate_bot_env.sh
+# Or full recover recreate path:
+bash infra/ops_oom_recover.sh --apply-soft-limits --recreate-bot
+
+# 3) Smoke
+bash infra/ops_overnight_check.sh
+docker logs trading-bot-bot-1 --since 10m 2>&1 | grep -E 'SCAN \[|MEMORY PRESSURE|OOM|Traceback' | tail -40
+```
+
+**Never** `docker compose down -v` on production — that deletes `trading-bot_*` volumes (2FA, pairs, Redis/Postgres).
+
+Neighbor soft caps (AdGuard / Odysseus / NPM / Nextcloud) are applied with `infra/ops_apply_host_soft_limits.sh` via `docker update` (survives until those containers are recreated; re-run after their stack redeploys).
+
+### Troubleshooting
 
 | Symptom | Check |
 |---|---|
@@ -368,6 +429,8 @@ wiping Redis, Postgres, and dashboard 2FA state.
 | No equity scans | Check market hours and `DEV_MODE`; crypto pairs run 24/7, equity pairs are gated. |
 | Many pairs rejected | Review `BLOCK_CROSS_CURRENCY_PAIRS`, `BLOCK_LSE_PAIRS_FOR_SHORT_HOLD`, `PAIR_MAX_ROUND_TRIP_COST_PCT`, and `ALLOW_EU_CONTINENTAL_OVERLAP`. |
 | Live sell leg rejected before broker | The preflight inventory guard found insufficient available shares. |
+| Bot exit 137 / `OOMKilled=true` | Host RAM + compose limits; run `ops_oom_recover.sh`; pin discovery tickers; check Minecraft/`adguardhome` growth. |
+| `trading-bot-bot-1` at ~100% of 1.25GiB | Scout/scan pandas pressure; recreate bot; confirm `PAIR_DISCOVERY_MAX_TICKERS` ≤ 8 on bot-server. |
 
 ## Decision Flight Recorder (incident packs)
 

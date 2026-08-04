@@ -405,3 +405,49 @@ async def test_process_pair_skips_approval_when_pair_already_open(monitor):
         assert mock_dup_gate.await_args.kwargs.get("notify") is False
         mock_request_approval.assert_not_awaited()
         mock_execute_trade.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_pair_marks_rejected_when_approval_denied(monitor):
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT"}
+    latest_prices = {"AAPL": 150.0, "MSFT": 300.0}
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.services.notification_service.notification_service.request_approval", new_callable=AsyncMock, return_value=False) as mock_request_approval, \
+         patch("src.services.risk_service.risk_service.validate_trade") as mock_validate_trade, \
+         patch("src.monitor.estimate_pair_profit") as mock_estimate_profit, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
+         patch.object(monitor, "_has_active_pair_or_pending_order", new_callable=AsyncMock, return_value=False), \
+         patch.object(monitor, "execute_trade", new_callable=AsyncMock) as mock_execute_trade, \
+         patch.object(monitor, "is_market_open", return_value=True), \
+         patch.object(settings, "MONITOR_MIN_AI_CONFIDENCE", 0.5):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0, 1.0], 0.1, 3.0, 0.5)
+        mock_kf_get.return_value = mock_kf
+        mock_orchestrator.return_value = {"final_confidence": 0.8, "final_verdict": "APPROVE"}
+        mock_validate_trade.return_value = {
+            "is_acceptable": True,
+            "final_amount": 300.0,
+            "kelly_fraction": 0.1,
+            "max_allowed_fiat": 300.0,
+            "fee_status": {"total_friction_percent": 0.0},
+        }
+        mock_estimate_profit.return_value = MagicMock(
+            net_profit=10.0,
+            profit_margin_pct=0.03,
+            gross_profit=12.0,
+            expected_loss=8.0,
+            loss_margin_pct=0.02,
+            friction_usd=2.0,
+        )
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+        assert diagnostic["verdict"] == "REJECTED"
+        assert diagnostic["reason"] == "approval_denied"
+        assert monitor.active_signals[-1]["status"] == "REJECTED"
+        mock_request_approval.assert_awaited_once()
+        mock_execute_trade.assert_not_awaited()

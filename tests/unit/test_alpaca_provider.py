@@ -345,6 +345,30 @@ async def test_place_value_order_duplicate_client_order_id_reconciles_existing(a
 
 
 @pytest.mark.asyncio
+async def test_place_value_order_duplicate_terminal_order_refuses_reconcile_as_success(alpaca_rest):
+    _, client = alpaca_rest
+    client.submit_order.side_effect = Exception("client_order_id must be unique")
+    dead = _order("ord-dead", "cid-dead")
+    dead.status = "rejected"
+    client.get_order_by_client_order_id.return_value = dead
+    provider = AlpacaProvider(api_key="key", api_secret="secret", base_url="url")
+
+    result = await provider.place_value_order(
+        "ETH-USD",
+        50.0,
+        "BUY",
+        price=1900.0,
+        client_order_id="cid-dead",
+    )
+
+    assert result["status"] == "error"
+    assert result["terminal_duplicate"] is True
+    assert result["prior_order_status"] == "rejected"
+    assert result["client_order_id"] == "cid-dead"
+    assert client.submit_order.call_count == 1
+
+
+@pytest.mark.asyncio
 async def test_place_market_order_duplicate_client_order_id_reconciles_existing(alpaca_rest):
     _, client = alpaca_rest
     client.submit_order.side_effect = Exception("client_order_id must be unique")

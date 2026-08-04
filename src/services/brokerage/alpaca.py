@@ -166,13 +166,42 @@ class AlpacaProvider(AbstractBrokerageProvider):
         try:
             order = await self._lookup_order_by_client_order_id(client_order_id)
             if order:
+                order_status = str(getattr(order, "status", "") or "").lower()
+                # A duplicate bound to a dead order must not look like a successful
+                # submit — callers need a fresh client_order_id to retry (CLOSE_FAILED).
+                if is_duplicate and order_status in (
+                    "canceled",
+                    "cancelled",
+                    "expired",
+                    "rejected",
+                ):
+                    logger.warning(
+                        "Alpaca duplicate client_order_id=%s for %s is terminal "
+                        "(status=%s); refusing reconcile-as-success",
+                        client_order_id,
+                        broker_symbol,
+                        order_status,
+                    )
+                    return {
+                        "status": "error",
+                        "message": (
+                            f"client_order_id {client_order_id} is bound to terminal "
+                            f"order status={order_status}"
+                        ),
+                        "broker": "ALPACA",
+                        "client_order_id": client_order_id,
+                        "terminal_duplicate": True,
+                        "prior_order_status": order_status,
+                        "order_id": getattr(order, "id", None),
+                    }
                 logger.warning(
                     "Alpaca submit for %s reconciled existing client_order_id=%s "
-                    "(duplicate=%s ambiguous=%s)",
+                    "(duplicate=%s ambiguous=%s status=%s)",
                     broker_symbol,
                     client_order_id,
                     is_duplicate,
                     is_ambiguous,
+                    order_status or "unknown",
                 )
                 return self._order_success_result(order)
         except Exception as reconcile_exc:
