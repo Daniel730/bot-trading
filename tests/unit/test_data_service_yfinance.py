@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
 import importlib
 import threading
@@ -25,6 +25,50 @@ def test_module_import_does_not_initialize_external_market_clients():
     importlib.reload(reloaded)
     polygon_client.assert_not_called()
     alpaca_client.assert_not_called()
+
+
+def test_data_service_init_does_not_create_alpaca_client():
+    """GitHub #56: DataService() must not eagerly call tradeapi.REST."""
+    with patch("src.services.data_service.RESTClient"), patch(
+        "src.services.data_service.tradeapi.REST",
+        side_effect=AssertionError("Alpaca REST must stay lazy until first use"),
+    ) as alpaca_rest:
+        service = DataService()
+
+    assert service._alpaca_client is None
+    alpaca_rest.assert_not_called()
+
+
+def test_data_service_constructs_without_alpaca_credentials(monkeypatch):
+    """pytest paper-only: empty Alpaca keys must not break DataService()."""
+    monkeypatch.setattr("src.services.data_service.settings.ALPACA_API_KEY", "")
+    monkeypatch.setattr("src.services.data_service.settings.ALPACA_API_SECRET", "")
+
+    with patch("src.services.data_service.RESTClient"):
+        service = DataService()
+
+    assert service._alpaca_client is None
+
+    with patch("src.services.data_service.tradeapi.REST") as alpaca_rest:
+        alpaca_rest.return_value = MagicMock(name="placeholder_rest")
+        client = service.alpaca_client
+
+    assert client is alpaca_rest.return_value
+    alpaca_rest.assert_called_once()
+    kwargs = alpaca_rest.call_args.kwargs
+    assert kwargs["key_id"] == DataService._ALPACA_PLACEHOLDER_KEY
+    assert kwargs["secret_key"] == DataService._ALPACA_PLACEHOLDER_SECRET
+
+
+def test_data_service_accepts_injected_alpaca_client():
+    injected = MagicMock(name="injected_alpaca")
+    with patch("src.services.data_service.RESTClient"), patch(
+        "src.services.data_service.tradeapi.REST",
+        side_effect=AssertionError("injected client must skip REST factory"),
+    ):
+        service = DataService(alpaca_client=injected)
+
+    assert service.alpaca_client is injected
 
 
 def test_extract_latest_close_handles_flat_yfinance_columns():
