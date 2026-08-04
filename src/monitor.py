@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 from rich.logging import RichHandler
 from rich.console import Console
 from rich.theme import Theme
@@ -199,7 +200,63 @@ CRYPTO_PRICE_SANITY_RANGES = {
     "DOGE-USD": (0.001, 10.0),
     "SHIB-USD": (0.00000001, 0.01),
 }
+# Floor for price-only unchanged-marker repeats (no trade/quote timestamp).
 CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT = 5
+# Target wall-clock span before price-only repeats trip, scaled by SCAN_INTERVAL.
+CRYPTO_SNAPSHOT_STALE_TARGET_SECONDS = 120
+# Absolute max age for Alpaca crypto trade/quote timestamps vs wall clock.
+# Quiet markets may keep the same mid for several scans; age—not identity—is the
+# true staleness signal when metadata is present (shared scan snapshot pacing).
+CRYPTO_PRICE_MAX_AGE_SECONDS = 180
+
+
+def crypto_stale_repeat_limit(scan_interval_seconds: int) -> int:
+    """Repeats so price-only unchanged markers span ~CRYPTO_SNAPSHOT_STALE_TARGET_SECONDS."""
+    interval = max(1, int(scan_interval_seconds))
+    return max(
+        CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT,
+        int(math.ceil(CRYPTO_SNAPSHOT_STALE_TARGET_SECONDS / interval)),
+    )
+
+
+def crypto_price_max_age_seconds(scan_interval_seconds: int) -> float:
+    """Absolute quote/trade age budget, never tighter than ~8 scan cycles."""
+    interval = max(1, int(scan_interval_seconds))
+    return float(max(CRYPTO_PRICE_MAX_AGE_SECONDS, 8 * interval))
+
+
+def parse_price_timestamp(value) -> datetime | None:
+    """Parse ISO / pandas-like price timestamps to timezone-aware UTC."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    try:
+        timestamp = pd.Timestamp(value)
+        if pd.isna(timestamp):
+            return None
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.tz_localize(timezone.utc)
+        else:
+            timestamp = timestamp.tz_convert(timezone.utc)
+        return timestamp.to_pydatetime()
+    except Exception:
+        return None
+
+
+def crypto_leg_freshness_marker(
+    ticker: str,
+    price: float,
+    price_timestamps: dict,
+) -> tuple[str, float | str]:
+    """Prefer trade/quote timestamp; fall back to price when metadata is absent."""
+    raw_ts = price_timestamps.get(ticker) if price_timestamps else None
+    if raw_ts is not None and str(raw_ts).strip():
+        return ("ts", str(raw_ts))
+    return ("price", float(price))
+
 
 class ArbitrageMonitor:
     def __init__(self, mode: str = "live"):
@@ -227,7 +284,8 @@ class ArbitrageMonitor:
         # every scan cycle — which otherwise resets the dashboard stage back to
         # "pre_warming" forever and re-fetches 30d history on a loop.
         self._kalman_rebuild_attempted: set[str] = set()
-        self._crypto_snapshot_pair_prices: dict[str, tuple[tuple[float, float], int]] = {}
+        # pair_id -> (freshness_marker_pair, consecutive_unchanged_count)
+        self._crypto_snapshot_pair_prices: dict[str, tuple[tuple, int]] = {}
         # In-memory lock set for closing positions to prevent duplicate broker orders
         self._closing_signals: set = set()
         # Serialize heavy daily cointegration history pulls on shared Mini PC hosts.
@@ -1470,53 +1528,81 @@ class ArbitrageMonitor:
                 source_b = price_sources.get(t_b)
                 alpaca_crypto_sources = {"alpaca_crypto_snapshot", "alpaca_crypto_quote_mid"}
                 if source_a in alpaca_crypto_sources and source_b in alpaca_crypto_sources:
-                    price_timestamps = getattr(data_service, "last_price_timestamps", {})
+                    price_timestamps = getattr(data_service, "last_price_timestamps", {}) or {}
+                    now_utc = datetime.now(timezone.utc)
+                    max_age = crypto_price_max_age_seconds(settings.SCAN_INTERVAL_SECONDS)
+                    for ticker, source in ((t_a, source_a), (t_b, source_b)):
+                        parsed_ts = parse_price_timestamp(price_timestamps.get(ticker))
+                        if parsed_ts is None:
+                            continue
+                        age_seconds = (now_utc - parsed_ts).total_seconds()
+                        if age_seconds > max_age:
+                            logger.warning(
+                                "PRICE STALENESS [%s/%s]: %s %s timestamp age "
+                                "%.1fs exceeds max %.1fs (scan_interval=%ss). "
+                                "Blocking before Kalman update.",
+                                t_a,
+                                t_b,
+                                ticker,
+                                source,
+                                age_seconds,
+                                max_age,
+                                settings.SCAN_INTERVAL_SECONDS,
+                            )
+                            return skip(
+                                "stale_price_snapshot",
+                                stage="price_guard",
+                                age_seconds=age_seconds,
+                                max_age_seconds=max_age,
+                            )
 
-                    def freshness_marker(ticker: str, price: float, source: str):
-                        if source == "alpaca_crypto_quote_mid":
-                            timestamp = price_timestamps.get(ticker)
-                            return ("quote_mid", timestamp) if timestamp else None
-                        return ("snapshot", float(price))
-
+                    # Prefer timestamps for both snapshot and quote_mid so flat
+                    # prices with advancing trades are not false-stale. Price
+                    # identity is only a fallback when metadata is missing.
                     pair_marker = (
-                        freshness_marker(t_a, price_a, source_a),
-                        freshness_marker(t_b, price_b, source_b),
+                        crypto_leg_freshness_marker(t_a, price_a, price_timestamps),
+                        crypto_leg_freshness_marker(t_b, price_b, price_timestamps),
                     )
-                    if pair_marker[0] is None or pair_marker[1] is None:
-                        logger.warning(
-                            "PRICE STALENESS [%s/%s]: Alpaca crypto quote mid missing "
-                            "timestamp metadata. Blocking before Kalman update.",
-                            t_a,
-                            t_b,
-                        )
-                        return skip("stale_price_snapshot", stage="price_guard")
-
-                    previous_marker, repeat_count = self._crypto_snapshot_pair_prices.get(
-                        pair["id"],
-                        ((None, None), 0),
+                    uses_price_fallback = any(
+                        marker[0] == "price" for marker in pair_marker
                     )
-                    repeat_count = repeat_count + 1 if previous_marker == pair_marker else 0
-                    self._crypto_snapshot_pair_prices[pair["id"]] = (pair_marker, repeat_count)
-                    if repeat_count >= CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT:
-                        stale_subject = (
-                            "Alpaca crypto quote mid timestamps"
-                            if "alpaca_crypto_quote_mid" in {source_a, source_b}
-                            else "Alpaca crypto snapshot prices"
+                    if uses_price_fallback:
+                        previous_marker, repeat_count = self._crypto_snapshot_pair_prices.get(
+                            pair["id"],
+                            ((None, None), 0),
                         )
-                        logger.warning(
-                            "PRICE STALENESS [%s/%s]: %s repeated "
-                            "unchanged at %s for %s consecutive scan(s). Blocking before Kalman update.",
-                            t_a,
-                            t_b,
-                            stale_subject,
+                        repeat_count = (
+                            repeat_count + 1 if previous_marker == pair_marker else 0
+                        )
+                        self._crypto_snapshot_pair_prices[pair["id"]] = (
                             pair_marker,
                             repeat_count,
                         )
-                        return skip(
-                            "stale_price_snapshot",
-                            stage="price_guard",
-                            repeat_count=repeat_count,
+                        repeat_limit = crypto_stale_repeat_limit(
+                            settings.SCAN_INTERVAL_SECONDS
                         )
+                        if repeat_count >= repeat_limit:
+                            logger.warning(
+                                "PRICE STALENESS [%s/%s]: Alpaca crypto prices "
+                                "repeated unchanged at %s for %s consecutive scan(s) "
+                                "(limit=%s, scan_interval=%ss; no usable timestamps). "
+                                "Blocking before Kalman update.",
+                                t_a,
+                                t_b,
+                                pair_marker,
+                                repeat_count,
+                                repeat_limit,
+                                settings.SCAN_INTERVAL_SECONDS,
+                            )
+                            return skip(
+                                "stale_price_snapshot",
+                                stage="price_guard",
+                                repeat_count=repeat_count,
+                                repeat_limit=repeat_limit,
+                            )
+                    else:
+                        # Fresh timestamped quotes/trades — clear price-only state.
+                        self._crypto_snapshot_pair_prices.pop(pair["id"], None)
                 else:
                     self._crypto_snapshot_pair_prices.pop(pair["id"], None)
 
