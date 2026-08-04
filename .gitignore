@@ -43,3 +43,4 @@ out/
 # Logs
 logs/
 AGENT_ERROR.md
+dump.rdb

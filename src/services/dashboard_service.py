@@ -2357,8 +2357,13 @@ class DashboardService:
                 equity_cash: Optional[float] = None
                 equity_pending: float = 0.0
                 try:
-                    equity_cash = await brokerage_service.get_account_cash()
-                    equity_pending = await brokerage_service.get_pending_orders_value()
+                    if settings.PAPER_TRADING:
+                        # Shadow lane never hits the broker; avoid unauthorized Alpaca spam.
+                        equity_cash = float(settings.PAPER_TRADING_STARTING_CASH)
+                        equity_pending = 0.0
+                    else:
+                        equity_cash = await brokerage_service.get_account_cash()
+                        equity_pending = await brokerage_service.get_pending_orders_value()
                 except Exception as exc:
                     logger.warning("DASHBOARD: Could not fetch %s cash: %s", active_provider, exc)
 
