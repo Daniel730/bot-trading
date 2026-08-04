@@ -2196,7 +2196,18 @@ class ArbitrageMonitor:
                 # Calculate expected profit/loss from the same gross pair
                 # notional that execution will use.
                 effective_sizing_base = sizing_base if sizing_base > 0 else settings.PAPER_TRADING_STARTING_CASH
-                kelly_inputs = await persistence_service.get_kelly_inputs_from_ledger()
+                try:
+                    kelly_inputs = await persistence_service.get_kelly_inputs_from_ledger()
+                except Exception as kelly_exc:
+                    logger.warning(
+                        "Kelly ledger inputs unavailable (%s); using DEFAULT_WIN_*",
+                        kelly_exc,
+                    )
+                    kelly_inputs = {
+                        "win_prob": float(settings.DEFAULT_WIN_PROBABILITY),
+                        "win_loss_ratio": float(settings.DEFAULT_WIN_LOSS_RATIO),
+                        "source": "defaults_error",
+                    }
                 risk_res = risk_service.validate_trade(
                     ticker=f"{t_a}_{t_b}",
                     total_portfolio_cash=effective_sizing_base,
@@ -2751,7 +2762,18 @@ class ArbitrageMonitor:
 
         # Risk sizing is applied inside RiskService (Kelly + allocation cap).
         # Pass the sizing_base (equity) so sizing is calculated according to total wallet.
-        kelly_inputs = await persistence_service.get_kelly_inputs_from_ledger()
+        try:
+            kelly_inputs = await persistence_service.get_kelly_inputs_from_ledger()
+        except Exception as kelly_exc:
+            logger.warning(
+                "Kelly ledger inputs unavailable during execute (%s); using DEFAULT_WIN_*",
+                kelly_exc,
+            )
+            kelly_inputs = {
+                "win_prob": float(settings.DEFAULT_WIN_PROBABILITY),
+                "win_loss_ratio": float(settings.DEFAULT_WIN_LOSS_RATIO),
+                "source": "defaults_error",
+            }
         risk_res = risk_service.validate_trade(
             ticker=f"{t_a}_{t_b}",
             total_portfolio_cash=sizing_base,

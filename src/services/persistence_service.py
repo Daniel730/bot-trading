@@ -743,7 +743,7 @@ class PersistenceService:
                     "side": t.side.value,
                     "quantity": float(t.quantity),
                     "price": float(t.price),
-                    "fee": float(t.fee or 0.0),
+                    "fee": float(getattr(t, "fee", None) or 0.0),
                     "slippage_bps": float(meta.get("slippage_bps") or 0.0),
                     "execution_timestamp": t.execution_timestamp,
                     "metadata": meta,

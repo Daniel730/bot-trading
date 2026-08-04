@@ -37,7 +37,9 @@ def test_trade_allowed_limits():
     assert "exceeds limit" in res['reason'].lower()
 
 
-def test_validate_trade_checks_fees_on_final_sized_amount():
+def test_validate_trade_checks_fees_on_final_sized_amount(monkeypatch):
+    """Fee check runs on Kelly-sized notional; non-zero flat friction can veto small sizes."""
+    monkeypatch.setattr(settings, "FLAT_ORDER_FRICTION_USD", 0.50)
     risk = RiskService()
 
     result = risk.validate_trade("AAPL", total_portfolio_cash=500.0, amount_fiat=500.0)
@@ -45,3 +47,14 @@ def test_validate_trade_checks_fees_on_final_sized_amount():
     assert result["is_acceptable"] is False
     assert result["final_amount"] == 0.0
     assert "friction" in result["rejection_reason"].lower()
+
+
+def test_validate_trade_accepts_when_flat_friction_is_zero(monkeypatch):
+    """Alpaca commission-free default (FLAT=0) must not invent T212-era flat vetoes."""
+    monkeypatch.setattr(settings, "FLAT_ORDER_FRICTION_USD", 0.0)
+    risk = RiskService()
+
+    result = risk.validate_trade("AAPL", total_portfolio_cash=500.0, amount_fiat=500.0)
+
+    assert result["is_acceptable"] is True
+    assert result["final_amount"] > 0.0

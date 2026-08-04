@@ -188,6 +188,7 @@ async def test_get_open_signals_prefers_first_class_lane_columns(monkeypatch):
         side=OrderSide.BUY,
         quantity=1.0,
         price=100.0,
+        fee=0.0,
         venue="ALPACA",
         execution_timestamp=None,
         metadata_json={"is_shadow": False, "execution_lane": "LIVE"},  # stale meta
