@@ -56,10 +56,13 @@ def test_docs_include_paper_startup_container_cleanup():
 
 def test_docs_describe_monitor_execution_route_without_java_default():
     routing_statement = (
-        "`src/monitor.py` order routing: `PAPER_TRADING=true` calls "
-        "`shadow_service`; broker-connected mode submits both legs through "
-        "Python `BrokerageService`. The Java execution engine is a dry-run/audit "
-        "sidecar and is not the monitor's default order path."
+        "`src/monitor.py` order routing: `PAPER_TRADING=true` is the **SHADOW** "
+        "lane (`shadow_service` only). `PAPER_TRADING=false` with Alpaca's paper "
+        "API is **BROKER_PAPER** (real paper orders via Python `BrokerageService`). "
+        "Real Alpaca URLs are **LIVE**. Ledger metadata stamps `execution_lane` / "
+        "`is_shadow` with the open `signal_id`; closes follow the open lane so mode "
+        "flips do not double-count or orphan fills. The Java execution engine is a "
+        "dry-run/audit sidecar and is not the monitor's default order path."
     )
     for doc_name in ("README.md", "docs/ARCHITECTURE.md", "src/README.md"):
         doc_text = _read(doc_name)

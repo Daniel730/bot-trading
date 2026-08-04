@@ -236,7 +236,11 @@ PYTHONPATH=. .venv/bin/python -m pytest tests/unit/test_monitor.py \
 git diff --stat origin/master..HEAD
 ```
 
-On **bot-server**, confirm env is valid (prints errors only, never secret values):
+On **bot-server**, confirm env is valid (prints errors only, never secret values).
+The script also fails closed on `MONITOR_ENTRY_ZSCORE < 1.0`, `ORCHESTRATOR_TIMEOUT_SECONDS < 30`,
+non-loopback `MCP_HOST` without `MCP_ALLOW_NON_LOOPBACK`, missing/short `REDIS_PASSWORD`, and
+compose host publishes that are not `127.0.0.1` for redis/postgres/mcp/gRPC
+(`infra/docker-compose.backend.yml` is checked by default; use `--skip-compose` only for env-only):
 
 ```bash
 python3 scripts/validate_deploy_env.py /home/daniel/.env.trading
@@ -247,8 +251,8 @@ Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
 | Key | Expected on bot-server | Why |
 |---|---|---|
 | `BOT_HOST_PORT` | `8082` | Avoids SearXNG on `:8080` |
-| `ORCHESTRATOR_TIMEOUT_SECONDS` | `60` (or unset → code default 60) | Agent swarm budget |
-| `MONITOR_ENTRY_ZSCORE` | `2.0` (never `0.5`) | Entry threshold; code clamps below 1.0 |
+| `ORCHESTRATOR_TIMEOUT_SECONDS` | `60` (or unset → code default 60); validator rejects `< 30` | Agent swarm budget |
+| `MONITOR_ENTRY_ZSCORE` | `2.0` (never `0.5`); validator rejects `< 1.0` | Entry threshold; code clamps below 1.0 |
 | `IMAGE_OWNER` | `daniel730` | GHCR namespace |
 | `POSTGRES_PASSWORD`, `DASHBOARD_TOKEN`, `REDIS_PASSWORD` | non-default; token ≥16 chars; Redis password ≥16 chars | Startup / compose guards (`REDIS_PASSWORD` enables `--requirepass`) |
 | `PAIR_DISCOVERY_ENABLED` | `true` (default) | Background scout + elite rotation |

@@ -14,6 +14,12 @@ MCP_SOURCE = ROOT / "src" / "mcp_server.py"
 BACKEND_COMPOSE = ROOT / "infra" / "docker-compose.backend.yml"
 
 
+async def _call_mcp_tool(tool, **kwargs):
+    """Invoke a FastMCP-registered tool across FastMCP 2.x (FunctionTool.fn) and 3.x."""
+    fn = getattr(tool, "fn", None) or getattr(tool, "function", None) or tool
+    return await fn(**kwargs)
+
+
 @pytest.mark.asyncio
 async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch):
     # Module must not even expose these; if a regression re-imports them, still
@@ -28,7 +34,8 @@ async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch
         monkeypatch.setattr(mcp_server.persistence_service, "log_trade", log_trade)
 
     result = json.loads(
-        await mcp_server.execute_trade(
+        await _call_mcp_tool(
+            mcp_server.execute_trade,
             ticker="AAPL",
             side="BUY",
             quantity=1.0,
@@ -47,7 +54,8 @@ async def test_mcp_execute_trade_rejects_or_uses_safe_ledger_payload(monkeypatch
 @pytest.mark.parametrize("mode", ["SHADOW", "LIVE", "PAPER", "BROKER"])
 async def test_mcp_execute_trade_rejects_all_modes(mode: str):
     result = json.loads(
-        await mcp_server.execute_trade(
+        await _call_mcp_tool(
+            mcp_server.execute_trade,
             ticker="BTC-USD",
             side="SELL",
             quantity=0.5,
@@ -64,7 +72,8 @@ async def test_mcp_execute_trade_rejects_all_modes(mode: str):
 async def test_mcp_execute_trade_auth_mismatch_still_rejects_without_broker(monkeypatch):
     monkeypatch.setenv("MCP_TOOL_TOKEN", "expected-secret")
     result = json.loads(
-        await mcp_server.execute_trade(
+        await _call_mcp_tool(
+            mcp_server.execute_trade,
             ticker="AAPL",
             side="BUY",
             quantity=1.0,
@@ -82,12 +91,13 @@ async def test_mcp_get_market_data_requires_token_when_configured(monkeypatch):
     get_price = AsyncMock(return_value=101.0)
     monkeypatch.setattr(mcp_server.redis_service, "get_price", get_price)
 
-    denied = json.loads(await mcp_server.get_market_data(tickers=["AAPL"]))
+    denied = json.loads(await _call_mcp_tool(mcp_server.get_market_data, tickers=["AAPL"]))
     assert denied["status"] == "rejected"
     get_price.assert_not_awaited()
 
     ok = json.loads(
-        await mcp_server.get_market_data(
+        await _call_mcp_tool(
+            mcp_server.get_market_data,
             tickers=["AAPL"],
             auth_token="expected-secret",
         )
@@ -105,7 +115,8 @@ async def test_mcp_get_market_data_never_claims_broker_source(monkeypatch):
         mcp_server.redis_service, "get_price", AsyncMock(return_value=42.0)
     )
     result = json.loads(
-        await mcp_server.get_market_data(
+        await _call_mcp_tool(
+            mcp_server.get_market_data,
             tickers=["MSFT"],
             source="alpaca",
         )
