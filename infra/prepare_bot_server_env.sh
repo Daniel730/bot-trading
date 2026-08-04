@@ -29,6 +29,35 @@ if ! grep -q '^IMAGE_OWNER=' "$ENV_FILE"; then
   echo "ADDED_IMAGE_OWNER"
 fi
 
+python3 - "$ENV_FILE" <<'PY'
+import secrets
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+lines = text.splitlines()
+idx = None
+value = ""
+for i, raw in enumerate(lines):
+    if raw.startswith("REDIS_PASSWORD="):
+        idx = i
+        value = raw.split("=", 1)[1].strip().strip("'").strip('"')
+        break
+
+if idx is None:
+    lines.append(f"REDIS_PASSWORD={secrets.token_hex(32)}")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("ADDED_REDIS_PASSWORD")
+elif len(value) < 16:
+    lines[idx] = f"REDIS_PASSWORD={secrets.token_hex(32)}"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("ROTATED_WEAK_REDIS_PASSWORD")
+else:
+    print("REDIS_PASSWORD_OK")
+PY
+chmod 600 "$ENV_FILE"
+
 docker volume create trading-bot_redis_data >/dev/null
 docker volume create trading-bot_postgres_data >/dev/null
 docker volume create trading-bot_bot_data >/dev/null
@@ -50,9 +79,10 @@ for raw in p.read_text(encoding="utf-8").splitlines():
         v = v[1:-1]
     vals[k.strip()] = v.strip()
 
-required = ["POSTGRES_PASSWORD", "DASHBOARD_TOKEN"]
-missing = [k for k in required if not vals.get(k)]
+required = ["POSTGRES_PASSWORD", "DASHBOARD_TOKEN", "REDIS_PASSWORD"]
+missing = [k for k in required if not vals.get(k) or (k == "REDIS_PASSWORD" and len(vals.get(k, "")) < 16)]
 print("MISSING:" + ",".join(missing) if missing else "ENV_KEYS_OK")
 print("HAS_PAPER_TRADING=" + ("yes" if "PAPER_TRADING" in vals else "no"))
 print("BOT_HOST_PORT=" + vals.get("BOT_HOST_PORT", ""))
+print("REDIS_PASSWORD_LEN=" + str(len(vals.get("REDIS_PASSWORD", ""))))
 PY

@@ -7,15 +7,13 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     command:
-      [
-        "redis-server",
-        "--appendonly",
-        "yes",
-        "--appendfsync",
-        "everysec",
-        "--requirepass",
-        "${REDIS_PASSWORD:?REDIS_PASSWORD must be set}",
-      ]
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -27,7 +25,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG",
+          'redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping | grep -q PONG',
         ]
       interval: 10s
       timeout: 5s

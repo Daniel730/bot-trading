@@ -78,14 +78,16 @@ IMAGE_OWNER=my-ghcr-owner IMAGE_TAG=my-tag docker compose -f infra/docker-compos
 
 ## Services And Ports
 
-| Service | Internal port | Host port | Notes |
-|---|---:|---:|---|
-| `frontend` | `80` | `3000` | nginx static app and API proxy |
-| `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | monitor process plus dashboard API |
-| `mcp-server` | `8000` | `8000` | FastMCP SSE server when launched via compose command |
-| `execution-engine` | `50051` | `50051` | Java gRPC server |
-| `redis` | `6379` | `6379` | telemetry, Kalman state, idempotency |
-| `postgres` | `5432` | `5433` | ledger/audit database |
+| Service | Internal port | Host publish | Notes |
+|---|---:|---|---|
+| `frontend` | `80` | `3000` | nginx static app and API proxy (LAN/Tailscale OK) |
+| `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | monitor + dashboard API |
+| `mcp-server` | `8000` | `127.0.0.1:8000` | FastMCP; no auth — loopback only |
+| `execution-engine` | `50051` | `127.0.0.1:50051` | Java gRPC dry-run sidecar — loopback only |
+| `redis` | `6379` | `127.0.0.1:6379` | requirepass via `REDIS_PASSWORD`; clients use host `redis` on the compose network |
+| `postgres` | `5432` | `127.0.0.1:5433` | ledger/audit DB — loopback only |
+
+Containers talk over the compose network with service DNS (`REDIS_HOST=redis`, `POSTGRES_HOST=postgres`). Host port publishes are for operator tooling on localhost only. Re-apply binds + Redis auth with `ops_apply_loopback_binds.sh`; probe with `ops_security_probe.sh`.
 
 ## Useful Commands
 
