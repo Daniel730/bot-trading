@@ -87,11 +87,13 @@ export interface DashboardData {
   runtime?: RuntimeInfo;
   metrics?: PortfolioMetrics;
   market_regime?: {
-    regime: string;
-    confidence: number;
+    regime: string | null;
+    confidence: number | null;
     features?: any;
   };
-  global_accuracy?: number;
+  global_accuracy?: number | null;
+  global_accuracy_samples?: number;
+  global_accuracy_source?: 'unset' | 'measured' | 'legacy';
   active_signals?: Signal[];
   terminal_messages?: TerminalMessage[];
   timestamp: string;

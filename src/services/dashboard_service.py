@@ -40,6 +40,56 @@ _dashboard_auth_token: ContextVar[Optional[str]] = ContextVar("dashboard_auth_to
 _dashboard_auth_session: ContextVar[Optional[str]] = ContextVar("dashboard_auth_session", default=None)
 
 
+def resolve_dashboard_accuracy_display(
+    *,
+    accuracy_str: Optional[str],
+    samples_str: Optional[str],
+    default_accuracy: float,
+) -> dict:
+    """Map persisted strategy accuracy to an honest dashboard payload.
+
+    The orchestrator may use ``GLOBAL_STRATEGY_ACCURACY_DEFAULT`` as a prior.
+    The Intelligence Hub "self-esteem" meter must not present that prior as a
+    measured hit-rate until reflection has closed at least one trade (or the
+    stored value has clearly moved off the prior without a sample counter).
+    """
+    try:
+        samples = int(samples_str or 0)
+    except (TypeError, ValueError):
+        samples = 0
+
+    accuracy_value: Optional[float] = None
+    if accuracy_str is not None:
+        try:
+            accuracy_value = float(accuracy_str)
+        except (TypeError, ValueError):
+            accuracy_value = None
+
+    if samples > 0 and accuracy_value is not None:
+        return {
+            "global_accuracy": accuracy_value,
+            "global_accuracy_samples": samples,
+            "global_accuracy_source": "measured",
+        }
+
+    if (
+        accuracy_value is not None
+        and abs(accuracy_value - float(default_accuracy)) > 1e-9
+    ):
+        # Legacy deployments wrote accuracy without a sample counter.
+        return {
+            "global_accuracy": accuracy_value,
+            "global_accuracy_samples": samples,
+            "global_accuracy_source": "legacy",
+        }
+
+    return {
+        "global_accuracy": None,
+        "global_accuracy_samples": samples,
+        "global_accuracy_source": "unset",
+    }
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -338,8 +388,11 @@ class DashboardState:
             "daily_allocation": None,
             "daily_usage_pct": None,
         }
-        self.market_regime = {"regime": "STABLE", "confidence": 1.0}
-        self.global_accuracy = settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT
+        # Honest defaults: do not advertise STABLE@100% or 50% self-esteem before telemetry.
+        self.market_regime = {"regime": None, "confidence": None}
+        self.global_accuracy = None
+        self.global_accuracy_samples = 0
+        self.global_accuracy_source = "unset"
         self.active_signals = []
         self.terminal_messages = []
         self.listeners: List[asyncio.Queue] = []
@@ -347,6 +400,23 @@ class DashboardState:
         self.monitor = None
         self.desired_bot_state = "RUNNING"
         self.last_control_action: Optional[dict] = None
+
+    def telemetry_payload(self) -> dict:
+        """Shared dashboard / SSE snapshot fields for metrics honesty."""
+        return {
+            "stage": self.stage,
+            "details": self.details,
+            "bot_start_time": self.bot_start_time,
+            "runtime": self.runtime_info(),
+            "metrics": self.portfolio_metrics,
+            "market_regime": self.market_regime,
+            "global_accuracy": self.global_accuracy,
+            "global_accuracy_samples": self.global_accuracy_samples,
+            "global_accuracy_source": self.global_accuracy_source,
+            "active_signals": self.active_signals,
+            "terminal_messages": self.terminal_messages,
+            "timestamp": _utcnow().isoformat(),
+        }
 
     def runtime_info(self) -> dict:
         alpaca_endpoint_class = _alpaca_endpoint_class(settings.ALPACA_BASE_URL)
@@ -389,20 +459,7 @@ class DashboardState:
             await self._broadcast()
 
     async def _broadcast(self):
-        message = json.dumps(
-            {
-                "stage": self.stage,
-                "details": self.details,
-                "bot_start_time": self.bot_start_time,
-                "runtime": self.runtime_info(),
-                "metrics": self.portfolio_metrics,
-                "market_regime": self.market_regime,
-                "global_accuracy": self.global_accuracy,
-                "active_signals": self.active_signals,
-                "terminal_messages": self.terminal_messages,
-                "timestamp": _utcnow().isoformat(),
-            }
-        )
+        message = json.dumps(self.telemetry_payload())
         for q in self.listeners:
             await q.put(message)
 
@@ -2243,14 +2300,29 @@ class DashboardService:
                 regime = await persistence_service.get_latest_market_regime()
                 accuracy_str = await persistence_service.get_system_state(
                     "global_strategy_accuracy",
-                    str(settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT),
+                    None,
+                )
+                samples_str = await persistence_service.get_system_state(
+                    "global_strategy_accuracy_samples",
+                    "0",
+                )
+                accuracy_display = resolve_dashboard_accuracy_display(
+                    accuracy_str=accuracy_str,
+                    samples_str=samples_str,
+                    default_accuracy=settings.GLOBAL_STRATEGY_ACCURACY_DEFAULT,
                 )
 
                 async with dashboard_state._lock:
                     dashboard_state.portfolio_metrics.update(metrics)
                     if regime:
                         dashboard_state.market_regime = regime
-                    dashboard_state.global_accuracy = float(accuracy_str)
+                    dashboard_state.global_accuracy = accuracy_display["global_accuracy"]
+                    dashboard_state.global_accuracy_samples = accuracy_display[
+                        "global_accuracy_samples"
+                    ]
+                    dashboard_state.global_accuracy_source = accuracy_display[
+                        "global_accuracy_source"
+                    ]
                     await dashboard_state._broadcast()
             except Exception as exc:
                 logger.error("DASHBOARD POLLING ERROR: %s", exc)
@@ -2361,22 +2433,7 @@ async def message_stream(request: Request, token: str = Query(None), session: st
     q = asyncio.Queue()
     async with dashboard_state._lock:
         dashboard_state.listeners.append(q)
-        await q.put(
-            json.dumps(
-                {
-                    "stage": dashboard_state.stage,
-                    "details": dashboard_state.details,
-                    "bot_start_time": dashboard_state.bot_start_time,
-                    "runtime": dashboard_state.runtime_info(),
-                    "metrics": dashboard_state.portfolio_metrics,
-                    "market_regime": dashboard_state.market_regime,
-                    "global_accuracy": dashboard_state.global_accuracy,
-                    "active_signals": dashboard_state.active_signals,
-                    "terminal_messages": dashboard_state.terminal_messages,
-                    "timestamp": _utcnow().isoformat(),
-                }
-            )
-        )
+        await q.put(json.dumps(dashboard_state.telemetry_payload()))
 
     async def event_generator():
         try:

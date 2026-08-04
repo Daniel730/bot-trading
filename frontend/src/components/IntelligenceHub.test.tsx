@@ -22,5 +22,6 @@ describe('IntelligenceHub', () => {
     render(<IntelligenceHub regime="VOLATILE" confidence={0.5} accuracy={0.35} />);
     expect(screen.getByText('35.0%')).toBeInTheDocument();
     expect(screen.getByText('LOW ACCURACY WARNING')).toBeInTheDocument();
+    expect(screen.getByText(/CLOSED-TRADE HIT-RATE EMA/)).toBeInTheDocument();
   });
 });
