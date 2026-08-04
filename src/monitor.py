@@ -703,6 +703,24 @@ class ArbitrageMonitor:
                 dev_mode=settings.DEV_MODE,
             )
 
+        # Quarantine / denylist: never warm Kalman for known junk pairs (e.g. BTC/BCH).
+        from src.services.pair_discovery_helpers import is_pair_denied
+
+        denied_ids = settings.pair_denylist_ids
+        if denied_ids:
+            kept: list[dict] = []
+            for pair in candidate_pairs:
+                pair_id = pair.get("id") or f"{pair['ticker_a']}_{pair['ticker_b']}"
+                if is_pair_denied(pair_id=pair_id, denylist=denied_ids):
+                    logger.warning("PAIR DENYLIST: skipping %s at initialize", pair_id)
+                    try:
+                        await persistence_service.update_pair_status(pair_id, "Benched")
+                    except Exception as exc:
+                        logger.debug("Denylist bench failed for %s: %s", pair_id, exc)
+                    continue
+                kept.append(pair)
+            candidate_pairs = kept
+
         # Spec 037: pair-eligibility gate. Reject cross-currency, cross-session,
         # LSE-stamp-duty and cost-above-ceiling pairs *before* allocating
         # Kalman state for them. This avoids spending compute and Redis state
@@ -829,6 +847,24 @@ class ArbitrageMonitor:
                     logger.warning(f"Invalid hedge ratio for {ticker_a}/{ticker_b}: {hedge}. Using 1.0.")
                     hedge = 1.0
 
+                from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+
+                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                    logger.warning(
+                        "SKIP %s/%s: extreme hedge_ratio=%.3f exceeds PAIR_DISCOVERY_MAX_ABS_HEDGE=%.1f",
+                        ticker_a,
+                        ticker_b,
+                        float(hedge),
+                        settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    )
+                    try:
+                        await persistence_service.update_pair_status(
+                            f"{ticker_a}_{ticker_b}", "Benched"
+                        )
+                    except Exception:
+                        pass
+                    continue
+
                 pair_id = f"{ticker_a}_{ticker_b}"
 
                 if pair_id in self.kalman_quarantined_pairs:
@@ -871,6 +907,22 @@ class ArbitrageMonitor:
                 # Mark the pair as already validated today so the daily re-check
                 # in the scan loop doesn't immediately fire again 15 s after boot.
                 self.last_cointegration_check[pair_id] = datetime.now().date()
+                # Persist cointegration / hedge so elite rotation can bench broken pairs.
+                try:
+                    await persistence_service.save_trading_pairs([{
+                        "id": pair_id,
+                        "ticker_a": ticker_a,
+                        "ticker_b": ticker_b,
+                        "hedge_ratio": float(hedge),
+                        "is_cointegrated": bool(is_coint),
+                        "status": "Active",
+                    }])
+                except Exception as persist_exc:
+                    logger.warning(
+                        "Failed to persist cointegration state for %s: %s",
+                        pair_id,
+                        persist_exc,
+                    )
                 logger.info(f"SUCCESS: Pair {ticker_a}/{ticker_b} initialized.")
 
                 # Pacing: Avoid blasting the data API (Yahoo/Polygon) during boot
@@ -887,72 +939,32 @@ class ArbitrageMonitor:
 
     async def _rotate_elite_pairs(self):
         """
-        Implements the Elite Squad rotation logic.
-        Swaps the worst performing active pairs with the best candidates.
+        Promote scout candidates into the Active universe, then hot-reload
+        in-memory pair state when anything changed.
         """
         logger.info("ELITE SQUAD: Checking for potential pair rotation...")
+        from src.agents.portfolio_manager_agent import portfolio_manager
 
-        # 1. Get current active pairs
-        active_pairs = await persistence_service.get_active_trading_pairs()
-        if not active_pairs: return
+        result = await portfolio_manager.rotate_pairs()
+        if result.get("status") != "rotated":
+            logger.info("ELITE SQUAD: %s", result.get("status", "noop"))
+            return result
 
-        # 2. Get top candidates from scouting
-        top_candidates = await persistence_service.get_top_candidates(limit=10)
-        if not top_candidates:
-            logger.info("ELITE SQUAD: No candidates available for rotation.")
-            return
-
-        # 3. Find worst performing or broken active pair
-        # Simple heuristic: prioritize pairs that are no longer cointegrated.
-        worst_active = sorted(active_pairs, key=lambda p: p.get('is_cointegrated', True))[0]
-
-        # Get the best candidate that isn't already active
-        active_ids = {p['id'] for p in active_pairs}
-        eligible_candidates = [c for c in top_candidates if c['pair_id'] not in active_ids]
-
-        if not eligible_candidates:
-            logger.info("ELITE SQUAD: All top candidates are already active.")
-            return
-
-        best_candidate = eligible_candidates[0]
-
-        # 4. Rotation Logic: Rotate if active is broken OR candidate Sortino is significantly high
-        should_rotate = (
-            not worst_active.get("is_cointegrated")
-            or best_candidate["sortino"] > settings.ELITE_ROTATION_SORTINO_THRESHOLD
-        )
-
-        if should_rotate:
-            logger.info(f"ELITE SQUAD: Rotating {worst_active['id']} out for {best_candidate['pair_id']}.")
-
-            # Update DB
-            await persistence_service.update_pair_status(worst_active['id'], "Benched")
-
-            # Promote candidate to Active
-            ticker_a, ticker_b = best_candidate['pair_id'].split('_')
-            await persistence_service.save_trading_pairs([{
-                "ticker_a": ticker_a,
-                "ticker_b": ticker_b,
-                "status": "Active",
-                "is_cointegrated": True
-            }])
-
-            # Reload in-memory state
-            await self.reload_pairs()
-        else:
-            logger.info("ELITE SQUAD: No rotation needed at this time.")
+        await self.reload_pairs()
+        return result
 
     async def _auto_scout_and_rotate_loop(self):
         """
         Background task that periodically runs the discovery engine (Scouting)
         and promotes the best pairs (Rotation).
         """
-        # Wait 20 minutes after startup before the first scout cycle.
-        # The 60s original value caused run_discovery() to saturate yfinance
-        # immediately after boot, rate-limiting the first reload and dropping
-        # all active pairs to 0.  20 min gives the scan loop time to warm up
-        # Kalman filters before any heavy portfolio_manager downloads begin.
-        initial_delay = max(1200, settings.SCOUT_INTERVAL_HOURS * 1800)
+        if not settings.PAIR_DISCOVERY_ENABLED:
+            logger.info("AUTO-SCOUT: disabled via PAIR_DISCOVERY_ENABLED=false.")
+            return
+
+        # Wait after startup before the first scout cycle so Kalman warm-up
+        # and the first market-data burst are not starved by yfinance scouts.
+        initial_delay = max(60, int(settings.SCOUT_INITIAL_DELAY_SECONDS))
         logger.info(
             "AUTO-SCOUT: first cycle in %.0f minutes.",
             initial_delay / 60,
@@ -961,14 +973,20 @@ class ArbitrageMonitor:
 
         while True:
             try:
+                if not settings.PAIR_DISCOVERY_ENABLED:
+                    logger.info("AUTO-SCOUT: disabled; sleeping until re-enabled.")
+                    await asyncio.sleep(3600)
+                    continue
+
                 logger.info("AUTO-UPDATE: Starting periodic Scouting & Rotation cycle...")
 
-                # 1. Scouting: Find new candidates
                 from src.agents.portfolio_manager_agent import portfolio_manager
                 await portfolio_manager.run_discovery()
 
-                # 2. Rotation: Promote best candidates
-                await self._rotate_elite_pairs()
+                if settings.PAIR_DISCOVERY_AUTO_PROMOTE:
+                    await self._rotate_elite_pairs()
+                else:
+                    logger.info("AUTO-UPDATE: auto-promote disabled; candidates stored only.")
 
                 logger.info(f"AUTO-UPDATE: Cycle complete. Next run in {settings.SCOUT_INTERVAL_HOURS} hours.")
                 await asyncio.sleep(settings.SCOUT_INTERVAL_HOURS * 3600)
@@ -3174,10 +3192,13 @@ class ArbitrageMonitor:
         logger.info("Circuit breaker reset to NORMAL on startup.")
 
         # Start periodic Scouting & Rotation background task
-        background_task_watchdog.create_task(
-            self._auto_scout_and_rotate_loop(),
-            name="monitor:auto_scout_and_rotate_loop",
-        )
+        if settings.PAIR_DISCOVERY_ENABLED:
+            background_task_watchdog.create_task(
+                self._auto_scout_and_rotate_loop(),
+                name="monitor:auto_scout_and_rotate_loop",
+            )
+        else:
+            logger.info("Pair discovery auto-scout loop not started (PAIR_DISCOVERY_ENABLED=false).")
 
         try:
             # Main Scan Loop with Rich Live UI

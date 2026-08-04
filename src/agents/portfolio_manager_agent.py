@@ -15,7 +15,14 @@ from src.services.data_service import DataService
 from src.services.arbitrage_service import ArbitrageService
 from src.services.agent_log_service import agent_trace
 from src.agents.macro_economic_agent import macro_economic_agent
-from src.services.brokerage_service import brokerage_service
+from src.services.pair_eligibility_service import evaluate_pair
+from src.services.pair_discovery_helpers import (
+    candidate_pair_combos,
+    is_hedge_ratio_sane,
+    is_pair_denied,
+    pairs_from_promotions,
+    select_rotation_actions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -296,15 +303,17 @@ class PortfolioManagerAgent:
             return
 
         logger.info(f"Scanning sector {sector} with {len(sector_tickers)} tickers...")
-        
-        # Bulk fetch existing candidate IDs to avoid redundant analysis
-        existing_ids = await persistence_service.get_existing_candidate_ids(sector)
+        combos = candidate_pair_combos(
+            sector_tickers,
+            max_tickers=settings.PAIR_DISCOVERY_MAX_TICKERS,
+        )
+        existing_ids = set(await persistence_service.get_existing_candidate_ids(sector))
         new_candidates = []
+        scout_tickers = sorted({t for pair in combos for t in pair})
 
-        # Batch fetch historical data for all sector tickers to avoid rate limits
         try:
             full_df = await self.data_service.get_historical_data_async(
-                sector_tickers,
+                scout_tickers,
                 "1y",
                 "1d",
             )
@@ -312,42 +321,55 @@ class PortfolioManagerAgent:
             logger.error(f"Batch fetch failed for sector {sector}: {e}")
             full_df = pd.DataFrame()
 
-        # This is a placeholder for a more complex chunked scanning logic
-        for i in range(min(10, len(sector_tickers)-1)):
-            t_a, t_b = sector_tickers[i], sector_tickers[i+1]
+        for t_a, t_b in combos:
             pair_id = f"{t_a}_{t_b}"
-            
             if pair_id in existing_ids:
                 continue
+            if is_pair_denied(pair_id=pair_id, denylist=settings.pair_denylist_ids):
+                logger.debug("SCOUT SKIP %s: denylisted", pair_id)
+                continue
 
-            # Spec 045: Ensure both legs are accessible in the active brokerage
-            if not await brokerage_service.is_asset_active(t_a) or not await brokerage_service.is_asset_active(t_b):
-                logger.debug(f"SCOUT SKIP {pair_id}: one or both legs inactive in broker.")
+            eligibility = await evaluate_pair(
+                t_a,
+                t_b,
+                account_currency=settings.ACCOUNT_CURRENCY,
+                max_round_trip_cost_pct=settings.PAIR_MAX_ROUND_TRIP_COST_PCT,
+                block_cross_currency=settings.BLOCK_CROSS_CURRENCY_PAIRS,
+                block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
+                allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
+            )
+            if not eligibility.admit:
+                logger.debug("SCOUT SKIP %s: eligibility %s", pair_id, eligibility.reason)
                 continue
 
             try:
-                # Use data from batch fetch if available
                 if not full_df.empty and t_a in full_df.columns and t_b in full_df.columns:
                     df = full_df[[t_a, t_b]].dropna()
                 else:
-                    # Fallback to single fetch if missing from batch
                     df = await self.data_service.get_historical_data_async(
                         [t_a, t_b],
                         "1y",
                         "1d",
                     )
-                
+
                 if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
                     continue
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
-                
+                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                    logger.info(
+                        "SCOUT SKIP %s: extreme hedge_ratio=%.3f (max_abs=%.1f)",
+                        pair_id,
+                        float(hedge),
+                        settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    )
+                    continue
+
                 if is_coint:
-                    # Calculate estimated Sortino for this pair spread
                     spread = df[t_a] - (hedge * df[t_b])
                     spread_returns = spread.pct_change().dropna()
-                    pair_sortino = self.calculate_sortino_ratio(np.array([1.0]), pd.DataFrame(spread_returns)) # Simplified for single spread
-                    
-                    # Add to bulk list
+                    pair_sortino = self.calculate_sortino_ratio(
+                        np.array([1.0]), pd.DataFrame(spread_returns)
+                    )
                     new_candidates.append(UniverseCandidate(
                         pair_id=pair_id,
                         sector=sector,
@@ -355,7 +377,7 @@ class PortfolioManagerAgent:
                         correlation=df[t_a].corr(df[t_b]),
                         expected_return=spread_returns.mean() * 252,
                         volatility=spread_returns.std() * np.sqrt(252),
-                        sortino=pair_sortino
+                        sortino=pair_sortino,
                     ))
                     logger.info(f"Found new candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
             except Exception as e:
@@ -384,62 +406,82 @@ class PortfolioManagerAgent:
         Pairs with missing data or pairs that raise exceptions during processing are skipped silently; newly discovered candidates are saved in bulk at the end.
         """
         logger.info("Scanning crypto universe...")
-        top_crypto = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD", "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "LTC-USD"]
-        
-        existing_ids = await persistence_service.get_existing_candidate_ids("Crypto")
+        top_crypto = [
+            "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "ADA-USD",
+            "AVAX-USD", "DOT-USD", "LINK-USD", "NEAR-USD", "LTC-USD",
+        ]
+        combos = candidate_pair_combos(
+            top_crypto,
+            max_tickers=settings.PAIR_DISCOVERY_MAX_TICKERS,
+        )
+        existing_ids = set(await persistence_service.get_existing_candidate_ids("Crypto"))
         new_candidates = []
 
-        # Batch fetch all crypto data in one call
         try:
             full_df = await self.data_service.get_historical_data_async(top_crypto, "1y", "1d")
         except Exception as e:
             logger.error(f"Batch fetch failed for crypto: {e}")
             full_df = pd.DataFrame()
 
-        for i in range(len(top_crypto)):
-            for j in range(i + 1, len(top_crypto)):
-                t_a, t_b = top_crypto[i], top_crypto[j]
-                pair_id = f"{t_a}_{t_b}"
-                
-                if pair_id in existing_ids:
+        for t_a, t_b in combos:
+            pair_id = f"{t_a}_{t_b}"
+            if pair_id in existing_ids:
+                continue
+            if is_pair_denied(pair_id=pair_id, denylist=settings.pair_denylist_ids):
+                continue
+
+            eligibility = await evaluate_pair(
+                t_a,
+                t_b,
+                account_currency=settings.ACCOUNT_CURRENCY,
+                max_round_trip_cost_pct=settings.PAIR_MAX_ROUND_TRIP_COST_PCT,
+                block_cross_currency=settings.BLOCK_CROSS_CURRENCY_PAIRS,
+                block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
+                allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
+            )
+            if not eligibility.admit:
+                continue
+
+            try:
+                if not full_df.empty and t_a in full_df.columns and t_b in full_df.columns:
+                    df = full_df[[t_a, t_b]].dropna()
+                else:
+                    df = await self.data_service.get_historical_data_async(
+                        [t_a, t_b],
+                        "1y",
+                        "1d",
+                    )
+
+                if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
                     continue
 
-                # Spec 045: Ensure both legs are accessible in the active brokerage
-                if not await brokerage_service.is_asset_active(t_a) or not await brokerage_service.is_asset_active(t_b):
+                is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
+                if not is_hedge_ratio_sane(hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE):
+                    logger.info(
+                        "SCOUT SKIP %s: extreme hedge_ratio=%.3f (max_abs=%.1f)",
+                        pair_id,
+                        float(hedge),
+                        settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    )
                     continue
-
-                try:
-                    if not full_df.empty and t_a in full_df.columns and t_b in full_df.columns:
-                        df = full_df[[t_a, t_b]].dropna()
-                    else:
-                        df = await self.data_service.get_historical_data_async(
-                            [t_a, t_b],
-                            "1y",
-                            "1d",
-                        )
-                    
-                    if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
-                        continue
-                        
-                    is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
-                    
-                    if is_coint:
-                        spread = df[t_a] - (hedge * df[t_b])
-                        spread_returns = spread.pct_change().dropna()
-                        pair_sortino = self.calculate_sortino_ratio(np.array([1.0]), pd.DataFrame(spread_returns))
-                        
-                        new_candidates.append(UniverseCandidate(
-                            pair_id=pair_id,
-                            sector="Crypto",
-                            p_value=p_val,
-                            correlation=df[t_a].corr(df[t_b]),
-                            expected_return=spread_returns.mean() * 365,
-                            volatility=spread_returns.std() * np.sqrt(365),
-                            sortino=pair_sortino
-                        ))
-                        logger.info(f"Found new crypto candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
-                except Exception as e:
-                    continue
+                if is_coint:
+                    spread = df[t_a] - (hedge * df[t_b])
+                    spread_returns = spread.pct_change().dropna()
+                    pair_sortino = self.calculate_sortino_ratio(
+                        np.array([1.0]), pd.DataFrame(spread_returns)
+                    )
+                    new_candidates.append(UniverseCandidate(
+                        pair_id=pair_id,
+                        sector="Crypto",
+                        p_value=p_val,
+                        correlation=df[t_a].corr(df[t_b]),
+                        expected_return=spread_returns.mean() * 365,
+                        volatility=spread_returns.std() * np.sqrt(365),
+                        sortino=pair_sortino,
+                    ))
+                    logger.info(f"Found new crypto candidate: {pair_id} (Sortino: {pair_sortino:.2f})")
+            except Exception:
+                continue
 
         if new_candidates:
             await persistence_service.save_universe_candidates(new_candidates)
@@ -552,68 +594,57 @@ class PortfolioManagerAgent:
         return {"status": "COMPLETED", "timestamp": datetime.now().isoformat()}
 
     @agent_trace("PortfolioManagerAgent.rotate_pairs")
-    async def rotate_pairs(self):
+    async def rotate_pairs(self) -> Dict:
         """
-        Rotate active trading pairs by replacing them with the top scout candidates ranked by Sortino.
-        
-        Fetches all TradingPair rows with status "Active" and the top UniverseCandidate rows ordered by descending `sortino`. If there are scout pairs not already active, sets all TradingPair rows' status to "Scout", upserts the selected scout pairs as Active TradingPair rows (using the scout `pair_id` to populate `ticker_a` and `ticker_b`, with `hedge_ratio=0.0` and `is_cointegrated=True`), commits the transaction, and logs the rotation. If there are no active pairs or no scouts, or no scouts to activate, the method returns without making changes.
-        """
-        from src.services.persistence_service import TradingPair, UniverseCandidate
-        from sqlalchemy import select, update, desc
-        
-        logger.info("Starting pair rotation audit...")
-        
-        async with persistence_service.AsyncSessionLocal() as session:
-            # 1. Get current active pairs
-            active_stmt = select(TradingPair).where(TradingPair.status == "Active")
-            active_pairs = (await session.execute(active_stmt)).scalars().all()
-            
-            # 2. Get top candidates (Scouts)
-            scout_stmt = select(UniverseCandidate).order_by(desc(UniverseCandidate.sortino)).limit(settings.MAX_ACTIVE_PAIRS)
-            scouts = (await session.execute(scout_stmt)).scalars().all()
-            
-            if not active_pairs or not scouts:
-                logger.info("Rotation skipped: Insufficient active pairs or scouts.")
-                return
-            
-            # Sort active pairs by Sortino (if we have it, otherwise we'd need to calculate it)
-            # For now, let's assume we want to ensure we have the best Sortino pairs in Active
-            
-            active_ids = {p.id for p in active_pairs}
-            scout_ids = {s.pair_id for s in scouts}
-            
-            to_activate = scout_ids - active_ids
-            if not to_activate:
-                logger.info("Rotation completed: No better candidates found.")
-                return
+        Promote top scout candidates into the Active trading-pair universe.
 
-            logger.info(f"Identified {len(to_activate)} potential improvements.")
-            
-            # Simple rotation: swap worst active for best scout
-            # In a more advanced version, we'd check PnL and current volatility
-            
-            # For now, let's just make sure we don't exceed MAX_ACTIVE_PAIRS
-            # and that we have the top Sortino pairs active.
-            
-            # 1. Deactivate all
-            await session.execute(update(TradingPair).values(status="Scout"))
-            
-            # 2. Activate top Sortino scouts
-            for scout in scouts:
-                # Upsert into TradingPair
-                ticker_a, ticker_b = scout.pair_id.split('_')
-                p = TradingPair(
-                    id=scout.pair_id,
-                    ticker_a=ticker_a,
-                    ticker_b=ticker_b,
-                    hedge_ratio=0.0, # Will be re-calculated by monitor
-                    is_cointegrated=True,
-                    status="Active"
-                )
-                await session.merge(p)
-            
-            await session.commit()
-            logger.info(f"Rotated {len(scouts)} pairs into Active status.")
+        Fills open slots up to ``MAX_ACTIVE_PAIRS`` and replaces Active pairs that
+        are marked non-cointegrated. Healthy Active pairs are left alone.
+
+        Returns:
+            dict with ``promoted``, ``benched``, and ``status`` keys.
+        """
+        logger.info("Starting pair rotation audit...")
+        active_pairs = await persistence_service.get_active_trading_pairs()
+        scouts = await persistence_service.get_top_candidates(
+            limit=max(settings.MAX_ACTIVE_PAIRS * 2, settings.MAX_ACTIVE_PAIRS)
+        )
+        if not scouts:
+            logger.info("Rotation skipped: no scout candidates available.")
+            return {"status": "skipped", "promoted": [], "benched": []}
+
+        actions = select_rotation_actions(
+            active_pairs,
+            scouts,
+            max_active_pairs=settings.MAX_ACTIVE_PAIRS,
+            sortino_threshold=settings.ELITE_ROTATION_SORTINO_THRESHOLD,
+            denylist=settings.pair_denylist_ids,
+            max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+        )
+        to_bench = actions["to_bench"]
+        to_promote = actions["to_promote"]
+        if not to_bench and not to_promote:
+            logger.info("Rotation completed: no promotions needed.")
+            return {"status": "noop", "promoted": [], "benched": []}
+
+        for pair_id in to_bench:
+            await persistence_service.update_pair_status(pair_id, "Benched")
+
+        promote_payloads = pairs_from_promotions(to_promote)
+        if promote_payloads:
+            await persistence_service.save_trading_pairs(promote_payloads)
+
+        promoted_ids = [p["id"] for p in promote_payloads]
+        logger.info(
+            "Rotated elite squad: promoted=%s benched=%s",
+            promoted_ids,
+            to_bench,
+        )
+        return {
+            "status": "rotated",
+            "promoted": promoted_ids,
+            "benched": list(to_bench),
+        }
 
 portfolio_manager_agent = PortfolioManagerAgent()
 portfolio_manager = portfolio_manager_agent

@@ -1973,6 +1973,8 @@ class DashboardService:
         """
         Manually triggers a global pair discovery cycle using PortfolioManagerAgent.
         This runs in the background to avoid blocking the dashboard.
+        When PAIR_DISCOVERY_AUTO_PROMOTE is enabled, successful scouts are also
+        rotated into Active trading pairs and the monitor hot-reloads if attached.
         """
         from src.agents.portfolio_manager_agent import portfolio_manager
 
@@ -1982,6 +1984,13 @@ class DashboardService:
         async def _run_discovery_with_dashboard_messages():
             try:
                 await portfolio_manager.run_discovery()
+                promote_summary = {"status": "skipped"}
+                if settings.PAIR_DISCOVERY_AUTO_PROMOTE:
+                    monitor = dashboard_state.monitor
+                    if monitor is not None and hasattr(monitor, "_rotate_elite_pairs"):
+                        promote_summary = await monitor._rotate_elite_pairs() or {}
+                    else:
+                        promote_summary = await portfolio_manager.rotate_pairs()
             except asyncio.CancelledError:
                 await dashboard_state.add_message(
                     "SYSTEM",
@@ -1996,10 +2005,21 @@ class DashboardService:
                     metadata={"type": "pair_discovery", "actor": actor, "status": "failed"},
                 )
                 raise
+            promoted = promote_summary.get("promoted") or []
+            benched = promote_summary.get("benched") or []
             await dashboard_state.add_message(
                 "SYSTEM",
-                f"Pair discovery completed for {actor}.",
-                metadata={"type": "pair_discovery", "actor": actor, "status": "completed"},
+                (
+                    f"Pair discovery completed for {actor}. "
+                    f"promoted={len(promoted)} benched={len(benched)}."
+                ),
+                metadata={
+                    "type": "pair_discovery",
+                    "actor": actor,
+                    "status": "completed",
+                    "promoted": promoted,
+                    "benched": benched,
+                },
             )
 
         background_task_watchdog.create_task(
@@ -2012,7 +2032,15 @@ class DashboardService:
             f"Global pair discovery triggered by {actor}. Completion will be reported when the scan finishes.",
             metadata={"type": "pair_discovery", "actor": actor, "status": "started"}
         )
-        return {"status": "accepted", "message": "Discovery cycle started. Completion will be reported in the terminal feed."}
+        return {
+            "status": "accepted",
+            "message": (
+                "Discovery cycle started. Cointegrated scouts will be promoted into "
+                "Active pairs when the scan finishes (see terminal feed)."
+                if settings.PAIR_DISCOVERY_AUTO_PROMOTE
+                else "Discovery cycle started. Candidates are stored only (auto-promote off)."
+            ),
+        }
 
     async def start(self):
         """

@@ -187,6 +187,29 @@ class Settings(BaseSettings):
     MAX_ALLOCATION_PERCENTAGE: float = 15.0
     MAX_ACTIVE_PAIRS: int = Field(default=20, validation_alias="MAX_ACTIVE_PAIRS")
     SCOUT_INTERVAL_HOURS: int = Field(default=12, validation_alias="SCOUT_INTERVAL_HOURS")
+    # Automatic pair discovery (S&P sector + crypto scout → universe_candidates → Active).
+    # When false, the monitor skips the background scout loop; dashboard POST
+    # /api/pairs/discover still works so operators can run a one-shot scan.
+    PAIR_DISCOVERY_ENABLED: bool = Field(default=True, validation_alias="PAIR_DISCOVERY_ENABLED")
+    # Seconds to wait after boot before the first auto-scout cycle (avoids
+    # yfinance saturation during Kalman warm-up). Periodic interval remains
+    # SCOUT_INTERVAL_HOURS after that.
+    SCOUT_INITIAL_DELAY_SECONDS: int = Field(default=1200, validation_alias="SCOUT_INITIAL_DELAY_SECONDS")
+    # Cap tickers per sector/crypto scout pass so C(n,2) cointegration tests stay bounded.
+    # Kept modest to avoid yfinance/RAM spikes on the Mini PC during overnight scouts.
+    PAIR_DISCOVERY_MAX_TICKERS: int = Field(default=12, validation_alias="PAIR_DISCOVERY_MAX_TICKERS")
+    # After a scout finishes, promote top candidates into empty Active slots /
+    # replace non-cointegrated Active pairs. Dashboard discover uses the same path.
+    PAIR_DISCOVERY_AUTO_PROMOTE: bool = Field(default=True, validation_alias="PAIR_DISCOVERY_AUTO_PROMOTE")
+    # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
+    # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
+    PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Hard denylist (either leg order). Comma-separated pair ids in env.
+    # Default quarantines the known BTC/BCH spread-guard churner.
+    PAIR_DENYLIST: str = Field(
+        default="BTC-USD_BCH-USD,BCH-USD_BTC-USD",
+        validation_alias="PAIR_DENYLIST",
+    )
     SGOV_SWEEP_TICKER: str = "SGOV"
     MIN_SWEEP_THRESHOLD: float = 10.0
     LIVE_CAPITAL_DANGER: bool = Field(default=False, validation_alias="LIVE_CAPITAL_DANGER")
@@ -776,7 +799,7 @@ class Settings(BaseSettings):
         {'ticker_a': 'AVAX-USD',  'ticker_b': 'DOT-USD'},
         # --- Stores of value / Bitcoin forks ---
         {'ticker_a': 'BTC-USD',   'ticker_b': 'LTC-USD'},
-        {'ticker_a': 'BTC-USD',   'ticker_b': 'BCH-USD'},
+        # BTC-USD/BCH-USD quarantined: extreme beta (~285) + spread-guard churn.
         {'ticker_a': 'LTC-USD',   'ticker_b': 'BCH-USD'},
         # --- Payments ---
         {'ticker_a': 'XRP-USD',   'ticker_b': 'XLM-USD'},
@@ -789,6 +812,12 @@ class Settings(BaseSettings):
     DEV_EXECUTION_TICKERS: dict = {
         'BTC-USD': 'MSFT', 'ETH-USD': 'AAPL', 'BNB-USD': 'GOOGL', 'SOL-USD': 'TSLA'
     }
+
+    @property
+    def pair_denylist_ids(self) -> set[str]:
+        from src.services.pair_discovery_helpers import normalize_denylist, parse_denylist_env
+
+        return normalize_denylist(parse_denylist_env(self.PAIR_DENYLIST))
 
     @property
     def effective_t212_key(self) -> str:

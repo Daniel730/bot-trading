@@ -217,6 +217,11 @@ Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
 | `MONITOR_ENTRY_ZSCORE` | `2.0` (never `0.5`) | Entry threshold; code clamps below 1.0 |
 | `IMAGE_OWNER` | `daniel730` | GHCR namespace |
 | `POSTGRES_PASSWORD`, `DASHBOARD_TOKEN` | non-default, ≥16 chars for token | Startup guards |
+| `PAIR_DISCOVERY_ENABLED` | `true` (default) | Background scout + elite rotation |
+| `PAIR_DISCOVERY_AUTO_PROMOTE` | `true` (default) | Promote scouts into Active after discover |
+| `PAIR_DENYLIST` | includes `BTC-USD_BCH-USD` | Quarantine junk / spread-guard churners |
+| `PAIR_DISCOVERY_MAX_TICKERS` | `12` (default) | Bounds scout RAM/yfinance load |
+| `PAPER_TRADING` | `true` for paper Alpaca | Do not enable live real-money overnight |
 
 **Do not** set `MONITOR_ENTRY_ZSCORE=0.5` in env or `data/bot_settings.json` — the runtime
 clamps to 1.0 and logs a warning, but the intent is wrong and hides misconfiguration.
