@@ -5,7 +5,12 @@ import asyncio
 import inspect
 from datetime import datetime
 from src.config import settings
-from src.services.persistence_service import persistence_service, OrderStatus, MarketRegime
+from src.services.persistence_service import (
+    ExitReason,
+    MarketRegime,
+    OrderStatus,
+    persistence_service,
+)
 from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
@@ -21,6 +26,22 @@ class ReflectionAgent:
 
     def _is_mock_value(self, value) -> bool:
         return type(value).__module__.startswith("unittest.mock")
+
+    @staticmethod
+    def _exit_reason_from_ledger(trades) -> ExitReason | None:
+        """Prefer ledger metadata.exit_reason stamped by close_trade / reconcile."""
+        for trade in trades or []:
+            meta = getattr(trade, "metadata_json", None)
+            if not isinstance(meta, dict):
+                continue
+            raw = meta.get("exit_reason")
+            if raw is None:
+                continue
+            try:
+                return ExitReason(str(raw))
+            except ValueError:
+                continue
+        return None
 
     @agent_trace("ReflectionAgent.reflect_on_trade")
     async def reflect_on_trade(self, signal_id_str: str):
@@ -67,6 +88,13 @@ class ReflectionAgent:
                     logger.warning(f"ReflectionAgent: No journal entry found for {signal_id_str}. Creating one.")
                     # Entry context might be lost, but we can still reflect
 
+                ledger_exit_reason = self._exit_reason_from_ledger(trades)
+                resolved_exit_reason = (
+                    journal.exit_reason
+                    if journal is not None and journal.exit_reason is not None
+                    else ledger_exit_reason
+                )
+
                 # 3. Analyze Performance
                 # close_trade stamps the same signal-level realized PnL onto every
                 # leg. Take one value — never sum legs (that double-counts).
@@ -92,7 +120,11 @@ class ReflectionAgent:
                     reflection_note = "SUCCESS: Mean reversion captured within expected timeframe."
                     efficiency = 0.95
                 else:
-                    exit_reason = journal.exit_reason.value if journal and journal.exit_reason else "UNKNOWN"
+                    exit_reason = (
+                        resolved_exit_reason.value
+                        if resolved_exit_reason is not None
+                        else "UNKNOWN"
+                    )
                     if exit_reason == "STOP_LOSS":
                         reflection_note = "FAILED: Statistical stop hit. Hedge ratio might have drifted or cointegration broke."
                     elif exit_reason == "KILL_SWITCH":
@@ -109,6 +141,9 @@ class ReflectionAgent:
                     "reflection_text": reflection_note,
                     "efficiency_score": efficiency,
                 }
+                # Keep exit_reason continuous when recovering a missing/thin journal.
+                if resolved_exit_reason is not None:
+                    journal_data["exit_reason"] = resolved_exit_reason
 
                 # P-05 (2026-04-26): TradeJournal.entry_regime is NOT NULL.
                 # PostgreSQL validates the full INSERT candidate row even when

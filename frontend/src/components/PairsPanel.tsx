@@ -17,6 +17,7 @@ import {
   ShoppingCart,
 } from 'lucide-react';
 import {
+  ApiError,
   fetchPairs,
   syncWallet,
   updatePairs,
@@ -421,7 +422,19 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
 
     setWalletSyncing(true);
     try {
-      const result = await syncWallet(token, sessionToken, budget);
+      let result;
+      try {
+        result = await syncWallet(token, sessionToken, budget);
+      } catch (firstErr) {
+        const errMsg = (firstErr as Error)?.message || '';
+        if (firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg)) {
+          const otp = window.prompt('Enter authenticator or backup code to confirm wallet sync:');
+          if (!otp?.trim()) throw firstErr;
+          result = await syncWallet(token, sessionToken, budget, otp.trim());
+        } else {
+          throw firstErr;
+        }
+      }
       const okOrders = result.orders.filter((order) => order.status === 'ok').length;
       setWalletOk(
         `${result.message} ${okOrders} orders, ${result.skipped.length} skipped.`,

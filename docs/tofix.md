@@ -40,8 +40,8 @@ Historical registers (`docs/bugs.md`, `.brain/*`) contain many items marked **Pe
 10. **Dev startup with pre-existing Alpaca paper positions** — *done (working tree, uncommitted)*
     `IGNORE_UNMANAGED_POSITIONS=true` (default) lets the monitor start when the Alpaca paper account has positions not tracked in the bot ledger. Documented in `.env.template` (working tree). Set `false` before live unattended execution.
 
-11. **`DataService` eager Alpaca client on first use** — *partially done* — GitHub [#56](https://github.com/Daniel730/bot-trading/issues/56)
-    Module singleton is lazy (`_LazyDataService` since 2026-05-21): importing `monitor.py` no longer constructs Alpaca at import time. `DataService.__init__` still eagerly builds `tradeapi.REST` on first real use; direct `DataService()` in tests still needs `ALPACA_API_KEY`/`ALPACA_API_SECRET`.
+11. **`DataService` eager Alpaca client on first use** — *done (2026-08-04)* — GitHub [#56](https://github.com/Daniel730/bot-trading/issues/56)
+    Module singleton remains lazy (`_LazyDataService`). `DataService.__init__` no longer builds `tradeapi.REST`; the client is created on first `alpaca_client` access (injectable for tests). Missing keys use paper placeholders so pytest can construct/patch without real Alpaca credentials.
 
 ## Strategy And Data Quality
 

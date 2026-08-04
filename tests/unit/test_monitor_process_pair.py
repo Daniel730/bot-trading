@@ -62,6 +62,7 @@ async def test_process_pair_quarantines_invalid_kalman_state_until_rebuild(monit
 async def test_quarantined_kalman_state_requests_post_scan_rebuild(monitor):
     pair = {"ticker_a": "BTC-USD", "ticker_b": "LTC-USD", "id": "BTC-USD_LTC-USD"}
     latest_prices = {"BTC-USD": 76800.0, "LTC-USD": 85.0}
+    monitor.active_pairs = [pair]
 
     with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
@@ -81,11 +82,13 @@ async def test_quarantined_kalman_state_requests_post_scan_rebuild(monitor):
     mock_orchestrator.assert_not_awaited()
 
     monitor.reload_pairs = AsyncMock()
+    monitor._rebuild_quarantined_kalman_pair = AsyncMock(return_value=True)
 
     rebuilt = await monitor._reload_quarantined_pairs_if_requested()
 
     assert rebuilt is True
-    monitor.reload_pairs.assert_awaited_once()
+    monitor._rebuild_quarantined_kalman_pair.assert_awaited_once_with(pair)
+    monitor.reload_pairs.assert_not_awaited()
     assert monitor._kalman_quarantine_reload_requested is False
 
 
@@ -98,14 +101,21 @@ async def test_quarantine_does_not_reload_repeatedly_after_rebuild(monitor):
     reload — which reset the dashboard stage to 'pre_warming' forever and
     re-fetched 30d history on a loop.
     """
-    pair = {"ticker_a": "BTC-USD", "ticker_b": "LTC-USD", "id": "BTC-USD_LTC-USD"}
+    pair = {
+        "ticker_a": "BTC-USD",
+        "ticker_b": "LTC-USD",
+        "id": "BTC-USD_LTC-USD",
+        "hedge_ratio": 900.0,
+    }
     latest_prices = {"BTC-USD": 76800.0, "LTC-USD": 85.0}
+    monitor.active_pairs = [pair]
 
     with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
          patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock), \
          patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
-         patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock):
+         patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock), \
+         patch("src.monitor.persistence_service.save_trading_pairs", new_callable=AsyncMock) as mock_save_pairs:
 
         mock_kf = MagicMock()
         # beta pinned at the clip minimum -> invalid_kalman_state every call.
@@ -124,9 +134,41 @@ async def test_quarantine_does_not_reload_repeatedly_after_rebuild(monitor):
 
         second = await monitor.process_pair(pair, latest_prices)
 
-    assert second["reason"] == "kalman_state_invalid"
-    # The key assertion: no second reload is requested, so the stage/warm loop stops.
+    assert second["reason"] == "kalman_quarantine_benched"
+    # No second reload; Active slot is freed so discovery=false servers stop burning it.
     assert monitor._kalman_quarantine_reload_requested is False
+    assert pair["id"] not in {p["id"] for p in monitor.active_pairs}
+    mock_save_pairs.assert_awaited()
+    benched = mock_save_pairs.await_args.args[0][0]
+    assert benched["id"] == pair["id"]
+    assert benched["status"] == "Benched"
+
+
+@pytest.mark.asyncio
+async def test_stuck_quarantine_benches_after_rebuild_exhausted(monitor):
+    """Pairs left in kalman_state_quarantined after a failed rebuild must retire."""
+    pair = {
+        "ticker_a": "BTC-USD",
+        "ticker_b": "LTC-USD",
+        "id": "BTC-USD_LTC-USD",
+        "hedge_ratio": 1446.0,
+    }
+    monitor.active_pairs = [pair]
+    monitor.kalman_quarantined_pairs.add(pair["id"])
+    monitor._kalman_rebuild_attempted.add(pair["id"])
+    monitor._kalman_quarantine_reload_requested = False
+
+    with patch("src.monitor.redis_service.client.delete", new_callable=AsyncMock), \
+         patch("src.monitor.persistence_service.save_trading_pairs", new_callable=AsyncMock) as mock_save_pairs, \
+         patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get:
+
+        diagnostic = await monitor.process_pair(pair, {"BTC-USD": 76800.0, "LTC-USD": 85.0})
+
+    assert diagnostic["reason"] == "kalman_quarantine_benched"
+    assert pair["id"] not in {p["id"] for p in monitor.active_pairs}
+    assert pair["id"] not in monitor.kalman_quarantined_pairs
+    mock_kf_get.assert_not_awaited()
+    mock_save_pairs.assert_awaited()
 
 
 @pytest.mark.asyncio

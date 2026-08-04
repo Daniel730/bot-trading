@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import socket
 import time
@@ -476,8 +477,11 @@ class DashboardState:
             self.details = details
             if active_signals is not None:
                 self.active_signals = active_signals
+            # `pnl` is lifetime closed-trade revenue from the monitor scan loop.
+            # Never write it into daily_profit -- that field is owned by _poll_metrics
+            # (today's realized PnL) and the Overview "profit today" card.
             if pnl is not None:
-                self.portfolio_metrics["daily_profit"] = pnl
+                self.portfolio_metrics["total_revenue"] = pnl
             await self._broadcast()
 
     async def update_metrics(self, metrics: dict):
@@ -704,6 +708,69 @@ def verify_token(token: Optional[str] = None, session: Optional[str] = None):
     return session
 
 
+
+def require_step_up_2fa(otp_token: Optional[str], *, action: str = "this action") -> None:
+    """Require a valid TOTP/backup code when dashboard 2FA is already enabled.
+
+    Session auth alone is insufficient for dangerous controls once an authenticator
+    is enrolled. When 2FA is not yet configured, session login remains enough so
+    operators can still bootstrap paper/dev workflows and enroll 2FA.
+    """
+    status = dashboard_service.totp.public_status()
+    if not status.get("enabled"):
+        return
+    if not otp_token or not dashboard_service.totp.verify_token_or_backup(otp_token):
+        raise HTTPException(
+            status_code=403,
+            detail=f"A valid 2FA token is required for {action}.",
+        )
+
+
+_LOG_SECRET_SETTING_KEYS = (
+    "DASHBOARD_TOKEN",
+    "POSTGRES_PASSWORD",
+    "ALPACA_API_KEY",
+    "ALPACA_API_SECRET",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "POLYGON_API_KEY",
+    "TELEGRAM_BOT_TOKEN",
+    "T212_API_KEY",
+    "T212_API_SECRET",
+    "TRADING_212_API_KEY",
+    "TRADING_212_API_SECRET",
+)
+_LOG_SECRET_PATTERNS = (
+    re.compile(r"(?i)(api[_-]?key|api[_-]?secret|password|token|bearer)\s*[=:]\s*(\S+)"),
+    re.compile(r"(?i)authorization:\s*bearer\s+\S+"),
+    re.compile(r"(?i)https?://api\.telegram\.org/bot\S+"),
+    re.compile(r"(?i)\bsk-[a-z0-9_-]{8,}\b"),
+)
+
+
+def _redact_dashboard_log_line(line: str) -> str:
+    """Scrub known secret values and common credential patterns from log lines."""
+    redacted = line
+    for key in _LOG_SECRET_SETTING_KEYS:
+        try:
+            raw = getattr(settings, key, None)
+        except Exception:
+            raw = None
+        value = str(raw or "").strip().strip('"').strip("'")
+        if len(value) >= 8:
+            redacted = redacted.replace(value, "[REDACTED]")
+    for pattern in _LOG_SECRET_PATTERNS:
+        redacted = pattern.sub(
+            lambda match: (
+                f"{match.group(1)}=[REDACTED]"
+                if match.lastindex and match.lastindex >= 2
+                else "[REDACTED]"
+            ),
+            redacted,
+        )
+    return redacted
+
+
 def _serialize_pair(active_pair: dict) -> dict:
     ticker_a = active_pair.get("ticker_a", "")
     ticker_b = active_pair.get("ticker_b", "")
@@ -791,10 +858,24 @@ class TOTPManager:
     def save_state(self, state: dict) -> None:
         self.persistence.set_dashboard_auth_state("totp_state", state)
 
-    def initiate_setup(self) -> dict:
+    def initiate_setup(self, otp_token: Optional[str] = None) -> dict:
+        """Start (or rotate) TOTP enrollment.
+
+        When 2FA is already enabled, a valid current OTP/backup code is required
+        so a stolen session cannot silently replace the operator's authenticator.
+        """
+        state = self.get_state()
+        if state.get("enabled"):
+            if not otp_token or not self.verify_token_or_backup(otp_token):
+                raise HTTPException(
+                    status_code=403,
+                    detail="A valid 2FA token is required to rotate authenticator setup.",
+                )
+            # Re-load after backup-code consumption in verify_token_or_backup.
+            state = self.get_state()
+
         secret = self.generate_secret()
         backup_codes = self.generate_backup_codes()
-        state = self.get_state()
         state["pending"] = {
             "secret_encrypted": self._protect_secret(secret),
             "backup_code_hashes": [self.hash_backup_code(code) for code in backup_codes],
@@ -877,6 +958,7 @@ class WalletSyncRequest(BaseModel):
     skip_owned: bool = True
     skip_pending: bool = True
     delay_seconds: float = Field(default=0.5, ge=0, le=10)
+    otp_token: Optional[str] = None
 
 
 class WalletRecommendationRequest(BaseModel):
@@ -889,7 +971,7 @@ class WalletRecommendationRequest(BaseModel):
 class WalletRecommendationBuyRequest(WalletRecommendationRequest):
     tickers: Optional[List[str]] = None
     delay_seconds: float = Field(default=0.5, ge=0, le=10)
-
+    otp_token: Optional[str] = None
 
 
 class DashboardConfigUpdateRequest(BaseModel):
@@ -912,9 +994,18 @@ class TOTPVerifyRequest(BaseModel):
     token: str
 
 
+class TwoFactorInitiateRequest(BaseModel):
+    otp_token: Optional[str] = None
+
+
 class BotControlRequest(BaseModel):
     action: Literal["start", "stop", "restart"]
     actor: str = "dashboard"
+    otp_token: Optional[str] = None
+
+
+class BotRestartRequest(BaseModel):
+    otp_token: Optional[str] = None
 
 
 app = FastAPI(title="Arbitrage Dashboard", redirect_slashes=True)
@@ -970,6 +1061,8 @@ class DashboardService:
             "MARKET_DATA_TIMEOUT_SECONDS": {"type": "float", "sensitive": False},
             "MONITOR_ENTRY_ZSCORE": {"type": "float", "sensitive": False},
             "TAKE_PROFIT_ZSCORE": {"type": "float", "sensitive": False},
+            # Missing from editable set historically broke CI patches that expected
+            # operators to tune the force-exit floor via dashboard / bot_settings.
             "TAKE_PROFIT_FORCE_EXIT_ZSCORE": {"type": "float", "sensitive": False},
             "STOP_LOSS_ZSCORE": {"type": "float", "sensitive": False},
             "MAX_ALLOCATION_PERCENTAGE": {"type": "float", "sensitive": True},
@@ -998,7 +1091,7 @@ class DashboardService:
             "ALPACA_BASE_URL": {"type": "str", "sensitive": True, "masked": False},
             "SEC_USER_AGENT": {"type": "str", "sensitive": False},
             "TELEGRAM_BOT_TOKEN": {"type": "str", "sensitive": True},
-            "TELEGRAM_CHAT_ID": {"type": "str", "sensitive": False},
+            "TELEGRAM_CHAT_ID": {"type": "str", "sensitive": True},
         }
 
     def attach_monitor(self, monitor):
@@ -2041,11 +2134,18 @@ class DashboardService:
         selected = files[0] if files else None
         lines: List[str] = []
         if selected:
-            lines = self._tail_log_file(selected, limit)
+            lines = [_redact_dashboard_log_line(line) for line in self._tail_log_file(selected, limit)]
+        events = []
+        for event in self.persistence.get_recent_events(limit=min(limit, 100)):
+            scrubbed = dict(event)
+            for key in ("message", "details", "text"):
+                if key in scrubbed and isinstance(scrubbed[key], str):
+                    scrubbed[key] = _redact_dashboard_log_line(scrubbed[key])
+            events.append(scrubbed)
         return {
             "file": str(selected) if selected else None,
             "lines": lines,
-            "events": self.persistence.get_recent_events(limit=min(limit, 100)),
+            "events": events,
         }
 
     async def bot_control(self, action: str, actor: str) -> dict:
@@ -2650,14 +2750,21 @@ async def get_system_logs(token: str = Query(None), session: str = Query(None), 
 
 
 @app.post("/api/bot/restart")
-async def restart_bot(token: str = Query(None), session: str = Query(None)):
+async def restart_bot(
+    request: Optional[BotRestartRequest] = None,
+    token: str = Query(None),
+    session: str = Query(None),
+):
     verify_token(token, session)
+    payload = request or BotRestartRequest()
+    require_step_up_2fa(payload.otp_token, action="bot restart")
     return await dashboard_service.bot_control("restart", actor="dashboard")
 
 
 @app.post("/api/bot/control")
 async def control_bot(request: BotControlRequest, token: str = Query(None), session: str = Query(None)):
     verify_token(token, session)
+    require_step_up_2fa(request.otp_token, action=f"bot {request.action}")
     return await dashboard_service.bot_control(request.action, actor=request.actor)
 
 
@@ -2678,9 +2785,14 @@ async def update_config(request: DashboardConfigUpdateRequest, token: str = Quer
 
 
 @app.post("/api/auth/2fa/initiate")
-async def initiate_2fa(token: str = Query(None), session: str = Query(None)):
+async def initiate_2fa(
+    request: Optional[TwoFactorInitiateRequest] = None,
+    token: str = Query(None),
+    session: str = Query(None),
+):
     verify_token(token, session)
-    return dashboard_service.totp.initiate_setup()
+    payload = request or TwoFactorInitiateRequest()
+    return dashboard_service.totp.initiate_setup(otp_token=payload.otp_token)
 
 
 @app.post("/api/auth/2fa/verify")
@@ -2893,6 +3005,7 @@ async def sync_wallet(request: WalletSyncRequest, token: str = Query(None), sess
         dict: Operation result containing at least `status` (`"ok"` or `"partial"`), `orders` (placed order records), and `failures` (number of failed orders). Additional fields such as `skipped` may be present.
     """
     verify_token(token, session)
+    require_step_up_2fa(request.otp_token, action="wallet sync")
     return await dashboard_service.sync_wallet_for_coint(request)
 
 
@@ -2944,6 +3057,7 @@ async def buy_wallet_recommendations(
         dict: Result object containing `status` (`"ok"` or `"partial"`), `orders` (list of placed order records), `failures` (number of failed orders), and `skipped` (list of skipped tickers).
     """
     verify_token(token, session)
+    require_step_up_2fa(request.otp_token, action="wallet recommendation buys")
     return await dashboard_service.buy_wallet_recommendations(request)
 
 

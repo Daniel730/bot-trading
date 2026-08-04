@@ -13,17 +13,22 @@ load_dotenv()
 PAIRS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "pairs.json"
 BOT_SETTINGS_OVERRIDE_PATH = Path(__file__).resolve().parent.parent / "data" / "bot_settings.json"
 ACTIVE_BROKERAGE_PROVIDER = "ALPACA"
+# Floor for MONITOR_ENTRY_ZSCORE across env, bot_settings.json, and dashboard writes.
+# Values below this flood the orchestrator with noise; never allow silent <1.0 runtime.
+MONITOR_ENTRY_ZSCORE_MIN = 1.0
 _logger = logging.getLogger(__name__)
 
 def _guard_monitor_entry_zscore(value: Any) -> float:
-    """Clamp dangerously low entry z-score overrides from bot_settings.json."""
+    """Clamp MONITOR_ENTRY_ZSCORE so env/bot_settings/dashboard cannot run below the floor."""
     z = float(value)
-    if z < 1.0:
+    if z < MONITOR_ENTRY_ZSCORE_MIN:
         _logger.warning(
-            "MONITOR_ENTRY_ZSCORE override %.2f is below safe minimum 1.0; clamping to 1.0",
+            "MONITOR_ENTRY_ZSCORE override %.2f is below safe minimum %.1f; clamping to %.1f",
             z,
+            MONITOR_ENTRY_ZSCORE_MIN,
+            MONITOR_ENTRY_ZSCORE_MIN,
         )
-        return 1.0
+        return MONITOR_ENTRY_ZSCORE_MIN
     return z
 
 def _load_settings_override():
@@ -969,6 +974,23 @@ class Settings(BaseSettings):
         return self.is_alpaca_paper_endpoint
 
     @property
+    def requires_l2_entropy_baselines(self) -> bool:
+        """True only for real-money live broker endpoints under LIVE_CAPITAL_DANGER.
+
+        Shadow paper (`PAPER_TRADING`) and Alpaca paper-api never require Redis L2
+        entropy baselines — including DEV_MODE pointed at paper-api. Runtime mode
+        `broker_paper_trading` is intentionally narrower (excludes DEV); the
+        startup entropy gate must key off the endpoint class, not that flag.
+        """
+        if not self.LIVE_CAPITAL_DANGER:
+            return False
+        if self.PAPER_TRADING:
+            return False
+        if self.is_alpaca_paper_endpoint:
+            return False
+        return True
+
+    @property
     def execution_lane(self) -> str:
         """Single fill path: SHADOW | BROKER_PAPER | LIVE (mutually exclusive)."""
         from src.services.execution_lane import resolve_execution_lane
@@ -1045,6 +1067,9 @@ class Settings(BaseSettings):
             raise ValueError("PAPER_TRADING=false requires LIVE_CAPITAL_DANGER=true")
         if "*" in self.dashboard_allowed_origins and not self.DEV_MODE:
             raise ValueError("DASHBOARD_ALLOWED_ORIGINS='*' is only allowed when DEV_MODE=true")
+        # Env + bot_settings + dashboard all funnel through validate_secrets; never leave
+        # MONITOR_ENTRY_ZSCORE below the safe floor on the live Settings object.
+        self.MONITOR_ENTRY_ZSCORE = _guard_monitor_entry_zscore(self.MONITOR_ENTRY_ZSCORE)
         # Force-exit must sit inside the TP band; values above TAKE_PROFIT collapse
         # friction-hold into always-exit and burn fees on every mean-reversion touch.
         if self.TAKE_PROFIT_FORCE_EXIT_ZSCORE < 0:
@@ -1088,16 +1113,26 @@ settings.BROKERAGE_PROVIDER = _validate_supported_brokerage_provider(settings.BR
 
 
 def validate_runtime_settings_update(updates: dict[str, Any]) -> None:
-    """Validate dashboard/runtime settings updates against the full Settings guardrail set."""
+    """Validate dashboard/runtime settings updates against the full Settings guardrail set.
+
+    Mutates ``updates`` in place with any clamps (entry z-score floor, take-profit
+    force-exit band) so callers that setattr from ``updates`` cannot silently keep
+    unsafe values on the live settings object while only the JSON file is clamped.
+    """
     originals = {}
-    for key, value in updates.items():
+    for key in list(updates.keys()):
+        value = updates[key]
         if key == "MONITOR_ENTRY_ZSCORE":
             value = _guard_monitor_entry_zscore(value)
+            updates[key] = value
         if hasattr(settings, key):
             originals[key] = getattr(settings, key)
             setattr(settings, key, value)
     try:
         settings.validate_secrets()
+        # Reflect validate_secrets clamps (e.g. TAKE_PROFIT_FORCE_EXIT_ZSCORE) back.
+        for key in originals:
+            updates[key] = getattr(settings, key)
     finally:
         for key, value in originals.items():
             setattr(settings, key, value)

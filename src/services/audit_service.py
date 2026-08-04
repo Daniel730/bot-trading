@@ -58,8 +58,19 @@ class AuditService:
         elif "SELL" in final_verdict_str: decision = DecisionType.SELL
         elif "VETO" in final_verdict_str: decision = DecisionType.VETO
 
+        # Keep AgentReasoning.trace_id == TradeJournal/TradeLedger.signal_id
+        # so paper/live audit joins stay continuous.
+        try:
+            trace_id = uuid.UUID(str(signal_id)) if signal_id else uuid.uuid4()
+        except (TypeError, ValueError, AttributeError):
+            logger.warning(
+                "AUDIT: invalid signal_id=%r — generating fresh trace_id (join broken)",
+                signal_id,
+            )
+            trace_id = uuid.uuid4()
+
         reasoning_data = {
-            "trace_id": uuid.UUID(signal_id) if isinstance(signal_id, str) and len(signal_id) == 36 else uuid.uuid4(),
+            "trace_id": trace_id,
             "agent_name": "Orchestrator",
             "ticker_pair": pair_name,
             "thought_journal": agent_state.get('final_verdict', 'No journal provided'),

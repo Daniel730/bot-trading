@@ -9,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  ApiError,
   buyWalletRecommendations,
   fetchWalletRecommendations,
   type WalletRecommendation,
@@ -189,13 +190,29 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken, paperTra
     setOk(null);
     setBuyResult(null);
     try {
-      const result = await buyWalletRecommendations(token, sessionToken, {
-        budget: budgetValue,
-        includeBroken,
-        tickers: selectedRecommendations.map((item) => item.ticker),
-        skipOwned,
-        skipPending,
-      });
+      const runBuy = (otpToken?: string) =>
+        buyWalletRecommendations(token, sessionToken, {
+          budget: budgetValue,
+          includeBroken,
+          tickers: selectedRecommendations.map((item) => item.ticker),
+          skipOwned,
+          skipPending,
+          otpToken,
+        });
+
+      let result;
+      try {
+        result = await runBuy();
+      } catch (firstErr) {
+        const errMsg = (firstErr as Error)?.message || '';
+        if (firstErr instanceof ApiError && firstErr.status === 403 && /2fa|token/i.test(errMsg)) {
+          const otp = window.prompt('Enter authenticator or backup code to confirm wallet buys:');
+          if (!otp?.trim()) throw firstErr;
+          result = await runBuy(otp.trim());
+        } else {
+          throw firstErr;
+        }
+      }
       setBuyResult(result);
       setOk(`${result.message} ${result.orders.filter((order) => order.status === 'ok').length} orders accepted.`);
       setConfirmOpen(false);

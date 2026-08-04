@@ -744,6 +744,7 @@ export const syncWallet = async (
   token: string | null,
   sessionToken: string | null,
   budget: number,
+  otpToken?: string,
 ): Promise<WalletSyncResponse> =>
   requestJsonWithFallbacks<WalletSyncResponse>([
     {
@@ -751,7 +752,7 @@ export const syncWallet = async (
       init: {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ budget }),
+        body: JSON.stringify({ budget, otp_token: otpToken || undefined }),
       },
     },
   ], token, sessionToken, 'wallet.sync');
@@ -787,6 +788,7 @@ export const buyWalletRecommendations = async (
     skipOwned?: boolean;
     skipPending?: boolean;
     delaySeconds?: number;
+    otpToken?: string;
   },
 ): Promise<WalletRecommendationBuyResponse> =>
   requestJsonWithFallbacks<WalletRecommendationBuyResponse>([
@@ -802,6 +804,7 @@ export const buyWalletRecommendations = async (
           skip_owned: payload.skipOwned ?? true,
           skip_pending: payload.skipPending ?? true,
           delay_seconds: payload.delaySeconds ?? 0.5,
+          otp_token: payload.otpToken || undefined,
         }),
       },
     },
@@ -872,11 +875,12 @@ export const controlBot = async (
   sessionToken: string | null,
   action: 'start' | 'stop' | 'restart',
   actor = 'dashboard',
+  otpToken?: string,
 ): Promise<{ status: string; requested_state: string; action: string }> =>
   requestJson('/api/bot/control', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, actor }),
+    body: JSON.stringify({ action, actor, otp_token: otpToken || undefined }),
   }, sessionToken);
 
 export const fetchConfig = async (token: string | null, sessionToken?: string | null): Promise<ConfigResponse> =>
@@ -895,10 +899,15 @@ export const updateConfig = async (
     body: JSON.stringify({ actor, updates, otp_token: otpToken }),
   }, sessionToken);
 
-export const initiateTwoFactor = async (token: string | null, sessionToken: string | null): Promise<TwoFactorInitiateResponse> =>
+export const initiateTwoFactor = async (
+  token: string | null,
+  sessionToken: string | null,
+  otpToken?: string,
+): Promise<TwoFactorInitiateResponse> =>
   requestJson('/api/auth/2fa/initiate', token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ otp_token: otpToken || undefined }),
   }, sessionToken);
 
 export const verifyTwoFactor = async (token: string | null, sessionToken: string | null, code: string) =>

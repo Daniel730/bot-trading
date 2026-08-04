@@ -27,7 +27,8 @@ DecisionLevel = Literal["compact", "verbose"]
 DecisionOutcome = Literal["skip", "veto", "execute", "continue", "anomaly"]
 
 # High-frequency / low-signal reasons omitted in compact mode.
-_COMPACT_OMIT_REASONS = frozenset(
+# Exported so the monitor can demote matching PAIR SKIP log lines to debug.
+COMPACT_OMIT_SKIP_REASONS = frozenset(
     {
         "below_entry_threshold",
         "beyond_stop_threshold",
@@ -35,6 +36,7 @@ _COMPACT_OMIT_REASONS = frozenset(
         "not_scanned",
     }
 )
+_COMPACT_OMIT_REASONS = COMPACT_OMIT_SKIP_REASONS
 
 # Reasons that trigger promote + anomaly tagging.
 _ANOMALY_REASONS = frozenset(
@@ -42,6 +44,7 @@ _ANOMALY_REASONS = frozenset(
         "exception",
         "orchestrator_timeout",
         "kalman_state_invalid",
+        "kalman_quarantine_benched",
         "kalman_unavailable",
         "price_sanity_invalid",
         "stale_price_snapshot",

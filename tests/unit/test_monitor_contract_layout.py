@@ -70,7 +70,8 @@ def test_monitor_price_guard_contract_tests_are_split_from_monolith():
     assert "def test_process_pair_missing_price_reports_skip_reason" not in monolith
     assert "def test_process_pair_blocks_impossible_crypto_price_before_kalman" not in monolith
     assert "def test_process_pair_missing_price_reports_skip_reason" in price_guard
-    assert "def test_process_pair_blocks_repeated_alpaca_crypto_quote_mid_timestamp_before_kalman" in price_guard
+    assert "def test_process_pair_allows_fresh_repeated_quote_mid_timestamp" in price_guard
+    assert "def test_process_pair_blocks_aged_alpaca_crypto_quote_mid_before_kalman" in price_guard
 
 
 def test_monitor_process_pair_contract_tests_are_split_from_monolith():

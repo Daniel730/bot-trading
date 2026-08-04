@@ -110,6 +110,11 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 class DataService:
     LATEST_PRICE_BATCH_CAP = 5
     LATEST_PRICE_CHUNK_TIMEOUT_CAP_SECONDS = 15.0
+    # Disposable credentials so tradeapi.REST can be constructed in paper/pytest
+    # without real keys. Live calls with these placeholders will 401 — callers
+    # must mock the client or supply real ALPACA_API_KEY / ALPACA_API_SECRET.
+    _ALPACA_PLACEHOLDER_KEY = "PK_TEST_PLACEHOLDER"
+    _ALPACA_PLACEHOLDER_SECRET = "SK_TEST_PLACEHOLDER"
     PRICE_METADATA_MAX = 256
     HISTORY_ROW_CAP = 5000
     YF_HISTORY_CACHE_MAX = 64
@@ -117,7 +122,7 @@ class DataService:
     YF_QUOTE_CACHE_MAX = 64
     YF_QUOTE_CACHE_TTL_SECONDS = 15.0
 
-    def __init__(self):
+    def __init__(self, alpaca_client: Optional[object] = None):
         # Increase connection pool size to handle concurrent requests
         self.polygon_client = RESTClient(api_key=settings.POLYGON_API_KEY, num_pools=10)
         # Directly tune the underlying urllib3 pool manager to avoid 'Connection pool is full' warnings
@@ -125,11 +130,15 @@ class DataService:
             self.polygon_client.client.connection_pool_kw['maxsize'] = 10
         except Exception:
             pass
-        self.alpaca_client = tradeapi.REST(
-            key_id=settings.ALPACA_API_KEY,
-            secret_key=settings.ALPACA_API_SECRET,
-            base_url=settings.ALPACA_BASE_URL
-        )
+        # Lazy: do not call tradeapi.REST here — empty keys raise ValueError and
+        # break DataService() in pytest paper-only runs (GitHub #56).
+        # Snapshot credentials at construction so later tests that patch the
+        # whole `settings` object (e.g. DEV_MODE) do not feed MagicMocks into REST.
+        self._alpaca_client = alpaca_client
+        self._alpaca_key_id = (settings.ALPACA_API_KEY or "").strip()
+        self._alpaca_secret_key = (settings.ALPACA_API_SECRET or "").strip()
+        base_url = (settings.ALPACA_BASE_URL or "").strip()
+        self._alpaca_base_url = base_url or "https://paper-api.alpaca.markets"
         self._ws_client: Optional[WebSocketClient] = None
         self.last_price_sources: dict[str, str] = {}
         self.last_price_timestamps: dict[str, str] = {}
@@ -184,6 +193,33 @@ class DataService:
             )
             return "1Hour"
         return timeframe
+
+    def _create_alpaca_rest_client(self) -> tradeapi.REST:
+        key_id = self._alpaca_key_id
+        secret_key = self._alpaca_secret_key
+        base_url = self._alpaca_base_url
+        if not key_id or not secret_key:
+            logger.debug(
+                "DataService: Alpaca credentials missing; using placeholder REST client "
+                "(safe for construction / test patching; real API calls will fail auth)"
+            )
+            key_id = key_id or self._ALPACA_PLACEHOLDER_KEY
+            secret_key = secret_key or self._ALPACA_PLACEHOLDER_SECRET
+        return tradeapi.REST(
+            key_id=key_id,
+            secret_key=secret_key,
+            base_url=base_url,
+        )
+
+    @property
+    def alpaca_client(self):
+        if self._alpaca_client is None:
+            self._alpaca_client = self._create_alpaca_rest_client()
+        return self._alpaca_client
+
+    @alpaca_client.setter
+    def alpaca_client(self, value) -> None:
+        self._alpaca_client = value
 
     @staticmethod
     def _snapshot_field(snapshot, *field_names):

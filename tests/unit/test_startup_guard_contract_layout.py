@@ -68,6 +68,11 @@ def test_startup_entropy_baseline_contract_tests_are_split_from_monolith():
     entropy = _read_unit_file("test_startup_entropy_baselines.py")
 
     assert "def test_alpaca_paper_broker_startup_skips_live_entropy_baselines" in entropy
+    assert "def test_dev_mode_paper_api_startup_skips_live_entropy_baselines" in entropy
+    assert "def test_shadow_paper_startup_skips_live_entropy_baselines" in entropy
+    assert "def test_live_api_startup_enforces_entropy_baselines" in entropy
+    assert "def test_requires_l2_entropy_baselines_false_for_dev_mode_on_paper_api" in entropy
+    assert "def test_requires_l2_entropy_baselines_true_for_live_api" in entropy
     assert "def test_startup_refusal_missing_baselines" in entropy
     assert "def test_startup_success_with_baselines" in entropy
 

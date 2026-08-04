@@ -1,14 +1,55 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.monitor import CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+from src.config import settings
+from src.monitor import (
+    CRYPTO_PRICE_MAX_AGE_SECONDS,
+    CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT,
+    CRYPTO_SNAPSHOT_STALE_TARGET_SECONDS,
+    crypto_leg_freshness_marker,
+    crypto_price_max_age_seconds,
+    crypto_stale_repeat_limit,
+    parse_price_timestamp,
+)
 from src.services.data_service import data_service
 
 
 def test_crypto_snapshot_stale_repeat_limit_matches_runtime_cadence():
     assert CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT == 5
+    assert CRYPTO_SNAPSHOT_STALE_TARGET_SECONDS == 120
+    assert CRYPTO_PRICE_MAX_AGE_SECONDS == 180
+    # Default SCAN_INTERVAL=15s => ceil(120/15)=8 repeats (~2 min wall clock).
+    assert crypto_stale_repeat_limit(15) == 8
+    assert crypto_stale_repeat_limit(settings.SCAN_INTERVAL_SECONDS) >= CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+    # Slow scans keep the floor so we still trip within a few iterations.
+    assert crypto_stale_repeat_limit(60) == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+    assert crypto_price_max_age_seconds(15) == float(CRYPTO_PRICE_MAX_AGE_SECONDS)
+    assert crypto_price_max_age_seconds(30) == 240.0
+
+
+def test_crypto_leg_freshness_marker_prefers_timestamp_over_price():
+    assert crypto_leg_freshness_marker(
+        "BTC-USD",
+        76800.0,
+        {"BTC-USD": "2026-08-04T08:00:00+00:00"},
+    ) == ("ts", "2026-08-04T08:00:00+00:00")
+    assert crypto_leg_freshness_marker("BTC-USD", 76800.0, {}) == ("price", 76800.0)
+    assert crypto_leg_freshness_marker("BTC-USD", 76800.0, {"BTC-USD": ""}) == (
+        "price",
+        76800.0,
+    )
+
+
+def test_parse_price_timestamp_normalizes_naive_and_aware():
+    aware = parse_price_timestamp("2026-08-04T08:00:00+00:00")
+    assert aware == datetime(2026, 8, 4, 8, 0, tzinfo=timezone.utc)
+    naive = parse_price_timestamp(datetime(2026, 8, 4, 8, 0))
+    assert naive == datetime(2026, 8, 4, 8, 0, tzinfo=timezone.utc)
+    assert parse_price_timestamp(None) is None
+    assert parse_price_timestamp("not-a-timestamp") is None
 
 
 @pytest.mark.asyncio
@@ -51,6 +92,7 @@ async def test_process_pair_blocks_impossible_crypto_price_before_kalman(monitor
 
 @pytest.mark.asyncio
 async def test_process_pair_blocks_repeated_alpaca_crypto_snapshot_before_kalman(monitor, monkeypatch, caplog):
+    """Price-only Alpaca snapshots (no timestamps) still trip after paced repeats."""
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
     monkeypatch.setattr(
@@ -58,6 +100,10 @@ async def test_process_pair_blocks_repeated_alpaca_crypto_snapshot_before_kalman
         "last_price_sources",
         {"BTC-USD": "alpaca_crypto_snapshot", "ETH-USD": "alpaca_crypto_snapshot"},
     )
+    monkeypatch.setattr(data_service, "last_price_timestamps", {}, raising=False)
+    monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 15)
+
+    repeat_limit = crypto_stale_repeat_limit(15)
 
     with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
@@ -70,22 +116,25 @@ async def test_process_pair_blocks_repeated_alpaca_crypto_snapshot_before_kalman
 
         diagnostics = [
             await monitor.process_pair(pair, dict(latest_prices))
-            for _ in range(CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT + 1)
+            for _ in range(repeat_limit + 1)
         ]
 
     assert diagnostics[0]["reason"] == "below_entry_threshold"
     assert diagnostics[-1]["verdict"] == "IGNORED"
     assert diagnostics[-1]["reason"] == "stale_price_snapshot"
-    assert mock_kf_get.await_count == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
-    assert mock_save_state.await_count == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+    assert mock_kf_get.await_count == repeat_limit
+    assert mock_save_state.await_count == repeat_limit
     mock_orchestrator.assert_not_awaited()
     assert "PRICE STALENESS [BTC-USD/ETH-USD]" in caplog.text
+    assert "no usable timestamps" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_process_pair_blocks_repeated_alpaca_crypto_quote_mid_timestamp_before_kalman(monitor, monkeypatch, caplog):
+async def test_process_pair_allows_fresh_repeated_quote_mid_timestamp(monitor, monkeypatch, caplog):
+    """Shared scan snapshot may reuse the same quote mid across scans; fresh age must pass."""
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(seconds=20)).isoformat()
     monkeypatch.setattr(
         data_service,
         "last_price_sources",
@@ -94,10 +143,55 @@ async def test_process_pair_blocks_repeated_alpaca_crypto_quote_mid_timestamp_be
     monkeypatch.setattr(
         data_service,
         "last_price_timestamps",
-        {
-            "BTC-USD": "2026-05-20T12:01:00+00:00",
-            "ETH-USD": "2026-05-20T12:01:00+00:00",
-        },
+        {"BTC-USD": fresh_ts, "ETH-USD": fresh_ts},
+        raising=False,
+    )
+    monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 15)
+
+    # More iterations than the old hard-coded limit of 5 — must not false-reject.
+    iterations = CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT + 3
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         caplog.at_level(logging.WARNING, logger="src.monitor"):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
+        mock_kf_get.return_value = mock_kf
+
+        diagnostics = [
+            await monitor.process_pair(pair, dict(latest_prices))
+            for _ in range(iterations)
+        ]
+
+    assert all(d["reason"] == "below_entry_threshold" for d in diagnostics)
+    assert mock_kf_get.await_count == iterations
+    assert mock_save_state.await_count == iterations
+    mock_orchestrator.assert_not_awaited()
+    assert "PRICE STALENESS" not in caplog.text
+    assert pair["id"] not in monitor._crypto_snapshot_pair_prices
+
+
+@pytest.mark.asyncio
+async def test_process_pair_blocks_aged_alpaca_crypto_quote_mid_before_kalman(monitor, monkeypatch, caplog):
+    """Truly stale quote timestamps (wall-clock age) still block before Kalman."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 15)
+    max_age = crypto_price_max_age_seconds(15)
+    stale_ts = (
+        datetime.now(timezone.utc) - timedelta(seconds=max_age + 30)
+    ).isoformat()
+    monkeypatch.setattr(
+        data_service,
+        "last_price_sources",
+        {"BTC-USD": "alpaca_crypto_quote_mid", "ETH-USD": "alpaca_crypto_quote_mid"},
+    )
+    monkeypatch.setattr(
+        data_service,
+        "last_price_timestamps",
+        {"BTC-USD": stale_ts, "ETH-USD": stale_ts},
         raising=False,
     )
 
@@ -110,15 +204,94 @@ async def test_process_pair_blocks_repeated_alpaca_crypto_quote_mid_timestamp_be
         mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
         mock_kf_get.return_value = mock_kf
 
-        diagnostics = [
-            await monitor.process_pair(pair, dict(latest_prices))
-            for _ in range(CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT + 1)
-        ]
+        diagnostic = await monitor.process_pair(pair, dict(latest_prices))
 
-    assert diagnostics[0]["reason"] == "below_entry_threshold"
-    assert diagnostics[-1]["verdict"] == "IGNORED"
-    assert diagnostics[-1]["reason"] == "stale_price_snapshot"
-    assert mock_kf_get.await_count == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
-    assert mock_save_state.await_count == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+    assert diagnostic["verdict"] == "IGNORED"
+    assert diagnostic["reason"] == "stale_price_snapshot"
+    mock_kf_get.assert_not_awaited()
+    mock_save_state.assert_not_awaited()
     mock_orchestrator.assert_not_awaited()
-    assert "Alpaca crypto quote mid timestamps repeated" in caplog.text
+    assert "timestamp age" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_pair_snapshot_with_advancing_timestamps_not_false_stale(
+    monitor, monkeypatch, caplog
+):
+    """Flat snapshot prices with advancing trade timestamps must not trip price-identity stale."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    monkeypatch.setattr(
+        data_service,
+        "last_price_sources",
+        {"BTC-USD": "alpaca_crypto_snapshot", "ETH-USD": "alpaca_crypto_snapshot"},
+    )
+    monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 15)
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         caplog.at_level(logging.WARNING, logger="src.monitor"):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
+        mock_kf_get.return_value = mock_kf
+
+        iterations = crypto_stale_repeat_limit(15) + 1
+        diagnostics = []
+        base = datetime.now(timezone.utc) - timedelta(seconds=10)
+        for i in range(iterations):
+            monkeypatch.setattr(
+                data_service,
+                "last_price_timestamps",
+                {
+                    "BTC-USD": (base + timedelta(seconds=i)).isoformat(),
+                    "ETH-USD": (base + timedelta(seconds=i + 1)).isoformat(),
+                },
+                raising=False,
+            )
+            diagnostics.append(await monitor.process_pair(pair, dict(latest_prices)))
+
+    assert all(d["reason"] == "below_entry_threshold" for d in diagnostics)
+    assert mock_kf_get.await_count == iterations
+    assert mock_save_state.await_count == iterations
+    mock_orchestrator.assert_not_awaited()
+    assert "PRICE STALENESS" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_pair_quote_mid_missing_timestamp_falls_back_to_price_repeat(
+    monitor, monkeypatch, caplog
+):
+    """Missing quote-mid timestamps no longer hard-reject; price-repeat guard applies."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    monkeypatch.setattr(
+        data_service,
+        "last_price_sources",
+        {"BTC-USD": "alpaca_crypto_quote_mid", "ETH-USD": "alpaca_crypto_quote_mid"},
+    )
+    monkeypatch.setattr(data_service, "last_price_timestamps", {}, raising=False)
+    monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 60)
+    repeat_limit = crypto_stale_repeat_limit(60)
+    assert repeat_limit == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock), \
+         caplog.at_level(logging.WARNING, logger="src.monitor"):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
+        mock_kf_get.return_value = mock_kf
+
+        # First observation must not hard-reject for missing timestamp.
+        first = await monitor.process_pair(pair, dict(latest_prices))
+        assert first["reason"] == "below_entry_threshold"
+
+        diagnostics = [first]
+        for _ in range(repeat_limit):
+            diagnostics.append(await monitor.process_pair(pair, dict(latest_prices)))
+
+    assert diagnostics[-1]["reason"] == "stale_price_snapshot"
+    assert "no usable timestamps" in caplog.text
