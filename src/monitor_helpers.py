@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Iterable, Mapping, MutableMapping, Sequence
 
+import pandas as pd
+
 # Terminal / low-value dashboard signal statuses safe to drop under memory pressure.
 TERMINAL_SIGNAL_STATUSES = frozenset(
     {
@@ -21,6 +23,28 @@ TERMINAL_SIGNAL_STATUSES = frozenset(
 
 def is_crypto_pair(ticker_a: str, ticker_b: str) -> bool:
     return "-USD" in ticker_a or "-USD" in ticker_b
+
+
+def normalize_history_close_frame(hist_data: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Flatten yfinance MultiIndex frames down to a ticker→Close price table."""
+    if hist_data is None or getattr(hist_data, "empty", True):
+        return hist_data
+    if isinstance(hist_data.columns, pd.MultiIndex):
+        # Level 0 is usually the price field (Close/Open/…), level 1 is ticker.
+        if "Close" in hist_data.columns.get_level_values(0):
+            return hist_data["Close"]
+        hist_data = hist_data.copy()
+        hist_data.columns = hist_data.columns.get_level_values(-1)
+    return hist_data
+
+
+def resolve_history_column(columns: Sequence[object], ticker: str) -> object | None:
+    """Exact (case-insensitive) column match — never substring (GOOG ⊄ GOOGL)."""
+    target = str(ticker).upper()
+    for col in columns:
+        if str(col).upper() == target:
+            return col
+    return None
 
 
 def resolve_pair_sector(
