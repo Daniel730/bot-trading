@@ -53,9 +53,12 @@ Conditions: automatic LIVE checklist must pass; start with small notional; conti
 - TTL expiry + RELEASE status
 - File WAL is **audit mirror only** — not the lock
 
-`OpenSlotReservationService` prefers distributed store; fail-closed if Postgres unavailable (no silent local fallback in production path).
+`OpenSlotReservationService` prefers the distributed store.
 
-**Not accepted:** in-memory mutex, globals, or Python locks as the safety boundary (local lock remains cache-only).
+- **Real-money LIVE:** fail-closed if Postgres is unavailable (no silent local claim).
+- **Paper / Alpaca-paper auto-approve:** local+WAL claim fallback when the distributed store errors (same policy as the async read path), so unit tests and paper soak do not skip every trade on a transient loop/pool fault.
+
+**Not accepted:** in-memory mutex, globals, or Python locks as the safety boundary for LIVE (local lock remains cache-only / paper fallback).
 
 ---
 

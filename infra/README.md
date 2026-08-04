@@ -125,3 +125,5 @@ gh workflow run "Deploy to bot-server (Mini PC)" --ref master
 ```
 
 Post-deploy smoke on bot-server: `bash scripts/post_deploy_smoke.sh`
+
+Extended soak/health probe (binds, RSS, SEC keys, frontend markers): `bash infra/ops_postdeploy_health.sh`

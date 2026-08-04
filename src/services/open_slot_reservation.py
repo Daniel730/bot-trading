@@ -153,8 +153,9 @@ class OpenSlotReservationService:
     """Reservation facade: PostgreSQL distributed store is authority (Phase-4).
 
     In-process state is a non-authoritative cache for fast local reads only.
-    ``claim`` / ``release`` always go through ``DistributedReservationStore``
-    when available — never a Python mutex as the safety boundary.
+    ``claim`` / ``release`` prefer ``DistributedReservationStore`` when available.
+    Real-money LIVE refuses claims if Postgres errors; paper / auto-approve may
+    fall back to local+WAL (never a Python mutex as the LIVE safety boundary).
     """
 
     def __init__(
@@ -264,6 +265,16 @@ class OpenSlotReservationService:
             return await dist.reservation_count()
         return self.reservation_count()
 
+    @staticmethod
+    def _allows_local_claim_fallback() -> bool:
+        """Paper / Alpaca-paper auto-approve may use local+WAL when Postgres is down.
+
+        Real-money LIVE must remain fail-closed (no silent local claim).
+        """
+        return bool(getattr(settings, "PAPER_TRADING", True)) or bool(
+            getattr(settings, "should_auto_approve_trades", False)
+        )
+
     async def claim(
         self,
         *,
@@ -325,6 +336,22 @@ class OpenSlotReservationService:
                         logger.warning("WAL mirror CLAIM failed: %s", exc)
                 return result
             except Exception as exc:  # noqa: BLE001
+                if self._allows_local_claim_fallback():
+                    logger.warning(
+                        "Distributed reservation unavailable — local claim fallback "
+                        "(paper/auto-approve): %s",
+                        exc,
+                    )
+                    return await self._claim_local(
+                        signal_id=sid,
+                        ticker_a=ticker_a,
+                        ticker_b=ticker_b,
+                        open_signals=open_signals,
+                        canonicalize=canonicalize,
+                        max_open_pairs=max_open_pairs,
+                        block_shared_legs=block_shared_legs,
+                        metadata=metadata,
+                    )
                 logger.critical(
                     "Distributed reservation unavailable — refusing claim (fail-closed): %s",
                     exc,
