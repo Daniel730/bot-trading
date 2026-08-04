@@ -180,10 +180,22 @@ class Settings(BaseSettings):
         default="compact",
         validation_alias="DECISION_TRACE_LEVEL",
     )
-    DECISION_TRACE_RING_SIZE: int = Field(default=2000, validation_alias="DECISION_TRACE_RING_SIZE")
+    DECISION_TRACE_RING_SIZE: int = Field(default=500, validation_alias="DECISION_TRACE_RING_SIZE")
     DECISION_TRACE_INPUT_MAX_CHARS: int = Field(
         default=500,
         validation_alias="DECISION_TRACE_INPUT_MAX_CHARS",
+    )
+    # Soft RSS reclaim threshold (MiB). Compose mem_limit is 1280m; act before OOM.
+    MEMORY_PRESSURE_THRESHOLD_MIB: int = Field(
+        default=900,
+        validation_alias="MEMORY_PRESSURE_THRESHOLD_MIB",
+    )
+    # Cap dashboard-facing active_signals rows (soft prune keeps non-terminal only under pressure).
+    MEMORY_ACTIVE_SIGNAL_MAX: int = Field(default=40, validation_alias="MEMORY_ACTIVE_SIGNAL_MAX")
+    STRUCTURED_LOG_MAX_BYTES: int = Field(default=5_000_000, validation_alias="STRUCTURED_LOG_MAX_BYTES")
+    TRADE_DECISION_LOG_MAX_BYTES: int = Field(
+        default=10_000_000,
+        validation_alias="TRADE_DECISION_LOG_MAX_BYTES",
     )
     REGION: Literal["US", "EU"] = Field(default="US", validation_alias="REGION")
 
