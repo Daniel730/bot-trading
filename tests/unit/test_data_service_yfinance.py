@@ -6,6 +6,7 @@ import time
 
 import pandas as pd
 import pytest
+import requests
 
 from src.services.data_service import DataService
 
@@ -528,3 +529,165 @@ async def test_get_bid_ask_crypto_snapshot_does_not_require_exchange_kwarg():
         bid, ask = await service.get_bid_ask("BTC-USD")
 
     assert (bid, ask) == (90000.0, 90010.0)
+
+
+@pytest.mark.parametrize(
+    ("interval", "expected"),
+    [
+        ("1d", "1Day"),
+        ("1D", "1Day"),
+        ("1h", "1Hour"),
+        ("1m", "1Min"),
+        ("5m", "5Min"),
+        ("unknown", "1Hour"),
+    ],
+)
+def test_alpaca_timeframe_maps_daily_and_intraday(interval, expected):
+    assert DataService._alpaca_timeframe(interval) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "usable"),
+    [
+        ("", False),
+        ("your_polygon_key", False),
+        ("YOUR_API_KEY", False),
+        ("real-polygon-secret", True),
+    ],
+)
+def test_has_usable_polygon_key_rejects_placeholders(key, usable):
+    assert DataService._has_usable_polygon_key(key) is usable
+
+
+def test_get_historical_data_uses_daily_alpaca_timeframe_not_1min():
+    """Equity 60d/1d regime fetches must not request minute bars (retry storms)."""
+    service = DataService()
+    timestamps = pd.date_range("2026-05-01", periods=3, freq="D", tz="UTC")
+    bars = pd.DataFrame(
+        {"close": [500.0, 501.0, 502.0], "symbol": ["SPY", "SPY", "SPY"]},
+        index=timestamps,
+    )
+    bars.index.name = "timestamp"
+
+    class FakeBars:
+        def __init__(self, frame):
+            self.df = frame
+
+    captured = {}
+
+    def fake_get_bars(symbols, timeframe, **kwargs):
+        captured["timeframe"] = timeframe
+        captured["symbols"] = symbols
+        return FakeBars(bars)
+
+    with patch.object(service.alpaca_client, "get_bars", side_effect=fake_get_bars), \
+         patch.object(
+             service.alpaca_client,
+             "get_crypto_bars",
+             side_effect=AssertionError("equity-only request"),
+         ), \
+         patch.object(service, "_download_yfinance", side_effect=AssertionError("no yfinance")):
+        result = service.get_historical_data(["SPY"], period="60d", interval="1d")
+
+    assert captured["timeframe"] == "1Day"
+    assert list(result.columns) == ["SPY"]
+    assert float(result.iloc[-1]["SPY"]) == 502.0
+
+
+def test_get_historical_data_crypto_bars_omit_invalid_exchange_kwarg():
+    """alpaca-trade-api accepts loc=, not exchange= — exchange TypeError forced yfinance."""
+    service = DataService()
+    timestamp = pd.Timestamp("2026-05-13 13:00", tz="UTC")
+    index = pd.MultiIndex.from_tuples(
+        [("BTC/USD", timestamp)],
+        names=["symbol", "timestamp"],
+    )
+    bars = pd.DataFrame({"close": [80000.0]}, index=index)
+
+    class FakeBars:
+        df = bars
+
+    def fake_get_crypto_bars(symbols, timeframe, **kwargs):
+        if "exchange" in kwargs:
+            raise TypeError(
+                "REST.get_crypto_bars() got an unexpected keyword argument 'exchange'"
+            )
+        assert symbols == ["BTC/USD"]
+        assert timeframe == "1Hour"
+        return FakeBars()
+
+    with patch.object(
+        service.alpaca_client,
+        "get_crypto_bars",
+        side_effect=fake_get_crypto_bars,
+    ), patch.object(
+        service.alpaca_client,
+        "get_bars",
+        side_effect=AssertionError("crypto-only request"),
+    ), patch.object(
+        service,
+        "_download_yfinance",
+        side_effect=AssertionError("Alpaca crypto should succeed"),
+    ):
+        result = service.get_historical_data(["BTC-USD"], period="30d", interval="1h")
+
+    assert list(result.columns) == ["BTC-USD"]
+    assert float(result.iloc[0]["BTC-USD"]) == 80000.0
+
+
+def test_get_historical_data_exhausted_fallback_does_not_retry_storm():
+    """ValueError after Alpaca+yfinance(+skipped Polygon) must not be tenacity-retried."""
+    service = DataService()
+    calls = {"alpaca_stock": 0, "alpaca_crypto": 0, "yfinance": 0, "polygon": 0}
+
+    def fake_get_bars(*_args, **_kwargs):
+        calls["alpaca_stock"] += 1
+        raise requests.HTTPError("alpaca stock down")
+
+    def fake_get_crypto_bars(*_args, **_kwargs):
+        calls["alpaca_crypto"] += 1
+        class Empty:
+            df = pd.DataFrame()
+        return Empty()
+
+    def fake_download(*_args, **_kwargs):
+        calls["yfinance"] += 1
+        return pd.DataFrame()
+
+    with patch.object(service.alpaca_client, "get_bars", side_effect=fake_get_bars), \
+         patch.object(service.alpaca_client, "get_crypto_bars", side_effect=fake_get_crypto_bars), \
+         patch.object(service, "_download_yfinance", side_effect=fake_download), \
+         patch.object(service, "_has_usable_polygon_key", return_value=False):
+        with pytest.raises(ValueError, match="No data returned"):
+            service.get_historical_data(["SPY", "BTC-USD"], period="30d", interval="1h")
+
+    assert calls["alpaca_stock"] == 1
+    assert calls["alpaca_crypto"] == 1
+    assert calls["yfinance"] == 1
+    assert calls["polygon"] == 0
+
+
+def test_get_latest_price_skips_placeholder_polygon_key():
+    service = DataService()
+
+    with patch("src.services.data_service.redis_service.get_price", return_value=None), \
+         patch.object(service, "_update_redis_cache"), \
+         patch.object(service.alpaca_client, "get_snapshots", return_value={}), \
+         patch.object(service.alpaca_client, "get_crypto_snapshots", return_value={}), \
+         patch(
+             "src.services.data_service.settings.POLYGON_API_KEY",
+             "your_polygon_key",
+         ), \
+         patch.object(
+             service,
+             "_get_latest_price_polygon",
+             side_effect=AssertionError("placeholder polygon key must be skipped"),
+         ), \
+         patch.object(
+             service,
+             "_get_latest_price_yfinance_with_retry",
+             return_value={"AAPL": 150.0},
+         ):
+        prices = service.get_latest_price(["AAPL"])
+
+    assert prices == {"AAPL": 150.0}
