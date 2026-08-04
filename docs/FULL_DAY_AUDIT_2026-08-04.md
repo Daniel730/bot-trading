@@ -112,3 +112,4 @@ Sampler authenticates with dashboard token + TOTP (`data/audit/`).
 2. Signal → orchestrator → shadow fill path when |z| ≥ entry (and beta sane)
 3. Equity re-admit behavior once US cash session is open (still yfinance-only here)
 4. Rotate Alpaca keys and re-run broker-paper soak
+5. Live Kalman near-zero floor still intentionally off (F7) — watch sizing if β drifts under 0.05
