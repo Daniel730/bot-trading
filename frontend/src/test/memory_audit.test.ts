@@ -1,53 +1,90 @@
 import { renderHook, act } from '@testing-library/react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useTelemetry } from '../hooks/useTelemetry';
 
-// Mock WebSocket
 class MockWebSocket {
-  onopen: any;
-  onmessage: any;
-  onclose: any;
-  onerror: any;
+  onopen: ((ev?: unknown) => void) | null = null;
+  onmessage: ((ev: { data: string }) => void) | null = null;
+  onclose: ((ev: { code: number }) => void) | null = null;
+  onerror: ((ev?: unknown) => void) | null = null;
   send = vi.fn();
   close = vi.fn();
   url: string;
+  static instances: MockWebSocket[] = [];
+
   constructor(url: string) {
     this.url = url;
+    MockWebSocket.instances.push(this);
     setTimeout(() => this.onopen?.(), 0);
   }
 }
-(globalThis as any).WebSocket = MockWebSocket;
 
 describe('Telemetry Memory Stability', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = [];
+    (globalThis as any).WebSocket = MockWebSocket;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('authenticates with the approved session when the dashboard token is not retained', async () => {
     const { result } = renderHook(() => useTelemetry(null, 'persisted-session'));
 
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
 
-    const wsInstance = (result.current as any).ws?.current;
-    expect(wsInstance.send).toHaveBeenCalledWith(JSON.stringify({
-      type: 'auth',
-      session: 'persisted-session',
-    }));
+    const wsInstance = result.current.ws?.current as unknown as MockWebSocket;
+    expect(wsInstance.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'auth',
+        session: 'persisted-session',
+      }),
+    );
+    expect(String(wsInstance.url)).not.toContain('session=');
+    expect(String(wsInstance.url)).not.toContain('token=');
+  });
+
+  it('stops reconnecting and surfaces authError when the socket is closed with 4003', async () => {
+    vi.useFakeTimers();
+    const { result } = renderHook(() => useTelemetry(null, 'revoked-session'));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const first = MockWebSocket.instances[0];
+    expect(first).toBeTruthy();
+
+    await act(async () => {
+      first.onclose?.({ code: 4003 });
+    });
+
+    expect(result.current.authError?.status).toBe(401);
+    expect(result.current.authError?.message).toMatch(/session expired/i);
+
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(MockWebSocket.instances.length).toBe(1);
+    vi.useRealTimers();
   });
 
   it('strictly enforces 100-entry limit under extreme burst', async () => {
     const { result } = renderHook(() => useTelemetry('fake-token', 'fake-session'));
-    
-    // Wait for connection
-    await new Promise(r => setTimeout(r, 10));
 
-    const wsInstance = (result.current as any).ws?.current;
-    
-    // Simulate 5,000 messages
+    await new Promise((r) => setTimeout(r, 10));
+
+    const wsInstance = result.current.ws?.current as unknown as MockWebSocket;
+
     act(() => {
       for (let i = 0; i < 5000; i++) {
-        wsInstance.onmessage({
+        wsInstance.onmessage?.({
           data: JSON.stringify({
             type: 'thought',
             data: { agent_name: 'TEST', thought: `Msg ${i}`, verdict: 'NEUTRAL' },
-            timestamp: new Date().toISOString()
-          })
+            timestamp: new Date().toISOString(),
+          }),
         });
       }
     });

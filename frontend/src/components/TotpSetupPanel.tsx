@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import { Check, Copy, Download, Eye, EyeOff } from 'lucide-react';
 
 interface TotpSetupPanelProps {
@@ -11,6 +11,10 @@ interface TotpSetupPanelProps {
   isBusy: boolean;
 }
 
+/**
+ * 2FA enrollment UI. Secrets stay in-browser only — never sent to third-party QR APIs
+ * (otpauth URLs contain the TOTP secret and must not leave the origin).
+ */
 const TotpSetupPanel: React.FC<TotpSetupPanelProps> = ({
   secret,
   otpauthUrl,
@@ -23,11 +27,6 @@ const TotpSetupPanel: React.FC<TotpSetupPanelProps> = ({
   const [showSecret, setShowSecret] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [ackBackup, setAckBackup] = useState(false);
-
-  const qrSrc = useMemo(
-    () => `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(otpauthUrl)}`,
-    [otpauthUrl],
-  );
 
   const copyText = async (label: string, value: string) => {
     try {
@@ -51,25 +50,34 @@ const TotpSetupPanel: React.FC<TotpSetupPanelProps> = ({
 
   return (
     <div className="twofa-setup" style={{ marginTop: '20px' }}>
-      <div className="twofa-qr-row">
-        <div className="twofa-qr-card">
-          <img src={qrSrc} alt="Authenticator QR code" width={220} height={220} />
-          <p className="muted">Scan with Google Authenticator, 1Password, or Authy.</p>
-        </div>
-        <div className="twofa-manual">
-          <label className="setting-field">
-            <span>Manual secret</span>
-            <div className="inline-actions">
-              <code>{showSecret ? secret : '••••••••••••••••'}</code>
-              <button type="button" className="ghost-btn" onClick={() => setShowSecret((v) => !v)} aria-label="Toggle secret">
-                {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-              <button type="button" className="ghost-btn" onClick={() => copyText('secret', secret)} aria-label="Copy secret">
-                {copied === 'secret' ? <Check size={14} /> : <Copy size={14} />}
-              </button>
-            </div>
-          </label>
-        </div>
+      <div className="twofa-manual">
+        <p className="muted">
+          Add this account in your authenticator with the secret below (or paste the otpauth URI).
+          The secret never leaves this browser.
+        </p>
+        <label className="setting-field">
+          <span>Manual secret</span>
+          <div className="inline-actions">
+            <code>{showSecret ? secret : '••••••••••••••••'}</code>
+            <button type="button" className="ghost-btn" onClick={() => setShowSecret((v) => !v)} aria-label="Toggle secret">
+              {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
+            </button>
+            <button type="button" className="ghost-btn" onClick={() => copyText('secret', secret)} aria-label="Copy secret">
+              {copied === 'secret' ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          </div>
+        </label>
+        <label className="setting-field" style={{ marginTop: '12px' }}>
+          <span>otpauth URI</span>
+          <div className="inline-actions">
+            <code className="twofa-otpauth" title={otpauthUrl}>
+              {otpauthUrl.length > 48 ? `${otpauthUrl.slice(0, 48)}…` : otpauthUrl}
+            </code>
+            <button type="button" className="ghost-btn" onClick={() => copyText('otpauth', otpauthUrl)} aria-label="Copy otpauth URI">
+              {copied === 'otpauth' ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          </div>
+        </label>
       </div>
 
       <div style={{ marginTop: '16px' }}>

@@ -98,6 +98,18 @@ describe('LoginView banners', () => {
     expect(screen.getByText('Session expired')).toBeInTheDocument();
     expect(screen.getByText('Please log in again')).toBeInTheDocument();
   });
+
+  it('auto-shows OTP field when loginError mentions authenticator', () => {
+    render(
+      <LoginView
+        {...defaultProps({
+          loginError: 'Login approval channel unavailable. Use authenticator or backup code.',
+        })}
+      />,
+    );
+    expect(screen.getByText('Authenticator / Backup Code')).toBeInTheDocument();
+    expect(document.querySelector('input[autocomplete="one-time-code"]')).toBeTruthy();
+  });
 });
 
 describe('LoginView input interactions', () => {

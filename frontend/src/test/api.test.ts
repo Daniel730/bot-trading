@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buyWalletRecommendations,
   fetchWalletRecommendations,
+  formatApiDetail,
   syncWallet,
   type WalletRecommendation,
   type WalletSyncOrder,
@@ -16,6 +17,23 @@ const makeFetchMock = (payload: unknown) =>
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('formatApiDetail', () => {
+  it('returns string details as-is', () => {
+    expect(formatApiDetail('Dashboard session expired.', 'fallback')).toBe('Dashboard session expired.');
+  });
+
+  it('joins FastAPI validation error lists without leaking object coercion', () => {
+    expect(
+      formatApiDetail([{ msg: 'Field required' }, { msg: 'Invalid type' }], 'fallback'),
+    ).toBe('Field required; Invalid type');
+  });
+
+  it('uses fallback for empty or unknown shapes', () => {
+    expect(formatApiDetail(null, 'Request failed (400)')).toBe('Request failed (400)');
+    expect(formatApiDetail({}, 'Request failed (400)')).toBe('Request failed (400)');
+  });
 });
 
 describe('wallet API types', () => {
