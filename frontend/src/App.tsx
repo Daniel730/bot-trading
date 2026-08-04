@@ -112,6 +112,8 @@ function App() {
   const [saveOtpModalOpen, setSaveOtpModalOpen] = useState(false);
   const [saveOtpCode, setSaveOtpCode] = useState('');
   const [pendingConfigUpdates, setPendingConfigUpdates] = useState<Record<string, string> | null>(null);
+  const [pendingBotAction, setPendingBotAction] = useState<'start' | 'stop' | 'restart' | null>(null);
+  const [pendingTwoFactorRotate, setPendingTwoFactorRotate] = useState(false);
   const [twoFactorSetup, setTwoFactorSetup] = useState<TwoFactorInitiateResponse | null>(null);
   const [twoFactorCode, setTwoFactorCode] = useState('');
   const [systemMessage, setSystemMessage] = useState<string | null>(null);
@@ -294,17 +296,31 @@ function App() {
     config,
   });
 
-  const handleBotAction = async (action: 'start' | 'stop' | 'restart') => {
+  const handleBotAction = async (action: 'start' | 'stop' | 'restart', otpToken?: string) => {
     setIsBusy(true);
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await controlBot(securityToken, sessionToken, action);
+      const result = await controlBot(securityToken, sessionToken, action, 'dashboard', otpToken);
+      setPendingBotAction(null);
+      setSaveOtpModalOpen(false);
+      setSaveOtpCode('');
       setSystemMessage(`Bot ${result.action} request accepted.`);
       await refreshDashboard();
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
-      setSystemError(err.message || `Failed to ${action} bot.`);
+      const errMsg = err?.message || `Failed to ${action} bot.`;
+      const requiresOtp = err instanceof ApiError && err.status === 403 && /2fa|token/i.test(errMsg);
+      if (requiresOtp && !otpToken) {
+        setPendingBotAction(action);
+        setPendingConfigUpdates(null);
+        setPendingTwoFactorRotate(false);
+        setSaveOtpCode('');
+        setSaveOtpModalOpen(true);
+        setSystemMessage('2FA confirmation required for bot control.');
+      } else {
+        setSystemError(errMsg);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -379,6 +395,8 @@ function App() {
       const requiresOtp = err instanceof ApiError && err.status === 403 && /2fa|token/i.test(errMsg);
       if (requiresOtp) {
         setPendingConfigUpdates(updates);
+        setPendingBotAction(null);
+        setPendingTwoFactorRotate(false);
         setSaveOtpCode('');
         setSaveOtpModalOpen(true);
         setSystemMessage('2FA confirmation required to save these changes.');
@@ -391,7 +409,19 @@ function App() {
   };
 
   const handleConfirmSaveWithOtp = async () => {
-    if (!pendingConfigUpdates || !saveOtpCode.trim()) {
+    if (!saveOtpCode.trim()) {
+      setSystemError('Enter your authenticator or backup code.');
+      return;
+    }
+    if (pendingBotAction) {
+      await handleBotAction(pendingBotAction, saveOtpCode.trim());
+      return;
+    }
+    if (pendingTwoFactorRotate) {
+      await handleInitiate2FA(saveOtpCode.trim());
+      return;
+    }
+    if (!pendingConfigUpdates) {
       setSystemError('Enter your authenticator or backup code.');
       return;
     }
@@ -420,17 +450,31 @@ function App() {
     }
   };
 
-  const handleInitiate2FA = async () => {
+  const handleInitiate2FA = async (otpToken?: string) => {
     setIsBusy(true);
     setSystemError(null);
     setSystemMessage(null);
     try {
-      const result = await initiateTwoFactor(securityToken, sessionToken);
+      const result = await initiateTwoFactor(securityToken, sessionToken, otpToken);
       setTwoFactorSetup(result);
+      setPendingTwoFactorRotate(false);
+      setSaveOtpModalOpen(false);
+      setSaveOtpCode('');
       setSystemMessage('2FA setup secret generated. Verify with your authenticator code to enable it.');
     } catch (err: any) {
       if (handleAuthFailure(err)) return;
-      setSystemError(err.message || 'Failed to initiate 2FA.');
+      const errMsg = err.message || 'Failed to initiate 2FA.';
+      const requiresOtp = err instanceof ApiError && err.status === 403 && /2fa|token|rotate/i.test(errMsg);
+      if (requiresOtp && !otpToken) {
+        setPendingTwoFactorRotate(true);
+        setPendingBotAction(null);
+        setPendingConfigUpdates(null);
+        setSaveOtpCode('');
+        setSaveOtpModalOpen(true);
+        setSystemMessage('Current 2FA code required to rotate authenticator setup.');
+      } else {
+        setSystemError(errMsg);
+      }
     } finally {
       setIsBusy(false);
     }
@@ -686,13 +730,25 @@ function App() {
                   <span className="td-yellow" />
                   <span className="td-green" />
                 </div>
-                <span className="terminal-title">confirm 2fa for save</span>
+                <span className="terminal-title">
+                  {pendingBotAction
+                    ? `confirm 2fa for bot ${pendingBotAction}`
+                    : pendingTwoFactorRotate
+                      ? 'confirm 2fa to rotate'
+                      : 'confirm 2fa for save'}
+                </span>
               </div>
               <div className="confirm-body">
                 <div className="confirm-total">
                   <span>One-time confirmation needed</span>
                   <strong>2FA</strong>
-                  <small>Enter authenticator code or backup code to apply settings changes.</small>
+                  <small>
+                    {pendingBotAction
+                      ? 'Enter authenticator or backup code to control the bot.'
+                      : pendingTwoFactorRotate
+                        ? 'Enter current authenticator or backup code to rotate 2FA setup.'
+                        : 'Enter authenticator code or backup code to apply settings changes.'}
+                  </small>
                 </div>
                 <label className="setting-field">
                   <span>Authenticator / Backup Code</span>
@@ -704,11 +760,19 @@ function App() {
                   />
                 </label>
                 <div className="inline-actions">
-                  <button className="ghost-btn" disabled={isBusy} onClick={() => setSaveOtpModalOpen(false)}>
+                  <button
+                    className="ghost-btn"
+                    disabled={isBusy}
+                    onClick={() => {
+                      setSaveOtpModalOpen(false);
+                      setPendingBotAction(null);
+                      setPendingTwoFactorRotate(false);
+                    }}
+                  >
                     Cancel
                   </button>
                   <button className="primary-btn" disabled={isBusy} onClick={handleConfirmSaveWithOtp}>
-                    {isBusy ? 'Saving...' : 'Confirm Save'}
+                    {isBusy ? 'Confirming...' : 'Confirm'}
                   </button>
                 </div>
               </div>
