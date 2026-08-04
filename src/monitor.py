@@ -2828,41 +2828,80 @@ class ArbitrageMonitor:
             return execution_result(True, "paper_shadow_executed")
 
         lane_label = settings.execution_lane
+        # F-004: freeze lane knobs for this execution; abort if hot-reload flips mid-flight.
+        lane_snapshot = {
+            "paper_trading": bool(settings.PAPER_TRADING),
+            "alpaca_base_url": (settings.ALPACA_BASE_URL or "").strip(),
+            "live_capital_danger": bool(settings.LIVE_CAPITAL_DANGER),
+            "execution_lane": settings.execution_lane,
+        }
         logger.info(
             "%s EXECUTION: Placing broker orders for %s/%s - %s",
             lane_label, exec_t_a, exec_t_b, direction,
         )
 
+        def _lane_drifted() -> bool:
+            return (
+                bool(settings.PAPER_TRADING) != lane_snapshot["paper_trading"]
+                or (settings.ALPACA_BASE_URL or "").strip() != lane_snapshot["alpaca_base_url"]
+                or bool(settings.LIVE_CAPITAL_DANGER) != lane_snapshot["live_capital_danger"]
+            )
+
         # T-02: Atomic execution guard - abort if Leg A fails; emergency-close if Leg B fails
+        # F-007/F-016: persist ORDER_SUBMITTED with client_order_id BEFORE broker submit.
+        client_order_id_a = f"{signal_id}-A"
+        await persistence_service.log_trade({
+            "order_id": client_order_id_a,
+            "signal_id": uuid.UUID(signal_id),
+            "ticker": t_a,
+            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
+            "quantity": size_a,
+            "price": price_a,
+            "status": OrderStatus.ORDER_SUBMITTED,
+            "venue": venue,
+            "metadata_json": {
+                "client_order_id": client_order_id_a,
+                "pending_broker_submit": True,
+                "submitted_qty": size_a,
+                "side": side_a,
+                "symbol": t_a,
+                "execution_lane": lane_snapshot["execution_lane"],
+                "lane_snapshot": lane_snapshot,
+            },
+        })
+        if _lane_drifted():
+            await persistence_service.update_signal_status(
+                uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION
+            )
+            return execution_result(False, "execution_lane_changed_mid_flight")
+
         # Leg A
         res_a = await self.brokerage.place_value_order(
             exec_t_a,
             target_cash_a,
             side_a,
             price=price_a,
-            client_order_id=f"{signal_id}-A",
+            client_order_id=client_order_id_a,
+            intent="open",
         )
-        order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or str(uuid.uuid4())
+        order_id_a = res_a.get("order_id") or res_a.get("orderId") or res_a.get("client_order_id") or client_order_id_a
 
         if res_a.get("requires_reconciliation") or res_a.get("status") == "unknown":
-            await persistence_service.log_trade({
-                "order_id": order_id_a,
-                "signal_id": uuid.UUID(signal_id),
-                "ticker": t_a,
-                "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-                "quantity": size_a,
-                "price": price_a,
-                "status": OrderStatus.NEEDS_MANUAL_RECONCILIATION,
-                "venue": venue,
-                "metadata_json": {
+            await persistence_service.attach_broker_order_id(
+                uuid.UUID(signal_id),
+                client_order_id_a,
+                broker_order_id=str(order_id_a),
+                status=OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                metadata_updates={
                     "broker_order_id": order_id_a,
+                    "pending_broker_submit": False,
                     "submitted_qty": size_a,
                     "side": side_a,
                     "symbol": t_a,
                     "status": "unknown",
                     "broker_response": res_a,
-                }
-            })
+                },
+            )
             await persistence_service.update_signal_status(uuid.UUID(signal_id), OrderStatus.NEEDS_MANUAL_RECONCILIATION)
             alert = (
                 f"Leg A ({exec_t_a}) submission state is UNKNOWN. Leg B NOT placed. "
@@ -2881,28 +2920,37 @@ class ArbitrageMonitor:
                 f"ATOMIC ABORT: Leg A ({exec_t_a}) failed before Leg B was placed. "
                 f"No position opened. Broker response: {broker_msg}"
             )
+            await persistence_service.attach_broker_order_id(
+                uuid.UUID(signal_id),
+                client_order_id_a,
+                broker_order_id=str(order_id_a),
+                status=OrderStatus.LEG_A_REJECTED,
+                metadata_updates={
+                    "pending_broker_submit": False,
+                    "broker_response": res_a,
+                    "status": "rejected",
+                },
+            )
             await notification_service.send_message(
                 f"Execution aborted: Leg A failed for {exec_t_a}. Broker response: {broker_msg}"
             )
             return execution_result(False, "leg_a_rejected")
-        await persistence_service.log_trade({
-            "order_id": order_id_a,
-            "signal_id": uuid.UUID(signal_id),
-            "ticker": t_a,
-            "side": OrderSide.SELL if side_a == "SELL" else OrderSide.BUY,
-            "quantity": size_a,
-            "price": price_a,
-            "status": OrderStatus.LEG_A_SUBMITTED,
-            "venue": venue,
-            "metadata_json": {
+        # Promote the pre-submit ORDER_SUBMITTED row (matched by client_order_id).
+        await persistence_service.attach_broker_order_id(
+            uuid.UUID(signal_id),
+            client_order_id_a,
+            broker_order_id=str(order_id_a),
+            status=OrderStatus.LEG_A_SUBMITTED,
+            metadata_updates={
                 "broker_order_id": order_id_a,
+                "pending_broker_submit": False,
                 "submitted_qty": size_a,
                 "side": side_a,
                 "symbol": t_a,
                 "status": "submitted",
                 "broker_response": res_a,
-            }
-        })
+            },
+        )
 
         # PATCH 5: Confirm Leg A is filled before placing Leg B.
         # Alpaca submit_order returns 'success' when order is QUEUED, not FILLED.
@@ -2974,6 +3022,7 @@ class ArbitrageMonitor:
                         close_side_a,
                         price=close_price_a,
                         client_order_id=f"{signal_id}-A-PARTIAL-CLOSE",
+                        intent="close",
                     )
                     close_status = str(close_res.get("status", "")).lower()
                     close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
@@ -3171,6 +3220,7 @@ class ArbitrageMonitor:
                 close_side_a,
                 price=close_price_a,
                 client_order_id=f"{signal_id}-A-EMERGENCY-CLOSE",
+                intent="close",
             )
             close_status = str(close_res.get("status", "")).lower()
             close_unknown = close_res.get("requires_reconciliation") or close_status == "unknown"
@@ -3381,6 +3431,7 @@ class ArbitrageMonitor:
                         close_side_b,
                         price=close_price_b,
                         client_order_id=f"{signal_id}-B-PARTIAL-CLOSE",
+                        intent="close",
                     )
                     close_b_status = str(close_b_res.get("status", "")).lower()
                     close_b_unknown = (
@@ -4517,6 +4568,7 @@ class ArbitrageMonitor:
                         order["side"],
                         price=order["price"],
                         client_order_id=client_order_id,
+                        intent="close",
                     )
                     # Dead prior close order (rejected/canceled) keeps the same
                     # client_order_id reserved — retry once with a unique suffix.
@@ -4538,6 +4590,7 @@ class ArbitrageMonitor:
                             order["side"],
                             price=order["price"],
                             client_order_id=client_order_id,
+                            intent="close",
                         )
                     order_id = res.get("order_id") or res.get("orderId") or res.get("client_order_id") or client_order_id
 

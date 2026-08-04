@@ -65,6 +65,13 @@ async def evaluate_capital_halt(
         daily_pnl = float(await persistence_service.get_daily_pnl_for_date(today) or 0.0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("capital_halt: daily PnL unavailable: %s", exc)
+        # Fail-closed for broker/live opens when PnL cannot be read (Phase-2 F-002 residual).
+        if not bool(getattr(settings, "PAPER_TRADING", True)):
+            return {
+                "halt": True,
+                "reason": "daily_pnl_unavailable",
+                "details": {**details, "error": str(exc)},
+            }
         daily_pnl = 0.0
     details["daily_pnl"] = daily_pnl
     details["date"] = today
