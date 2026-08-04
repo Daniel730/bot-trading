@@ -20,6 +20,7 @@ from src.services.pair_discovery_helpers import (
     candidate_pair_combos,
     is_hedge_ratio_sane,
     is_pair_denied,
+    max_abs_hedge_limit,
     pairs_from_promotions,
     select_rotation_actions,
 )
@@ -355,9 +356,10 @@ class PortfolioManagerAgent:
                 if df is None or df.empty or t_a not in df.columns or t_b not in df.columns:
                     continue
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
+                hedge_cap = max_abs_hedge_limit(t_a, t_b)
                 if not is_hedge_ratio_sane(
                     hedge,
-                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    max_abs_hedge=hedge_cap,
                     min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                 ):
                     logger.info(
@@ -365,7 +367,7 @@ class PortfolioManagerAgent:
                         pair_id,
                         float(hedge),
                         settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
-                        settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                        hedge_cap,
                     )
                     continue
 
@@ -472,9 +474,10 @@ class PortfolioManagerAgent:
                     continue
 
                 is_coint, p_val, hedge = self.arbitrage_service.check_cointegration(df[t_a], df[t_b])
+                hedge_cap = max_abs_hedge_limit(t_a, t_b)
                 if not is_hedge_ratio_sane(
                     hedge,
-                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    max_abs_hedge=hedge_cap,
                     min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                 ):
                     logger.info(
@@ -482,7 +485,7 @@ class PortfolioManagerAgent:
                         pair_id,
                         float(hedge),
                         settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
-                        settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                        hedge_cap,
                     )
                     continue
                 pair_corr = float(df[t_a].corr(df[t_b]))
@@ -650,7 +653,7 @@ class PortfolioManagerAgent:
             max_active_pairs=settings.MAX_ACTIVE_PAIRS,
             sortino_threshold=settings.ELITE_ROTATION_SORTINO_THRESHOLD,
             denylist=settings.pair_denylist_ids,
-            max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+            max_abs_hedge=None,
             min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
             min_correlation=settings.PAIR_DISCOVERY_MIN_CORRELATION,
             max_pvalue=settings.PAIR_DISCOVERY_MAX_PVALUE,

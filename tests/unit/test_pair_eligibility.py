@@ -120,7 +120,7 @@ async def test_btc_bch_denylist_rejects_both_orders(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_extreme_hedge_ratio_rejected_even_without_denylist():
-    """BTC/BCH-scale betas (~285) fail PAIR_DISCOVERY_MAX_ABS_HEDGE=25."""
+    """BTC/BCH-scale betas (~285) fail when an equity-tight max_abs_hedge is forced."""
     result = await evaluate_pair(
         "BTC-USD",
         "BCH-USD",
@@ -131,6 +131,20 @@ async def test_extreme_hedge_ratio_rejected_even_without_denylist():
     )
     assert result.admit is False
     assert "hedge_ratio_extreme" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_crypto_default_hedge_cap_admits_btc_eth_scale_beta():
+    """Default crypto ceiling admits intentional BTC/ETH-scale hedges (~34)."""
+    result = await evaluate_pair(
+        "BTC-USD",
+        "ETH-USD",
+        account_currency="USD",
+        denylist=[],
+        hedge_ratio=34.0,
+        max_abs_hedge=None,
+    )
+    assert result.admit is True
 
 
 @pytest.mark.asyncio

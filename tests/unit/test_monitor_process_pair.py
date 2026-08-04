@@ -34,10 +34,75 @@ async def test_process_pair_blocks_clipped_kalman_state_before_orchestrator(moni
 
 @pytest.mark.asyncio
 async def test_process_pair_skips_when_kalman_beta_exceeds_admission_cap(monitor):
-    """Live Kalman beta must honor PAIR_DISCOVERY_MAX_ABS_HEDGE (not only OLS warm-up)."""
-    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD", "is_cointegrated": True}
-    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    """Equity live Kalman beta must honor PAIR_DISCOVERY_MAX_ABS_HEDGE."""
+    pair = {"ticker_a": "AAPL", "ticker_b": "MSFT", "id": "AAPL_MSFT", "is_cointegrated": True}
+    latest_prices = {"AAPL": 190.0, "MSFT": 420.0}
     max_abs = float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE)
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch.object(monitor, "is_market_open", return_value=True):
+
+        mock_kf = MagicMock()
+        # Valid innovation/z, but beta past equity admission hedge cap.
+        mock_kf.update.return_value = ([0.0, max_abs + 9.0], 0.1, 0.2, 0.5)
+        mock_kf_get.return_value = mock_kf
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+    assert diagnostic["verdict"] == "IGNORED"
+    assert diagnostic["reason"] == "extreme_kalman_beta"
+    mock_save_state.assert_not_awaited()
+    mock_orchestrator.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_pair_allows_crypto_beta_within_crypto_hedge_cap(monitor):
+    """Intentional crypto pairs use PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO (not equity 25)."""
+    pair = {
+        "ticker_a": "BTC-USD",
+        "ticker_b": "ETH-USD",
+        "id": "BTC-USD_ETH-USD",
+        "is_cointegrated": True,
+    }
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    equity_cap = float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE)
+    crypto_cap = float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO)
+    assert crypto_cap > equity_cap
+    # Observed stuck beta (~34) exceeds equity cap but is fine for crypto.
+    crypto_beta = equity_cap + 9.0
+    assert crypto_beta < crypto_cap
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock), \
+         patch("src.services.redis_service.redis_service.get_fundamental_score", new_callable=AsyncMock, return_value=None):
+
+        mock_kf = MagicMock()
+        mock_kf.update.return_value = ([0.0, crypto_beta], 0.1, 0.2, 0.5)
+        mock_kf_get.return_value = mock_kf
+        mock_orchestrator.return_value = {"final_confidence": 0.1, "final_verdict": "VETO"}
+
+        diagnostic = await monitor.process_pair(pair, latest_prices)
+
+    assert diagnostic["reason"] != "extreme_kalman_beta"
+    mock_save_state.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_process_pair_skips_crypto_when_beta_exceeds_crypto_hedge_cap(monitor, monkeypatch):
+    pair = {
+        "ticker_a": "BTC-USD",
+        "ticker_b": "ETH-USD",
+        "id": "BTC-USD_ETH-USD",
+        "is_cointegrated": True,
+    }
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    # Keep below KALMAN_BETA_CLIP_MAX so the abs-hedge gate (not clip invalid) fires.
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO", 100.0)
 
     with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
@@ -45,8 +110,7 @@ async def test_process_pair_skips_when_kalman_beta_exceeds_admission_cap(monitor
          patch("src.services.audit_service.audit_service.log_thought_process", new_callable=AsyncMock):
 
         mock_kf = MagicMock()
-        # Valid innovation/z, but beta past admission hedge cap.
-        mock_kf.update.return_value = ([0.0, max_abs + 9.0], 0.1, 0.2, 0.5)
+        mock_kf.update.return_value = ([0.0, 150.0], 0.1, 0.2, 0.5)
         mock_kf_get.return_value = mock_kf
 
         diagnostic = await monitor.process_pair(pair, latest_prices)

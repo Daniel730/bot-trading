@@ -264,6 +264,8 @@ Confirm these **non-secret** keys in `/home/daniel/.env.trading`:
 | `PAIR_DISCOVERY_AUTO_PROMOTE` | `false` (default) | Promote scouts into Active after discover |
 | `PAIR_DENYLIST` | includes `BTC-USD_BCH-USD` | Quarantine junk / spread-guard churners |
 | `PAIR_DISCOVERY_MAX_TICKERS` | `12` (default); pin `8` on bot-server | Bounds scout RAM/yfinance load |
+| `PAIR_DISCOVERY_MAX_ABS_HEDGE` | `25.0` (default) | Equity abs-hedge / Kalman beta ceiling |
+| `PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO` | `1000.0` (default) | Crypto abs-hedge ceiling (BTC/ETH ≈ 35 stays tradeable) |
 | `PAIR_DISCOVERY_MIN_CORRELATION` | `0.70` (default) | Scout/promote correlation floor |
 | `PAIR_DISCOVERY_MAX_PVALUE` | `0.05` (default) | Promote only statistically cointegrated scouts |
 | `ELITE_ROTATION_SORTINO_THRESHOLD` | `2.0` (default) | Do not promote weak Sortino scouts |
@@ -463,6 +465,34 @@ docker logs trading-bot-bot-1 --since 10m 2>&1 | grep -E 'SCAN \[|MEMORY PRESSUR
 
 **Never** `docker compose down -v` on production — that deletes `trading-bot_*` volumes (2FA, pairs, Redis/Postgres).
 
+### Unmanaged broker positions (operator path)
+
+Startup may log `RISK ALERT: Broker has unmanaged position(s) outside the bot ledger`
+when Alpaca holds inventory the bot ledger does not track (manual buys, prior runs).
+`IGNORE_UNMANAGED_POSITIONS=true` continues scanning without auto-flattening.
+
+**Do not** invent OPEN pair signals for foreign holdings — that would make the bot try to exit them incorrectly.
+
+Acknowledge (paper / broker-paper preferred):
+
+```bash
+# List unmanaged vs acknowledged
+curl -s -H "X-Dashboard-Session: $SESSION" http://127.0.0.1:8082/api/broker/unmanaged | jq .
+
+# Acknowledge all foreign holdings (no ledger OPEN import)
+curl -s -X POST -H "X-Dashboard-Session: $SESSION" -H "Content-Type: application/json" \
+  -d '{"acknowledge_all": true, "note": "alpaca_paper_inventory"}' \
+  http://127.0.0.1:8082/api/broker/unmanaged/acknowledge
+
+# Or from the host / container CLI
+PYTHONPATH=. python scripts/acknowledge_unmanaged_positions.py --list
+PYTHONPATH=. python scripts/acknowledge_unmanaged_positions.py --all --note alpaca_paper_inventory
+```
+
+Live real-money acknowledge still requires step-up `otp_token` when 2FA is enrolled.
+Clear acknowledgements with `POST /api/broker/unmanaged/clear` if you need the alert again.
+Set `IGNORE_UNMANAGED_POSITIONS=false` only after inventory is closed or acknowledged and you want fail-closed startup.
+
 Neighbor soft caps (AdGuard / Odysseus / NPM / Nextcloud) are applied with `infra/ops_apply_host_soft_limits.sh` via `docker update` (survives until those containers are recreated; re-run after their stack redeploys).
 
 ### Troubleshooting
@@ -476,6 +506,9 @@ Neighbor soft caps (AdGuard / Odysseus / NPM / Nextcloud) are applied with `infr
 | Java engine exits | Set `DRY_RUN=true`; confirm Redis/Postgres env vars. |
 | Equity orders use the wrong broker | Check `BROKERAGE_PROVIDER`; the only active value is `ALPACA`. Unsupported values fail startup. |
 | No equity scans | Check market hours and `DEV_MODE`; crypto pairs run 24/7, equity pairs are gated. |
+| Crypto pairs only `extreme_kalman_beta` | Confirm `PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO` (≥ observed beta; default 1000). Equity cap stays 25. |
+| Wallet sync returns 403 | Live money needs `otp_token` step-up when 2FA is enrolled. Shadow / Alpaca paper (`should_auto_approve_trades`) skips step-up for wallet sync/buys. |
+| Unmanaged broker RISK ALERT | Acknowledge via API/CLI (does **not** create OPEN signals). See below. |
 | Many pairs rejected | Review `BLOCK_CROSS_CURRENCY_PAIRS`, `BLOCK_LSE_PAIRS_FOR_SHORT_HOLD`, `PAIR_MAX_ROUND_TRIP_COST_PCT`, and `ALLOW_EU_CONTINENTAL_OVERLAP`. |
 | Live sell leg rejected before broker | The preflight inventory guard found insufficient available shares. |
 | Bot exit 137 / `OOMKilled=true` | Host RAM + compose limits; run `ops_oom_recover.sh`; pin discovery tickers; check Minecraft/`adguardhome` growth. |

@@ -28,6 +28,7 @@ async def test_startup_blocks_when_broker_has_unmanaged_position(
     )
     mock_persistence.get_open_signals = AsyncMock(return_value=[])
     mock_persistence.set_system_state = AsyncMock()
+    mock_persistence.get_system_state = AsyncMock(return_value="")
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
 
@@ -84,6 +85,7 @@ async def test_startup_broker_ledger_mismatch_reports_read_only_reconciliation_a
         ]
     )
     mock_persistence.set_system_state = AsyncMock()
+    mock_persistence.get_system_state = AsyncMock(return_value="")
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
 
@@ -130,6 +132,7 @@ async def test_startup_allows_unmanaged_positions_when_ignore_flag_enabled(
     )
     mock_persistence.get_open_signals = AsyncMock(return_value=[])
     mock_persistence.set_system_state = AsyncMock()
+    mock_persistence.get_system_state = AsyncMock(return_value="")
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
 
@@ -231,6 +234,7 @@ async def test_startup_ignore_unmanaged_never_implies_auto_flatten(
     monitor.brokerage.execute_order = AsyncMock()
     mock_persistence.get_open_signals = AsyncMock(return_value=[])
     mock_persistence.set_system_state = AsyncMock()
+    mock_persistence.get_system_state = AsyncMock(return_value="")
     mock_notify.send_message = AsyncMock()
     mock_dashboard.update = AsyncMock()
 
@@ -245,3 +249,45 @@ async def test_startup_ignore_unmanaged_never_implies_auto_flatten(
     message = mock_notify.send_message.await_args.args[0]
     assert "NOT auto-flattening overnight" in message
     assert "suggested_action=IMPORT_OR_CLOSE_MANUALLY_NO_AUTO_FLATTEN" in message
+
+
+@pytest.mark.asyncio
+@patch("src.monitor.notification_service")
+@patch("src.monitor.persistence_service")
+@patch("src.monitor.dashboard_service")
+async def test_startup_skips_alert_for_operator_acknowledged_unmanaged(
+    mock_dashboard,
+    mock_persistence,
+    mock_notify,
+    startup_monitor_factory,
+):
+    monitor = startup_monitor_factory()
+    monitor.brokerage.get_portfolio = AsyncMock(
+        return_value=[{"ticker": "BTC-USD", "quantity": 0.1, "quantityAvailableForTrading": 0.1}]
+    )
+    mock_persistence.get_open_signals = AsyncMock(return_value=[])
+    mock_persistence.set_system_state = AsyncMock()
+    mock_persistence.get_system_state = AsyncMock(
+        return_value=json.dumps(
+            {"symbols": {"BTC-USD": {"note": "paper_ack", "provenance": "broker_foreign_holding"}}}
+        )
+    )
+    mock_notify.send_message = AsyncMock()
+    mock_dashboard.update = AsyncMock()
+
+    with patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "IGNORE_UNMANAGED_POSITIONS", False):
+        should_continue = await monitor._fail_fast_on_broker_ledger_mismatch()
+
+    assert should_continue is True
+    mock_notify.send_message.assert_not_awaited()
+    mock_dashboard.update.assert_not_awaited()
+    state_calls = [
+        call
+        for call in mock_persistence.set_system_state.await_args_list
+        if call.args[0] == "unmanaged_broker_positions"
+    ]
+    assert state_calls
+    payload = json.loads(state_calls[0].args[1])
+    assert payload["acknowledged_only"] is True
+    assert payload["symbols"] == ["BTC-USD"]

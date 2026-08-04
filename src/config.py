@@ -274,8 +274,15 @@ class Settings(BaseSettings):
     # Do not auto-promote scouted pairs into the live book (operator must promote).
     PAIR_DISCOVERY_AUTO_PROMOTE: bool = Field(default=False, validation_alias="PAIR_DISCOVERY_AUTO_PROMOTE")
     # Absolute hedge-ratio / Kalman beta ceiling for scout admission + promotion.
-    # BTC/BCH-style price-ratio pairs land near ~285 and churn the spread guard.
+    # Equity pairs stay tight; BTC/BCH-style extremes (~285) remain denylisted.
     PAIR_DISCOVERY_MAX_ABS_HEDGE: float = Field(default=25.0, validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE")
+    # Crypto price ratios (BTC/ETH ≈ 35, BTC/LTC ≈ 900) need a higher ceiling so
+    # intentional CRYPTO_TEST_PAIRS are not stuck on extreme_kalman_beta every scan.
+    # Capped at KALMAN_BETA_CLIP_MAX (1000) so sizing still fails closed above that.
+    PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO: float = Field(
+        default=1000.0,
+        validation_alias="PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO",
+    )
     # Admission-only floor on |OLS hedge|. Exact 0.0 was already rejected; near-zero
     # betas (e.g. AVAX/LTC ≈ -0.002) still admit and make sizing fragile. Live
     # Kalman scans do not use this floor (see KALMAN_BETA_CLIP_MIN separately).

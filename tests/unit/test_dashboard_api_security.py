@@ -74,6 +74,56 @@ def test_require_step_up_2fa_accepts_valid_otp(monkeypatch):
     require_step_up_2fa("123456", action="bot stop")
 
 
+def test_require_step_up_2fa_skips_on_broker_paper_when_allowed(monkeypatch):
+    monkeypatch.setattr(dashboard_service.totp, "public_status", lambda: {"enabled": True})
+    monkeypatch.setattr(dashboard_service.totp, "verify_token_or_backup", lambda token: False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    assert settings.should_auto_approve_trades is True
+    require_step_up_2fa(None, action="wallet sync", allow_paper_skip=True)
+
+
+def test_require_step_up_2fa_still_required_on_live_money(monkeypatch):
+    monkeypatch.setattr(dashboard_service.totp, "public_status", lambda: {"enabled": True})
+    monkeypatch.setattr(dashboard_service.totp, "verify_token_or_backup", lambda token: False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    assert settings.should_auto_approve_trades is False
+    with pytest.raises(HTTPException) as exc:
+        require_step_up_2fa(None, action="wallet sync", allow_paper_skip=True)
+    assert exc.value.status_code == 403
+    assert "otp_token" in exc.value.detail
+
+
+def test_wallet_sync_skips_step_up_in_broker_paper(authed_client, monkeypatch):
+    client, _session = authed_client
+    monkeypatch.setattr(
+        dashboard_service.totp,
+        "public_status",
+        lambda: {"enabled": True, "pending_setup": False, "backup_codes_remaining": 1},
+    )
+    monkeypatch.setattr(dashboard_service.totp, "verify_token_or_backup", lambda token: False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+
+    async def _fake_sync(request):
+        return {"status": "ok", "mode": "ALPACA", "orders": [], "failures": 0, "skipped": []}
+
+    monkeypatch.setattr(dashboard_service, "sync_wallet_for_coint", _fake_sync)
+    resp = client.post("/api/wallet/sync", json={"budget": 25.0, "delay_seconds": 0})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+
 def test_initiate_setup_allows_first_enroll_without_otp(monkeypatch):
     monkeypatch.setattr(
         dashboard_service.totp,
@@ -169,6 +219,12 @@ def test_wallet_buy_requires_step_up_when_2fa_enabled(authed_client, monkeypatch
         lambda: {"enabled": True, "pending_setup": False, "backup_codes_remaining": 1},
     )
     monkeypatch.setattr(dashboard_service.totp, "verify_token_or_backup", lambda token: False)
+    # Live real-money: paper skip must not apply.
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
 
     resp = client.post(
         "/api/wallet/recommendations/buy",

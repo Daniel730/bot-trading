@@ -86,7 +86,11 @@ def _default_denylist() -> set[str]:
     return set(settings.pair_denylist_ids)
 
 
-def _default_max_abs_hedge() -> float:
+def _default_max_abs_hedge(ticker_a: str = "", ticker_b: str = "") -> float:
+    from src.services.pair_discovery_helpers import max_abs_hedge_limit
+
+    if ticker_a and ticker_b:
+        return max_abs_hedge_limit(ticker_a, ticker_b)
     from src.config import settings
 
     return float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE)
@@ -218,7 +222,7 @@ async def evaluate_pair(
     hedge_cap = (
         float(max_abs_hedge)
         if max_abs_hedge is not None
-        else _default_max_abs_hedge()
+        else _default_max_abs_hedge(a, b)
     )
     corr_floor = (
         float(min_correlation)

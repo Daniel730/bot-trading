@@ -48,6 +48,29 @@ def canonical_pair_id(ticker_a: str, ticker_b: str) -> str:
     return f"{str(ticker_a).strip().upper()}_{str(ticker_b).strip().upper()}"
 
 
+def _is_crypto_ticker(ticker: str) -> bool:
+    return "-USD" in str(ticker or "").upper()
+
+
+def is_crypto_pair_tickers(ticker_a: str, ticker_b: str) -> bool:
+    """True when both legs look like crypto (``*-USD``) symbols."""
+    return _is_crypto_ticker(ticker_a) and _is_crypto_ticker(ticker_b)
+
+
+def max_abs_hedge_limit(ticker_a: str, ticker_b: str) -> float:
+    """Return the absolute hedge / Kalman-beta ceiling for a pair.
+
+    Equity pairs keep the tight ``PAIR_DISCOVERY_MAX_ABS_HEDGE`` guard.
+    Intentional crypto pairs use ``PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO`` because
+    price ratios (e.g. BTC/ETH ≈ 35) are naturally larger than equity betas.
+    """
+    from src.config import settings
+
+    if is_crypto_pair_tickers(ticker_a, ticker_b):
+        return float(getattr(settings, "PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO", 1000.0))
+    return float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE)
+
+
 def pair_id_aliases(pair_id: str) -> Set[str]:
     """Return both orderings of a pair id (A_B and B_A)."""
     try:
@@ -185,7 +208,7 @@ def select_rotation_actions(
     max_active_pairs: int,
     sortino_threshold: float = 0.0,
     denylist: Iterable[str] | None = None,
-    max_abs_hedge: float = 25.0,
+    max_abs_hedge: float | None = None,
     min_abs_hedge: float = 0.0,
     min_correlation: float = 0.0,
     max_pvalue: float = 1.0,
@@ -216,11 +239,17 @@ def select_rotation_actions(
             to_bench.append(pair_id)
             continue
         hedge = pair.get("hedge_ratio")
-        if hedge is not None and not is_hedge_ratio_sane(
-            hedge, max_abs_hedge=max_abs_hedge, min_abs_hedge=min_abs_hedge
-        ):
-            to_bench.append(pair_id)
-            continue
+        if hedge is not None:
+            try:
+                t_a, t_b = parse_pair_id(pair_id)
+                pair_hedge_cap = max_abs_hedge_limit(t_a, t_b) if max_abs_hedge is None else float(max_abs_hedge)
+            except ValueError:
+                pair_hedge_cap = float(max_abs_hedge) if max_abs_hedge is not None else 25.0
+            if not is_hedge_ratio_sane(
+                hedge, max_abs_hedge=pair_hedge_cap, min_abs_hedge=min_abs_hedge
+            ):
+                to_bench.append(pair_id)
+                continue
         # Dead equity / broken crypto must not keep occupying Active slots
         # overnight while waiting for a replacement scout.
         if not bool(pair.get("is_cointegrated", True)):
@@ -237,12 +266,19 @@ def select_rotation_actions(
             continue
         if is_pair_denied(pair_id=pair_id, denylist=denied):
             continue
+        try:
+            c_a, c_b = parse_pair_id(pair_id)
+            candidate_hedge_cap = (
+                max_abs_hedge_limit(c_a, c_b) if max_abs_hedge is None else float(max_abs_hedge)
+            )
+        except ValueError:
+            candidate_hedge_cap = float(max_abs_hedge) if max_abs_hedge is not None else 25.0
         if not _candidate_passes_quality(
             candidate,
             sortino_threshold=sortino_threshold,
             min_correlation=min_correlation,
             max_pvalue=max_pvalue,
-            max_abs_hedge=max_abs_hedge,
+            max_abs_hedge=candidate_hedge_cap,
             min_abs_hedge=min_abs_hedge,
         ):
             continue

@@ -875,7 +875,7 @@ class ArbitrageMonitor:
             block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
             allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
             denylist=settings.pair_denylist_ids,
-            max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+            max_abs_hedge=None,
             min_correlation=settings.PAIR_DISCOVERY_MIN_CORRELATION,
             max_pvalue=settings.PAIR_DISCOVERY_MAX_PVALUE,
         )
@@ -1019,11 +1019,12 @@ class ArbitrageMonitor:
                     logger.warning(f"Invalid hedge ratio for {ticker_a}/{ticker_b}: {hedge}. Using 1.0.")
                     hedge = 1.0
 
-                from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+                from src.services.pair_discovery_helpers import is_hedge_ratio_sane, max_abs_hedge_limit
 
+                hedge_cap = max_abs_hedge_limit(ticker_a, ticker_b)
                 if not is_hedge_ratio_sane(
                     hedge,
-                    max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                    max_abs_hedge=hedge_cap,
                     min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
                 ):
                     logger.warning(
@@ -1033,7 +1034,7 @@ class ArbitrageMonitor:
                         ticker_b,
                         float(hedge),
                         settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
-                        settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                        hedge_cap,
                     )
                     try:
                         await persistence_service.save_trading_pairs([{
@@ -2036,18 +2037,19 @@ class ArbitrageMonitor:
             self._kalman_rebuild_attempted.discard(pair['id'])
 
             # Admission hedge cap must also apply to live Kalman beta. OLS can
-            # pass PAIR_DISCOVERY_MAX_ABS_HEDGE at warm-up while the filter drifts
-            # past it (observed BTC-USD/ETH-USD beta ~34 with max_abs=25).
-            from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+            # pass the asset-class abs-hedge ceiling at warm-up while the filter
+            # drifts past it. Crypto uses PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO.
+            from src.services.pair_discovery_helpers import is_hedge_ratio_sane, max_abs_hedge_limit
 
+            hedge_cap = max_abs_hedge_limit(t_a, t_b)
             if not is_hedge_ratio_sane(
-                state_vec[1], max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+                state_vec[1], max_abs_hedge=hedge_cap
             ):
                 return skip(
                     "extreme_kalman_beta",
                     stage="kalman",
                     beta=float(state_vec[1]),
-                    max_abs_hedge=float(settings.PAIR_DISCOVERY_MAX_ABS_HEDGE),
+                    max_abs_hedge=float(hedge_cap),
                 )
 
             # Persist Kalman state to Redis
@@ -3942,17 +3944,18 @@ class ArbitrageMonitor:
                 hist_data[col_a], hist_data[col_b], pvalue_threshold=p_thresh
             )
 
-            from src.services.pair_discovery_helpers import is_hedge_ratio_sane
+            from src.services.pair_discovery_helpers import is_hedge_ratio_sane, max_abs_hedge_limit
 
+            hedge_cap = max_abs_hedge_limit(t_a, t_b)
             if hedge is not None and not is_hedge_ratio_sane(
                 hedge,
-                max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                max_abs_hedge=hedge_cap,
                 min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
             ):
                 msg = (
                     f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} outside "
                     f"[{settings.PAIR_DISCOVERY_MIN_ABS_HEDGE:.3f}, "
-                    f"{settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}] abs. "
+                    f"{hedge_cap:.1f}] abs. "
                     f"Pair benched to free Active slot."
                 )
                 logger.warning(msg)
@@ -4271,7 +4274,8 @@ class ArbitrageMonitor:
         msg = (
             f"RISK ALERT: Broker has unmanaged position(s) outside the bot ledger: {symbols}. "
             "Continuing because IGNORE_UNMANAGED_POSITIONS=True — NOT auto-flattening overnight. "
-            "Import into the ledger or close manually. "
+            "Import into acknowledgements via POST /api/broker/unmanaged/acknowledge "
+            "or close manually. "
             "Set IGNORE_UNMANAGED_POSITIONS=false before unattended live execution."
         )
         if audit_lines:
@@ -4363,6 +4367,38 @@ class ArbitrageMonitor:
 
         if not unmanaged_symbols:
             await persistence_service.set_system_state("unmanaged_broker_positions", "")
+            return True
+
+        from src.services.unmanaged_positions_service import (
+            ACK_STATE_KEY,
+            filter_unacked_symbols,
+            parse_acknowledgements,
+        )
+
+        raw_ack = await persistence_service.get_system_state(ACK_STATE_KEY, default="")
+        acks = parse_acknowledgements(raw_ack)
+        unacked_symbols = filter_unacked_symbols(unmanaged_symbols, acks)
+        ack_only = sorted(set(unmanaged_symbols) - set(unacked_symbols))
+        if ack_only:
+            logger.info(
+                "Unmanaged broker positions already operator-acknowledged (no OPEN import): %s",
+                ", ".join(ack_only),
+            )
+        unmanaged_symbols = unacked_symbols
+        if not unmanaged_symbols:
+            await persistence_service.set_system_state(
+                "unmanaged_broker_positions",
+                json.dumps(
+                    {
+                        "ignored": True,
+                        "auto_flatten": False,
+                        "acknowledged_only": True,
+                        "count": len(ack_only),
+                        "symbols": ack_only,
+                    },
+                    separators=(",", ":"),
+                )[:4000],
+            )
             return True
 
         if ignore_unmanaged:

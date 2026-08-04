@@ -710,20 +710,35 @@ def verify_token(token: Optional[str] = None, session: Optional[str] = None):
 
 
 
-def require_step_up_2fa(otp_token: Optional[str], *, action: str = "this action") -> None:
+def require_step_up_2fa(
+    otp_token: Optional[str],
+    *,
+    action: str = "this action",
+    allow_paper_skip: bool = False,
+) -> None:
     """Require a valid TOTP/backup code when dashboard 2FA is already enabled.
 
     Session auth alone is insufficient for dangerous controls once an authenticator
     is enrolled. When 2FA is not yet configured, session login remains enough so
     operators can still bootstrap paper/dev workflows and enroll 2FA.
+
+    When ``allow_paper_skip`` is True and the runtime is shadow paper or Alpaca
+    broker-paper (``settings.should_auto_approve_trades``), step-up is skipped so
+    operators can sync wallets / acknowledge paper inventory without a TOTP prompt.
+    Live real-money still requires step-up.
     """
+    if allow_paper_skip and settings.should_auto_approve_trades:
+        return
     status = dashboard_service.totp.public_status()
     if not status.get("enabled"):
         return
     if not otp_token or not dashboard_service.totp.verify_token_or_backup(otp_token):
         raise HTTPException(
             status_code=403,
-            detail=f"A valid 2FA token is required for {action}.",
+            detail=(
+                f"A valid 2FA token is required for {action}. "
+                "Pass otp_token in the JSON body (or re-prompt from the dashboard)."
+            ),
         )
 
 
@@ -1002,6 +1017,22 @@ class WalletSyncRequest(BaseModel):
     skip_owned: bool = True
     skip_pending: bool = True
     delay_seconds: float = Field(default=0.5, ge=0, le=10)
+    otp_token: Optional[str] = None
+
+
+class UnmanagedAcknowledgeRequest(BaseModel):
+    """Acknowledge foreign broker holdings without creating OPEN ledger signals."""
+
+    symbols: Optional[List[str]] = None
+    acknowledge_all: bool = False
+    note: str = ""
+    actor: str = "dashboard"
+    otp_token: Optional[str] = None
+
+
+class UnmanagedClearRequest(BaseModel):
+    symbols: Optional[List[str]] = None
+    clear_all: bool = False
     otp_token: Optional[str] = None
 
 
@@ -3139,7 +3170,8 @@ async def sync_wallet(request: WalletSyncRequest, token: str = Query(None), sess
         dict: Operation result containing at least `status` (`"ok"` or `"partial"`), `orders` (placed order records), and `failures` (number of failed orders). Additional fields such as `skipped` may be present.
     """
     verify_token(token, session)
-    require_step_up_2fa(request.otp_token, action="wallet sync")
+    # Shadow / Alpaca paper: allow sync without TOTP. Live money keeps step-up.
+    require_step_up_2fa(request.otp_token, action="wallet sync", allow_paper_skip=True)
     return await dashboard_service.sync_wallet_for_coint(request)
 
 
@@ -3191,7 +3223,11 @@ async def buy_wallet_recommendations(
         dict: Result object containing `status` (`"ok"` or `"partial"`), `orders` (list of placed order records), `failures` (number of failed orders), and `skipped` (list of skipped tickers).
     """
     verify_token(token, session)
-    require_step_up_2fa(request.otp_token, action="wallet recommendation buys")
+    require_step_up_2fa(
+        request.otp_token,
+        action="wallet recommendation buys",
+        allow_paper_skip=True,
+    )
     return await dashboard_service.buy_wallet_recommendations(request)
 
 
@@ -3238,6 +3274,117 @@ async def list_broker_positions(token: str = Query(None), session: str = Query(N
     result["positions"] = positions
     result["total_market_value"] = total_mv
     return result
+
+
+@app.get("/api/broker/unmanaged")
+async def list_unmanaged_broker_positions(token: str = Query(None), session: str = Query(None)):
+    """List broker holdings outside the bot ledger vs operator acknowledgements.
+
+    Acknowledgements never create OPEN pair signals — they only silence the
+    unmanaged RISK ALERT / startup fail-closed path for reviewed symbols.
+    """
+    verify_token(token, session)
+    from src.services.persistence_service import persistence_service
+    from src.services.unmanaged_positions_service import (
+        classify_broker_positions,
+        load_acknowledgements,
+    )
+
+    try:
+        raw = await brokerage_service.get_positions()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not read broker positions: {exc}") from exc
+    try:
+        open_signals = await persistence_service.get_open_signals()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not read ledger: {exc}") from exc
+
+    acks = await load_acknowledgements()
+    classified = classify_broker_positions(raw or [], open_signals or [], acks)
+    return {
+        "status": "ok",
+        "provider": settings.BROKERAGE_PROVIDER,
+        "ignore_unmanaged_positions": bool(settings.IGNORE_UNMANAGED_POSITIONS),
+        "acknowledgements": acks,
+        **classified,
+    }
+
+
+@app.post("/api/broker/unmanaged/acknowledge")
+async def acknowledge_unmanaged_broker_positions(
+    request: UnmanagedAcknowledgeRequest,
+    token: str = Query(None),
+    session: str = Query(None),
+):
+    """Mark foreign broker holdings as operator-acknowledged (no OPEN signals)."""
+    verify_token(token, session)
+    require_step_up_2fa(
+        request.otp_token,
+        action="acknowledging unmanaged broker positions",
+        allow_paper_skip=True,
+    )
+    from src.services.unmanaged_positions_service import (
+        acknowledge_symbols,
+        classify_broker_positions,
+        load_acknowledgements,
+    )
+    from src.services.persistence_service import persistence_service
+
+    try:
+        raw = await brokerage_service.get_positions()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not read broker positions: {exc}") from exc
+    try:
+        open_signals = await persistence_service.get_open_signals()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Could not read ledger: {exc}") from exc
+
+    classified = classify_broker_positions(raw or [], open_signals or [], await load_acknowledgements())
+    targets = list(request.symbols or [])
+    if request.acknowledge_all:
+        targets = [row["symbol"] for row in classified["unmanaged"]]
+    if not targets:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide symbols=[] or acknowledge_all=true for unmanaged holdings.",
+        )
+
+    payload = await acknowledge_symbols(
+        symbols=targets,
+        positions=raw or [],
+        actor=request.actor or "dashboard",
+        note=request.note or "operator_acknowledged_unmanaged",
+    )
+    refreshed = classify_broker_positions(raw or [], open_signals or [], payload)
+    await dashboard_state.add_message(
+        "SYSTEM",
+        f"Acknowledged {len(targets)} unmanaged broker symbol(s) (no ledger OPEN import).",
+        metadata={"type": "unmanaged_ack", "symbols": targets},
+    )
+    return {"status": "ok", "acknowledgements": payload, **refreshed}
+
+
+@app.post("/api/broker/unmanaged/clear")
+async def clear_unmanaged_acknowledgements(
+    request: UnmanagedClearRequest,
+    token: str = Query(None),
+    session: str = Query(None),
+):
+    """Clear operator acknowledgements so unmanaged holdings alert again."""
+    verify_token(token, session)
+    require_step_up_2fa(
+        request.otp_token,
+        action="clearing unmanaged acknowledgements",
+        allow_paper_skip=True,
+    )
+    from src.services.unmanaged_positions_service import clear_acknowledgements
+
+    if not request.clear_all and not request.symbols:
+        raise HTTPException(status_code=400, detail="Provide symbols=[] or clear_all=true.")
+    payload = await clear_acknowledgements(
+        symbols=None if request.clear_all else list(request.symbols or []),
+    )
+    return {"status": "ok", "acknowledgements": payload}
 
 
 @app.get("/api/positions")

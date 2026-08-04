@@ -128,6 +128,7 @@ def test_default_pair_denylist_covers_both_btc_bch_orders(monkeypatch):
     assert "BCH-USD_BTC-USD" in denied
     assert settings.PAIR_DISCOVERY_AUTO_PROMOTE is False
     assert settings.PAIR_DISCOVERY_MAX_ABS_HEDGE == 25.0
+    assert settings.PAIR_DISCOVERY_MAX_ABS_HEDGE_CRYPTO == 1000.0
     assert settings.PAIR_DISCOVERY_MIN_ABS_HEDGE == 0.05
     assert settings.PAIR_DISCOVERY_MIN_CORRELATION == 0.70
     assert settings.PAIR_DISCOVERY_MAX_PVALUE == 0.05
