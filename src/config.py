@@ -389,6 +389,26 @@ class Settings(BaseSettings):
     MARKET_REGIME_VOLATILITY_LOW: float = Field(default=0.10, validation_alias="MARKET_REGIME_VOLATILITY_LOW")
     MARKET_REGIME_ENTROPY_SPIKE: float = Field(default=0.85, validation_alias="MARKET_REGIME_ENTROPY_SPIKE")
     ORCH_AGENT_CONFIDENCE_THRESHOLD: float = Field(default=0.5, validation_alias="ORCH_AGENT_CONFIDENCE_THRESHOLD")
+    # Bull/bear theme agents default to labeled z-score heuristics (not LLM theater).
+    # Set BULL_BEAR_LLM_ENABLED=true only when deliberately spending Gemini/OpenAI budget;
+    # hourly/daily caps apply process-locally and fail closed to the heuristic.
+    BULL_BEAR_LLM_ENABLED: bool = Field(default=False, validation_alias="BULL_BEAR_LLM_ENABLED")
+    BULL_BEAR_LLM_MAX_CALLS_PER_HOUR: int = Field(
+        default=4,
+        validation_alias="BULL_BEAR_LLM_MAX_CALLS_PER_HOUR",
+    )
+    BULL_BEAR_LLM_MAX_CALLS_PER_DAY: int = Field(
+        default=20,
+        validation_alias="BULL_BEAR_LLM_MAX_CALLS_PER_DAY",
+    )
+    BULL_BEAR_LLM_MODEL_GEMINI: str = Field(
+        default="gemini-1.5-flash",
+        validation_alias="BULL_BEAR_LLM_MODEL_GEMINI",
+    )
+    BULL_BEAR_LLM_MODEL_OPENAI: str = Field(
+        default="gpt-4o-mini",
+        validation_alias="BULL_BEAR_LLM_MODEL_OPENAI",
+    )
     ORCH_FUNDAMENTAL_DEFAULT_SCORE: int = Field(default=50, validation_alias="ORCH_FUNDAMENTAL_DEFAULT_SCORE")
     ORCH_FUNDAMENTAL_VETO_SCORE: int = Field(default=40, validation_alias="ORCH_FUNDAMENTAL_VETO_SCORE")
     # Treat Redis SEC scores older than this (or with unusable timestamps) as unknown.

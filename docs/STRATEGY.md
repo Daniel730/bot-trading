@@ -76,7 +76,7 @@ The orchestrator is an async Python ensemble, not a required LangGraph runtime p
 
 1. `DEGRADED_MODE` circuit-breaker check.
 2. Macro beacon fail-fast veto by sector.
-3. Bull and bear agent evaluation.
+3. Bull and bear agent evaluation. Default path is a labeled z-score heuristic (`source=heuristic_stub`), not LLM theater (legacy fixed 0.7/0.4 removed). Optional Gemini/OpenAI theme scoring requires `BULL_BEAR_LLM_ENABLED=true`, usable keys, and remaining hourly/daily caps; otherwise agents stay heuristic. Orchestrator telemetry uses `HEURISTIC` (not AI BULLISH/BEARISH) for non-LLM payloads and annotates `final_verdict` with a `THEME:` quality note.
 4. Cached SEC/fundamental integrity scores from Redis.
 5. Whale watcher status for crypto-sensitive flows. The hot-path implementation is a hard-dormant stub that reports `INACTIVE` (`active=False`). `WHALE_WATCHER_ENABLED` and related knobs are reserved; flipping the flag alone does not enable flow analysis. Cache-backed logic remains under `legacy/` (GitHub #91).
 6. Portfolio manager confidence adjustment.

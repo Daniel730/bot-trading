@@ -68,6 +68,38 @@ def _whale_effects_apply(verdict: dict | None) -> bool:
     return verdict.get("active") is True
 
 
+def _theme_agent_telemetry_verdict(results, *, directional_label: str) -> str:
+    """Label bull/bear telemetry honestly: HEURISTIC vs directional LLM quality.
+
+    Fixed theater confidences (legacy 0.7/0.4) must not paint as AI BULLISH/BEARISH
+    simply because they cleared ``ORCH_AGENT_CONFIDENCE_THRESHOLD``.
+    """
+    from src.agents.theme_agent_utils import is_heuristic_theme_verdict
+
+    if isinstance(results, Exception):
+        return "NEUTRAL"
+    if is_heuristic_theme_verdict(results):
+        return "HEURISTIC"
+    if results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD:
+        return directional_label
+    return "NEUTRAL"
+
+
+def _theme_quality_note(bull_verdict: dict | None, bear_verdict: dict | None) -> str:
+    """Short final_verdict suffix so operators do not read heuristic stubs as LLM AI."""
+    from src.agents.theme_agent_utils import is_heuristic_theme_verdict
+
+    bull_h = is_heuristic_theme_verdict(bull_verdict)
+    bear_h = is_heuristic_theme_verdict(bear_verdict)
+    if bull_h and bear_h:
+        return "THEME: heuristic stub (not LLM)"
+    if bull_h:
+        return "THEME: bull heuristic / bear LLM"
+    if bear_h:
+        return "THEME: bull LLM / bear heuristic"
+    return "THEME: LLM"
+
+
 class AgentState(TypedDict):
     signal_context: dict
     bull_verdict: dict
@@ -197,21 +229,29 @@ class Orchestrator:
         telemetry_service.broadcast("thought", {
             "agent_name": "BULL_AGENT",
             "signal_id": sig_id,
-            "thought": str(bull_results.get("reasoning", "Analysis complete")) if not isinstance(bull_results, Exception) else f"Error: {bull_results}",
-            "verdict": "BULLISH"
-            if not isinstance(bull_results, Exception)
-            and bull_results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
-            else "NEUTRAL"
+            "thought": (
+                str(bull_results.get("reasoning") or bull_results.get("argument", "Analysis complete"))
+                if not isinstance(bull_results, Exception)
+                else f"Error: {bull_results}"
+            ),
+            "verdict": _theme_agent_telemetry_verdict(bull_results, directional_label="BULLISH"),
+            "source": None if isinstance(bull_results, Exception) else bull_results.get("source"),
+            "quality": None if isinstance(bull_results, Exception) else bull_results.get("quality"),
+            "llm_used": False if isinstance(bull_results, Exception) else bool(bull_results.get("llm_used")),
         })
 
         telemetry_service.broadcast("thought", {
             "agent_name": "BEAR_AGENT",
             "signal_id": sig_id,
-            "thought": str(bear_results.get("reasoning", "Analysis complete")) if not isinstance(bear_results, Exception) else f"Error: {bear_results}",
-            "verdict": "BEARISH"
-            if not isinstance(bear_results, Exception)
-            and bear_results.get("confidence", 0) > settings.ORCH_AGENT_CONFIDENCE_THRESHOLD
-            else "NEUTRAL"
+            "thought": (
+                str(bear_results.get("reasoning") or bear_results.get("argument", "Analysis complete"))
+                if not isinstance(bear_results, Exception)
+                else f"Error: {bear_results}"
+            ),
+            "verdict": _theme_agent_telemetry_verdict(bear_results, directional_label="BEARISH"),
+            "source": None if isinstance(bear_results, Exception) else bear_results.get("source"),
+            "quality": None if isinstance(bear_results, Exception) else bear_results.get("quality"),
+            "llm_used": False if isinstance(bear_results, Exception) else bool(bear_results.get("llm_used")),
         })
 
         whale_inactive = (
@@ -459,6 +499,8 @@ class Orchestrator:
             else:
                 state["final_verdict"] = f"MAB Weighted: Bull({w_bull:.2f}), Bear({w_bear:.2f}), SEC({sec_weight_label}) | SORTINO OPTIMAL (+{max(p_advice_a['improvement'], p_advice_b['improvement']):.3f})"
                 logger.info("[ORCHESTRATOR] %s - Portfolio Logic: Optimal addition identified.", pair_id)
+
+            state["final_verdict"] += f" | {_theme_quality_note(state.get('bull_verdict'), state.get('bear_verdict'))}"
 
             if low_accuracy_warning:
                 state["final_verdict"] += (

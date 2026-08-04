@@ -59,6 +59,11 @@ Historical registers (`docs/bugs.md`, `.brain/*`) contain many items marked **Pe
     `WHALE_WATCHER_ENABLED` is ignored by the stub (template default `false`). Not a MAB arm.
     Restoring cache-backed whale analysis needs fresh tests for ingestion freshness, summaries, vetoes, and telemetry (GitHub #91).
 
+15b. **Bull/bear theme agents were fixed-confidence theater** — *mitigated (heuristic + gated LLM)*
+    Legacy hardcoded `0.7`/`0.4` confidences are replaced by labeled z-score heuristics (`source=heuristic_stub`).
+    Orchestrator emits `HEURISTIC` telemetry and a `THEME:` final_verdict note so MAB weights are not read as LLM AI quality.
+    Optional LLM path is off by default (`BULL_BEAR_LLM_ENABLED=false`) with hourly/daily call caps to avoid overnight OpenAI/Gemini spend.
+
 ## Testing Gaps
 
 16. **Alpaca live-path contract tests** — *partially done*
