@@ -864,11 +864,9 @@ class DataService:
                         return 0.0, 0.0
                     return bid_value, ask_value
 
-                info = yf.Ticker(ticker).info
-                bid, ask = quote_bid_ask(info, ("bid",), ("ask",))
-                if bid > 0.0 and ask > 0.0:
-                    return bid, ask
-
+                # Prefer Alpaca execution-venue quotes for crypto first. Stale or
+                # wide yfinance crypto bid/ask pairs commonly false-reject the
+                # spread guard even when the paper broker quote is tight.
                 if ticker.endswith("-USD"):
                     crypto_symbol = ticker.replace("-", "/")
                     snapshots = self.alpaca_client.get_crypto_snapshots([crypto_symbol])
@@ -878,7 +876,13 @@ class DataService:
                         bid, ask = quote_bid_ask(quote, ("bp", "bid_price", "bid"), ("ap", "ask_price", "ask"))
                         if bid > 0.0 and ask > 0.0:
                             return bid, ask
-                else:
+
+                info = yf.Ticker(ticker).info
+                bid, ask = quote_bid_ask(info, ("bid",), ("ask",))
+                if bid > 0.0 and ask > 0.0:
+                    return bid, ask
+
+                if not ticker.endswith("-USD"):
                     snapshots = self.alpaca_client.get_snapshots([ticker])
                     snapshot = snapshots.get(ticker) if isinstance(snapshots, dict) else None
                     if snapshot is not None:

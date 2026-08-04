@@ -213,6 +213,52 @@ async def test_close_position_closes_ledger_when_residual_ignored(monitor):
 
 
 @pytest.mark.asyncio
+async def test_close_position_retries_with_new_client_order_id_on_terminal_duplicate(monitor):
+    signal_id = str(uuid.uuid4())
+    signal = {
+        "signal_id": signal_id,
+        "legs": [
+            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
+            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0},
+        ],
+    }
+
+    with patch("src.monitor.persistence_service") as mock_persistence, \
+         patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
+         patch.object(settings, "PAPER_TRADING", False), \
+         patch.object(settings, "DEV_MODE", False):
+        mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
+        mock_persistence.close_trade = AsyncMock()
+        mock_persistence.update_signal_status = AsyncMock()
+        monitor.brokerage.place_value_order = AsyncMock(side_effect=[
+            {
+                "status": "error",
+                "terminal_duplicate": True,
+                "prior_order_status": "rejected",
+                "client_order_id": f"{signal_id}-CLOSE-AAPL",
+                "message": "bound to terminal order",
+            },
+            {"status": "success", "order_id": "close-a-retry"},
+            {"status": "success", "order_id": "close-b"},
+        ])
+        # Preflight inventory check, then post-close residual checks.
+        monitor.brokerage.get_available_quantity.side_effect = [10.0, 0.0, 0.0]
+        mock_await_fill.side_effect = [
+            {"status": "filled", "filled_qty": 10.0, "filled_avg_price": 160.0},
+            {"status": "filled", "filled_qty": 5.0, "filled_avg_price": 290.0},
+        ]
+
+        await monitor._close_position(signal, 160.0, 290.0, ExitReason.TAKE_PROFIT)
+
+        assert monitor.brokerage.place_value_order.await_count == 3
+        first = monitor.brokerage.place_value_order.await_args_list[0]
+        retry = monitor.brokerage.place_value_order.await_args_list[1]
+        assert first.kwargs["client_order_id"] == f"{signal_id}-CLOSE-AAPL"
+        assert retry.kwargs["client_order_id"].startswith(f"{signal_id}-CLOSE-AAPL-R")
+        mock_persistence.close_trade.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_close_position_skips_sell_when_broker_has_no_shares(monitor):
     signal = {
         "signal_id": str(uuid.uuid4()),
