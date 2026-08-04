@@ -32,8 +32,11 @@ allocated. The rules are:
    `PAIR_DISCOVERY_MAX_PVALUE`). Extreme hedge alone is also applied from
    pair dicts in ``filter_pair_universe`` (BTC/BCH-scale betas ~285).
 
-Crypto pairs share a single 24/7 session, but they still have to be active on
-Alpaca before entering the live universe.
+Crypto pairs share a single 24/7 session. Broker-paper and live paths still
+require both legs to be active on Alpaca before entering the scan universe.
+Shadow paper (``PAPER_TRADING=true``) skips that broker asset check because
+fills never hit Alpaca — otherwise placeholder/unauthorized keys empty the
+entire universe and contradict paper-mode docs.
 """
 from __future__ import annotations
 
@@ -183,6 +186,7 @@ async def evaluate_pair(
     max_abs_hedge: float | None = None,
     min_correlation: float | None = None,
     max_pvalue: float | None = None,
+    require_broker_active: bool | None = None,
 ) -> EligibilityResult:
     """Decide whether (ticker_a, ticker_b) should be admitted to the universe.
 
@@ -192,6 +196,9 @@ async def evaluate_pair(
 
     Spec 038 - allow_eu_continental_overlap relaxes the session rule so XETRA,
     EURONEXT, BORSA_ITALIANA and SIX are treated as the same session group.
+
+    ``require_broker_active`` defaults from ``not settings.PAPER_TRADING``:
+    shadow paper skips Alpaca asset lookups; broker-paper/live stay fail-closed.
     """
     a = ticker_a.strip().upper()
     b = ticker_b.strip().upper()
@@ -265,10 +272,17 @@ async def evaluate_pair(
     # Spec 045: Ensure both legs are accessible in the active brokerage.
     # This prevents the "legs not working" errors during execution by failing
     # the pair earlier, before any Kalman/math is performed.
-    if not await brokerage_service.is_asset_active(a):
-        return EligibilityResult(False, f"asset_not_active_in_brokerage:{a}", 0.0)
-    if not await brokerage_service.is_asset_active(b):
-        return EligibilityResult(False, f"asset_not_active_in_brokerage:{b}", 0.0)
+    # Shadow paper never routes to the broker; skip so placeholder / unauthorized
+    # Alpaca credentials cannot wipe the scan universe (see AGENTS.md paper mode).
+    if require_broker_active is None:
+        from src.config import settings
+
+        require_broker_active = not bool(settings.PAPER_TRADING)
+    if require_broker_active:
+        if not await brokerage_service.is_asset_active(a):
+            return EligibilityResult(False, f"asset_not_active_in_brokerage:{a}", 0.0)
+        if not await brokerage_service.is_asset_active(b):
+            return EligibilityResult(False, f"asset_not_active_in_brokerage:{b}", 0.0)
 
     return EligibilityResult(True, "crypto_pair" if crypto_pair else "admitted", cost)
 

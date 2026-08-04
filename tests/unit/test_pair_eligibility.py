@@ -422,3 +422,48 @@ async def test_filter_pair_universe_passes_eu_overlap_flag():
     )
     assert admitted_off == []
     assert len(admitted_on) == 1
+
+
+@pytest.mark.asyncio
+async def test_shadow_paper_skips_broker_asset_gate(monkeypatch):
+    """PAPER_TRADING=true must not empty the universe when Alpaca is unreachable."""
+    calls: list[str] = []
+
+    async def is_asset_active(ticker: str) -> bool:
+        calls.append(ticker)
+        return False
+
+    monkeypatch.setattr(pair_eligibility_service.brokerage_service, "is_asset_active", is_asset_active)
+    monkeypatch.setattr(
+        "src.config.settings.PAPER_TRADING",
+        True,
+        raising=False,
+    )
+    # Force default path (None) rather than fixture True via require flag.
+    result = await evaluate_pair(
+        "BTC-USD",
+        "ETH-USD",
+        account_currency="EUR",
+        require_broker_active=None,
+    )
+    assert result.admit is True
+    assert result.reason == "crypto_pair"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_broker_path_still_requires_active_assets(monkeypatch):
+    """Broker-paper / live must fail closed when legs are inactive on Alpaca."""
+
+    async def is_asset_active(_ticker: str) -> bool:
+        return False
+
+    monkeypatch.setattr(pair_eligibility_service.brokerage_service, "is_asset_active", is_asset_active)
+    result = await evaluate_pair(
+        "BTC-USD",
+        "ETH-USD",
+        account_currency="EUR",
+        require_broker_active=True,
+    )
+    assert result.admit is False
+    assert result.reason.startswith("asset_not_active_in_brokerage:")
