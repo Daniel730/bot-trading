@@ -5,6 +5,81 @@ import pytest
 from src.config import settings
 
 
+def test_requires_l2_entropy_baselines_false_when_live_capital_danger_off(monkeypatch):
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    assert settings.requires_l2_entropy_baselines is False
+
+
+def test_requires_l2_entropy_baselines_false_for_shadow_paper(monkeypatch):
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    assert settings.requires_l2_entropy_baselines is False
+
+
+def test_requires_l2_entropy_baselines_false_for_alpaca_paper_endpoint(monkeypatch):
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+    assert settings.requires_l2_entropy_baselines is False
+
+
+def test_requires_l2_entropy_baselines_false_for_dev_mode_on_paper_api(monkeypatch):
+    """DEV_MODE excludes broker_paper_trading, but paper-api must still skip the gate."""
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", True)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+    assert settings.is_broker_paper_trading is False
+    assert settings.is_alpaca_paper_endpoint is True
+    assert settings.requires_l2_entropy_baselines is False
+
+
+def test_requires_l2_entropy_baselines_true_for_live_api(monkeypatch):
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    assert settings.requires_l2_entropy_baselines is True
+
+
+def test_requires_l2_entropy_baselines_true_for_dev_mode_on_live_api(monkeypatch):
+    """DEV_MODE on a live URL remains gated — only paper-api is exempt."""
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "DEV_MODE", True)
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    assert settings.requires_l2_entropy_baselines is True
+
+
+async def _init_pairs_with_entropy_spy(monkeypatch, startup_monitor_factory, pairs):
+    monitor = startup_monitor_factory()
+    monitor.verify_entropy_baselines = AsyncMock()
+    monkeypatch.setattr(
+        "src.monitor.persistence_service.get_active_trading_pairs",
+        AsyncMock(return_value=pairs),
+    )
+    monkeypatch.setattr("src.monitor.build_candidate_pairs", MagicMock(return_value=pairs))
+    monkeypatch.setattr("src.monitor.filter_pair_universe", AsyncMock(return_value=(pairs, [])))
+    monkeypatch.setattr("src.monitor.dashboard_service.update", AsyncMock())
+    monkeypatch.setattr(
+        "src.monitor.data_service.get_historical_data_async",
+        AsyncMock(return_value=None),
+    )
+    await monitor.initialize_pairs()
+    return monitor
+
+
 @pytest.mark.asyncio
 async def test_alpaca_paper_broker_startup_skips_live_entropy_baselines(
     monkeypatch, startup_monitor_factory
@@ -29,6 +104,55 @@ async def test_alpaca_paper_broker_startup_skips_live_entropy_baselines(
     await monitor.initialize_pairs()
 
     monitor.verify_entropy_baselines.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dev_mode_paper_api_startup_skips_live_entropy_baselines(
+    monkeypatch, startup_monitor_factory
+):
+    """Regression: DEV_MODE makes broker_paper_trading False; paper-api must still skip."""
+    pairs = [{"ticker_a": "BTC-USD", "ticker_b": "ETH-USD"}]
+    monkeypatch.setattr(settings, "DEV_MODE", True)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://paper-api.alpaca.markets")
+
+    monitor = await _init_pairs_with_entropy_spy(monkeypatch, startup_monitor_factory, pairs)
+
+    assert settings.is_broker_paper_trading is False
+    monitor.verify_entropy_baselines.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_shadow_paper_startup_skips_live_entropy_baselines(
+    monkeypatch, startup_monitor_factory
+):
+    pairs = [{"ticker_a": "KO", "ticker_b": "PEP"}]
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", True)
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    monitor = await _init_pairs_with_entropy_spy(monkeypatch, startup_monitor_factory, pairs)
+
+    monitor.verify_entropy_baselines.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_live_api_startup_enforces_entropy_baselines(
+    monkeypatch, startup_monitor_factory
+):
+    pairs = [{"ticker_a": "KO", "ticker_b": "PEP"}]
+    monkeypatch.setattr(settings, "DEV_MODE", False)
+    monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "LIVE_CAPITAL_DANGER", True)
+    monkeypatch.setattr(settings, "BROKERAGE_PROVIDER", "ALPACA")
+    monkeypatch.setattr(settings, "ALPACA_BASE_URL", "https://api.alpaca.markets")
+
+    monitor = await _init_pairs_with_entropy_spy(monkeypatch, startup_monitor_factory, pairs)
+
+    monitor.verify_entropy_baselines.assert_awaited_once_with(pairs)
 
 
 @pytest.mark.asyncio

@@ -974,6 +974,23 @@ class Settings(BaseSettings):
         return self.is_alpaca_paper_endpoint
 
     @property
+    def requires_l2_entropy_baselines(self) -> bool:
+        """True only for real-money live broker endpoints under LIVE_CAPITAL_DANGER.
+
+        Shadow paper (`PAPER_TRADING`) and Alpaca paper-api never require Redis L2
+        entropy baselines — including DEV_MODE pointed at paper-api. Runtime mode
+        `broker_paper_trading` is intentionally narrower (excludes DEV); the
+        startup entropy gate must key off the endpoint class, not that flag.
+        """
+        if not self.LIVE_CAPITAL_DANGER:
+            return False
+        if self.PAPER_TRADING:
+            return False
+        if self.is_alpaca_paper_endpoint:
+            return False
+        return True
+
+    @property
     def execution_lane(self) -> str:
         """Single fill path: SHADOW | BROKER_PAPER | LIVE (mutually exclusive)."""
         from src.services.execution_lane import resolve_execution_lane

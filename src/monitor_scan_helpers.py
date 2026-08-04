@@ -1,8 +1,71 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Awaitable, Callable, Iterable
+from typing import TypeVar
 
 from src.monitor_helpers import is_crypto_pair
+
+T = TypeVar("T")
+
+
+async def gather_bounded(
+    awaitables: Iterable[Awaitable[T]],
+    *,
+    limit: int,
+    return_exceptions: bool = True,
+) -> list[T | BaseException]:
+    """
+    Run awaitables concurrently with a hard semaphore cap.
+
+    Preserves input order in the returned list (same contract as asyncio.gather).
+    Used by the monitor scan/exit loops so Mini PC CPU/RAM cannot be saturated by
+    an unbounded gather storm while every pair/signal still runs each cycle.
+    """
+    items = list(awaitables)
+    if not items:
+        return []
+    concurrency = max(1, int(limit))
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def _run(awaitable: Awaitable[T]) -> T | BaseException:
+        async with semaphore:
+            try:
+                return await awaitable
+            except Exception as exc:
+                if return_exceptions:
+                    return exc
+                raise
+
+    return list(await asyncio.gather(*(_run(item) for item in items)))
+
+
+def open_signal_tickers(open_signals: Iterable[dict]) -> list[str]:
+    """Collect unique leg tickers from open ledger signals (order-preserving)."""
+    tickers: list[str] = []
+    seen: set[str] = set()
+    for signal in open_signals:
+        for leg in signal.get("legs") or []:
+            ticker = leg.get("ticker")
+            if not ticker:
+                continue
+            key = str(ticker)
+            if key in seen:
+                continue
+            seen.add(key)
+            tickers.append(key)
+    return tickers
+
+
+def normalize_scan_results(raw_results: Iterable[object]) -> list[dict]:
+    """Drop gather exceptions so summarize_scan_iteration only sees pair diagnostics."""
+    normalized: list[dict] = []
+    for item in raw_results:
+        if isinstance(item, Exception):
+            continue
+        if isinstance(item, dict):
+            normalized.append(item)
+    return normalized
 
 
 def _pair_key(pair: dict) -> tuple[str, str]:

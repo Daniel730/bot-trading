@@ -853,16 +853,20 @@ class ArbitrageMonitor:
         )
 
         # US1: Verify entropy baselines ONLY for actual live broker endpoints.
-        if settings.LIVE_CAPITAL_DANGER:
+        # Key off endpoint/shadow — not broker_paper_trading (False under DEV_MODE
+        # even when ALPACA_BASE_URL is paper-api, which must never block paper).
+        if settings.requires_l2_entropy_baselines:
+            await self.verify_entropy_baselines(pairs_to_init)
+        elif settings.LIVE_CAPITAL_DANGER:
             runtime = dashboard_state.runtime_info()
-            if runtime.get("broker_paper_trading"):
-                logger.info(
-                    "Skipping L2 entropy baseline startup check in %s mode; "
-                    "baseline enforcement remains required for actual live endpoints.",
-                    runtime.get("execution_mode", "UNKNOWN"),
-                )
-            else:
-                await self.verify_entropy_baselines(pairs_to_init)
+            logger.info(
+                "Skipping L2 entropy baseline startup check in %s mode "
+                "(paper_trading=%s alpaca_endpoint_class=%s); "
+                "baseline enforcement remains required for actual live endpoints.",
+                runtime.get("execution_mode", "UNKNOWN"),
+                runtime.get("paper_trading"),
+                runtime.get("alpaca_endpoint_class"),
+            )
         logger.info(
             f"Initializing {len(pairs_to_init)} pairs in "
             f"{'DEV' if settings.DEV_MODE else 'PROD'} mode "
