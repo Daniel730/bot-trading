@@ -18,6 +18,25 @@ _REDIS_CACHE_WRITE_LOOP: ContextVar[asyncio.AbstractEventLoop | None] = ContextV
     "redis_cache_write_loop",
     default=None,
 )
+_POLYGON_PLACEHOLDER_KEYS = frozenset(
+    {
+        "",
+        "none",
+        "null",
+        "your_polygon_key",
+        "your_api_key",
+        "changeme",
+        "placeholder",
+    }
+)
+# Transient transport failures only — exhausted fallbacks (ValueError) must not
+# re-run Alpaca→yfinance→Polygon and amplify overnight equity/crypto storms.
+_HISTORICAL_RETRY_EXCEPTIONS = (
+    requests.RequestException,
+    TimeoutError,
+    ConnectionError,
+    OSError,
+)
 
 class AwaitableDict(dict):
     def __await__(self):
@@ -50,6 +69,48 @@ class DataService:
         self._ws_client: Optional[WebSocketClient] = None
         self.last_price_sources: dict[str, str] = {}
         self.last_price_timestamps: dict[str, str] = {}
+
+    @staticmethod
+    def _has_usable_polygon_key(api_key: Optional[str] = None) -> bool:
+        """Return True when POLYGON_API_KEY is present and not a template placeholder."""
+        key = (settings.POLYGON_API_KEY if api_key is None else api_key) or ""
+        normalized = str(key).strip().lower()
+        return bool(normalized) and normalized not in _POLYGON_PLACEHOLDER_KEYS
+
+    @staticmethod
+    def _alpaca_timeframe(interval: str) -> str:
+        """
+        Map yfinance-style intervals to Alpaca bar timeframes.
+
+        Historically ``1d`` fell through to ``1Min``, which pulled tens of thousands
+        of equity minute bars during crypto-only hours (regime / macro / portfolio)
+        and timed out under ``MARKET_DATA_TIMEOUT_SECONDS``.
+        """
+        normalized = (interval or "").strip().lower()
+        mapping = {
+            "1m": "1Min",
+            "1min": "1Min",
+            "1minute": "1Min",
+            "5m": "5Min",
+            "5min": "5Min",
+            "15m": "15Min",
+            "15min": "15Min",
+            "1h": "1Hour",
+            "60m": "1Hour",
+            "60min": "1Hour",
+            "1hour": "1Hour",
+            "1d": "1Day",
+            "1day": "1Day",
+            "day": "1Day",
+        }
+        timeframe = mapping.get(normalized)
+        if timeframe is None:
+            logger.warning(
+                "DataService: unrecognized interval %r for Alpaca bars; defaulting to 1Hour",
+                interval,
+            )
+            return "1Hour"
+        return timeframe
 
     @staticmethod
     def _snapshot_field(snapshot, *field_names):
@@ -335,7 +396,7 @@ class DataService:
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=10),
         stop=stop_after_attempt(3),
-        retry=retry_if_exception_type(Exception),
+        retry=retry_if_exception_type(_HISTORICAL_RETRY_EXCEPTIONS),
         reraise=True
     )
     def get_historical_data(self, tickers: List[str], period: str = "30d", interval: str = "1h") -> pd.DataFrame:
@@ -361,8 +422,8 @@ class DataService:
             elif "mo" in period: days = int(period.replace("mo", "")) * 30
             elif "y" in period: days = int(period.replace("y", "")) * 365
             
-            # Map interval to Alpaca timeframe
-            timeframe = "1Hour" if interval == "1h" else "1Min"
+            # Map interval to Alpaca timeframe (must honor daily bars — never default 1d→1Min)
+            timeframe = self._alpaca_timeframe(interval)
             
             # Use Alpaca bar fetching (RFC3339 UTC format)
             end_dt = datetime.now(timezone.utc) - timedelta(minutes=21)
@@ -393,11 +454,13 @@ class DataService:
                     logger.debug(f"DataService: Alpaca stock bars failed: {e}")
             
             # 1b. Fetch Crypto Bars
+            # alpaca-trade-api.get_crypto_bars uses loc='us', not exchange=...
+            # Passing exchange='CBSE' TypeErrors every call and forces yfinance storms.
             if alpaca_crypto_tickers:
                 crypto_symbols = [t.replace("-", "/") for t in alpaca_crypto_tickers]
                 try:
                     c_bars = self.alpaca_client.get_crypto_bars(
-                        crypto_symbols, timeframe, start=start_str, end=end_str, exchange='CBSE'
+                        crypto_symbols, timeframe, start=start_str, end=end_str
                     ).df
                     if not c_bars.empty:
                         c_df = self._alpaca_bars_to_close_frame(
@@ -438,8 +501,8 @@ class DataService:
         except Exception as e:
             logger.warning(f"DataService: yfinance historical data error for {tickers}: {e}")
 
-        # 2. Fallback to Polygon if API key exists and it's a small batch
-        if settings.POLYGON_API_KEY and len(tickers) <= 5:
+        # 3. Fallback to Polygon if a real API key exists and it's a small batch
+        if self._has_usable_polygon_key() and len(tickers) <= 5:
             try:
                 logger.info(f"DataService: Falling back to Polygon for {tickers} historical data...")
                 # Polygon is per-ticker, so we fetch one by one and merge
@@ -465,7 +528,7 @@ class DataService:
                     aggs = self.polygon_client.list_aggs(
                         poly_ticker,
                         1,
-                        "hour" if interval == "1h" else "minute",
+                        "hour" if interval == "1h" else "minute" if interval in {"1m", "1min"} else "day",
                         start_dt.strftime("%Y-%m-%d"),
                         end_dt.strftime("%Y-%m-%d"),
                         limit=5000
@@ -593,8 +656,8 @@ class DataService:
             self._update_price_metadata(price_sources, price_timestamps)
             return latest
 
-        # 3. Try Polygon for remaining
-        if settings.POLYGON_API_KEY and remaining_tickers:
+        # 3. Try Polygon for remaining (skip template placeholders that always 401)
+        if self._has_usable_polygon_key() and remaining_tickers:
             poly_prices = self._get_latest_price_polygon(remaining_tickers)
             for ticker, price in poly_prices.items():
                 latest[ticker] = price
@@ -729,7 +792,7 @@ class DataService:
         Fetch latest prices from Polygon for crypto tickers.
         Uses snapshots for immediate price lookup without historical aggregation.
         """
-        if not settings.POLYGON_API_KEY:
+        if not self._has_usable_polygon_key():
             return {}
         
         results = {}
