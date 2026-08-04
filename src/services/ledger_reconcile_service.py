@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -11,7 +12,12 @@ from typing import Any, Iterable, Optional
 
 from sqlalchemy import select
 
-from src.services.persistence_service import OrderStatus, TradeLedger, persistence_service
+from src.services.persistence_service import (
+    ExitReason,
+    OrderStatus,
+    TradeLedger,
+    persistence_service,
+)
 
 try:
     from src.services.trade_math import is_broker_fill_complete
@@ -120,6 +126,29 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+def _coerce_signal_uuid(value: Any) -> uuid.UUID | None:
+    if value is None:
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    try:
+        return uuid.UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+async def _stamp_journal_exit_for_signal(session, signal_id: Any) -> None:
+    """Ensure CLOSED reconcile paths leave a joinable TradeJournal.exit_reason."""
+    sid = _coerce_signal_uuid(signal_id)
+    if sid is None:
+        return
+    await persistence_service.ensure_journal_exit_reason(
+        sid,
+        ExitReason.MANUAL,
+        session=session,
+    )
+
+
 async def auto_close_flat_orphans(
     *,
     brokerage,
@@ -184,10 +213,12 @@ async def auto_close_flat_orphans(
                 "reconciled_at": now.isoformat(),
                 "method": "auto_close_flat_orphans",
             }
+            meta["exit_reason"] = ExitReason.MANUAL.value
             row.status = OrderStatus.CLOSED
             row.closed_at = now
             row.metadata_json = meta
             session.add(row)
+            await _stamp_journal_exit_for_signal(session, getattr(row, "signal_id", None))
             closed += 1
             logger.info("Auto-reconcile CLOSED ledger_id=%s ticker=%s", row.id, row.ticker)
 
@@ -955,11 +986,13 @@ async def auto_reconcile_broker_confirmed_closes(
                     ),
                 }
                 meta["pair_status"] = OrderStatus.CLOSED.value
+                meta["exit_reason"] = ExitReason.MANUAL.value
                 leg.status = OrderStatus.CLOSED
                 leg.closed_at = now
                 leg.metadata_json = meta
                 session.add(leg)
 
+            await _stamp_journal_exit_for_signal(session, signal_id)
             closed += 1
             logger.info(
                 "Auto-reconcile CLOSED signal_id=%s after broker-confirmed close fills "

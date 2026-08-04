@@ -320,9 +320,60 @@ class PersistenceService:
                 )
                 await session.execute(stmt)
 
+    async def ensure_journal_exit_reason(
+        self,
+        signal_id: uuid.UUID,
+        exit_reason: ExitReason,
+        *,
+        session: Optional[AsyncSession] = None,
+        entry_regime: Optional[MarketRegime] = None,
+    ) -> None:
+        """Upsert TradeJournal.exit_reason without clobbering reflection fields.
+
+        INSERT needs entry_regime (NOT NULL). ON CONFLICT only updates exit_reason
+        so existing regime / metrics / reflection stay intact. Used by close_trade
+        and reconcile auto-closes so CLOSED ledger rows join a journal with exit_reason.
+        """
+        from sqlalchemy.dialects.postgresql import insert
+
+        if isinstance(signal_id, str):
+            signal_id = uuid.UUID(signal_id)
+
+        regime = entry_regime
+        if regime is None:
+            regime = MarketRegime.STABLE
+            try:
+                latest = await self.get_latest_market_regime()
+                if latest and latest.get("regime"):
+                    regime = MarketRegime(latest["regime"])
+            except Exception:
+                pass
+
+        async def _execute(active_session: AsyncSession) -> None:
+            stmt = insert(TradeJournal).values(
+                signal_id=signal_id,
+                entry_regime=regime,
+                exit_reason=exit_reason,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=[TradeJournal.signal_id],
+                set_={"exit_reason": exit_reason},
+            )
+            await active_session.execute(stmt)
+
+        if session is not None:
+            await _execute(session)
+            return
+
+        async with self.AsyncSessionLocal() as own_session:
+            async with own_session.begin():
+                await _execute(own_session)
+
     async def close_trade(self, signal_id: uuid.UUID, exit_prices: dict, pnl: float, exit_reason: Optional[ExitReason] = None):
         """Marks trades with a specific signal_id as CLOSED and records PnL."""
         from sqlalchemy import select, update
+        if isinstance(signal_id, str):
+            signal_id = uuid.UUID(signal_id)
         close_metadata = {
             "exit_prices": exit_prices,
             "pnl": pnl,
@@ -344,12 +395,13 @@ class PersistenceService:
                     )
                     await session.execute(stmt)
 
-                # Update TradeJournal if it exists
+                # Upsert journal exit_reason (create stub if entry journal was missed).
                 if exit_reason:
-                    stmt_j = update(TradeJournal).where(TradeJournal.signal_id == signal_id).values(
-                        exit_reason=exit_reason
+                    await self.ensure_journal_exit_reason(
+                        signal_id,
+                        exit_reason,
+                        session=session,
                     )
-                    await session.execute(stmt_j)
 
         # Trigger reflection in the background
         from src.agents.reflection_agent import reflection_agent

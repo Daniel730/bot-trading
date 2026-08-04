@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 import uuid
 
 import pytest
@@ -75,6 +75,7 @@ async def test_close_trade_preserves_entry_metadata(monkeypatch):
     fake_session = _FakeSession(rows)
     service = PersistenceService()
     monkeypatch.setattr(service, "AsyncSessionLocal", lambda: fake_session)
+    monkeypatch.setattr(service, "ensure_journal_exit_reason", AsyncMock())
 
     def close_background_coro(coro, *, name):
         coro.close()
