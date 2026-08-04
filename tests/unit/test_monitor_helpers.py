@@ -259,9 +259,16 @@ class TestResolveHedgeRatio:
         assert resolve_hedge_ratio(pair) == pytest.approx(1.4)
         assert resolve_hedge_ratio({"hedge_ratio": 1.1}) == pytest.approx(1.1)
 
+    def test_uses_abs_for_signed_kalman_beta(self):
+        # ETH/SOL-style negative OLS/Kalman beta must size with |β|, not 1.0.
+        assert resolve_hedge_ratio({}, kalman_beta=-8.9) == pytest.approx(8.9)
+        assert resolve_hedge_ratio({"dynamic_beta": -1.25}) == pytest.approx(1.25)
+        assert resolve_hedge_ratio({"hedge_ratio": -0.5}) == pytest.approx(0.5)
+
     def test_invalid_values_fall_back_to_one(self):
         assert resolve_hedge_ratio({}) == 1.0
-        assert resolve_hedge_ratio({"hedge_ratio": 0.0, "dynamic_beta": -1.0}) == 1.0
+        assert resolve_hedge_ratio({"hedge_ratio": 0.0, "dynamic_beta": float("nan")}) == 1.0
+        assert resolve_hedge_ratio({"hedge_ratio": "bad"}) == 1.0
 
 
 def test_should_take_profit_exit_covers_friction():

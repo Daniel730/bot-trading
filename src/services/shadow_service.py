@@ -28,18 +28,21 @@ class ShadowService:
             "broker_paper_trading": False,
             "direction": direction,
         }
-        await persistence_service.log_trade({
-            "order_id": trade_id_a, "signal_id": signal_id, "ticker": t_a,
-            "side": OrderSide.SELL if direction == "Short-Long" else OrderSide.BUY,
-            "quantity": size_a, "price": price_a, "status": OrderStatus.OPEN,
-            "metadata_json": dict(shadow_meta),
-        })
-        await persistence_service.log_trade({
-            "order_id": trade_id_b, "signal_id": signal_id, "ticker": t_b,
-            "side": OrderSide.BUY if direction == "Short-Long" else OrderSide.SELL,
-            "quantity": size_b, "price": price_b, "status": OrderStatus.OPEN,
-            "metadata_json": dict(shadow_meta),
-        })
+        # Single transaction: never leave a 1-leg OPEN shadow signal if leg B fails.
+        await persistence_service.log_trades([
+            {
+                "order_id": trade_id_a, "signal_id": signal_id, "ticker": t_a,
+                "side": OrderSide.SELL if direction == "Short-Long" else OrderSide.BUY,
+                "quantity": size_a, "price": price_a, "status": OrderStatus.OPEN,
+                "metadata_json": dict(shadow_meta),
+            },
+            {
+                "order_id": trade_id_b, "signal_id": signal_id, "ticker": t_b,
+                "side": OrderSide.BUY if direction == "Short-Long" else OrderSide.SELL,
+                "quantity": size_b, "price": price_b, "status": OrderStatus.OPEN,
+                "metadata_json": dict(shadow_meta),
+            },
+        ])
         logger.info("SHADOW TRADE EXECUTED: %s for %s at %.4f/%.4f", direction, pair_id, price_a, price_b)
         return signal_id
 

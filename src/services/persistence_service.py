@@ -240,35 +240,50 @@ class PersistenceService:
                 order_status_values=(status.value for status in OrderStatus),
             )
 
-    async def log_trade(self, trade_data: dict):
-        """Logs a trade execution to the ledger with automatic venue detection."""
-        if 'signal_id' in trade_data and isinstance(trade_data['signal_id'], str):
-            trade_data['signal_id'] = uuid.UUID(trade_data['signal_id'])
+    def _prepare_trade_row(self, trade_data: dict) -> dict:
+        """Normalize one ledger row (signal id, venue, execution-lane stamp)."""
+        row = dict(trade_data)
+        if "signal_id" in row and isinstance(row["signal_id"], str):
+            row["signal_id"] = uuid.UUID(row["signal_id"])
 
         # Automatic Venue Detection
-        if "venue" not in trade_data or not trade_data["venue"]:
-            ticker = trade_data.get("ticker", "").upper()
-            trade_data["venue"] = "ALPACA"
+        if "venue" not in row or not row["venue"]:
+            row["venue"] = "ALPACA"
 
         # Stamp a single execution lane so shadow vs broker paper never mix in closes/PnL.
         from src.services.execution_lane import stamp_trade_metadata
 
-        trade_data["metadata_json"] = stamp_trade_metadata(
-            trade_data.get("metadata_json"),
+        row["metadata_json"] = stamp_trade_metadata(
+            row.get("metadata_json"),
             execution_lane=settings.execution_lane,
             broker_paper_trading=bool(settings.is_broker_paper_trading),
         )
-        meta = trade_data["metadata_json"] if isinstance(trade_data.get("metadata_json"), dict) else {}
+        meta = row["metadata_json"] if isinstance(row.get("metadata_json"), dict) else {}
         # Dual-write first-class columns (readers prefer these, fall back to metadata).
-        if trade_data.get("execution_lane") is None:
-            trade_data["execution_lane"] = meta.get("execution_lane")
-        if trade_data.get("is_shadow") is None:
-            trade_data["is_shadow"] = meta.get("is_shadow")
+        if row.get("execution_lane") is None:
+            row["execution_lane"] = meta.get("execution_lane")
+        if row.get("is_shadow") is None:
+            row["is_shadow"] = meta.get("is_shadow")
+        return row
 
+    async def log_trade(self, trade_data: dict):
+        """Logs a trade execution to the ledger with automatic venue detection."""
+        await self.log_trades([trade_data])
+
+    async def log_trades(self, trade_rows: list[dict]):
+        """Persist one or more ledger legs in a single transaction.
+
+        Shadow pair opens must never commit leg A without leg B — otherwise
+        ``get_open_signals`` yields a 1-leg signal and ``_evaluate_exit_conditions``
+        silently skips forever (``len(legs) != 2``).
+        """
+        if not trade_rows:
+            return
+        prepared = [self._prepare_trade_row(row) for row in trade_rows]
         async with self.AsyncSessionLocal() as session:
             async with session.begin():
-                trade = TradeLedger(**trade_data)
-                session.add(trade)
+                for row in prepared:
+                    session.add(TradeLedger(**row))
 
     async def log_reasoning(self, reasoning_data: dict):
         """Logs an agent reasoning event."""

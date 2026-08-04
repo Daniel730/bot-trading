@@ -75,13 +75,27 @@ Observed on this soak:
 **Fix:** `process_pair` now skips with `extreme_kalman_beta` when
 `abs(kalman_beta) > PAIR_DISCOVERY_MAX_ABS_HEDGE` (same helper as admission).
 
-### F7 — Near-zero OLS hedge still admits (WATCH)
+### F7 — Near-zero OLS hedge still admits (FIXED at admission + recheck)
 
 `AVAX-USD/LTC-USD` warmed with OLS hedge ≈ `-0.002` (passes `is_hedge_ratio_sane`
 because only exact `0.0` is rejected) and scans at Kalman beta ≈ `0.12`. Sizing
-with near-zero hedge is fragile. **Mitigation:** admission paths now enforce
-`PAIR_DISCOVERY_MIN_ABS_HEDGE` (default `0.05`) via `is_hedge_ratio_sane(...,
-min_abs_hedge=...)`. Live Kalman scans do not apply the floor.
+with near-zero hedge is fragile. **Mitigation:** admission paths and daily
+cointegration recheck now enforce `PAIR_DISCOVERY_MIN_ABS_HEDGE` (default `0.05`)
+via `is_hedge_ratio_sane(..., min_abs_hedge=...)`. Live Kalman entry scans still
+leave the floor at `0.0` (only the absolute ceiling applies).
+
+### F8 — Signed Kalman beta collapsed to hedge=1.0 (FIXED)
+
+`resolve_hedge_ratio` previously required `value > 0` and fell back to `1.0` for
+negative OLS/Kalman betas. ETH/SOL-style β ≈ `-8.9` would therefore size as an
+unhedged 1:1 pair. Fix: sizing uses `|β|`; direction still comes from z-score.
+
+### F9 — Shadow pair legs not atomic (FIXED)
+
+`shadow_service.execute_simulated_trade` wrote leg A and leg B in separate
+transactions. A failure after leg A left a 1-leg `OPEN` signal that
+`_evaluate_exit_conditions` silently skips (`len(legs) != 2`). Fix: `log_trades`
+commits both legs in one transaction and reuses the caller's `signal_id`.
 
 ## Soak harness
 

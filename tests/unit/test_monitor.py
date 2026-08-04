@@ -681,3 +681,60 @@ async def test_auto_scout_skips_promote_when_disabled(monitor, monkeypatch):
 
     mock_discover.assert_awaited_once()
     mock_rotate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recheck_cointegration_benches_near_zero_hedge(monitor, monkeypatch):
+    """Daily recheck must apply PAIR_DISCOVERY_MIN_ABS_HEDGE like admission."""
+    import pandas as pd
+
+    pair = {
+        "id": "AVAX-USD_LTC-USD",
+        "ticker_a": "AVAX-USD",
+        "ticker_b": "LTC-USD",
+        "hedge_ratio": 0.12,
+        "is_cointegrated": True,
+        "status": "Active",
+    }
+    monitor.active_pairs = [pair]
+    benched: list[str] = []
+
+    async def fake_hist(tickers, *_a, **_k):
+        idx = pd.RangeIndex(80)
+        return pd.DataFrame(
+            {t: 50.0 + 0.01 * idx for t in tickers},
+            index=idx,
+        )
+
+    async def fake_bench(p, *, hedge_ratio=None, reason=""):
+        benched.append(reason)
+        monitor.active_pairs = []
+
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_MIN_ABS_HEDGE", 0.05)
+    monkeypatch.setattr(settings, "PAIR_DISCOVERY_MAX_ABS_HEDGE", 25.0)
+    monkeypatch.setattr(settings, "COINTEGRATION_ROLLING_ENABLED", False)
+
+    with patch(
+        "src.monitor.data_service.get_historical_data_async",
+        new=fake_hist,
+    ), patch(
+        "src.monitor.arbitrage_service.check_cointegration",
+        return_value=(True, 0.01, -0.002),
+    ), patch.object(
+        monitor,
+        "_bench_pair_for_health",
+        new=fake_bench,
+    ), patch(
+        "src.monitor.notification_service.send_message",
+        new_callable=AsyncMock,
+    ) as mock_notify:
+        await monitor._recheck_cointegration_body(
+            pair,
+            pair_id="AVAX-USD_LTC-USD",
+            t_a="AVAX-USD",
+            t_b="LTC-USD",
+        )
+
+    assert benched == ["extreme_hedge"]
+    mock_notify.assert_awaited_once()
+    assert "HEDGE BREAK" in mock_notify.await_args.args[0]

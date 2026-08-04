@@ -3552,11 +3552,14 @@ class ArbitrageMonitor:
             from src.services.pair_discovery_helpers import is_hedge_ratio_sane
 
             if hedge is not None and not is_hedge_ratio_sane(
-                hedge, max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE
+                hedge,
+                max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+                min_abs_hedge=settings.PAIR_DISCOVERY_MIN_ABS_HEDGE,
             ):
                 msg = (
-                    f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} exceeds "
-                    f"PAIR_DISCOVERY_MAX_ABS_HEDGE={settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}. "
+                    f"HEDGE BREAK: {t_a}/{t_b} hedge_ratio={float(hedge):.3f} outside "
+                    f"[{settings.PAIR_DISCOVERY_MIN_ABS_HEDGE:.3f}, "
+                    f"{settings.PAIR_DISCOVERY_MAX_ABS_HEDGE:.1f}] abs. "
                     f"Pair benched to free Active slot."
                 )
                 logger.warning(msg)
