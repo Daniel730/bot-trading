@@ -778,6 +778,10 @@ class ArbitrageMonitor:
             block_cross_currency=settings.BLOCK_CROSS_CURRENCY_PAIRS,
             block_lse_short_hold=settings.BLOCK_LSE_PAIRS_FOR_SHORT_HOLD,
             allow_eu_continental_overlap=settings.ALLOW_EU_CONTINENTAL_OVERLAP,
+            denylist=settings.pair_denylist_ids,
+            max_abs_hedge=settings.PAIR_DISCOVERY_MAX_ABS_HEDGE,
+            min_correlation=settings.PAIR_DISCOVERY_MIN_CORRELATION,
+            max_pvalue=settings.PAIR_DISCOVERY_MAX_PVALUE,
         )
 
         # US1: Verify entropy baselines ONLY for actual live broker endpoints.
