@@ -74,6 +74,12 @@ async def run_broker_reconciliation_cycle(
             "last_broker_reconcile_ok",
             "true",
         )
+        try:
+            from src.services.limited_live_kill import note_reconcile_result
+
+            await note_reconcile_result(persistence_service, ok=True)
+        except Exception:  # noqa: BLE001
+            pass
     except Exception as exc:  # noqa: BLE001
         summary["broker_ok"] = False
         summary["error"] = str(exc)
@@ -82,6 +88,9 @@ async def run_broker_reconciliation_cycle(
             await persistence_service.set_system_state(
                 "last_broker_reconcile_ok", "false"
             )
+            from src.services.limited_live_kill import note_reconcile_result
+
+            await note_reconcile_result(persistence_service, ok=False)
         except Exception:  # noqa: BLE001
             pass
     summary["finished_at"] = datetime.now(timezone.utc).isoformat()

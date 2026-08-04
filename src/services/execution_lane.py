@@ -114,4 +114,11 @@ def stamp_trade_metadata(
     meta["is_shadow"] = is_shadow
     meta["execution_lane"] = lane
     meta["broker_paper_trading"] = bool(broker_paper_trading) and not is_shadow
+    # Phase-5: stamp strategy/config/git provenance for forensic replay.
+    try:
+        from src.services.trade_provenance import stamp_provenance
+
+        meta = stamp_provenance(meta)
+    except Exception:  # noqa: BLE001 — never block fills on provenance
+        pass
     return meta

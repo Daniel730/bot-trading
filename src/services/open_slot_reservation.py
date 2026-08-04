@@ -237,11 +237,20 @@ class OpenSlotReservationService:
             try:
                 return await dist.active_as_open_signals()
             except Exception as exc:  # noqa: BLE001
+                # LIVE: fail-closed (raise). Paper / auto-approve: local cache fallback
+                # so unit tests and shadow soak keep working when Postgres is down.
+                if bool(getattr(settings, "PAPER_TRADING", True)) or bool(
+                    getattr(settings, "should_auto_approve_trades", False)
+                ):
+                    logger.warning(
+                        "Distributed reservation read failed — local cache fallback (paper): %s",
+                        exc,
+                    )
+                    return self.active_as_open_signals()
                 logger.error(
                     "Distributed reservation read failed — fail-closed empty merge: %s",
                     exc,
                 )
-                # Fail closed: treat as max contention rather than empty book.
                 raise
         return self.active_as_open_signals()
 

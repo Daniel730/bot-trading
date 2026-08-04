@@ -404,15 +404,21 @@ class ArbitrageMonitor:
 
             open_signals = list(open_signals or []) + await open_slot_reservation_service.active_as_open_signals_async()
         except Exception as exc:  # noqa: BLE001
-            logger.critical(
-                "Could not load distributed open-slot reservations (fail-closed): %s",
-                exc,
-            )
-            if notify:
-                await notification_service.send_message(
-                    f"Execution blocked for {ticker_a}/{ticker_b}: reservation store unavailable."
+            if settings.PAPER_TRADING or settings.should_auto_approve_trades:
+                logger.warning(
+                    "Reservation store unavailable in paper lane (continuing): %s",
+                    exc,
                 )
-            return True
+            else:
+                logger.critical(
+                    "Could not load distributed open-slot reservations (fail-closed): %s",
+                    exc,
+                )
+                if notify:
+                    await notification_service.send_message(
+                        f"Execution blocked for {ticker_a}/{ticker_b}: reservation store unavailable."
+                    )
+                return True
 
         for signal in open_signals or []:
             leg_symbols = {
@@ -2432,6 +2438,22 @@ class ArbitrageMonitor:
                                 else "execution_blocked"
                             ),
                         )
+                    try:
+                        from src.services.shadow_live_divergence import (
+                            shadow_live_divergence_monitor,
+                        )
+
+                        shadow_live_divergence_monitor.record_live(
+                            pair_id=pair.get("id") or f"{t_a}_{t_b}",
+                            decision=str(diagnostic.get("verdict") or "UNKNOWN"),
+                            confidence=float(final_confidence)
+                            if final_confidence is not None
+                            else None,
+                            signal_id=str(signal_id),
+                            inputs={"z_score": float(z_score)},
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
 
                 diagnostic["confidence"] = final_confidence
             elif beyond_stop:
@@ -2517,6 +2539,33 @@ class ArbitrageMonitor:
             logger.error("LIVE readiness check failed open-fail-closed: %s", ready_exc)
             if not settings.should_auto_approve_trades and settings.LIVE_CAPITAL_DANGER:
                 return execution_result(False, "live_readiness_check_failed")
+
+        # Phase-5: limited-LIVE operational kill criteria.
+        try:
+            from src.services.limited_live_kill import evaluate_limited_live_kill
+
+            kill = await evaluate_limited_live_kill(persistence_service=persistence_service)
+            if kill.get("kill") and settings.LIVE_CAPITAL_DANGER and not settings.PAPER_TRADING:
+                logger.critical(
+                    "LIMITED LIVE KILL: refusing open %s/%s (%s)",
+                    t_a,
+                    t_b,
+                    kill.get("reason"),
+                )
+                try:
+                    await persistence_service.set_system_state(
+                        "operational_status", "PAUSED_REQUIRES_MANUAL_REVIEW"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                return execution_result(
+                    False,
+                    "limited_live_kill",
+                    kill_reason=kill.get("reason"),
+                    kill_details=kill.get("details"),
+                )
+        except Exception as kill_exc:
+            logger.warning("limited live kill check failed (continuing): %s", kill_exc)
 
         if await self._has_active_pair_or_pending_order(t_a, t_b):
             return execution_result(False, "active_pair_or_pending_order")
@@ -2821,8 +2870,11 @@ class ArbitrageMonitor:
             ]
             open_for_lane = list(open_for_lane or []) + reserved
         except Exception as exc:  # noqa: BLE001
-            logger.critical("execute_trade: reservation merge failed (fail-closed): %s", exc)
-            return execution_result(False, "reservation_store_unavailable")
+            if settings.PAPER_TRADING or settings.should_auto_approve_trades:
+                logger.warning("execute_trade: reservation merge failed (paper continue): %s", exc)
+            else:
+                logger.critical("execute_trade: reservation merge failed (fail-closed): %s", exc)
+                return execution_result(False, "reservation_store_unavailable")
 
         slot_check = check_max_open_pairs(len(open_for_lane or []), settings.MAX_OPEN_PAIRS)
         if not slot_check["allowed"]:
@@ -2967,7 +3019,8 @@ class ArbitrageMonitor:
                 return execution_result(False, f"exactly_once:{intent_a.get('reason')}")
         except Exception as intent_exc:
             logger.critical("EXACTLY-ONCE intent failed open-fail-closed: %s", intent_exc)
-            if not settings.PAPER_TRADING:
+            # Broker-paper / shadow can proceed without Postgres intents; real LIVE cannot.
+            if not settings.should_auto_approve_trades:
                 return execution_result(False, "exactly_once_intent_unavailable")
 
         await persistence_service.log_trade({
@@ -3262,6 +3315,7 @@ class ArbitrageMonitor:
 
         # Leg B — exactly-once intent before submit
         client_order_id_b = f"{signal_id}-B"
+        intent_b_ok = True
         try:
             from src.services.execution_intent_service import execution_intent_service
 
@@ -3272,41 +3326,53 @@ class ArbitrageMonitor:
                 metadata={"ticker": t_b, "side": side_b, "qty": size_b},
             )
             if not intent_b.get("ok"):
+                intent_b_ok = False
                 logger.critical(
-                    "EXACTLY-ONCE: refusing duplicate Leg B submit signal=%s reason=%s — "
-                    "emergency-closing Leg A",
+                    "EXACTLY-ONCE: duplicate Leg B intent signal=%s reason=%s",
                     signal_id,
                     intent_b.get("reason"),
                 )
-                # Fall through to existing Leg B failure emergency close path by
-                # synthesizing a rejection.
-                res_b = {
-                    "status": "error",
-                    "message": f"exactly_once:{intent_b.get('reason')}",
-                }
+                if not settings.should_auto_approve_trades:
+                    res_b = {
+                        "status": "error",
+                        "message": f"exactly_once:{intent_b.get('reason')}",
+                    }
+                    order_id_b = client_order_id_b
+                else:
+                    # Paper/broker-paper: treat as already-intent'd and continue place.
+                    intent_b_ok = True
+        except Exception as intent_b_exc:
+            logger.critical("Leg B intent unavailable: %s", intent_b_exc)
+            if not settings.should_auto_approve_trades:
+                res_b = {"status": "error", "message": str(intent_b_exc)}
                 order_id_b = client_order_id_b
+                intent_b_ok = False
             else:
-                res_b = await self.brokerage.place_value_order(
-                    exec_t_b,
-                    target_cash_b,
-                    side_b,
-                    price=price_b,
-                    client_order_id=client_order_id_b,
-                    intent="open",
-                )
-                order_id_b = (
-                    res_b.get("order_id")
-                    or res_b.get("orderId")
-                    or res_b.get("client_order_id")
-                    or client_order_id_b
-                )
+                intent_b_ok = True
+
+        if intent_b_ok:
+            res_b = await self.brokerage.place_value_order(
+                exec_t_b,
+                target_cash_b,
+                side_b,
+                price=price_b,
+                client_order_id=client_order_id_b,
+                intent="open",
+            )
+            order_id_b = (
+                res_b.get("order_id")
+                or res_b.get("orderId")
+                or res_b.get("client_order_id")
+                or client_order_id_b
+            )
+            try:
+                from src.services.execution_intent_service import execution_intent_service
+
                 await execution_intent_service.mark_submitted(
                     client_order_id_b, broker_order_id=str(order_id_b)
                 )
-        except Exception as intent_b_exc:
-            logger.critical("Leg B intent/place failed: %s", intent_b_exc)
-            res_b = {"status": "error", "message": str(intent_b_exc)}
-            order_id_b = client_order_id_b
+            except Exception as mark_exc:  # noqa: BLE001
+                logger.warning("Could not mark Leg B intent submitted: %s", mark_exc)
 
         if res_b.get("requires_reconciliation") or res_b.get("status") == "unknown":
             await persistence_service.log_trade({
