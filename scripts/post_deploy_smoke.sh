@@ -66,6 +66,27 @@ done
 echo "--- bot image ---"
 docker inspect trading-bot-bot-1 --format 'image={{.Config.Image}}'
 
+echo "--- outbound DNS from bot container ---"
+docker exec -i trading-bot-bot-1 python3 - <<'PY'
+import socket
+
+hosts = ("paper-api.alpaca.markets", "query1.finance.yahoo.com")
+failures: list[str] = []
+for host in hosts:
+    try:
+        infos = socket.getaddrinfo(host, 443)
+        print(f"{host}=ok addrs={sorted({i[4][0] for i in infos})[:4]}")
+    except OSError as exc:
+        print(f"{host}=FAIL {type(exc).__name__}: {exc}")
+        failures.append(host)
+if failures:
+    raise SystemExit(
+        "bot container cannot resolve public DNS for: "
+        + ", ".join(failures)
+        + " (pin dns: [8.8.8.8, 1.1.1.1] in compose; Tailscale MagicDNS alone is not enough)"
+    )
+PY
+
 echo "--- recent bot logs (no crash loop) ---"
 docker logs trading-bot-bot-1 --since 8m 2>&1 | tail -30
 if docker logs trading-bot-bot-1 --since 8m 2>&1 | grep -qE 'Startup blocked|Traceback|CRITICAL.*boot'; then
@@ -73,8 +94,11 @@ if docker logs trading-bot-bot-1 --since 8m 2>&1 | grep -qE 'Startup blocked|Tra
 fi
 
 echo "--- scan loop ---"
-docker logs trading-bot-bot-1 --since 15m 2>&1 | grep -E 'SCAN \[' | tail -5 \
-  || fail "no SCAN lines in last 15 minutes"
+# Prefer classic SCAN lines; fall back to Iteration Complete (crypto off-hours / quieter logs).
+if ! docker logs trading-bot-bot-1 --since 15m 2>&1 | grep -E 'SCAN \[' | tail -5; then
+  docker logs trading-bot-bot-1 --since 15m 2>&1 | grep -E 'Iteration Complete' | tail -5 \
+    || fail "no SCAN / Iteration Complete lines in last 15 minutes"
+fi
 
 echo "--- health endpoint (401 without auth is OK) ---"
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BOT_PORT}/api/system/health" || true)
@@ -82,7 +106,7 @@ echo "health_http=${code}"
 [[ "$code" == "200" || "$code" == "401" ]] || fail "unexpected health HTTP status: $code"
 
 echo "--- runtime settings inside bot container ---"
-docker exec trading-bot-bot-1 python3 - <<'PY'
+docker exec -i trading-bot-bot-1 python3 - <<'PY'
 from src.config import settings
 import inspect
 from src.agents.orchestrator import Orchestrator

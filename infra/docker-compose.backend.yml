@@ -61,6 +61,12 @@ services:
     # Override IMAGE_OWNER / IMAGE_TAG via env if you ever need a different tag.
     # BOT_HOST_PORT defaults to 8080; on bot-server use 8082 to avoid SearXNG on :8080.
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
+    # Pin public resolvers. Tailscale MagicDNS (100.100.100.100) often returns SERVFAIL
+    # for public names; Docker embeds host resolvers at create-time and will stay broken
+    # across MagicsDNS flaps until recreate. Do not remove without an equivalent fix.
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports:
       - "${BOT_HOST_PORT:-8080}:8080"
     env_file:
@@ -90,6 +96,9 @@ services:
     # No `build:` block here so Compose doesn't redundantly re-run the build.
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     command: python src/mcp_server.py
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     # FastMCP has no network auth layer; keep the host publish on loopback only.
     # Inside the container listen on 0.0.0.0 so Docker can map 127.0.0.1:8000.
     ports:
@@ -121,6 +130,9 @@ services:
   execution-engine:
     profiles: ["optional"]
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/execution-engine:${IMAGE_TAG:-latest}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     # gRPC sidecar is only needed on-host / via compose network — not LAN/IPv6.
     ports:
       - "127.0.0.1:50051:50051"
@@ -151,6 +163,9 @@ services:
     # Shares the trading-bot-base image built by the `bot` service above.
     image: ghcr.io/${IMAGE_OWNER:-daniel730}/trading-bot-base:${IMAGE_TAG:-latest}
     command: python src/daemons/sec_fundamental_worker.py
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     env_file:
       - ${APP_ENV_FILE:-../.env}
     volumes:

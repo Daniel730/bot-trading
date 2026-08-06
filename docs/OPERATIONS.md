@@ -407,11 +407,13 @@ wiping Redis, Postgres, and dashboard 2FA state.
 | Java fix not live | Java path not in redeploy watcher | Re-run workflow with `force_java=true` or touch `execution-engine/` |
 | `DEV_MODE=true` in production | Dashboard open, wrong universe | Set `DEV_MODE=false` in env, recreate bot |
 | GHCR pull 401 on server | Runner token expired | Re-login on runner host or re-run deploy job (workflow logs in) |
+| Container DNS fails (`Temporary failure in name resolution` / yfinance empty / Alpaca unreachable) while host DNS works | Docker embedded DNS forwarding to Tailscale MagicDNS (`100.100.100.100`), which SERVFAILs public names; resolvers are snapshotted at container create | Compose pins `dns: [8.8.8.8, 1.1.1.1]` on bot/sec-worker/optional sidecars. Recreate affected services. Smoke script asserts outbound DNS from the bot container. |
 
 ### Deploy log (recent)
 
 | Date | Commits | Workflow | Notes |
 |---|---|---|---|
+| 2026-08-06 | (compose DNS pin + env defaults) | host recreate (compose file patched on runner workdir; push pending) | Found bot Up 35h but dead trading path: container DNS via MagicDNS SERVFAIL → missing_price on all crypto, Alpaca equity fetch fail. Host DNS OK. Pinned public DNS in `docker-compose.backend.yml`; smoke asserts resolution. Restored overnight soft-admit knobs to defaults (`COINTEGRATION_ROLLING_PASS_RATE=0.7`, `MAX_ACTIVE_PAIRS=12`). |
 | 2026-08-04 | `42031a4` (via `8c7df2c`, `9b0bac7`) | [run 30916391994](https://github.com/Daniel730/bot-trading/actions/runs/30916391994) | Phase 4–5 to bot-server. Quality fixes: paper claim fallback; race-safe `begin_intent` ON CONFLICT; brokerage integration test opts into `_pre_submit_gate`. Smoke OK; ~50m soak clean (Restart=0, no CRITICAL/Traceback, Alpaca paper). |
 | 2026-07-17 | `7e6f7b3`, `a5c5b63` | [run 29569493017](https://github.com/Daniel730/bot-trading/actions/runs/29569493017) | Profitability fixes: MAB, crypto orchestrator bypass, z-score clamp, take-profit guard, UI label. `force_python` + `force_frontend`. Smoke OK. |
 
