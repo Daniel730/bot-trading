@@ -444,6 +444,7 @@ wiping Redis, Postgres, and dashboard 2FA state.
 | `DEV_MODE=true` in production | Dashboard open, wrong universe | Set `DEV_MODE=false` in env, recreate bot |
 | GHCR pull 401 on server | Runner token expired | Re-login on runner host or re-run deploy job (workflow logs in) |
 | Container DNS fails (`Temporary failure in name resolution` / yfinance empty / Alpaca unreachable) while host DNS works | Docker embedded DNS forwarding to Tailscale MagicDNS (`100.100.100.100`), which SERVFAILs public names; resolvers are snapshotted at container create | Compose pins `dns: [8.8.8.8, 1.1.1.1]` on bot/sec-worker/optional sidecars. Recreate affected services. Smoke script asserts outbound DNS from the bot container. |
+| Deploy stuck at `detect_changes` / `Set up job` forever | GitHub-hosted `ubuntu-latest` pool stall; or self-hosted listener stale | `detect_changes` + `build_python` + deploy jobs run on `[self-hosted, bot-server]`. Quality stays on `ubuntu-24.04` (service containers). Restart runner: `systemctl --user restart actions-runner.service` on bot-server. |
 
 ### Deploy log (recent)
 

@@ -37,7 +37,9 @@ env:
 
 jobs:
   detect_changes:
-    runs-on: ubuntu-latest
+    # Light job — keep on the mini PC so deploys are not blocked when
+    # GitHub-hosted "Set up job" stalls for ubuntu-latest.
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 5
     outputs:
       python_quality: ${{ steps.flags.outputs.python_quality }}
@@ -180,7 +182,9 @@ jobs:
   quality_python:
     needs: detect_changes
     if: ${{ needs.detect_changes.outputs.python_quality == 'true' }}
-    runs-on: ubuntu-latest
+    # Pin away from flaky ubuntu-latest pool; service containers need hosted runners
+    # (self-hosted would collide with trading-bot Redis :6379 / Postgres host ports).
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       redis:
@@ -273,7 +277,7 @@ jobs:
   quality_java:
     needs: detect_changes
     if: ${{ needs.detect_changes.outputs.java_quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout code
@@ -297,7 +301,7 @@ jobs:
   quality_frontend:
     needs: detect_changes
     if: ${{ needs.detect_changes.outputs.frontend_quality == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout code
@@ -341,7 +345,7 @@ jobs:
           needs.quality_java.result == 'success'
         )
       }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 25
     permissions:
       contents: read
@@ -387,7 +391,7 @@ jobs:
         needs.detect_changes.outputs.java_image == 'true' &&
         needs.quality_java.result == 'success'
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
@@ -433,7 +437,7 @@ jobs:
         needs.detect_changes.outputs.frontend_image == 'true' &&
         needs.quality_frontend.result == 'success'
       }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
       contents: read
@@ -741,7 +745,7 @@ jobs:
       - deploy_sec_worker
       - deploy_python_services
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, bot-server]
     timeout-minutes: 5
     steps:
       - name: Write deployment summary
