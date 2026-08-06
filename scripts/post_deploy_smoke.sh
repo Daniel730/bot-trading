@@ -100,6 +100,13 @@ if ! docker logs trading-bot-bot-1 --since 15m 2>&1 | grep -E 'SCAN \[' | tail -
     || fail "no SCAN / Iteration Complete lines in last 15 minutes"
 fi
 
+echo "--- funnel / activity (best-effort) ---"
+docker logs trading-bot-bot-1 --since 30m 2>&1 | grep -E 'FUNNEL ' | tail -5 || true
+# During US cash hours, equity SCANs should appear once Active equities are admitted.
+if docker logs trading-bot-bot-1 --since 30m 2>&1 | grep -qE 'FUNNEL active_eq=[1-9]'; then
+  echo "activity_note=equity Active slots present in FUNNEL"
+fi
+
 echo "--- health endpoint (401 without auth is OK) ---"
 code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${BOT_PORT}/api/system/health" || true)
 echo "health_http=${code}"

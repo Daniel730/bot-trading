@@ -14,6 +14,7 @@ from src.monitor_scan_helpers import (
     build_candidate_pairs,
     build_scan_pairs,
     calculate_realized_pnl,
+    summarize_scan_funnel,
     summarize_scan_iteration,
 )
 
@@ -218,6 +219,66 @@ class TestSummarizeScanIteration:
         results = [{"verdict": "EXECUTED"}]
         active, _ = summarize_scan_iteration(results, min_ai_confidence=0.5)
         assert active == 0
+
+
+# ---------------------------------------------------------------------------
+# summarize_scan_funnel
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeScanFunnel:
+    def test_counts_asset_mix_and_near_miss(self):
+        active_pairs = [
+            {"ticker_a": "KO", "ticker_b": "PEP"},
+            {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD"},
+            {"ticker_a": "SOL-USD", "ticker_b": "AVAX-USD"},
+        ]
+        results = [
+            {
+                "reason": "below_entry_threshold",
+                "near_miss": True,
+                "confidence": 0.0,
+                "verdict": "IGNORED",
+            },
+            {
+                "reason": "below_entry_threshold",
+                "near_miss": False,
+                "confidence": 0.0,
+                "verdict": "IGNORED",
+            },
+            {
+                "reason": "entry_band",
+                "near_miss": False,
+                "confidence": 0.8,
+                "verdict": "APPROVED",
+                "approved": True,
+            },
+        ]
+        funnel = summarize_scan_funnel(
+            results,
+            active_pairs=active_pairs,
+            scan_pairs=active_pairs,
+            min_ai_confidence=0.5,
+        )
+        assert funnel["active_equity"] == 1
+        assert funnel["active_crypto"] == 2
+        assert funnel["scanned"] == 3
+        assert funnel["near_miss"] == 1
+        assert funnel["entry_band_hit"] == 1
+        assert funnel["approved"] == 1
+        assert funnel["skip_reasons"]["below_entry_threshold"] == 2
+        assert funnel["signals"] == 1
+
+    def test_empty_funnel(self):
+        funnel = summarize_scan_funnel(
+            [],
+            active_pairs=[],
+            scan_pairs=[],
+            min_ai_confidence=0.5,
+        )
+        assert funnel["active_equity"] == 0
+        assert funnel["near_miss"] == 0
+        assert funnel["skip_reasons"] == {}
 
 
 # ---------------------------------------------------------------------------

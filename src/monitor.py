@@ -65,6 +65,7 @@ from src.monitor_scan_helpers import (
     gather_bounded,
     normalize_scan_results,
     open_signal_tickers,
+    summarize_scan_funnel,
     summarize_scan_iteration,
     build_close_orders,
     calculate_realized_pnl,
@@ -2089,6 +2090,11 @@ class ArbitrageMonitor:
 
             if in_entry_band:
                 signal_id = str(uuid.uuid4())
+                diagnostic["reason"] = "entry_band"
+                diagnostic["z_score"] = float(z_score)
+                diagnostic["entry_zscore"] = float(entry_zscore)
+                diagnostic["asset_class"] = "crypto" if is_crypto else "equity"
+                diagnostic["near_miss"] = False
                 decision_recorder.set_signal_id(signal_id)
                 decision_recorder.record(
                     stage="signal",
@@ -2503,11 +2509,25 @@ class ArbitrageMonitor:
             elif beyond_stop:
                 # Past the stop-loss band — un-enterable. Surface it without an AI call.
                 await self._remove_active_signal(t_a, t_b)
+                diagnostic["z_score"] = float(z_score)
+                diagnostic["entry_zscore"] = float(entry_zscore)
+                diagnostic["asset_class"] = "crypto" if is_crypto else "equity"
+                diagnostic["near_miss"] = False
                 skip("beyond_stop_threshold", stage="zscore_gate", z_score=float(z_score))
             else:
                 # Cleanup inactive signals
                 await self._remove_active_signal(t_a, t_b)
-                skip("below_entry_threshold", stage="zscore_gate", z_score=float(z_score))
+                near_miss = abs(float(z_score)) >= float(entry_zscore) * 0.8
+                diagnostic["z_score"] = float(z_score)
+                diagnostic["entry_zscore"] = float(entry_zscore)
+                diagnostic["asset_class"] = "crypto" if is_crypto else "equity"
+                diagnostic["near_miss"] = near_miss
+                skip(
+                    "below_entry_threshold",
+                    stage="zscore_gate",
+                    z_score=float(z_score),
+                    near_miss=near_miss,
+                )
 
             return diagnostic
 
@@ -4750,6 +4770,12 @@ class ArbitrageMonitor:
                         results,
                         settings.MONITOR_MIN_AI_CONFIDENCE,
                     )
+                    funnel = summarize_scan_funnel(
+                        results,
+                        active_pairs=self.active_pairs,
+                        scan_pairs=scan_pairs,
+                        min_ai_confidence=settings.MONITOR_MIN_AI_CONFIDENCE,
+                    )
 
                     summary_msg = (
                         f"[bold green]Iteration Complete[/] | "
@@ -4759,6 +4785,19 @@ class ArbitrageMonitor:
                         f"Open: {len(open_signals)}"
                     )
                     logger.info(summary_msg)
+                    logger.info(
+                        "FUNNEL active_eq=%s active_crypto=%s scanned=%s/%s "
+                        "near_miss=%s entry_band=%s approved=%s orders=%s skips=%s",
+                        funnel.get("active_equity"),
+                        funnel.get("active_crypto"),
+                        funnel.get("scanned"),
+                        funnel.get("active_total"),
+                        funnel.get("near_miss"),
+                        funnel.get("entry_band_hit"),
+                        funnel.get("approved"),
+                        funnel.get("order_submitted"),
+                        funnel.get("skip_reasons"),
+                    )
                     try:
                         self._write_trade_decision_report(
                             scan_pairs=scan_pairs,

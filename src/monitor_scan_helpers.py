@@ -148,6 +148,55 @@ def summarize_scan_iteration(results: list[dict], min_ai_confidence: float) -> t
     return len(active_signals), len(vetoed)
 
 
+def summarize_scan_funnel(
+    results: list[dict],
+    *,
+    active_pairs: list[dict],
+    scan_pairs: list[dict],
+    min_ai_confidence: float,
+) -> dict[str, object]:
+    """Per-iteration funnel counters for ops (near-miss / skip reasons / asset mix)."""
+    active_equity = sum(
+        1 for p in active_pairs if not is_crypto_pair(p["ticker_a"], p["ticker_b"])
+    )
+    active_crypto = sum(
+        1 for p in active_pairs if is_crypto_pair(p["ticker_a"], p["ticker_b"])
+    )
+    skip_reasons: dict[str, int] = {}
+    near_miss = 0
+    entry_band_hit = 0
+    approved = 0
+    order_submitted = 0
+    for row in results:
+        if not isinstance(row, dict):
+            continue
+        reason = str(row.get("reason") or "")
+        if reason:
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+        if row.get("near_miss"):
+            near_miss += 1
+        if reason == "entry_band" or row.get("verdict") in {"APPROVED", "EXECUTE", "EXECUTED"}:
+            entry_band_hit += 1
+        if row.get("approved") or row.get("verdict") == "APPROVED":
+            approved += 1
+        if row.get("order_submitted") or row.get("executed"):
+            order_submitted += 1
+    active_signals, vetoed = summarize_scan_iteration(results, min_ai_confidence)
+    return {
+        "active_equity": active_equity,
+        "active_crypto": active_crypto,
+        "scanned": len(scan_pairs),
+        "active_total": len(active_pairs),
+        "signals": active_signals,
+        "vetoed": vetoed,
+        "near_miss": near_miss,
+        "entry_band_hit": entry_band_hit,
+        "approved": approved,
+        "order_submitted": order_submitted,
+        "skip_reasons": dict(sorted(skip_reasons.items(), key=lambda kv: (-kv[1], kv[0]))),
+    }
+
+
 def build_close_orders(
     signal: dict,
     *,

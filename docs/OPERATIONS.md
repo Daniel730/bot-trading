@@ -373,7 +373,43 @@ docker exec trading-bot-bot-1 python3 -c \
 
 Health endpoint returns **401** without dashboard auth — that is correct (fail-closed).
 
+### Paper activity campaign (scan surface)
+
+When the bot is healthy but almost never trades, check **Active slots** and the **z-gate** before blaming the broker:
+
+1. Env targets for a measured paper campaign (keep discovery OFF on the 7.4 GiB host):
+
+```bash
+# On bot-server — or run scripts/apply_paper_activity_knobs.sh
+COINTEGRATION_ROLLING_PASS_RATE=0.40
+MAX_ACTIVE_PAIRS=20
+MONITOR_ENTRY_ZSCORE=1.75   # floor remains 1.0; do not set below
+PAIR_DISCOVERY_ENABLED=false
+PAIR_DISCOVERY_AUTO_PROMOTE=false
+```
+
+Note: `0.55` admitted **zero** equities on 2026-08-06 (ADF/rolling fails across the US list). Use **`0.40`** for the paper re-admit campaign (same as the proven overnight pin); raise toward `0.55–0.7` only after Active equities are stable.
+
+2. Re-admit equities that pass cointegration at the new pass rate (no soft-admit):
+
+```bash
+docker cp scripts/readmit_cointegrated_equities.py trading-bot-bot-1:/tmp/readmit.py
+docker exec -e PYTHONPATH=/app trading-bot-bot-1 python3 /tmp/readmit.py
+# Then recreate/reload so initialize_pairs warms the new Active set:
+#   docker compose ... up -d --no-deps --force-recreate bot
+```
+
+3. Activity soak (after ≥15–60 min of US cash session):
+
+```bash
+docker logs trading-bot-bot-1 --since 30m 2>&1 | grep -E 'FUNNEL |SCAN \[|Iteration Complete' | tail -40
+# Expect: Scanned N/N with N>>3, equity SCANs (KO/PEP etc.), FUNNEL near_miss / skip_reasons
+```
+
+Do **not** restore soft-admit into Active, enable discovery overnight without RSS headroom, or drop `MONITOR_ENTRY_ZSCORE` below 1.0.
+
 ### Rollback
+
 
 If a deploy misbehaves, re-deploy the previous image tag without wiping volumes:
 
@@ -413,6 +449,7 @@ wiping Redis, Postgres, and dashboard 2FA state.
 
 | Date | Commits | Workflow | Notes |
 |---|---|---|---|
+| 2026-08-06 | paper activity campaign | host env + python deploy | Raised scan surface for Alpaca paper: `COINTEGRATION_ROLLING_PASS_RATE=0.40` (0.55 admitted zero equities), `MAX_ACTIVE_PAIRS=20`, `MONITOR_ENTRY_ZSCORE=1.75` (discovery stays OFF). Re-admit via `scripts/readmit_cointegrated_equities.py` (no soft-admit). Added per-iteration `FUNNEL` log + near-miss tagging. |
 | 2026-08-06 | (compose DNS pin + env defaults) | host recreate (compose file patched on runner workdir; push pending) | Found bot Up 35h but dead trading path: container DNS via MagicDNS SERVFAIL → missing_price on all crypto, Alpaca equity fetch fail. Host DNS OK. Pinned public DNS in `docker-compose.backend.yml`; smoke asserts resolution. Restored overnight soft-admit knobs to defaults (`COINTEGRATION_ROLLING_PASS_RATE=0.7`, `MAX_ACTIVE_PAIRS=12`). |
 | 2026-08-04 | `42031a4` (via `8c7df2c`, `9b0bac7`) | [run 30916391994](https://github.com/Daniel730/bot-trading/actions/runs/30916391994) | Phase 4–5 to bot-server. Quality fixes: paper claim fallback; race-safe `begin_intent` ON CONFLICT; brokerage integration test opts into `_pre_submit_gate`. Smoke OK; ~50m soak clean (Restart=0, no CRITICAL/Traceback, Alpaca paper). |
 | 2026-07-17 | `7e6f7b3`, `a5c5b63` | [run 29569493017](https://github.com/Daniel730/bot-trading/actions/runs/29569493017) | Profitability fixes: MAB, crypto orchestrator bypass, z-score clamp, take-profit guard, UI label. `force_python` + `force_frontend`. Smoke OK. |
