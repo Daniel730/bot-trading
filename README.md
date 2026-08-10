@@ -230,6 +230,7 @@ npm run build
 
 Start with [docs/README.md](docs/README.md), then use:
 
+- [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) for **agent process** (issues → PRs → Hermes) and the target observability/quality/test/motion stack.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) for day-to-day running.
 - [docs/STRATEGY.md](docs/STRATEGY.md) for signal and risk logic.

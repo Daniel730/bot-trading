@@ -2,6 +2,8 @@
 
 Project setup, code, and testing guidance live in `README.md`, `GEMINI.md`, and the per-project READMEs (`src/README.md`, `frontend/README.md`, `execution-engine/README.md`, `infra/README.md`). Read those first for standard commands.
 
+**Required process for every agent:** [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) — create GitHub issues (`[Correção]` / `[Melhoria]` / `[Nova função]`), work via feature branches + PRs that `Fixes #N`, prefer Hermes via forge for cheap survey/draft, keep `PAPER_TRADING` defaults, never commit secrets. Target observability/quality/test/motion stack and backlog links live there.
+
 ## Cursor Cloud specific instructions
 
 This environment is a multi-language monorepo. The update script already refreshes
