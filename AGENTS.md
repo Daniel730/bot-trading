@@ -48,9 +48,10 @@ script's own dir shadows the repo root. Always run it with `PYTHONPATH=/workspac
 
 ### Dashboard login is fail-closed (important for UI testing)
 
-`/api/auth/login` requires either (a) Telegram approval or (b) TOTP 2FA already enabled — there is
-NO token-only fallback despite what `frontend/README.md` says. With Telegram disabled, bootstrap 2FA
-once via the app's own manager, then log in with the dashboard token + a TOTP/backup code:
+`/api/auth/login` requires either (a) Telegram approval or (b) a TOTP/backup code when 2FA is
+already enabled — there is **no token-only** session path (matches `frontend/README.md`). With
+Telegram disabled, bootstrap 2FA once via the app's own manager, then log in with the dashboard
+token + a TOTP/backup code:
 
 ```python
 # PYTHONPATH=/workspace .venv/bin/python

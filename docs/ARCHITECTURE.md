@@ -106,12 +106,13 @@ The React console provides:
 ## Security Model
 
 - `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` are required and must be non-default.
-- Alpaca broker credentials are required for the active live path: `ALPACA_API_KEY`/`ALPACA_API_SECRET`/`ALPACA_BASE_URL`. Trading 212 and Web3 settings are legacy/disabled in the current runtime.
+- Alpaca broker credentials are required for the active live path: `ALPACA_API_KEY`/`ALPACA_API_SECRET`/`ALPACA_BASE_URL`. Trading 212 and Web3 settings are legacy/disabled in the current runtime (`BROKERAGE_PROVIDER` must be `ALPACA`).
 - Dashboard API calls use `Authorization: Bearer <DASHBOARD_TOKEN>` plus `X-Dashboard-Session`.
-- Login can be approved by Telegram notification; TOTP/backup codes protect sensitive config writes after setup.
+- Dashboard login is **fail-closed**: after a valid token, the operator must complete Telegram login approval **or** supply a TOTP/backup code when 2FA is already enabled. There is no token-only session path.
+- TOTP/backup codes also protect sensitive config writes once 2FA is enabled.
 - CORS origins are controlled by `DASHBOARD_ALLOWED_ORIGINS`; wildcard origins are only accepted in `DEV_MODE=true`.
 - WebSocket telemetry requires either query/session auth or an initial auth message.
-- Live approvals are blocked unless Telegram is configured, unless `ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM=true`.
+- Trade approvals: shadow paper and Alpaca paper auto-approve via `settings.should_auto_approve_trades`. Real-money live requires human Telegram/dashboard approval and **fail-closes** if Telegram is unavailable. `ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM` is retained in settings/env but is **intentionally not honored** for real capital (see `notification_service`).
 
 ## Deployment Shape
 

@@ -86,16 +86,19 @@ IMAGE_OWNER=my-ghcr-owner IMAGE_TAG=my-tag docker compose -f infra/docker-compos
 
 ## Services And Ports
 
-| Service | Internal port | Host publish | Notes |
-|---|---:|---|---|
-| `frontend` | `80` | `3000` | nginx static app and API proxy (LAN/Tailscale OK) |
-| `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | monitor + dashboard API |
-| `mcp-server` | `8000` | `127.0.0.1:8000` | Optional (`--profile optional`); FastMCP; host publish loopback only |
-| `execution-engine` | `50051` | `127.0.0.1:50051` | Optional (`--profile optional`); Java gRPC dry-run sidecar — loopback only |
-| `redis` | `6379` | `127.0.0.1:6379` | requirepass via `REDIS_PASSWORD`; clients use host `redis` on the compose network |
-| `postgres` | `5432` | `127.0.0.1:5433` | ledger/audit DB — loopback only |
+| Service | Internal port | Host publish | Restart | Notes |
+|---|---:|---|---|---|
+| `frontend` | `80` | `3000` | `unless-stopped` | nginx static app and API proxy (LAN/Tailscale OK) |
+| `bot` | `8080` | `${BOT_HOST_PORT:-8080}` (8082 on bot-server) | `unless-stopped` | monitor + dashboard API (#137) |
+| `sec-worker` | — | — | `unless-stopped` | SEC scoring daemon |
+| `mcp-server` | `8000` | `127.0.0.1:8000` | `no` | Optional (`--profile optional`); FastMCP; host publish loopback only |
+| `execution-engine` | `50051` | `127.0.0.1:50051` | `unless-stopped` | Optional (`--profile optional`); Java gRPC dry-run sidecar — loopback only |
+| `redis` | `6379` | `127.0.0.1:6379` | `always` | requirepass via `REDIS_PASSWORD`; clients use host `redis` on the compose network |
+| `postgres` | `5432` | `127.0.0.1:5433` | `always` | ledger/audit DB — loopback only |
 
 Containers talk over the compose network with service DNS (`REDIS_HOST=redis`, `POSTGRES_HOST=postgres`). Host port publishes are for operator tooling on localhost only. Re-apply binds + Redis auth with `ops_apply_loopback_binds.sh`; probe with `ops_security_probe.sh`.
+
+`bot` uses `restart: unless-stopped` so the monitor returns after host reboot / dockerd restart. Explicit `docker stop` still sticks until you start it again. See `docs/OPERATIONS.md` (Production Deploy) for the `docker update --restart` hotfix path.
 
 ## Useful Commands
 

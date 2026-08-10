@@ -22,8 +22,8 @@ Foundation backlog for observability / quality / tests / motion starts at issues
 
 ## 2. Feature branches + PRs (deploy management)
 
-- Do **not** push feature work straight to `main`.
-- Branch from an up-to-date `main`: `fix/<issue>-short-slug` or `feat/<issue>-short-slug`.
+- Do **not** push feature work straight to `master` (default branch).
+- Branch from an up-to-date `master`: `fix/<issue>-short-slug` or `feat/<issue>-short-slug`.
 - Open a PR for review and for deploy gating (quality jobs in `.github/workflows/deploy.yml`; dedicated CI workflow tracked in #131).
 - Production images deploy from **GitHub Releases** / controlled workflow dispatch — not from random local pushes.
 

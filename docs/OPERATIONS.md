@@ -57,7 +57,8 @@ source .venv/bin/activate
 python -m pip install --upgrade pip uv
 uv pip install -r requirements.lock
 python scripts/init_db.py
-python src/monitor.py
+# Prefer module form so `src` resolves; bare `python src/monitor.py` needs PYTHONPATH=.
+PYTHONPATH=. python -m src.monitor
 ```
 
 On Windows, use `py -3.11 -m venv .venv` and `.venv\Scripts\Activate.ps1` for the virtual environment steps. Local runs should use `requirements.lock` so they match CI and Docker.
@@ -67,15 +68,18 @@ Local tooling note:
 - Validated backend commands use the repo WSL/Python 3.11 virtualenv (`.venv/bin/python`).
 - Windows `python`/`py` may resolve to Python 3.14; do not use it as proof that the locked backend stack is compatible.
 - If `npm` is not installed, frontend gates are not runnable locally; install Node/npm or run the frontend checks in an environment that has them.
+- Frontend install: `npm install --legacy-peer-deps` (React 19 vs `react-sprite-animator` peer).
 - No Gradle wrapper is committed; use an installed `gradle` command for the Java sidecar, or run the Docker build path.
 
 Frontend:
 
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps
 npm run dev
 ```
+
+Vite proxies `/api`, `/stream`, and `/ws` to `http://localhost:8080`.
 
 Java engine:
 
@@ -90,7 +94,7 @@ DRY_RUN=true gradle run --no-daemon
 Optional FastMCP tool server (loopback by default; `execute_trade` always rejects):
 
 ```bash
-python src/mcp_server.py
+PYTHONPATH=. python src/mcp_server.py
 # Override only inside Docker: MCP_HOST=0.0.0.0 MCP_ALLOW_NON_LOOPBACK=true
 # Optional tool gate: MCP_TOOL_TOKEN=... (pass auth_token= to each tool)
 ```
@@ -136,12 +140,12 @@ Local pytest from the repo root does not need this mount.
 
 ## Dashboard Login
 
-1. Open `http://localhost:3000` in Docker or the Vite dev URL locally.
+1. Open `http://localhost:3000` in Docker or the Vite dev URL (`http://localhost:5173`) locally.
 2. Enter `DASHBOARD_TOKEN`.
-3. If Telegram notifications are configured, approve the login notification.
-4. If TOTP is enabled, provide an authenticator or backup code when needed.
+3. Complete a second factor: approve the Telegram login notification **or** submit a TOTP/backup code when 2FA is enabled.
+4. If Telegram is unavailable and 2FA is not enabled yet, login returns **503** (fail-closed — no token-only session). Bootstrap 2FA as documented in `AGENTS.md`, then retry with OTP.
 
-The dashboard removes old `token`/`session` query params from the URL. API auth is header-based.
+The dashboard removes old `token`/`session` query params from the URL. API auth is header-based (`Authorization` + `X-Dashboard-Session`).
 
 ## Operating Modes
 

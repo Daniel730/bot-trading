@@ -13,7 +13,7 @@ The execution engine is the low-latency gRPC sidecar for atomic trade execution.
 
 ## Important Safety State
 
-`DRY_RUN=true` is required. `Application` intentionally refuses to boot with `DRY_RUN=false` because the real Java `LiveBroker` path is not wired for production brokerage execution yet. Live Trading 212 and Web3 execution are currently handled by the Python brokerage dispatcher.
+`DRY_RUN=true` is required. `Application` intentionally refuses to boot with `DRY_RUN=false` because the real Java `LiveBroker` path is not wired for production brokerage execution yet. Live Alpaca execution is Python-only (`BrokerageService`). Trading 212 and Web3 are legacy/disabled in the active runtime (`BROKERAGE_PROVIDER` must be `ALPACA`).
 
 ## Build And Test
 
