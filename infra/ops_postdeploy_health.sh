@@ -5,7 +5,12 @@ set +e
 echo "=== POSTDEPLOY HEALTH $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
 echo "=== bot ==="
-docker inspect trading-bot-bot-1 --format 'Restart={{.RestartCount}} OOM={{.State.OOMKilled}} Status={{.State.Status}} Image={{.Config.Image}} Started={{.State.StartedAt}}'
+BOT_STATE="$(docker inspect trading-bot-bot-1 --format '{{.State.Status}}' 2>/dev/null || echo missing)"
+if [ "$BOT_STATE" != "running" ]; then
+  echo "FAIL: trading-bot-bot-1 is not running (state=${BOT_STATE})"
+  exit 1
+fi
+docker inspect trading-bot-bot-1 --format 'Restart={{.RestartCount}} OOM={{.State.OOMKilled}} Status={{.State.Status}} RestartPolicy={{.HostConfig.RestartPolicy.Name}} Image={{.Config.Image}} Started={{.State.StartedAt}}'
 docker exec trading-bot-bot-1 python -c 'from src import config; s=config.settings; print("discovery=", s.PAIR_DISCOVERY_ENABLED); print("paper=", s.PAPER_TRADING); print("broker_paper=", s.is_broker_paper_trading); print("auto_approve=", s.should_auto_approve_trades); print("pass_rate=", getattr(s,"COINTEGRATION_ROLLING_PASS_RATE",None)); print("max_active=", getattr(s,"MAX_ACTIVE_PAIRS",None)); print("entry_z=", s.MONITOR_ENTRY_ZSCORE)'
 
 echo "=== active count ==="
