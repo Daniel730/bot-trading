@@ -1,5 +1,7 @@
 # Local Brain: Start Here
 
+> **Historical / session memory** (last refreshed 2026-05-07). Prefer `docs/README.md`, `docs/tofix.md`, and current source over this folder when they disagree.
+
 Last refreshed: 2026-05-07, Europe/Lisbon.
 
 This folder is the repo-local memory for Alpha Arbitrage Bot. Use it before touching code, running audits, or deciding whether the system is safe to trade. It is intentionally opinionated: the goal is to preserve the current mental model, the active safety work, and the things that must not be forgotten between sessions.

@@ -5,20 +5,24 @@ React 19 + TypeScript operations console for the trading bot. The first screen i
 ## Stack
 
 - React 19
-- Vite 8
+- Vite 8 (dev proxy: `/api`, `/stream` → `http://localhost:8080`; `/ws` → `ws://localhost:8080`)
 - TypeScript 5
 - lucide-react icons
+- framer-motion (partial: e.g. `PairsPanel`, `IntelligenceHub` — broader motion tracked in #134)
+- ESLint 9 (`npm run lint`; Biome not installed yet — #123)
 - Vitest + Testing Library
 - nginx static serving in Docker
 
 ## Local Development
 
 ```bash
-npm install
+npm install --legacy-peer-deps
 npm run dev
 ```
 
-Vite serves the app on `http://localhost:5173` unless another port is selected. When the app runs on localhost and not on port `8080`, API calls are sent to `http://localhost:8080`. Remote nginx deployments use the same origin so `/api`, `/stream`, and `/ws` are handled by nginx proxy rules.
+Install must use `--legacy-peer-deps` (matches CI): `react-sprite-animator` declares a React 17 peer while the app is React 19.
+
+Vite serves the app on `http://localhost:5173` unless another port is selected. The Vite proxy forwards `/api`, `/stream`, and `/ws` to the dashboard on `8080`, so same-origin relative fetches work in dev without CORS. When the app decides an absolute API base URL (localhost and not port `8080`), it still targets `http://localhost:8080`. Remote nginx deployments use the same origin so `/api`, `/stream`, and `/ws` are handled by nginx proxy rules.
 
 Deep links use hash routes such as `#/settings`, `#/wallet`, `#/control`.
 
@@ -34,7 +38,7 @@ VITE_API_TIMEOUT_MS=15000
 ```bash
 npm run dev      # Vite dev server
 npm run build    # TypeScript build + Vite bundle
-npm run lint     # ESLint
+npm run lint     # ESLint 9
 npm run test     # Vitest
 npm run preview  # preview built bundle
 ```
@@ -42,8 +46,8 @@ npm run preview  # preview built bundle
 ## Authentication Flow
 
 1. The user enters `DASHBOARD_TOKEN`.
-2. Login **fails closed**: without a valid token (and approval / OTP when required), no dashboard session is created.
-3. Prefer Telegram login approval when available; use authenticator/backup OTP when Telegram is offline or 2FA is required.
+2. Login **fails closed**: without a valid token (and Telegram approval **or** OTP when 2FA is enabled), no dashboard session is created. There is no token-only session.
+3. Prefer Telegram login approval when available; use authenticator/backup OTP when Telegram is offline or 2FA is required. If Telegram is unavailable and 2FA is not yet enabled, bootstrap 2FA (see `AGENTS.md`) before logging in.
 4. Pending Telegram approvals can be cancelled from the login screen.
 5. API requests send `Authorization: Bearer <dashboard-token>` and `X-Dashboard-Session: <session-token>`.
 6. SSE uses the same headers against `/stream`.

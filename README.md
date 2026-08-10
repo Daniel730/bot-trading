@@ -113,27 +113,29 @@ Local tooling note:
 3. Start the monitor. This also starts the dashboard API on port `8080`:
 
 ```bash
-python src/monitor.py
+# Module form (recommended) or PYTHONPATH so `import src` works:
+PYTHONPATH=. python -m src.monitor
 ```
+
+On Windows PowerShell: `$env:PYTHONPATH="."; python -m src.monitor`
 
 4. Start the frontend in another shell:
 
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps
 npm run dev
 ```
 
-Vite uses port `5173` by default. The app automatically talks to `http://localhost:8080` when running locally.
+Vite uses port `5173` by default and proxies `/api`, `/stream`, and `/ws` to `http://localhost:8080`.
 
 5. Optional: start the standalone FastMCP tool server:
 
 ```bash
-python src/mcp_server.py
+PYTHONPATH=. python src/mcp_server.py
 ```
 
 It runs on port `8000` with SSE transport.
-
 ## Java Execution Engine
 
 The Java service requires Java 21 and Gradle. No Gradle wrapper is committed; use an installed `gradle` command:
@@ -215,12 +217,13 @@ Useful ports:
 ## Test Commands
 
 ```bash
-pytest tests/ -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/ -v --asyncio-mode=auto
 
 cd execution-engine
 gradle test --no-daemon
 
 cd frontend
+npm install --legacy-peer-deps
 npm run lint
 npm run test
 npm run build
@@ -230,12 +233,12 @@ npm run build
 
 Start with [docs/README.md](docs/README.md), then use:
 
-- [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) for **agent process** (issues → PRs → Hermes) and the target observability/quality/test/motion stack.
+- [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) for **agent process** (issues → PRs → Hermes) and the target observability/quality/test/motion stack (what exists vs backlog).
+- [AGENTS.md](AGENTS.md) for Cursor Cloud / local VM gotchas (auth bootstrap, ports, Alpaca paper).
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) for day-to-day running.
 - [docs/STRATEGY.md](docs/STRATEGY.md) for signal and risk logic.
 - [src/README.md](src/README.md), [frontend/README.md](frontend/README.md), [execution-engine/README.md](execution-engine/README.md), and [infra/README.md](infra/README.md) for per-project details.
-
 ## Support the Project
 
 If Alpha Arbitrage Bot saves you time or helps your research, please consider supporting development. Sponsorships fund infrastructure costs (databases, market-data feeds, CI), new venue integrations, and continued maintenance.

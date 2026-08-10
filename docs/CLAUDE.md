@@ -37,27 +37,29 @@ Default to paper mode while changing execution logic.
 
 ### Python
 
+Prefer locked deps + `PYTHONPATH` (or `-m`) so `src` resolves:
+
 ```bash
-pip install -r requirements.txt
-python scripts/init_db.py
-python src/monitor.py
-python src/mcp_server.py
-pytest tests/ -v --asyncio-mode=auto
+uv pip install -r requirements.lock
+PYTHONPATH=. python scripts/init_db.py
+PYTHONPATH=. python -m src.monitor
+PYTHONPATH=. python src/mcp_server.py
+PYTHONPATH=. pytest tests/ -v --asyncio-mode=auto
 ```
 
 Focused examples:
 
 ```bash
-pytest tests/unit/test_pair_eligibility.py -v --asyncio-mode=auto
-pytest tests/unit/test_config_env_parsing.py -v --asyncio-mode=auto
-pytest tests/integration/test_portfolio_orchestration.py -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/unit/test_pair_eligibility.py -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/unit/test_config_env_parsing.py -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/integration/test_portfolio_orchestration.py -v --asyncio-mode=auto
 ```
 
 ### Frontend
 
 ```bash
 cd frontend
-npm install
+npm install --legacy-peer-deps
 npm run dev
 npm run lint
 npm run test
@@ -87,6 +89,7 @@ docker compose \
   up -d --build --remove-orphans
 ```
 
+Compose restart: `bot` / `sec-worker` / `frontend` / `execution-engine` → `unless-stopped`; Redis/Postgres → `always`; optional `mcp-server` → `no`.
 ## Key Invariants
 
 - `POSTGRES_PASSWORD` and `DASHBOARD_TOKEN` must be non-default.
@@ -120,4 +123,4 @@ docker compose \
 
 ## Historical Files
 
-`docs/bugs.md`, `docs/MONDAY_READINESS_AUDIT.md`, and `docs/geminiplan.md` are useful context, but they are historical. Check current code before treating any old finding as still open.
+`docs/bugs.md`, `docs/MONDAY_READINESS_AUDIT.md`, `docs/geminiplan.md`, Phase audits, and `.brain/*` are useful context, but they are historical. Check current code before treating any old finding as still open. Default branch is `master`.

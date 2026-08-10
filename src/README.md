@@ -48,32 +48,50 @@ Opens refuse mixing SHADOW and broker-lane open signals. Closes follow the lane 
 
 ## Dashboard API
 
-`monitor.py` attaches itself to `dashboard_service` and starts Uvicorn on port `8080`. Important routes:
+`monitor.py` attaches itself to `dashboard_service` and starts Uvicorn on port `8080`. Auth model: Bearer `DASHBOARD_TOKEN` + `X-Dashboard-Session`. Login is fail-closed (Telegram approval or TOTP/backup when 2FA is enabled — no token-only session). Sensitive config/settings writes require OTP once 2FA is enabled.
 
-- `POST /api/auth/login`
-- `GET /stream`
-- `WS /ws/telemetry`
-- `GET/POST /api/pairs`
-- `GET /api/stats/summary`
-- `GET /api/stats/trades`
-- `GET /api/system/health`
-- `GET /api/config`
-- `POST /api/config/update`
+Important routes (not exhaustive):
 
-All operational routes require both a valid dashboard token and a valid dashboard session. Sensitive config writes require TOTP/backup-code verification once 2FA is enabled.
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/auth/login` | Token + Telegram challenge or OTP |
+| `POST` | `/api/auth/login/complete` | Finish Telegram challenge |
+| `POST` | `/api/auth/login/cancel` | Cancel pending challenge |
+| `POST` | `/api/auth/logout` | End session |
+| `POST` | `/api/auth/2fa/initiate` | Start TOTP setup |
+| `POST` | `/api/auth/2fa/verify` | Confirm TOTP / verify codes |
+| `GET` | `/stream` | SSE telemetry |
+| `WS` | `/ws/telemetry` | WebSocket telemetry (auth required) |
+| `GET` | `/ping` | Unauthenticated liveness |
+| `GET`/`POST` | `/api/pairs` | Pair universe |
+| `POST` | `/api/pairs/discover` | One-shot discovery (scout still frozen by default) |
+| `GET` | `/api/stats/summary`, `/api/stats/trades`, `/api/stats/charts/{metric}` | Stats |
+| `GET` | `/api/system/health`, `/api/system/logs` | Health / logs |
+| `GET`/`POST` | `/api/config`, `/api/config/update` | Runtime config |
+| `GET`/`POST` | `/api/settings` | Settings (OTP for sensitive writes) |
+| `POST` | `/api/bot/control`, `/api/bot/restart` | Operator control |
+| `GET`/`POST` | `/api/approvals/...` | Pending trade approvals |
+| `GET` | `/api/positions`, `/api/broker/positions`, `/api/broker/unmanaged` | Ledger vs broker inventory |
+| `POST` | `/api/wallet/sync` | Wallet sync |
+
+All operational routes (except `/ping`) require both a valid dashboard token and a valid dashboard session.
+
+## Telemetry
+
+`src/services/telemetry_service.py` is an **internal** in-process queue that broadcasts to dashboard WebSocket clients. Remote `sync_outcomes()` is a stub (logs only). Vendor APM (OpenTelemetry / Sentry / Datadog) is **not** live — see `docs/AGENT_WORKFLOW.md` and issues #118–#122.
 
 ## Tests
 
 ```bash
-pytest tests/ -v --asyncio-mode=auto
-pytest tests/unit -v --asyncio-mode=auto
-pytest tests/integration -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/ -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/unit -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/integration -v --asyncio-mode=auto
 ```
 
 Use focused tests when touching shared trading logic:
 
 ```bash
-pytest tests/unit/test_pair_eligibility.py -v --asyncio-mode=auto
-pytest tests/unit/test_slippage_guard.py -v --asyncio-mode=auto
-pytest tests/integration/test_portfolio_orchestration.py -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/unit/test_pair_eligibility.py -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/unit/test_slippage_guard.py -v --asyncio-mode=auto
+PYTHONPATH=. pytest tests/integration/test_portfolio_orchestration.py -v --asyncio-mode=auto
 ```

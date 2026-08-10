@@ -143,11 +143,11 @@ When z-score is negative:
 Long A / Short B
 ```
 
-In paper mode the shadow service records simulated fills. In live mode the Python brokerage dispatcher routes through Alpaca only:
+In paper mode the shadow service records simulated fills. Broker Alpaca paper (`PAPER_TRADING=false` + paper-api URL) and real-money live both use Python `BrokerageService` → Alpaca:
 
 - `BROKERAGE_PROVIDER=ALPACA` is required;
-- Trading 212 and Web3 execution routes are legacy/disabled and unsupported provider values fail startup.
-
+- Trading 212 and Web3 execution routes are legacy/disabled and unsupported provider values fail startup;
+- Approvals: shadow + Alpaca paper auto-approve via `settings.should_auto_approve_trades`; real-money live always requires human Telegram/dashboard approval (`ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM` is not honored for real capital).
 ## Position Exit
 
 Open positions are evaluated each loop:
