@@ -26,6 +26,14 @@ for svc in trading-bot-mcp-server-1 trading-bot-execution-engine-1; do
   docker inspect "$svc" --format '{{.Name}} state={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}n/a{{end}} started={{.State.StartedAt}} rc={{.RestartCount}} oom={{.State.OOMKilled}}' 2>/dev/null || echo "SKIP $svc (optional profile not deployed)"
 done
 
+BOT_STATE="$(docker inspect trading-bot-bot-1 --format '{{.State.Status}}' 2>/dev/null || echo missing)"
+if [ "$BOT_STATE" != "running" ]; then
+  echo "FAIL: trading-bot-bot-1 is not running (state=${BOT_STATE})"
+  exit 1
+fi
+RESTART_POLICY="$(docker inspect trading-bot-bot-1 --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null || echo unknown)"
+echo "bot_restart_policy=${RESTART_POLICY}"
+
 echo "--- mem ---"
 docker stats --no-stream --format 'table {{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.CPUPerc}}' | head -40
 echo "--- trading-bot cgroup limits (0 mem = UNLIMITED) ---"

@@ -5,6 +5,11 @@ ssh -o ConnectTimeout=15 daniel@bot-server bash -s <<'EOF'
 set -euo pipefail
 echo "=== OPS CHECK $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 docker ps --filter name=trading-bot-bot-1 --format 'bot={{.Names}} status={{.Status}}'
+BOT_STATE="$(docker inspect trading-bot-bot-1 --format '{{.State.Status}}' 2>/dev/null || echo missing)"
+if [ "$BOT_STATE" != "running" ]; then
+  echo "FAIL: trading-bot-bot-1 is not running (state=${BOT_STATE})"
+  exit 1
+fi
 docker logs trading-bot-bot-1 --since 12m 2>&1 | grep -E 'RISK APPROVED|PARTIAL EXPOSURE|Duplicate entry|Startup blocked|INVENTORY GUARD|CRITICAL|Gross=' | tail -25 || true
 docker exec trading-bot-bot-1 python - <<'PY' 2>/dev/null || echo 'alpaca_probe=failed'
 import asyncio

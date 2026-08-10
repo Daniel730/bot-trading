@@ -79,7 +79,10 @@ services:
       REDIS_HOST: redis
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
-    restart: "no"
+    # Recover after host reboot / dockerd restart. Explicit `docker stop` still sticks.
+    # Apply to a running container without recreate:
+    #   docker update --restart unless-stopped trading-bot-bot-1
+    restart: unless-stopped
     mem_limit: 1280m
     cpus: 1.50
     depends_on:

@@ -46,8 +46,8 @@ def test_backend_compose_restart_policies():
     assert services["redis"]["restart"] == "always"
     assert services["postgres"]["restart"] == "always"
 
-    # Bot stays manual-restart so crashes stay visible to operators.
-    assert services["bot"]["restart"] == "no"
+    # Bot must come back after host reboot / dockerd restart (Exited 137 left it down for days).
+    assert services["bot"]["restart"] == "unless-stopped"
     # SEC worker auto-recovers: empty Redis fundamentals silently block live equity entries.
     assert services["sec-worker"]["restart"] == "unless-stopped"
     # Optional dry-run sidecars may recover without operator intervention when profile-enabled.

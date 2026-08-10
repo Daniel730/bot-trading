@@ -343,6 +343,20 @@ docker compose --env-file /home/daniel/.env.trading -p trading-bot \
 # docker compose ... --profile optional up -d --no-deps mcp-server execution-engine
 ```
 
+**Restart policy (`bot`):** `unless-stopped` so the monitor returns after host reboot / dockerd
+restart (see #137 — `restart: "no"` left `Exited(137)` down for days). Explicit `docker stop`
+still sticks until you start it again. To apply the policy to a **running** container without
+recreate/downtime:
+
+```bash
+docker update --restart unless-stopped trading-bot-bot-1
+docker inspect trading-bot-bot-1 --format '{{.HostConfig.RestartPolicy.Name}}'
+```
+
+Compose file on disk is authoritative after the next deploy/recreate; the `docker update` path
+only patches the live HostConfig until then. Overnight/postdeploy checks **fail** if
+`trading-bot-bot-1` is not `running`.
+
 ### Post-deploy smoke tests
 
 On bot-server (copy script or run from repo checkout):
