@@ -471,6 +471,34 @@ class ArbitrageMonitor:
                 await notification_service.send_message(msg)
             return True
 
+        # Undetermined / manual ledger exposure must block new opens even when
+        # those rows are excluded from get_open_signals (no TP/SL path).
+        try:
+            unresolved = await persistence_service.get_unresolved_exposure_tickers()
+        except Exception as exc:
+            msg = (
+                f"Execution blocked for {ticker_a}/{ticker_b}: could not verify "
+                f"unresolved ledger exposure ({exc})."
+            )
+            logger.critical(msg)
+            if notify:
+                await notification_service.send_message(msg)
+            return True
+
+        for row in unresolved or []:
+            row_sym = self._canonical_position_symbol(row.get("ticker"))
+            if row_sym and row_sym in pair_symbols:
+                msg = (
+                    f"Execution blocked for {ticker_a}/{ticker_b}: unresolved "
+                    f"ledger exposure on {row.get('ticker')} "
+                    f"(status={row.get('status')}, signal={row.get('signal_id')}). "
+                    "Reconcile before opening new exposure."
+                )
+                logger.critical(msg)
+                if notify:
+                    await notification_service.send_message(msg)
+                return True
+
         if settings.PAPER_TRADING:
             return False
 
@@ -499,6 +527,57 @@ class ArbitrageMonitor:
                     f"pending broker order exists for {raw_symbol}."
                 )
                 logger.warning(msg)
+                if notify:
+                    await notification_service.send_message(msg)
+                return True
+
+        # Broker-only inventory on a proposed leg: IGNORE_UNMANAGED continues
+        # scanning, but must never average into / re-enter overlapping symbols.
+        try:
+            broker_positions = await self.brokerage.get_positions()
+        except Exception as exc:
+            msg = (
+                f"Execution blocked for {ticker_a}/{ticker_b}: could not verify "
+                f"broker positions ({exc})."
+            )
+            logger.critical(msg)
+            if notify:
+                await notification_service.send_message(msg)
+            return True
+
+        ledger_leg_symbols = set()
+        for signal in open_signals or []:
+            for leg in signal.get("legs", []) or []:
+                sym = self._canonical_position_symbol(leg.get("ticker"))
+                if sym:
+                    ledger_leg_symbols.add(sym)
+
+        for pos in broker_positions or []:
+            raw_symbol = (
+                pos.get("ticker")
+                or pos.get("symbol")
+                or pos.get("instrumentTicker")
+                or pos.get("instrument")
+            )
+            canonical = self._canonical_position_symbol(raw_symbol)
+            if not canonical or canonical not in pair_symbols:
+                continue
+            qty = float(
+                pos.get("quantityAvailableForTrading")
+                if pos.get("quantityAvailableForTrading") is not None
+                else pos.get("quantity")
+                or 0.0
+            )
+            if abs(qty) <= 1e-12:
+                continue
+            if canonical not in ledger_leg_symbols:
+                msg = (
+                    f"Execution blocked for {ticker_a}/{ticker_b}: broker holds "
+                    f"unmanaged inventory on {raw_symbol} (qty={qty}). "
+                    "Close or acknowledge and keep IGNORE_UNMANAGED from averaging "
+                    "into foreign inventory."
+                )
+                logger.critical(msg)
                 if notify:
                     await notification_service.send_message(msg)
                 return True
@@ -1853,84 +1932,75 @@ class ArbitrageMonitor:
                 source_a = price_sources.get(t_a)
                 source_b = price_sources.get(t_b)
                 alpaca_crypto_sources = {"alpaca_crypto_snapshot", "alpaca_crypto_quote_mid"}
-                if source_a in alpaca_crypto_sources and source_b in alpaca_crypto_sources:
-                    price_timestamps = getattr(data_service, "last_price_timestamps", {}) or {}
-                    now_utc = datetime.now(timezone.utc)
-                    max_age = crypto_price_max_age_seconds(settings.SCAN_INTERVAL_SECONDS)
-                    for ticker, source in ((t_a, source_a), (t_b, source_b)):
-                        parsed_ts = parse_price_timestamp(price_timestamps.get(ticker))
-                        if parsed_ts is None:
-                            continue
-                        age_seconds = (now_utc - parsed_ts).total_seconds()
-                        if age_seconds > max_age:
-                            logger.warning(
-                                "PRICE STALENESS [%s/%s]: %s %s timestamp age "
-                                "%.1fs exceeds max %.1fs (scan_interval=%ss). "
-                                "Blocking before Kalman update.",
-                                t_a,
-                                t_b,
-                                ticker,
-                                source,
-                                age_seconds,
-                                max_age,
-                                settings.SCAN_INTERVAL_SECONDS,
-                            )
-                            return skip(
-                                "stale_price_snapshot",
-                                stage="price_guard",
-                                age_seconds=age_seconds,
-                                max_age_seconds=max_age,
-                            )
-
-                    # Prefer timestamps for both snapshot and quote_mid so flat
-                    # prices with advancing trades are not false-stale. Price
-                    # identity is only a fallback when metadata is missing.
-                    pair_marker = (
-                        crypto_leg_freshness_marker(t_a, price_a, price_timestamps),
-                        crypto_leg_freshness_marker(t_b, price_b, price_timestamps),
-                    )
-                    uses_price_fallback = any(
-                        marker[0] == "price" for marker in pair_marker
-                    )
-                    if uses_price_fallback:
-                        previous_marker, repeat_count = self._crypto_snapshot_pair_prices.get(
-                            pair["id"],
-                            ((None, None), 0),
-                        )
-                        repeat_count = (
-                            repeat_count + 1 if previous_marker == pair_marker else 0
-                        )
-                        self._crypto_snapshot_pair_prices[pair["id"]] = (
-                            pair_marker,
-                            repeat_count,
-                        )
-                        repeat_limit = crypto_stale_repeat_limit(
-                            settings.SCAN_INTERVAL_SECONDS
-                        )
-                        if repeat_count >= repeat_limit:
-                            logger.warning(
-                                "PRICE STALENESS [%s/%s]: Alpaca crypto prices "
-                                "repeated unchanged at %s for %s consecutive scan(s) "
-                                "(limit=%s, scan_interval=%ss; no usable timestamps). "
-                                "Blocking before Kalman update.",
-                                t_a,
-                                t_b,
-                                pair_marker,
-                                repeat_count,
-                                repeat_limit,
-                                settings.SCAN_INTERVAL_SECONDS,
-                            )
-                            return skip(
-                                "stale_price_snapshot",
-                                stage="price_guard",
-                                repeat_count=repeat_count,
-                                repeat_limit=repeat_limit,
-                            )
-                    else:
-                        # Fresh timestamped quotes/trades — clear price-only state.
-                        self._crypto_snapshot_pair_prices.pop(pair["id"], None)
-                else:
+                # Fail closed: mixed/unknown sources (redis/yfinance/missing) have no
+                # trustworthy age — never feed Kalman / open a new trade on them.
+                if source_a not in alpaca_crypto_sources or source_b not in alpaca_crypto_sources:
                     self._crypto_snapshot_pair_prices.pop(pair["id"], None)
+                    logger.warning(
+                        "PRICE FRESHNESS [%s/%s]: crypto sources not both Alpaca "
+                        "(%s=%s, %s=%s). Blocking before Kalman update.",
+                        t_a,
+                        t_b,
+                        t_a,
+                        source_a,
+                        t_b,
+                        source_b,
+                    )
+                    return skip(
+                        "price_freshness_unknown",
+                        stage="price_guard",
+                        source_a=source_a,
+                        source_b=source_b,
+                    )
+
+                price_timestamps = getattr(data_service, "last_price_timestamps", {}) or {}
+                now_utc = datetime.now(timezone.utc)
+                max_age = crypto_price_max_age_seconds(settings.SCAN_INTERVAL_SECONDS)
+                missing_ts = []
+                for ticker, source in ((t_a, source_a), (t_b, source_b)):
+                    parsed_ts = parse_price_timestamp(price_timestamps.get(ticker))
+                    if parsed_ts is None:
+                        missing_ts.append(ticker)
+                        continue
+                    age_seconds = (now_utc - parsed_ts).total_seconds()
+                    if age_seconds > max_age:
+                        logger.warning(
+                            "PRICE STALENESS [%s/%s]: %s %s timestamp age "
+                            "%.1fs exceeds max %.1fs (scan_interval=%ss). "
+                            "Blocking before Kalman update.",
+                            t_a,
+                            t_b,
+                            ticker,
+                            source,
+                            age_seconds,
+                            max_age,
+                            settings.SCAN_INTERVAL_SECONDS,
+                        )
+                        return skip(
+                            "stale_price_snapshot",
+                            stage="price_guard",
+                            age_seconds=age_seconds,
+                            max_age_seconds=max_age,
+                        )
+
+                # Missing trade/quote timestamps = invalid freshness (not "maybe fine").
+                if missing_ts:
+                    self._crypto_snapshot_pair_prices.pop(pair["id"], None)
+                    logger.warning(
+                        "PRICE FRESHNESS [%s/%s]: missing Alpaca timestamps for %s. "
+                        "Blocking before Kalman update.",
+                        t_a,
+                        t_b,
+                        ",".join(missing_ts),
+                    )
+                    return skip(
+                        "price_freshness_unknown",
+                        stage="price_guard",
+                        missing_timestamps=missing_ts,
+                    )
+
+                # Both legs timestamped and within max age — clear legacy price-only state.
+                self._crypto_snapshot_pair_prices.pop(pair["id"], None)
 
             # Feature 007: Kalman Filter Update
             kf = await arbitrage_service.get_or_create_filter(

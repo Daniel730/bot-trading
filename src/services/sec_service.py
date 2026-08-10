@@ -29,9 +29,12 @@ _SEC_UNREACHABLE_MARKERS = (
     "timed out",
     "connection",
     "temporarily unavailable",
+    "temporary failure",
+    "name resolution",
     "name or service not known",
     "nodename nor servname",
     "failed to resolve",
+    "getaddrinfo",
     "max retries exceeded",
     "network is unreachable",
 )

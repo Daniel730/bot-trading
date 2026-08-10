@@ -167,15 +167,17 @@ async def recover_leg_a_orphans(*, brokerage, dry_run: bool = False) -> dict[str
                 skipped += 1
                 continue
 
+            # Alpaca "success" means submit accepted, not fill confirmed.
+            # Only filled/closed may flatten the ledger; otherwise leave manual.
+            fill_confirmed = status in {"filled", "closed"}
             if signal_id and signal_id != "__none__":
                 await persistence_service.update_signal_status(
                     uuid.UUID(signal_id),
-                    OrderStatus.NEEDS_MANUAL_RECONCILIATION
-                    if status not in {"success", "filled", "closed"}
-                    else OrderStatus.CLOSED,
+                    OrderStatus.CLOSED
+                    if fill_confirmed
+                    else OrderStatus.NEEDS_MANUAL_RECONCILIATION,
                 )
-            # Stamp closed_at on orphan rows when broker accepted close.
-            if status in {"success", "filled", "closed"}:
+            if fill_confirmed:
                 async with persistence_service.AsyncSessionLocal() as session:
                     async with session.begin():
                         for row in legs:
@@ -188,13 +190,22 @@ async def recover_leg_a_orphans(*, brokerage, dry_run: bool = False) -> dict[str
                             meta["orphan_close_client_order_id"] = client_order_id
                             row.metadata_json = meta
                             session.add(row)
-            recovered += 1
-            logger.warning(
-                "leg_orphan_recovery: closed orphan Leg A signal=%s ticker=%s qty=%s",
-                signal_id,
-                orphan_ticker,
-                close_qty,
-            )
+                recovered += 1
+                logger.warning(
+                    "leg_orphan_recovery: closed orphan Leg A signal=%s ticker=%s qty=%s",
+                    signal_id,
+                    orphan_ticker,
+                    close_qty,
+                )
+            else:
+                skipped += 1
+                logger.critical(
+                    "leg_orphan_recovery PENDING FILL signal=%s ticker=%s "
+                    "status=%s — marked NEEDS_MANUAL_RECONCILIATION (no ledger flatten)",
+                    signal_id,
+                    orphan_ticker,
+                    status,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.critical(
                 "leg_orphan_recovery exception signal=%s: %s", signal_id, exc

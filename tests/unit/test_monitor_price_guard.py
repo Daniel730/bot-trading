@@ -91,8 +91,10 @@ async def test_process_pair_blocks_impossible_crypto_price_before_kalman(monitor
 
 
 @pytest.mark.asyncio
-async def test_process_pair_blocks_repeated_alpaca_crypto_snapshot_before_kalman(monitor, monkeypatch, caplog):
-    """Price-only Alpaca snapshots (no timestamps) still trip after paced repeats."""
+async def test_process_pair_blocks_alpaca_crypto_missing_timestamps_immediately(
+    monitor, monkeypatch, caplog
+):
+    """Missing timestamps are invalid freshness — hard-block before Kalman (no trade)."""
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
     monkeypatch.setattr(
@@ -103,30 +105,88 @@ async def test_process_pair_blocks_repeated_alpaca_crypto_snapshot_before_kalman
     monkeypatch.setattr(data_service, "last_price_timestamps", {}, raising=False)
     monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 15)
 
-    repeat_limit = crypto_stale_repeat_limit(15)
-
     with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock) as mock_save_state, \
          patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
          caplog.at_level(logging.WARNING, logger="src.monitor"):
 
         mock_kf = MagicMock()
-        mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
         mock_kf_get.return_value = mock_kf
+        diagnostic = await monitor.process_pair(pair, dict(latest_prices))
 
-        diagnostics = [
-            await monitor.process_pair(pair, dict(latest_prices))
-            for _ in range(repeat_limit + 1)
-        ]
-
-    assert diagnostics[0]["reason"] == "below_entry_threshold"
-    assert diagnostics[-1]["verdict"] == "IGNORED"
-    assert diagnostics[-1]["reason"] == "stale_price_snapshot"
-    assert mock_kf_get.await_count == repeat_limit
-    assert mock_save_state.await_count == repeat_limit
+    assert diagnostic["verdict"] == "IGNORED"
+    assert diagnostic["reason"] == "price_freshness_unknown"
+    mock_kf_get.assert_not_awaited()
+    mock_save_state.assert_not_awaited()
     mock_orchestrator.assert_not_awaited()
-    assert "PRICE STALENESS [BTC-USD/ETH-USD]" in caplog.text
-    assert "no usable timestamps" in caplog.text
+    assert "missing Alpaca timestamps" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_pair_blocks_mixed_crypto_sources_before_kalman(
+    monitor, monkeypatch, caplog
+):
+    """Redis/yfinance mixed with Alpaca must not open trades (no trustworthy age)."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(seconds=20)).isoformat()
+    monkeypatch.setattr(
+        data_service,
+        "last_price_sources",
+        {"BTC-USD": "alpaca_crypto_snapshot", "ETH-USD": "redis"},
+    )
+    monkeypatch.setattr(
+        data_service,
+        "last_price_timestamps",
+        {"BTC-USD": fresh_ts},
+        raising=False,
+    )
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         caplog.at_level(logging.WARNING, logger="src.monitor"):
+        mock_kf_get.return_value = MagicMock()
+        diagnostic = await monitor.process_pair(pair, dict(latest_prices))
+
+    assert diagnostic["reason"] == "price_freshness_unknown"
+    mock_kf_get.assert_not_awaited()
+    mock_orchestrator.assert_not_awaited()
+    assert "not both Alpaca" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_process_pair_blocks_single_leg_over_max_age(monitor, monkeypatch, caplog):
+    """One stale Alpaca leg contaminating the pair must block the whole pair."""
+    pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
+    latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
+    monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 15)
+    max_age = crypto_price_max_age_seconds(15)
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(seconds=20)).isoformat()
+    stale_ts = (
+        datetime.now(timezone.utc) - timedelta(seconds=max_age + 30)
+    ).isoformat()
+    monkeypatch.setattr(
+        data_service,
+        "last_price_sources",
+        {"BTC-USD": "alpaca_crypto_quote_mid", "ETH-USD": "alpaca_crypto_quote_mid"},
+    )
+    monkeypatch.setattr(
+        data_service,
+        "last_price_timestamps",
+        {"BTC-USD": stale_ts, "ETH-USD": fresh_ts},
+        raising=False,
+    )
+
+    with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
+         patch("src.agents.orchestrator.orchestrator.ainvoke", new_callable=AsyncMock) as mock_orchestrator, \
+         caplog.at_level(logging.WARNING, logger="src.monitor"):
+        mock_kf_get.return_value = MagicMock()
+        diagnostic = await monitor.process_pair(pair, dict(latest_prices))
+
+    assert diagnostic["reason"] == "stale_price_snapshot"
+    mock_kf_get.assert_not_awaited()
+    mock_orchestrator.assert_not_awaited()
+    assert "BTC-USD" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -260,10 +320,10 @@ async def test_process_pair_snapshot_with_advancing_timestamps_not_false_stale(
 
 
 @pytest.mark.asyncio
-async def test_process_pair_quote_mid_missing_timestamp_falls_back_to_price_repeat(
+async def test_process_pair_quote_mid_missing_timestamp_hard_blocks(
     monitor, monkeypatch, caplog
 ):
-    """Missing quote-mid timestamps no longer hard-reject; price-repeat guard applies."""
+    """Missing quote-mid timestamps hard-reject (invalid freshness ≠ tradeable)."""
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     latest_prices = {"BTC-USD": 76800.0, "ETH-USD": 2110.0}
     monkeypatch.setattr(
@@ -273,8 +333,6 @@ async def test_process_pair_quote_mid_missing_timestamp_falls_back_to_price_repe
     )
     monkeypatch.setattr(data_service, "last_price_timestamps", {}, raising=False)
     monkeypatch.setattr(settings, "SCAN_INTERVAL_SECONDS", 60)
-    repeat_limit = crypto_stale_repeat_limit(60)
-    assert repeat_limit == CRYPTO_SNAPSHOT_STALE_REPEAT_LIMIT
 
     with patch("src.services.arbitrage_service.arbitrage_service.get_or_create_filter", new_callable=AsyncMock) as mock_kf_get, \
          patch("src.services.arbitrage_service.arbitrage_service.save_filter_state", new_callable=AsyncMock), \
@@ -285,13 +343,8 @@ async def test_process_pair_quote_mid_missing_timestamp_falls_back_to_price_repe
         mock_kf.update.return_value = ([0.0, 1.0], 1.0, 0.0, 0.0)
         mock_kf_get.return_value = mock_kf
 
-        # First observation must not hard-reject for missing timestamp.
         first = await monitor.process_pair(pair, dict(latest_prices))
-        assert first["reason"] == "below_entry_threshold"
 
-        diagnostics = [first]
-        for _ in range(repeat_limit):
-            diagnostics.append(await monitor.process_pair(pair, dict(latest_prices)))
-
-    assert diagnostics[-1]["reason"] == "stale_price_snapshot"
-    assert "no usable timestamps" in caplog.text
+    assert first["reason"] == "price_freshness_unknown"
+    mock_kf_get.assert_not_awaited()
+    assert "missing Alpaca timestamps" in caplog.text

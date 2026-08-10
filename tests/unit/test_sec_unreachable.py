@@ -17,6 +17,15 @@ def test_is_sec_unreachable_error_markers():
     assert _is_sec_unreachable_error(TimeoutError("timed out")) is True
     assert _is_sec_unreachable_error(ConnectionError("connection reset")) is True
     assert _is_sec_unreachable_error(RuntimeError("unexpected parse failure")) is False
+    # glibc / Docker DNS — ops saw this exact string; must trip unreachable circuit.
+    assert (
+        _is_sec_unreachable_error(
+            OSError("[Errno -3] Temporary failure in name resolution")
+        )
+        is True
+    )
+    assert _is_sec_unreachable_error(OSError("Name Resolution failure")) is True
+    assert _is_sec_unreachable_error(OSError("getaddrinfo failed")) is True
 
 
 @pytest.mark.asyncio

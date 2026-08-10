@@ -202,7 +202,7 @@ async def test_r303_equity_new_high_updates_hwm(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# R-302 leg orphan recovery
+# R-302 leg orphan recovery (DB-backed; see also test_leg_orphan_recovery_fill_confirm.py)
 # ---------------------------------------------------------------------------
 
 
@@ -245,7 +245,8 @@ async def test_r302_leg_a_orphan_emergency_close(monkeypatch):
                     "intent": intent,
                 }
             )
-            return {"status": "success", "order_id": "close-1"}
+            # Fill-confirmed close (submit-accept alone must not flatten — unit-tested separately).
+            return {"status": "filled", "order_id": "close-1"}
 
     summary = await recover_leg_a_orphans(brokerage=FakeBroker(), dry_run=False)
     assert summary["broker_ok"]

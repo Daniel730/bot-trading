@@ -1,9 +1,43 @@
 import logging
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.config import settings
+from src.services.data_service import data_service
+
+
+@pytest.fixture(autouse=True)
+def _fresh_alpaca_crypto_price_metadata(monkeypatch):
+    """Crypto process_pair tests assume Alpaca freshness metadata is present.
+
+    Production scan path always stamps sources/timestamps via data_service;
+    unit tests that call process_pair directly must do the same or the
+    fail-closed freshness gate (price_freshness_unknown) correctly blocks.
+    """
+    fresh_ts = (datetime.now(timezone.utc) - timedelta(seconds=15)).isoformat()
+    tickers = (
+        "BTC-USD",
+        "ETH-USD",
+        "LTC-USD",
+        "BCH-USD",
+        "SOL-USD",
+        "AVAX-USD",
+        "DOT-USD",
+    )
+    monkeypatch.setattr(
+        data_service,
+        "last_price_sources",
+        {t: "alpaca_crypto_snapshot" for t in tickers},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        data_service,
+        "last_price_timestamps",
+        {t: fresh_ts for t in tickers},
+        raising=False,
+    )
 
 
 @pytest.mark.asyncio

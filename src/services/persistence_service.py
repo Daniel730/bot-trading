@@ -703,6 +703,47 @@ class PersistenceService:
             result = await session.execute(stmt)
             return int(result.scalar() or 0)
 
+    async def get_unresolved_exposure_tickers(self) -> List[dict]:
+        """Ledger rows that imply undetermined or manual broker exposure.
+
+        These are intentionally *not* in ``get_open_signals`` (no TP/SL exits),
+        but must still block *new* pair opens that share their symbols (Inv2).
+        """
+        from sqlalchemy import select
+
+        blocking = (
+            OrderStatus.ORDER_SUBMITTED,
+            OrderStatus.LEG_A_SUBMITTED,
+            OrderStatus.LEG_A_FILLED,
+            OrderStatus.LEG_A_PARTIAL,
+            OrderStatus.LEG_B_SUBMITTED,
+            OrderStatus.LEG_B_PARTIAL,
+            OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+            OrderStatus.FAILED_REQUIRES_MANUAL_RECONCILIATION,
+            OrderStatus.CLOSE_FAILED,
+            OrderStatus.FAILED,
+        )
+        async with self.AsyncSessionLocal() as session:
+            stmt = (
+                select(TradeLedger)
+                .where(TradeLedger.status.in_(blocking))
+                .where(TradeLedger.closed_at.is_(None))
+            )
+            result = await session.execute(stmt)
+            rows = result.scalars().all()
+            return [
+                {
+                    "signal_id": str(row.signal_id) if row.signal_id else None,
+                    "ticker": row.ticker,
+                    "status": (
+                        row.status.value
+                        if isinstance(row.status, OrderStatus)
+                        else str(row.status)
+                    ),
+                }
+                for row in rows
+            ]
+
     async def get_open_signals(self, venue: Optional[str] = None) -> List[dict]:
         """Retrieves all currently OPEN positions grouped by signal_id."""
         from sqlalchemy import select
