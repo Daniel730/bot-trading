@@ -1,0 +1,24 @@
+name: Nova função
+description: New feature or integration
+title: "[Nova função] "
+labels: ["Nova função"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto
+      description: Why this capability is needed
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critérios de aceitação
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Paths relacionados

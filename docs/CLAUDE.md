@@ -2,6 +2,8 @@
 
 This file is a compact repo map for assistant-style coding sessions. The runtime source of truth is the code plus the current docs under `README.md` and `docs/`.
 
+**Process:** follow [AGENT_WORKFLOW.md](AGENT_WORKFLOW.md) (issues with `[Correção]`/`[Melhoria]`/`[Nova função]`, PRs that `Fixes #N`, Hermes via forge when online).
+
 ## What This System Is
 
 Alpha Arbitrage is a statistical-arbitrage bot with:
@@ -109,6 +111,7 @@ docker compose \
 ## Documentation Pointers
 
 - `README.md`: quick start and project map.
+- `docs/AGENT_WORKFLOW.md`: **required** issue/PR/Hermes process + target observability/quality/test/motion stack.
 - `docs/ARCHITECTURE.md`: current architecture.
 - `docs/OPERATIONS.md`: runbook.
 - `docs/STRATEGY.md`: signal/risk logic.

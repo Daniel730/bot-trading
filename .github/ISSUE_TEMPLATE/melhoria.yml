@@ -1,0 +1,24 @@
+name: Melhoria
+description: Improvement to an existing capability
+title: "[Melhoria] "
+labels: ["Melhoria"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto
+      description: Current behavior and why it should improve
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critérios de aceitação
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Paths relacionados

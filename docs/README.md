@@ -19,6 +19,7 @@ Use these files as the current documentation set:
 | `DEVELOPER_BUDGET_GUIDE.md` | Venue budget implementation |
 | `agents.md` | Agent ensemble and background analysis |
 | `CLAUDE.md` | Assistant-oriented repo map and commands |
+| `AGENT_WORKFLOW.md` | Required agent process: issues, PRs, Hermes, target stack |
 | `tofix.md` | Current known backlog and open risks |
 | `SUMMARY.md` | Current readiness verdict and open risks |
 | `DECISIONS.md` | Architecture / safety decision log |

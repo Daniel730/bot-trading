@@ -1,0 +1,25 @@
+name: Correção
+description: Bug fix / correction
+title: "[Correção] "
+labels: ["Correção", "bug"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Contexto
+      description: What is broken and how it shows up
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Critérios de aceitação
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: paths
+    attributes:
+      label: Paths relacionados
+      placeholder: src/..., frontend/..., tests/...
