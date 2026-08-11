@@ -1,6 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { Brain, TrendingUp, TrendingDown, RefreshCw, Activity, Shield } from 'lucide-react';
+import { PanelSkeleton } from './Skeleton';
 
 interface IntelligenceHubProps {
   regime: string;
@@ -9,6 +10,8 @@ interface IntelligenceHubProps {
 }
 
 const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, accuracy }) => {
+  const awaitingTelemetry = !String(regime || '').trim();
+
   const getRegimeIcon = () => {
     switch (regime) {
       case 'TRENDING_UP': return <TrendingUp size={20} style={{ color: 'var(--success)' }} />;
@@ -35,10 +38,12 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
         <Brain size={16} />
         Intelligence Hub
       </div>
-      
-      <div className="panel-content" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '15px' }}>
-        {/* MARKET REGIME CARD */}
-        <motion.div 
+
+      {awaitingTelemetry ? (
+        <PanelSkeleton rows={3} label="Loading intelligence hub" />
+      ) : (
+      <div className="panel-content content-reveal-layer" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '15px' }}>
+        <motion.div
           className="metric-card"
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -58,8 +63,7 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
           </div>
         </motion.div>
 
-        {/* SELF-ESTEEM (ACCURACY) METER */}
-        <motion.div 
+        <motion.div
           className="metric-card"
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -69,7 +73,7 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
             STRATEGY_SELF_ESTEEM (CLOSED-TRADE HIT-RATE EMA)
           </div>
           <div style={{ position: 'relative', height: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', overflow: 'hidden' }}>
-            <motion.div 
+            <motion.div
               style={{ position: 'absolute', top: 0, left: 0, height: '100%', background: accuracyColor, boxShadow: `0 0 10px ${accuracyColor}` }}
               initial={{ width: 0 }}
               animate={{ width: `${accuracyValue * 100}%` }}
@@ -87,6 +91,7 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
           </div>
         </motion.div>
       </div>
+      )}
     </div>
   );
 };

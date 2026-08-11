@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Wallet, RefreshCw, ArrowUp, ArrowDown } from 'lucide-react';
 import { fetchBrokerPositions, type BrokerPosition } from '../services/api';
 import { formatCurrency } from '../utils/formatters';
+import { ContentReveal, PanelSkeleton } from './Skeleton';
 
 interface BrokerPositionsPanelProps {
   token: string;
@@ -69,35 +70,42 @@ const BrokerPositionsPanel: React.FC<BrokerPositionsPanelProps> = ({ token, sess
             <Wallet size={28} style={{ opacity: 0.3 }} />
             <span style={{ color: 'var(--red)' }}>Could not load broker holdings: {error}</span>
           </div>
-        ) : positions.length === 0 ? (
-          <div className="empty-state">
-            <Wallet size={28} style={{ opacity: 0.3 }} />
-            <span>{loading ? 'Loading holdings…' : 'No broker holdings'}</span>
-          </div>
         ) : (
-          <div className="position-list">
-            {positions.map((pos) => {
-              const upl = pos.unrealized_pl ?? 0;
-              const pnlColor = upl > 0 ? 'var(--green)' : upl < 0 ? 'var(--red)' : 'var(--text-muted)';
-              return (
-                <div className="position-card" key={pos.ticker ?? Math.random()}>
-                  <div className="position-top">
-                    <span className="signal-pair">{pos.ticker ?? '—'}</span>
-                    <span className="position-pnl" style={{ color: pnlColor }}>
-                      {upl >= 0 ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
-                      {formatCurrency(pos.unrealized_pl)} ({pctFmt(pos.unrealized_pl_pct)})
-                    </span>
-                  </div>
-                  <div className="position-meta-row">
-                    <span className="badge badge-blue">{qtyFmt(pos.quantity)} units</span>
-                    <span className="position-meta-text">
-                      avg {formatCurrency(pos.avg_price)} · now {formatCurrency(pos.current_price)} · mkt {formatCurrency(pos.market_value)}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+          <ContentReveal
+            loading={loading && positions.length === 0}
+            skeleton={<PanelSkeleton rows={3} label="Loading holdings" />}
+          >
+            {positions.length === 0 ? (
+              <div className="empty-state">
+                <Wallet size={28} style={{ opacity: 0.3 }} />
+                <span>No broker holdings</span>
+              </div>
+            ) : (
+              <div className="position-list">
+                {positions.map((pos) => {
+                  const upl = pos.unrealized_pl ?? 0;
+                  const pnlColor = upl > 0 ? 'var(--green)' : upl < 0 ? 'var(--red)' : 'var(--text-muted)';
+                  return (
+                    <div className="position-card" key={pos.ticker ?? Math.random()}>
+                      <div className="position-top">
+                        <span className="signal-pair">{pos.ticker ?? '—'}</span>
+                        <span className="position-pnl" style={{ color: pnlColor }}>
+                          {upl >= 0 ? <ArrowUp size={11} /> : <ArrowDown size={11} />}
+                          {formatCurrency(pos.unrealized_pl)} ({pctFmt(pos.unrealized_pl_pct)})
+                        </span>
+                      </div>
+                      <div className="position-meta-row">
+                        <span className="badge badge-blue">{qtyFmt(pos.quantity)} units</span>
+                        <span className="position-meta-text">
+                          avg {formatCurrency(pos.avg_price)} · now {formatCurrency(pos.current_price)} · mkt {formatCurrency(pos.market_value)}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </ContentReveal>
         )}
       </div>
     </div>

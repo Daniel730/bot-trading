@@ -2,6 +2,7 @@ import React from 'react';
 import type { HealthResponse, LogsResponse } from '../services/api';
 import { SectionHeader, LineMiniChart } from '../components/UIHelpers';
 import { formatDateTime } from '../utils/formatters';
+import { PanelSkeleton } from '../components/Skeleton';
 
 interface SystemHealthPageProps {
   health: HealthResponse | null;
@@ -18,10 +19,19 @@ const SystemHealthPage: React.FC<SystemHealthPageProps> = ({
     : health.runtime.broker_paper_trading ? 'Yes' : 'No';
   const alpacaEndpointClass = health?.runtime?.alpaca_endpoint_class?.toUpperCase() ?? '—';
 
+  if (!health) {
+    return (
+      <>
+        <SectionHeader title="System Health" subtitle="CPU, memory, network, and event visibility." />
+        <PanelSkeleton rows={5} label="Loading system health" />
+      </>
+    );
+  }
+
   return (
     <>
       <SectionHeader title="System Health" subtitle="CPU, memory, network, and event visibility." />
-      <div className="card-grid metrics">
+      <div className="card-grid metrics content-reveal-layer">
         <div className="metric-card">
           <span>CPU</span>
           <strong>{health?.current?.cpu_pct?.toFixed(1) ?? '—'}%</strong>
