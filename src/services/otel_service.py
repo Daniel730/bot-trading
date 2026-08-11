@@ -197,7 +197,7 @@ def set_span_attributes(attributes: Mapping[str, AttributeValue]) -> None:
 
 
 def reset_for_tests() -> None:
-    """Reset module flags and TracerProvider (unit tests only)."""
+    """Reset module flags and restore a NoOp TracerProvider (unit tests only)."""
     global _SETUP_DONE, _ENABLED
     _SETUP_DONE = False
     _ENABLED = False
@@ -205,6 +205,8 @@ def reset_for_tests() -> None:
     trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
     trace._PROXY_TRACER_PROVIDER = None  # type: ignore[attr-defined]
     trace._TRACER_PROVIDER_SET_ONCE = trace.Once()  # type: ignore[attr-defined]
+    # Always leave a working provider so later tests (orchestrator, etc.) can span.
+    trace.set_tracer_provider(trace.NoOpTracerProvider())
 
 
 def setup_inmemory_tracer() -> Any:
@@ -215,6 +217,11 @@ def setup_inmemory_tracer() -> Any:
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    # Replace whatever provider reset_for_tests installed.
+    trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
+    trace._PROXY_TRACER_PROVIDER = None  # type: ignore[attr-defined]
+    trace._TRACER_PROVIDER_SET_ONCE = trace.Once()  # type: ignore[attr-defined]
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider(resource=Resource.create({"service.name": "alpha-arbitrage-test"}))
