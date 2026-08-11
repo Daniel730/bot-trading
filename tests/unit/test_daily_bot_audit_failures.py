@@ -260,3 +260,69 @@ def test_historical_trend_empty_when_no_metrics(tmp_path, monkeypatch):
     hist = dba.compute_historical_trend()
     assert hist["available"] is False
     assert "note" in hist
+
+
+# --- alerting policy (brief: what to do with a bad verdict) ----------------- #
+def test_should_open_critical_issue_policy():
+    assert dba.should_open_critical_issue("CRITICAL", True) is True
+    assert dba.should_open_critical_issue("DEGRADED", True) is False
+    assert dba.should_open_critical_issue("CRITICAL", False) is False
+    assert dba.critical_issue_title("2026-08-11") == \
+        "Daily Bot Audit CRITICAL — 2026-08-11"
+
+
+def test_open_critical_issue_idempotent_and_safe(monkeypatch):
+    # Simulate gh auth OK, then an existing same-day issue -> no duplicate.
+    calls = {}
+
+    def fake_run(cmd, *a, **k):
+        calls.setdefault(tuple(cmd[:3]), 0)
+        calls[tuple(cmd[:3])] += 1
+        if cmd[1:3] == ["auth", "status"]:
+            return (0, "", "")
+        if cmd[1:3] == ["issue", "list"]:
+            # gh issue list returns an existing open critical issue
+            return (0, '[{"number": 99}]', "")
+        return (0, "", "")
+
+    monkeypatch.setattr(dba, "_run", fake_run)
+    rep = _report()
+    rep.verdict = "CRITICAL"
+    rep.findings.append(dba.Finding("CRITICAL", "boom", "detail", "X"))
+    res = dba.open_critical_issue(rep)
+    # Did NOT file a new issue because one already exists same-day.
+    assert res["opened"] is False
+    assert res["reason"] == "already-open"
+    assert tuple(["gh", "issue", "create"]) not in [
+        tuple(c[:3]) for c in calls
+    ]
+
+
+def test_open_critical_issue_files_when_none_exists(monkeypatch):
+    calls = {}
+
+    def fake_run(cmd, *a, **k):
+        calls[tuple(cmd[:3])] = calls.get(tuple(cmd[:3]), 0) + 1
+        if cmd[1:3] == ["auth", "status"]:
+            return (0, "", "")
+        if cmd[1:3] == ["issue", "list"]:
+            return (0, "[]", "")  # no existing issue
+        if cmd[1:3] == ["issue", "create"]:
+            return (0, "", "")
+        return (0, "", "")
+
+    monkeypatch.setattr(dba, "_run", fake_run)
+    rep = _report()
+    rep.verdict = "CRITICAL"
+    rep.findings.append(dba.Finding("CRITICAL", "boom", "detail", "X"))
+    res = dba.open_critical_issue(rep)
+    assert res["opened"] is True
+    assert calls.get(("gh", "issue", "create"), 0) == 1
+
+
+def test_open_critical_issue_degraded_is_noop():
+    rep = _report()
+    rep.verdict = "DEGRADED"
+    res = dba.open_critical_issue(rep)  # no gh monkeypatch; must no-op safely
+    assert res["opened"] is False
+    assert res["reason"] == "not-critical-or-no-gh"

@@ -995,6 +995,67 @@ def run_audit(date: str, tests_mode: str, no_github: bool, no_autofix: bool) -> 
     return report
 
 
+# --------------------------------------------------------------------------- #
+# Alerting policy (brief: what to do with a bad verdict)
+# --------------------------------------------------------------------------- #
+# Only CRITICAL auto-opens a GitHub issue. DEGRADED is surfaced as a warning
+# annotation (CI) but never auto-files — a human already owns those. Idempotent:
+# a same-day issue is not duplicated (we search by date title before creating).
+CRITICAL_ISSUE_TITLE_PREFIX = "Daily Bot Audit CRITICAL"
+
+
+def should_open_critical_issue(verdict: str, gh_available: bool) -> bool:
+    """Pure policy decision — unit-tested, no network."""
+    return verdict == "CRITICAL" and gh_available
+
+
+def critical_issue_title(date: str) -> str:
+    return f"{CRITICAL_ISSUE_TITLE_PREFIX} — {date}"
+
+
+def open_critical_issue(report: Report) -> dict:
+    """File a GitHub issue on CRITICAL (idempotent). Never raises; degrades
+    gracefully (returns {'opened': False, 'reason': ...} if gh/token missing)."""
+    if not should_open_critical_issue(report.verdict, _gh_available()):
+        return {"opened": False, "reason": "not-critical-or-no-gh"}
+    title = critical_issue_title(report.date)
+    # Idempotency: skip if a same-day critical issue already exists.
+    rc, out, _ = _run(
+        ["gh", "issue", "list", "--state", "open", "--search", title,
+         "--json", "number", "--limit", "1"],
+        timeout=30,
+    )
+    if rc == 0:
+        try:
+            if json.loads(out or "[]"):
+                return {"opened": False, "reason": "already-open"}
+        except json.JSONDecodeError:
+            pass
+    body = (
+        f"Daily Bot Audit flagged a **CRITICAL** verdict on {report.date} "
+        f"(commit {report.commit}, env {report.environment}).\n\n"
+        f"Findings:\n"
+        + "\n".join(f"- [{f.severity}] {f.title}" for f in report.findings
+                    if f.severity in ("CRITICAL", "HIGH"))
+        + "\n\nFull report: `reports/daily-audit/"
+        f"{report.date}.md`. Requires human triage — do NOT auto-remediate "
+        f"anything that could affect capital."
+    )
+    rc, _, err = _run(
+        ["gh", "issue", "create", "--title", title, "--body", body,
+         "--label", "audit-critical"],
+        timeout=30,
+    )
+    if rc != 0:
+        return {"opened": False, "reason": f"gh-failed:{err[:120]}"}
+    return {"opened": True, "title": title}
+
+
+def _gh_available() -> bool:
+    rc, _, _ = _run(["gh", "auth", "status"], timeout=20)
+    return rc == 0
+
+
 def _env_label() -> str:
     rc, branch, _ = _run(["git", "-C", str(GIT), "rev-parse", "--abbrev-ref", "HEAD"])
     branch = branch.strip() or "unknown"
@@ -1012,11 +1073,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--autofix", action="store_true", default=False,
                     help="ENABLE safe, guarded auto-remediation (opt-in; "
                          "default is OFF / fully read-only)")
+    ap.add_argument("--issue-on-critical", action="store_true", default=False,
+                    help="Auto-open a GitHub issue when verdict is CRITICAL "
+                         "(opt-in; idempotent by date; default OFF)")
     args = ap.parse_args(argv)
 
     report = run_audit(args.date, args.tests, args.no_github, not args.autofix)
     print(render_report(report))
     print(f"\nReport written to: reports/daily-audit/{args.date}.md", file=sys.stderr)
+    if args.issue_on_critical:
+        res = open_critical_issue(report)
+        print(f"Critical-issue dispatch: {res}", file=sys.stderr)
     return {"HEALTHY": 0, "DEGRADED": 1, "CRITICAL": 2}[report.verdict]
 
 

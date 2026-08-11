@@ -20,10 +20,15 @@ on:
         required: false
         default: false
         type: boolean
+      issue_on_critical:
+        description: "Auto-open a GitHub issue when verdict is CRITICAL (idempotent by date)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
-  issues: read
+  issues: write
   actions: read
 
 concurrency:
@@ -59,7 +64,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python scripts/daily_bot_audit.py \
-            --tests "${{ github.event.inputs.tests || 'fast' }}" || true
+            --tests "${{ github.event.inputs.tests || 'fast' }}" \
+            ${{ github.event.inputs.autofix == 'true' && '--autofix' || '' }} \
+            ${{ github.event.inputs.issue_on_critical == 'true' && '--issue-on-critical' || '' }} || true
           # Note: auto-remediation is OFF by default (safe/opt-in). Pass
           # --autofix only for an explicit, reviewed remediation run.
           # The verdict is surfaced (not failed) by the step below so the
