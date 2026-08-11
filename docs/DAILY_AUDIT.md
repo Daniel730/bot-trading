@@ -24,11 +24,11 @@ them into one reproducible, versioned, observable daily report.
 |---|---|---|
 | **Runtime** | `docker`/`pgrep` probe | Detects bot on this host; honestly reports "not-running-here" on dev/CI. Real runtime checks belong to `infra/ops_overnight_check.sh` on bot-server. |
 | **Logs** | `logs/structured_logs.jsonl` | Pattern rules distinguish **expected fail-closed safety behavior** (reconciliation, emergency closes, exactly-once refusals) from **real incidents** (Traceback/OOM/duplicate-fill/unknown-exposure). Naive `ERROR` counting is explicitly avoided. |
-| **Trading** | dashboard API `:8080` | Best-effort positions/orders/PnL if the bot API is reachable from the audit host; otherwise reports unavailable. |
+| **Trading** | dashboard API (configurable `AUDIT_BOT_HOST`, default `http://127.0.0.1:8082`) | Best-effort positions/orders/PnL if the bot API is reachable from the audit host; otherwise reports unavailable. |
 | **Software** | `pytest` + `ruff` + `bug_hunt_audit.py` | Mirrors the CI gate (`ci.yml`): broker/config safety contract tests, ruff undefined-names, the existing secret-hygiene preflight. |
 | **GitHub** | `gh` CLI | Open issues (auto-classified), failed CI runs, PRs, dependabot. |
 | **Financial Safety** | static source grep | Verifies the BUG→TRADE→LOSS guard rails (ADR-003/006/008/010/012) with `file:line` evidence. Proves the path is mitigated, not assumed safe. |
-| **Trend** | previous `latest.md` | Errors / incidents / API-degraded / expected-fail-closed compared to the prior run. |
+| **Trend** | previous `latest.md` + `metrics/*.json` | Errors / incidents / API-degraded / expected-fail-closed vs the prior run **and** a multi-day historical window (brief §11). |
 | **Auto-fixes / Requires Review** | remediation module | Safe fixes applied (opt-in) with anti-loop guards; everything else listed for humans. |
 
 ---
@@ -45,7 +45,7 @@ PYTHONPATH=. .venv/Scripts/python.exe scripts/daily_bot_audit.py --tests fast
 # full (adds the heavy monitor_execution/closing safety tests): ~10 min
 PYTHONPATH=. .venv/Scripts/python.exe scripts/daily_bot_audit.py --tests full
 
-# enable safe hygiene auto-remediation (opt-in)
+# enable safe hygiene auto-remediation (opt-in; OFF by default)
 PYTHONPATH=. .venv/Scripts/python.exe scripts/daily_bot_audit.py --autofix
 
 # skip GitHub (e.g. no token)
@@ -109,7 +109,7 @@ GITHUB          - open issues, failed CI runs
 FINANCIAL SAFETY - guard: file:line evidence
 AUTOMATIC FIXES - what was applied (empty by default)
 REQUIRES REVIEW - human actions
-HISTORICAL TREND - previous vs current metric snapshot
+HISTORICAL TREND - previous vs current snapshot + multi-day deltas / worsening / recurring (brief §11)
 OVERALL VERDICT - HEALTHY / DEGRADED / CRITICAL
 ```
 
@@ -158,6 +158,36 @@ recorded so it won't be retried inside the cooldown.
 
 ---
 
+## 4½. Historical observability (brief §11)
+
+The audit writes a **machine-readable daily metric snapshot** to
+`reports/daily-audit/metrics/YYYY-MM-DD.json` (gitignored — it's generated
+data) on every run, in addition to the human-readable `*.md` report. This
+answers the brief's questions without standing up Prometheus/Grafana:
+
+- **Better or worse than yesterday?** `compute_historical_trend()` compares the
+  last `N` days (default 7) and reports per-metric deltas and a
+  `worsening_vs_prev` map (any "bad-up" metric that rose vs the prior day).
+- **Are errors / retries / rejections / failed-CI runs rising?** Tracked across
+  the window via the `deltas` series; `recurring` flags any metric elevated on
+  ≥2 distinct recent days.
+- **Verdict trajectory** — are we getting healthier? Rendered as the list of
+  daily verdicts.
+
+### On-demand trend view
+
+```bash
+# print the multi-day trend (exit 1 if any metric worsened / recurs — cron-ready)
+PYTHONPATH=. .venv/Scripts/python.exe scripts/audit_trend.py --days 7
+PYTHONPATH=. .venv/Scripts/python.exe scripts/audit_trend.py --days 7 --json
+```
+
+The CI workflow also prints the trend after each run. A single day of data
+shows flat deltas (Δ0) — the signal accumulates once multiple daily snapshots
+exist.
+
+---
+
 ## 5. `REQUIRES_REVIEW` criteria
 
 A finding is marked `REQUIRES_REVIEW` when it could affect capital, availability,
@@ -187,9 +217,9 @@ These are never auto-fixed. The audit lists them and a human decides.
 - **False `CRITICAL` on logs?** The `_INCIDENT` regex is in `analyzze_logs`. If a
   new benign pattern triggers it, add it to `_EXPECTED_FAIL_CLOSED` with evidence
   and a test in `tests/unit/test_daily_bot_audit.py`.
-- **Accidental auto-fix?** Auto-fix is opt-in and each fix is reversible
-  (`restore`). To disable entirely, run with `--no-autofix` (the default). State
-  lives in `data/audit/remediation_state.json`; delete it to reset the guards.
+- **Accidental auto-fix?** Auto-fix is opt-in (`--autofix`) and each fix is
+  reversible (`restore`). The default run never auto-fixes. State lives in
+  `data/audit/remediation_state.json`; delete it to reset the guards.
 
 ---
 
