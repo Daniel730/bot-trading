@@ -38,6 +38,7 @@ dependencies {
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
     testImplementation("org.postgresql:postgresql:42.7.3") // JDBC driver required by Testcontainers PostgreSQLContainer
 }
 
