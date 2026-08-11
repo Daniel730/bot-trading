@@ -86,7 +86,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 
 | Area | Target | Status (foundation audit) | Tracking |
 |---|---|---|---|
-| Tracing / metrics | OpenTelemetry (OTLP) | Missing SDK (transitive `opentelemetry-api` only); internal `telemetry_service` stub | #118, #122 |
+| Tracing / metrics | OpenTelemetry (OTLP) | Missing SDK (transitive `opentelemetry-api` only); dashboard WS telemetry is real (#122) | #118, #122 |
 | Errors | Sentry | Missing | #119 |
 | APM / ops | Datadog | **Not planned** — use OTel + Sentry (see #120 close rationale) | #120 |
 | APM (optional) | New Relic | **Not planned** — duplicate APM vs OTel + Sentry | #121 |
