@@ -43,9 +43,14 @@ npm run lint:biome   # Biome lint
 npm run format       # Biome format --write
 npm run format:check # Biome format check
 npm run check        # Biome check (lint+format; CI warn-first)
+npm run knip         # Dead code/deps scan (CI warn-first; cleanup in a follow-up PR)
 npm run test         # Vitest
 npm run preview      # preview built bundle
 ```
+
+### Knip notes
+
+`frontend/knip.json` treats Vite entrypoints + Vitest specs as entries. CI runs `npm run knip` warn-first; the first cleanup of unused exports/deps should be a separate PR after the baseline is reviewed. `@vitest/coverage-v8` is intentionally ignored (CI installs it ad hoc).
 
 ### Lint/format decision (ESLint + Biome)
 
