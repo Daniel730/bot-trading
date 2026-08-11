@@ -4,6 +4,26 @@ Project setup, code, and testing guidance live in `README.md`, `GEMINI.md`, and 
 
 **Required process for every agent:** [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) — create GitHub issues (`[Correção]` / `[Melhoria]` / `[Nova função]`), work via feature branches + PRs that `Fixes #N`, prefer Hermes via forge for cheap survey/draft, keep `PAPER_TRADING` defaults, never commit secrets. Target observability/quality/test/motion stack and backlog links live there.
 
+## GitHub Copilot custom agents
+
+Repository profiles live in [`.github/agents/`](.github/agents/README.md). Use the smallest matching agent:
+
+| Agent | When |
+|---|---|
+| Trading Safety | Strategy, risk, broker/mode, execution, `signal_id` |
+| Code Reviewer | PR/diff review |
+| Test Engineer | Pytest / Vitest / Java tests and CI gaps |
+| Ops / SRE | Compose, deploy, health, incidents |
+
+Shared Copilot instructions: [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
+
+**Name collision:** [`docs/agents.md`](docs/agents.md) documents the **runtime** signal ensemble (`src/agents/`), not Copilot profiles.
+
+### Safety boundaries (all agents)
+
+- **Safe:** read code, run tests, lint, docs, branches/PRs, paper/shadow validation.
+- **Human approval required:** live trading, risk/sizing/strategy threshold changes, production credentials, production deploy, disabling 2FA/approval/safety gates, wiping Docker volumes, non-loopback binds for redis/postgres/mcp/gRPC.
+
 ## Cursor Cloud specific instructions
 
 This environment is a multi-language monorepo. The update script already refreshes

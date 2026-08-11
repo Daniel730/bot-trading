@@ -30,7 +30,8 @@ Default to paper mode while changing execution logic.
 | `execution-engine/` | Java gRPC execution service |
 | `infra/` | Docker and deployment wiring |
 | `tests/` | Python tests |
-| `.gemini/` | Gemini command/skill artifacts kept in this repo |
+| `.agents/` | Speckit commands/skills (engineering / quant / motion) |
+| `.github/agents/` | Copilot custom agents (trading safety, review, test, ops) |
 | `.specify/` and `specs/` | Feature planning templates and specs |
 
 ## Commands

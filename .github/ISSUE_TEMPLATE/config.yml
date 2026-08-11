@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Agent workflow
+    url: https://github.com/Daniel730/bot-trading/blob/master/docs/AGENT_WORKFLOW.md
+    about: Required process for coding agents (issues, PRs, paper defaults, Hermes).
+  - name: Operations runbook
+    url: https://github.com/Daniel730/bot-trading/blob/master/docs/OPERATIONS.md
+    about: Deploy, health checks, and day-2 operations — not for feature requests.
+  - name: GitHub custom agents
+    url: https://github.com/Daniel730/bot-trading/blob/master/.github/agents/README.md
+    about: Copilot agent profiles for trading safety, review, tests, and ops.
