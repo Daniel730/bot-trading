@@ -44,8 +44,19 @@ npm run format       # Biome format --write
 npm run format:check # Biome format check
 npm run check        # Biome check (lint+format; CI warn-first)
 npm run test         # Vitest
+npm run test:mutate  # Stryker mutation testing (focused files; slow — see below)
 npm run preview      # preview built bundle
 ```
+
+### Stryker (mutation testing)
+
+Config: `frontend/stryker.config.json` — initial mutate set is critical shared modules (`api.ts`, config metadata, navigation). Thresholds are informational (`break: null`); record a baseline score locally before tightening CI.
+
+```bash
+npm run test:mutate
+```
+
+Reports land under `frontend/reports/mutation/`. CI: `.github/workflows/mutation-frontend.yml` (`workflow_dispatch` only), not on every PR.
 
 ### Lint/format decision (ESLint + Biome)
 

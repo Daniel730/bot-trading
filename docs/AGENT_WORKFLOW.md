@@ -94,7 +94,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `ci.yml` + `deploy.yml` quality_python | #128 |
 | Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
 | Dead code | Knip (frontend) | Missing | #125 |
-| Mutation testing | Stryker (frontend) | Missing | #126 |
+| Mutation testing | Stryker (frontend) | Scaffolded (`stryker.config.json` + optional weekly/dispatch workflow) | #126 |
 | Architecture tests | ArchUnit (Java) + Python arch-contract | Missing | #127 |
 | Coverage | Codecov | `codecov.yml` + fail-soft uploads in `ci.yml`/`deploy.yml` | #129 |
 | E2E | Playwright | Missing (Vitest unit/component only) | #130 |
