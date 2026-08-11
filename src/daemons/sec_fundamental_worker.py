@@ -166,11 +166,15 @@ class SECFundamentalWorker:
         signal_id = f"bg-worker-{ticker}-{int(time.time())}"
         signal = await self.analyst.analyze_ticker(signal_id, ticker)
 
-        # analyze_ticker falls back when sections are empty; never cache that as real state.
+        # analyze_ticker falls back when sections are empty or the LLM fails;
+        # never cache those defaults as EDGAR-backed VALID state.
         fallback_markers = (
             "No SEC filings found",
             "due to missing SEC data",
             "Fallback to default",
+            "technical failure",
+            "LLM error",
+            "Analysis failed due to LLM",
         )
         reasoning = signal.final_reasoning or ""
         prosecutor = signal.prosecutor_argument or ""

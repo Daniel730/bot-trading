@@ -114,6 +114,31 @@ async def test_analyze_and_cache_skips_fallback_signal():
 
 
 @pytest.mark.asyncio
+async def test_analyze_and_cache_skips_llm_technical_failure():
+    """LLM-50 fallback must never be cached as source=edgar VALID."""
+    worker = SECFundamentalWorker()
+    worker.analyst = MagicMock()
+    worker.analyst.analyze_ticker = AsyncMock(
+        return_value=FundamentalSignal(
+            signal_id="bg",
+            ticker="AAPL",
+            structural_integrity_score=50,
+            prosecutor_argument="Analysis failed due to LLM error.",
+            defender_argument="Analysis failed due to LLM error.",
+            final_reasoning="Defaulting to 50 due to technical failure.",
+        )
+    )
+
+    with patch(
+        "src.daemons.sec_fundamental_worker.redis_service.set_fundamental_score",
+        new_callable=AsyncMock,
+    ) as set_score:
+        await worker._analyze_and_cache.__wrapped__(worker, "AAPL")
+
+    set_score.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_analyze_and_cache_writes_edgar_metadata():
     worker = SECFundamentalWorker()
     worker.analyst = MagicMock()
