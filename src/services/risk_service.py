@@ -2,8 +2,11 @@ from decimal import Decimal, ROUND_DOWN
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 import inspect
+import logging
 from src.config import settings
 from src.services.agent_log_service import agent_trace
+
+logger = logging.getLogger(__name__)
 
 class FeeAnalyzer:
     def __init__(self, max_friction_pct: Optional[float] = None):
@@ -184,7 +187,10 @@ class RiskService:
                 })
             elif region == "EU":
                 # FR-006: Bypass hedge and log critical alert for unmapped assets in EU
-                print(f"AGENT_LOGGER: CRITICAL - EU Compliance Mapping missing for {ticker}. Hedge bypassed.")
+                logger.critical(
+                    "AGENT_LOGGER: EU Compliance Mapping missing for %s. Hedge bypassed.",
+                    ticker,
+                )
 
         return {
             "status": "DEFCON_1",
