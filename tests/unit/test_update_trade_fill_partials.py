@@ -88,6 +88,7 @@ async def test_get_open_signals_exposes_partial_fill_fields(monkeypatch):
     trade.is_shadow = False
     trade.execution_lane = "BROKER"
     trade.status = OrderStatus.PARTIAL_EXPOSURE
+    trade.order_id = "ord-a"
     trade.metadata_json = {
         "filled_qty": 4.0,
         "filled_avg_price": 151.25,
@@ -111,3 +112,5 @@ async def test_get_open_signals_exposes_partial_fill_fields(monkeypatch):
     assert leg["filled_avg_price"] == 151.25
     assert leg["expected_qty"] == 10.0
     assert leg["remaining_qty"] == 6.0
+    assert leg["filled_qty"] == 4.0
+    assert leg["order_id"] == "ord-a"
