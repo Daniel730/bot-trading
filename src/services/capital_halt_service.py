@@ -110,7 +110,10 @@ async def evaluate_capital_halt(
         except Exception as exc:  # noqa: BLE001
             logger.warning("capital_halt: rolling metrics unavailable: %s", exc)
 
-    # R-303: equity high-water-mark / unrealized drawdown (broker equity as truth).
+    # R-303: equity HWM / unrealized drawdown.
+    # Under IGNORE_UNMANAGED_POSITIONS, track *managed* equity (broker equity minus
+    # unmanaged MV) — same risk base as sizing_base (#149 / #150). Full broker
+    # equity remains the base when ignore-unmanaged is off.
     equity_halt = await _evaluate_equity_drawdown(
         persistence_service=persistence_service,
         max_dd=max_dd,
@@ -122,6 +125,50 @@ async def evaluate_capital_halt(
     return {"halt": False, "reason": None, "details": details}
 
 
+async def _managed_equity_for_hwm(
+    *,
+    brokerage: Any,
+    broker_equity: float,
+    persistence_service: Any,
+    details: dict[str, Any],
+) -> Optional[float]:
+    """Return equity used for HWM / drawdown, or None when probe must fail-close.
+
+    Decision (#150): when ``IGNORE_UNMANAGED_POSITIONS`` is True on a broker path
+    (``PAPER_TRADING=false``), HWM tracks managed equity = broker equity − unmanaged MV.
+    Shadow paper keeps broker equity unchanged (no foreign-inventory probe).
+    """
+    details["broker_equity"] = broker_equity
+    ignore_unmanaged = bool(getattr(settings, "IGNORE_UNMANAGED_POSITIONS", False))
+    details["equity_base"] = "managed" if ignore_unmanaged and not bool(
+        getattr(settings, "PAPER_TRADING", True)
+    ) else "broker"
+
+    if details["equity_base"] != "managed":
+        details["unmanaged_mv"] = 0.0
+        return broker_equity
+
+    try:
+        import inspect
+
+        from src.services.unmanaged_positions_service import unmanaged_market_value
+
+        maybe_positions = brokerage.get_positions()
+        positions = (
+            await maybe_positions if inspect.isawaitable(maybe_positions) else maybe_positions
+        )
+        open_signals = await persistence_service.get_open_signals()
+        unmanaged_mv = float(unmanaged_market_value(positions or [], open_signals or []) or 0.0)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("capital_halt: unmanaged MV unavailable for managed HWM: %s", exc)
+        details["error"] = str(exc)
+        details["unmanaged_mv"] = None
+        return None
+
+    details["unmanaged_mv"] = unmanaged_mv
+    return max(0.0, float(broker_equity) - unmanaged_mv)
+
+
 async def _evaluate_equity_drawdown(
     *,
     persistence_service: Any,
@@ -131,14 +178,14 @@ async def _evaluate_equity_drawdown(
     """Halt when (HWM - current_equity) / HWM >= MAX_DRAWDOWN.
 
     Updates ``equity_high_water_mark`` in system_state when equity makes new highs.
-    Fail-closed on broker/live when equity cannot be read.
+    Fail-closed on broker/live when equity (or managed-equity inputs) cannot be read.
     """
     try:
         from src.services.brokerage_service import BrokerageService
 
         brokerage = BrokerageService()
         equity = await brokerage.get_account_equity()
-        equity_f = float(equity or 0.0)
+        broker_equity = float(equity or 0.0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("capital_halt: equity unavailable: %s", exc)
         if not bool(getattr(settings, "PAPER_TRADING", True)):
@@ -146,6 +193,21 @@ async def _evaluate_equity_drawdown(
                 "halt": True,
                 "reason": "equity_unavailable",
                 "details": {**details, "error": str(exc)},
+            }
+        return None
+
+    equity_f = await _managed_equity_for_hwm(
+        brokerage=brokerage,
+        broker_equity=broker_equity,
+        persistence_service=persistence_service,
+        details=details,
+    )
+    if equity_f is None:
+        if not bool(getattr(settings, "PAPER_TRADING", True)):
+            return {
+                "halt": True,
+                "reason": "managed_equity_unavailable",
+                "details": details,
             }
         return None
 

@@ -158,6 +158,7 @@ async def test_exactly_once_leg_b_independent():
 @pytest.mark.asyncio
 async def test_r303_equity_hwm_drawdown_halts(monkeypatch):
     monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "IGNORE_UNMANAGED_POSITIONS", False)
     monkeypatch.setattr(settings, "MAX_DRAWDOWN", 0.10)
 
     await persistence_service.set_system_state("operational_status", "NORMAL")
@@ -182,6 +183,7 @@ async def test_r303_equity_hwm_drawdown_halts(monkeypatch):
 @pytest.mark.asyncio
 async def test_r303_equity_new_high_updates_hwm(monkeypatch):
     monkeypatch.setattr(settings, "PAPER_TRADING", False)
+    monkeypatch.setattr(settings, "IGNORE_UNMANAGED_POSITIONS", False)
     monkeypatch.setattr(settings, "MAX_DRAWDOWN", 0.50)
     await persistence_service.set_system_state("operational_status", "NORMAL")
     await persistence_service.set_system_state("equity_high_water_mark", "10000")
