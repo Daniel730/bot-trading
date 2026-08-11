@@ -9,7 +9,7 @@ React 19 + TypeScript operations console for the trading bot. The first screen i
 - TypeScript 5
 - lucide-react icons
 - framer-motion (partial: e.g. `PairsPanel`, `IntelligenceHub` — broader motion tracked in #134)
-- ESLint 9 (`npm run lint`; Biome not installed yet — #123)
+- ESLint 9 (`npm run lint`) + Biome 2 (`npm run lint:biome` / `format` / `check`) — coexistence: ESLint remains the CI lint gate; Biome is warn-first until a dedicated format PR
 - Vitest + Testing Library
 - nginx static serving in Docker
 
@@ -38,10 +38,18 @@ VITE_API_TIMEOUT_MS=15000
 ```bash
 npm run dev      # Vite dev server
 npm run build    # TypeScript build + Vite bundle
-npm run lint     # ESLint 9
-npm run test     # Vitest
-npm run preview  # preview built bundle
+npm run lint         # ESLint 9 (CI gate)
+npm run lint:biome   # Biome lint
+npm run format       # Biome format --write
+npm run format:check # Biome format check
+npm run check        # Biome check (lint+format; CI warn-first)
+npm run test         # Vitest
+npm run preview      # preview built bundle
 ```
+
+### Lint/format decision (ESLint + Biome)
+
+Keep **ESLint** as the authoritative React/hooks gate (`npm run lint`). Use **Biome** for fast format/lint feedback locally and as a non-blocking CI signal (`continue-on-error`). Avoid enabling overlapping style rules that fight ESLint; migrate formatting-only responsibility to Biome in a later incremental PR (no mass rewrite here).
 
 ## Authentication Flow
 

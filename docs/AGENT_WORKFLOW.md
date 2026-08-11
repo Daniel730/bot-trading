@@ -90,7 +90,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | Errors | Sentry | Missing | #119 |
 | APM / ops | Datadog | **Not planned** — use OTel + Sentry (see #120 close rationale) | #120 |
 | APM (optional) | New Relic | **Not planned** — duplicate APM vs OTel + Sentry | #121 |
-| Frontend lint | Biome (+ current ESLint until migrated) | ESLint exists; Biome missing | #123 |
+| Frontend lint | Biome (+ current ESLint until migrated) | ESLint CI gate + Biome warn-first (`frontend/biome.json`) | #123 |
 | Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `ci.yml` + `deploy.yml` quality_python | #128 |
 | Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
 | Dead code | Knip (frontend) | Missing | #125 |

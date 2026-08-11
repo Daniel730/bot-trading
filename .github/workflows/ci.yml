@@ -206,6 +206,11 @@ jobs:
         working-directory: frontend
         run: npm run lint
 
+      - name: Biome check (warn-first)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm run check
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
