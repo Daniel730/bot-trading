@@ -65,6 +65,10 @@ jobs:
           # The verdict is surfaced (not failed) by the step below so the
           # report artifact is always uploaded.
 
+      - name: Show historical trend (brief §11)
+        if: always()
+        run: python scripts/audit_trend.py --days 7 || true
+
       - name: Upload audit report
         if: always()
         uses: actions/upload-artifact@v4

@@ -216,3 +216,47 @@ def test_expected_fail_closed_not_flagged_as_incident(tmp_path, monkeypatch):
     # fail-closed safety line is NOT an incident
     assert res["incidents"] == []
     assert res["expected_fail_closed"] >= 1
+
+
+# --- historical observability (brief §11) ----------------------------------- #
+def test_write_metrics_and_historical_trend(tmp_path, monkeypatch):
+    # Point metrics dir at tmp and seed two prior days with a worsening series.
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(dba, "METRICS_DIR", metrics_dir)
+    import json as _json
+    for d, errs in [("2026-08-09", 1), ("2026-08-10", 2), ("2026-08-11", 5)]:
+        (metrics_dir / f"{d}.json").write_text(
+            _json.dumps({"date": d, "errors": errs, "incidents": 0,
+                         "api_degraded": 0, "verdict": "DEGRADED"}),
+            encoding="utf-8",
+        )
+    # Build a report whose log analysis yields errors=5 (matches last seeded day)
+    log = tmp_path / "structured_logs.jsonl"
+    log.write_text(
+        '{"level":"ERROR","message":"boom","timestamp":"2026-08-11T10:00:00+00:00"}\n' * 5,
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dba, "LOG_PATH", log)
+    rep = _report()
+    rep.sections["logs"] = dba.analyze_logs(rep)
+    p = dba.write_metrics(rep)
+    assert p.exists()
+    saved = _json.loads(p.read_text(encoding="utf-8"))
+    assert saved["date"] == "2026-08-11"
+    # Historical trend sees the worsening errors series (1 -> 5) and flags it.
+    hist = dba.compute_historical_trend(days=7)
+    assert hist["available"] is True
+    assert hist["deltas"]["errors"]["delta"] == 4  # 1 -> 5
+    assert "errors" in hist["worsening_vs_prev"]  # 2 -> 5 vs prev day
+    # verdict trajectory: the 2 seeded days are DEGRADED; the live report is
+    # HEALTHY (5 plain ERROR lines are not incidents), so the last entry is HEALTHY.
+    assert hist["verdict_trajectory"][:2] == ["DEGRADED", "DEGRADED"]
+    assert hist["verdict_trajectory"][-1] in ("HEALTHY", "DEGRADED")
+
+
+def test_historical_trend_empty_when_no_metrics(tmp_path, monkeypatch):
+    monkeypatch.setattr(dba, "METRICS_DIR", tmp_path / "empty_metrics")
+    hist = dba.compute_historical_trend()
+    assert hist["available"] is False
+    assert "note" in hist

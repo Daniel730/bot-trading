@@ -49,6 +49,7 @@ from typing import Any, Optional
 ROOT = Path(__file__).resolve().parents[1]
 REPORT_DIR = ROOT / "reports" / "daily-audit"
 LATEST_REPORT = REPORT_DIR / "latest.md"
+METRICS_DIR = REPORT_DIR / "metrics"  # machine-readable per-day metrics (brief §11)
 # Paths are overridable so the audit works both locally (repo-mirrored logs)
 # and on bot-server (where the bot actually runs, logs/env live elsewhere).
 LOG_PATH = Path(os.environ.get("AUDIT_LOG_PATH", ROOT / "logs" / "structured_logs.jsonl"))
@@ -635,6 +636,111 @@ def compute_trend(report: Report) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# Section: Historical observability (brief §11) — machine-readable per-day
+# metrics + multi-day trend (better/worse than yesterday, rising errors/RAM,
+# recurring problems). Avoids Prometheus/Grafana: just JSONL of dated JSON.
+# --------------------------------------------------------------------------- #
+def current_metrics(report: Report) -> dict:
+    lg = report.sections.get("logs", {})
+    sw = report.sections.get("software", {})
+    gh = report.sections.get("github", {})
+    return {
+        "date": report.date,
+        "commit": report.commit,
+        "environment": report.environment,
+        "verdict": report.verdict,
+        "errors": lg.get("levels", {}).get("ERROR", 0),
+        "warnings": lg.get("levels", {}).get("WARNING", 0),
+        "critical_level": lg.get("levels", {}).get("CRITICAL", 0),
+        "incidents": len(lg.get("incidents", [])),
+        "api_degraded": lg.get("api_degraded_hits", 0),
+        "expected_fail_closed": lg.get("expected_fail_closed", 0),
+        "window_lines": lg.get("window_lines", 0),
+        "pytest_rc": sw.get("pytest", {}).get("rc"),
+        "pytest_passed": sw.get("pytest", {}).get("passed"),
+        "ruff_rc": sw.get("ruff", {}).get("rc"),
+        "bug_hunt_rc": sw.get("bug_hunt", {}).get("rc"),
+        "open_issues": len(gh.get("open_issues", [])),
+        "failed_ci_runs": len(gh.get("failed_runs", []) or []),
+        "findings_by_sev": {s: sum(1 for f in report.findings if f.severity == s)
+                            for s in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO")},
+    }
+
+
+def write_metrics(report: Report) -> Path:
+    METRICS_DIR.mkdir(parents=True, exist_ok=True)
+    p = METRICS_DIR / f"{report.date}.json"
+    p.write_text(json.dumps(current_metrics(report), indent=2), encoding="utf-8")
+    return p
+
+
+def _load_all_metrics() -> list[dict]:
+    if not METRICS_DIR.exists():
+        return []
+    out: list[dict] = []
+    for f in sorted(METRICS_DIR.glob("*.json")):
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, OSError):
+            continue
+    return out
+
+
+def compute_historical_trend(days: int = 7) -> dict:
+    """Compare across the last `days` metric files (brief §11 questions).
+
+    Returns worsening deltas, per-metric recent series, and recurring
+    problem signatures (metric elevated on >=2 of the last days).
+    """
+    rows = _load_all_metrics()
+    rows = [r for r in rows if r.get("date")][-days:]
+    if not rows:
+        return {"available": False, "days": days, "note": "no historical metrics yet"}
+    # Metrics where an increase is BAD.
+    bad_up = ("errors", "incidents", "api_degraded", "critical_level",
+              "failed_ci_runs", "open_issues")
+    series: dict[str, list] = {}
+    for r in rows:
+        for k in bad_up:
+            series.setdefault(k, []).append(r.get(k, 0))
+    first, last = rows[0], rows[-1]
+    deltas = {}
+    for k in bad_up:
+        a, b = first.get(k, 0), last.get(k, 0)
+        deltas[k] = {"first": a, "last": b, "delta": b - a}
+
+    # Worsening vs the immediate previous day.
+    worsening = {}
+    if len(rows) >= 2:
+        prev = rows[-2]
+        for k in bad_up:
+            pv, lv = prev.get(k, 0), last.get(k, 0)
+            if isinstance(lv, (int, float)) and lv > pv:
+                worsening[k] = {"prev": pv, "last": lv, "delta": lv - pv}
+
+    # Recurring problems: metric > 0 on >=2 distinct recent days.
+    recurring = {}
+    for k in bad_up:
+        days_hot = sum(1 for v in series.get(k, []) if v and v > 0)
+        if days_hot >= 2:
+            recurring[k] = {"days_hot": days_hot, "series": series.get(k, [])}
+
+    # Verdict trajectory (are we getting healthier or not?).
+    verdicts = [r.get("verdict") for r in rows]
+    return {
+        "available": True,
+        "days": days,
+        "from": first.get("date"),
+        "to": last.get("date"),
+        "deltas": deltas,
+        "worsening_vs_prev": worsening,
+        "recurring": recurring,
+        "verdict_trajectory": verdicts,
+        "metrics_files": len(rows),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Report rendering
 # --------------------------------------------------------------------------- #
 def render_report(report: Report) -> str:
@@ -736,6 +842,24 @@ def render_report(report: Report) -> str:
     trd = report.trend
     L.append(f"- Previous: {json.dumps(trd.get('previous'))}")
     L.append(f"- Current: {json.dumps(trd.get('current'))}")
+    # Multi-day historical observability (brief §11)
+    h = getattr(report, "historical", {})
+    if h.get("available"):
+        L.append(f"- Window: {h.get('from')} -> {h.get('to')} ({h.get('metrics_files')} daily metrics)")
+        L.append(f"- Verdict trajectory: {h.get('verdict_trajectory')}")
+        L.append("- Deltas (first -> last):")
+        for k, v in h.get("deltas", {}).items():
+            L.append(f"    - {k}: {v.get('first')} -> {v.get('last')} (Δ{v.get('delta')})")
+        if h.get("worsening_vs_prev"):
+            L.append("- Worsening vs previous day:")
+            for k, w in h["worsening_vs_prev"].items():
+                L.append(f"    - {k}: {w['prev']} -> {w['last']} (+{w['delta']})")
+        if h.get("recurring"):
+            L.append("- Recurring problem signals:")
+            for k, r in h["recurring"].items():
+                L.append(f"    - {k}: hot on {r['days_hot']} days (series {r['series']})")
+    else:
+        L.append(f"- {h.get('note', 'no multi-day metrics yet')}")
     L.append("")
     L.append("## OVERALL VERDICT")
     L.append(report.verdict)
@@ -828,6 +952,30 @@ def run_audit(date: str, tests_mode: str, no_github: bool, no_autofix: bool) -> 
 
     # Trend
     report.trend = compute_trend(report)
+
+    # Historical observability (brief §11) — persist machine-readable metrics
+    # and surface worsening / recurring problems as findings.
+    metrics_path = write_metrics(report)
+    hist = compute_historical_trend()
+    if hist.get("available"):
+        for k, w in hist.get("worsening_vs_prev", {}).items():
+            report.add(
+                Finding(
+                    "MEDIUM", f"Metric worsening vs previous day: {k}",
+                    f"{k} went {w['prev']} -> {w['last']} (+{w['delta']})",
+                    "Trend", requires_review=(k in ("incidents", "api_degraded")),
+                )
+            )
+        for k, r in hist.get("recurring", {}).items():
+            report.add(
+                Finding(
+                    "LOW", f"Recurring problem signal: {k}",
+                    f"{k} elevated on {r['days_hot']} of last {hist['days']} days "
+                    f"(series: {r['series']})",
+                    "Trend", requires_review=(k in ("incidents", "api_degraded")),
+                )
+            )
+    report.historical = hist
 
     # Verdict
     sev = report.highest_severity()
