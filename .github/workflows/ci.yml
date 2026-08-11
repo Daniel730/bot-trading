@@ -211,6 +211,11 @@ jobs:
         continue-on-error: true
         run: npm run check
 
+      - name: Knip dead-code scan (warn-first)
+        working-directory: frontend
+        continue-on-error: true
+        run: npm run knip
+
       - name: Build frontend
         working-directory: frontend
         run: npm run build
