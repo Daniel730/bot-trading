@@ -14,6 +14,7 @@ from src.services.redis_service import redis_service
 from src.services.telemetry_service import telemetry_service
 from src.services.persistence_service import persistence_service
 from src.services.decision_trace_service import decision_recorder
+from src.services import otel_service
 from src.config import settings
 
 logger = logging.getLogger(__name__)
@@ -144,8 +145,6 @@ class Orchestrator:
             return (1, 1)
 
     async def ainvoke(self, input_data: dict) -> dict:
-        from src.services.persistence_service import persistence_service
-
         # FR-004: Block new entries if in DEGRADED_MODE
         operational_status = await self._get_system_state("operational_status", "NORMAL")
 
@@ -159,6 +158,41 @@ class Orchestrator:
             "final_confidence": 0.0,
             "final_verdict": ""
         }
+
+        pair_hint = (
+            f"{input_data.get('signal_context', {}).get('ticker_a', '')}_"
+            f"{input_data.get('signal_context', {}).get('ticker_b', '')}"
+        )
+        signal_id = input_data.get("signal_context", {}).get("signal_id")
+        _otel = otel_service.attach_span(
+            "orchestrator.ainvoke",
+            {
+                "pair.id": pair_hint,
+                "signal.id": str(signal_id or ""),
+            },
+        )
+        try:
+            result = await self._ainvoke_body(input_data, state, operational_status)
+            if isinstance(result, dict):
+                state["final_confidence"] = float(result.get("final_confidence") or 0.0)
+                state["final_verdict"] = str(result.get("final_verdict") or "")
+            return result
+        except Exception as exc:  # noqa: BLE001
+            otel_service.detach_span(_otel, error=exc)
+            _otel = None
+            raise
+        finally:
+            if _otel is not None:
+                otel_service.detach_span(
+                    _otel,
+                    attributes={
+                        "orchestrator.confidence": float(state.get("final_confidence") or 0.0),
+                        "orchestrator.verdict": str(state.get("final_verdict") or "")[:200],
+                    },
+                )
+
+    async def _ainvoke_body(self, input_data: dict, state: AgentState, operational_status: str) -> dict:
+        from src.services.persistence_service import persistence_service
 
         if operational_status == "DEGRADED_MODE":
             state["final_confidence"] = 0.0

@@ -213,6 +213,19 @@ class Settings(BaseSettings):
 
     DASHBOARD_TOKEN: str = Field(validation_alias="DASHBOARD_TOKEN")
     LOG_LEVEL: str = Field(default="INFO", validation_alias="LOG_LEVEL")
+    # OpenTelemetry (#118) — opt-in; no export unless enabled + endpoint set.
+    OTEL_ENABLED: bool = Field(default=False, validation_alias="OTEL_ENABLED")
+    OTEL_SERVICE_NAME: str = Field(default="alpha-arbitrage", validation_alias="OTEL_SERVICE_NAME")
+    OTEL_EXPORTER_OTLP_ENDPOINT: str = Field(
+        default="",
+        validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT",
+        description="OTLP/HTTP collector base URL (e.g. http://localhost:4318). Empty = no export.",
+    )
+    OTEL_TRACES_SAMPLER_ARG: float = Field(
+        default=1.0,
+        validation_alias="OTEL_TRACES_SAMPLER_ARG",
+        description="ParentBased trace-id-ratio sampler argument in [0, 1].",
+    )
     # Spec 039: Decision Flight Recorder — compact branch-point trails (not printf-everything).
     DECISION_TRACE_LEVEL: Literal["compact", "verbose", "off"] = Field(
         default="compact",

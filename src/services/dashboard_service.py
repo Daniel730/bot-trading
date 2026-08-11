@@ -2421,8 +2421,10 @@ class DashboardService:
         """
         try:
             from src.services.telemetry_service import telemetry_service
+            from src.services import otel_service
 
             telemetry_service.start_broadcast_loop()
+            otel_service.instrument_fastapi_app(app)
             # lifespan="off": the FastAPI app has no startup/shutdown handlers, and
             # uvicorn is embedded as a background asyncio task (no OS signal handlers).
             # Without this, uvicorn's lifespan receive_queue.get() is hard-cancelled when

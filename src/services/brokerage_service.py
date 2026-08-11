@@ -4,6 +4,7 @@ from typing import List, Dict, Any, Optional
 from src.config import settings
 from src.services.budget_service import budget_service
 from src.services.brokerage.alpaca import AlpacaProvider
+from src.services import otel_service
 
 logger = logging.getLogger(__name__)
 
@@ -109,15 +110,27 @@ class BrokerageService:
         *,
         intent: str = "open",
     ) -> Dict[str, Any]:
-        blocked = await self._pre_submit_gate(intent=intent)
-        if blocked:
-            blocked["venue"] = self.provider_name
-            return blocked
-        result = await self.provider.place_market_order(
-            ticker, quantity, side, limit_price, client_order_id
-        )
-        result["venue"] = self.provider_name
-        return result
+        with otel_service.start_span(
+            "brokerage.place_market_order",
+            attributes={
+                "brokerage.ticker": str(ticker),
+                "brokerage.side": str(side),
+                "brokerage.intent": str(intent),
+                "brokerage.venue": self.provider_name,
+            },
+        ):
+            blocked = await self._pre_submit_gate(intent=intent)
+            if blocked:
+                blocked["venue"] = self.provider_name
+                return blocked
+            result = await self.provider.place_market_order(
+                ticker, quantity, side, limit_price, client_order_id
+            )
+            result["venue"] = self.provider_name
+            otel_service.set_span_attributes(
+                {"brokerage.status": str(result.get("status") or "")}
+            )
+            return result
 
     async def place_value_order(
         self,
@@ -129,26 +142,36 @@ class BrokerageService:
         *,
         intent: str = "open",
     ) -> Dict[str, Any]:
-        blocked = await self._pre_submit_gate(intent=intent)
-        if blocked:
-            blocked["venue"] = self.provider_name
-            return blocked
-        result = await self.provider.place_value_order(
-            ticker, amount, side, price, client_order_id
-        )
-        result["venue"] = self.provider_name
-        status = str(result.get("status", "")).lower()
-        # F-018: Alpaca returns "success" on accept — accrue budget on submit, not only "filled".
-        billable = status in {"filled", "success"} and not result.get("requires_reconciliation")
-        if billable and not settings.PAPER_TRADING and intent != "close":
-            filled_amount = result.get("filled_notional") or result.get("filled_amount") or amount
-            try:
-                budget_amount = float(filled_amount)
-            except (TypeError, ValueError):
-                budget_amount = amount
-            if side.upper() == "BUY":
-                budget_service.update_used_budget(self.provider_name, budget_amount)
-        return result
+        with otel_service.start_span(
+            "brokerage.place_value_order",
+            attributes={
+                "brokerage.ticker": str(ticker),
+                "brokerage.side": str(side),
+                "brokerage.intent": str(intent),
+                "brokerage.venue": self.provider_name,
+            },
+        ):
+            blocked = await self._pre_submit_gate(intent=intent)
+            if blocked:
+                blocked["venue"] = self.provider_name
+                return blocked
+            result = await self.provider.place_value_order(
+                ticker, amount, side, price, client_order_id
+            )
+            result["venue"] = self.provider_name
+            status = str(result.get("status", "")).lower()
+            otel_service.set_span_attributes({"brokerage.status": status})
+            # F-018: Alpaca returns "success" on accept — accrue budget on submit, not only "filled".
+            billable = status in {"filled", "success"} and not result.get("requires_reconciliation")
+            if billable and not settings.PAPER_TRADING and intent != "close":
+                filled_amount = result.get("filled_notional") or result.get("filled_amount") or amount
+                try:
+                    budget_amount = float(filled_amount)
+                except (TypeError, ValueError):
+                    budget_amount = amount
+                if side.upper() == "BUY":
+                    budget_service.update_used_budget(self.provider_name, budget_amount)
+            return result
 
     def get_symbol_metadata(self, ticker: str) -> Dict[str, Any]:
         return self.provider.get_symbol_metadata(ticker)
