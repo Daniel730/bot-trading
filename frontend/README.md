@@ -31,6 +31,12 @@ Optional environment variables:
 ```bash
 VITE_API_URL=http://localhost:8080
 VITE_API_TIMEOUT_MS=15000
+# Optional Sentry (#119) — empty DSN = no browser SDK
+# VITE_SENTRY_ENABLED=false
+# VITE_SENTRY_DSN=
+# VITE_SENTRY_TRACES_SAMPLE_RATE=0
+# VITE_SENTRY_ENVIRONMENT=
+# VITE_SENTRY_RELEASE=
 ```
 
 ## Commands

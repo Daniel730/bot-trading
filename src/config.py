@@ -226,6 +226,16 @@ class Settings(BaseSettings):
         validation_alias="OTEL_TRACES_SAMPLER_ARG",
         description="ParentBased trace-id-ratio sampler argument in [0, 1].",
     )
+    # Sentry (#119) — fail-closed when DSN empty; also requires SENTRY_ENABLED=true.
+    SENTRY_ENABLED: bool = Field(default=False, validation_alias="SENTRY_ENABLED")
+    SENTRY_DSN: str = Field(default="", validation_alias="SENTRY_DSN")
+    SENTRY_ENVIRONMENT: str = Field(default="", validation_alias="SENTRY_ENVIRONMENT")
+    SENTRY_SAMPLE_RATE: float = Field(default=1.0, validation_alias="SENTRY_SAMPLE_RATE")
+    SENTRY_TRACES_SAMPLE_RATE: float = Field(
+        default=0.0,
+        validation_alias="SENTRY_TRACES_SAMPLE_RATE",
+        description="Keep 0 when OpenTelemetry owns traces (#118).",
+    )
     # Spec 039: Decision Flight Recorder — compact branch-point trails (not printf-everything).
     DECISION_TRACE_LEVEL: Literal["compact", "verbose", "off"] = Field(
         default="compact",

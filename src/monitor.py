@@ -4670,6 +4670,9 @@ class ArbitrageMonitor:
 
         # Opt-in OTLP tracing (#118); no-op when OTEL_ENABLED is false / endpoint empty.
         otel_service.setup_otel()
+        from src.services import sentry_service
+
+        sentry_service.setup_sentry()
 
         # Initial Setup
         logger.info("Initializing Databases...")

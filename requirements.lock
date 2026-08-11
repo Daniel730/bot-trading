@@ -64,6 +64,7 @@ certifi==2025.11.12
     #   httpx
     #   polygon-api-client
     #   requests
+    #   sentry-sdk
 cffi==2.0.0
     # via
     #   cryptography
@@ -159,6 +160,7 @@ fastapi==0.136.1
     # via
     #   -r requirements.txt
     #   prefect
+    #   sentry-sdk
 fastmcp==2.12.5
     # via -r requirements.txt
 filelock==3.29.0
@@ -677,6 +679,8 @@ scipy==1.17.1
     #   statsmodels
 seaborn==0.13.2
     # via quantstats
+sentry-sdk==2.67.1
+    # via -r requirements.txt
 setuptools==82.0.1
     # via grpcio-tools
 shellingham==1.5.4
@@ -794,6 +798,7 @@ urllib3==1.26.20
     #   docker
     #   polygon-api-client
     #   requests
+    #   sentry-sdk
 uuid-utils==0.14.1
     # via
     #   langchain-core
