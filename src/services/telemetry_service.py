@@ -1,29 +1,44 @@
-import json
+"""Dashboard fan-out telemetry — fail-open, never blocks execution.
+
+External tracing/errors belong to OpenTelemetry (#118) and Sentry (#119).
+This module only queues updates for the operations-console WebSocket.
+"""
+
+from __future__ import annotations
+
 import asyncio
-from datetime import datetime, timezone
-from typing import Optional, Any
-from src.services.agent_log_service import agent_trace
+import json
 import logging
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+from src.services.agent_log_service import agent_trace
 
 logger = logging.getLogger(__name__)
 
+_QUEUE_MAXSIZE = 10_000
+
+
 class TelemetryService:
-    def __init__(self):
-        self.endpoint = "https://api.arbitrage-elite.com/telemetry" # Placeholder
-        # US4: Zero-Latency Telemetry. Enforce 10,000 maxsize to prevent OOM.
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=10000)
+    """Internal dashboard telemetry bus (not a vendor APM client)."""
+
+    def __init__(self, queue_maxsize: int = _QUEUE_MAXSIZE):
+        # Explicitly no external HTTP sync endpoint — see sync_outcomes().
+        self.external_sync_enabled = False
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize)
         self._broadcast_task: Optional[asyncio.Task] = None
+        self.dropped_updates = 0
 
     def start_broadcast_loop(self):
-        """Starts the background task that drains the queue and broadcasts to WebSockets."""
+        """Start the background task that drains the queue to WebSockets."""
         if self._broadcast_task is None:
             self._broadcast_task = asyncio.create_task(self._broadcast_loop())
-            logger.info("Telemetry: Broadcast loop started.")
+            logger.info("Telemetry: dashboard broadcast loop started.")
 
     async def _broadcast_loop(self):
-        """Consumes updates from the queue and sends to Dashboard WebSocket clients."""
+        """Consume updates and fan out to dashboard WebSocket clients."""
         from src.services.dashboard_service import connection_manager
-        
+
         while True:
             try:
                 update = await self._queue.get()
@@ -33,39 +48,52 @@ class TelemetryService:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Telemetry broadcast error: {e}")
+                logger.error("Telemetry broadcast error: %s", e)
                 await asyncio.sleep(1)
 
     def broadcast(self, type: str, data: Any):
-        """
-        Non-blocking 'fire-and-forget' telemetry broadcast.
-        Pushes a message to the internal queue for background processing.
-        """
+        """Non-blocking fire-and-forget dashboard telemetry publish."""
         update = {
             "type": type,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "data": data
+            "data": data,
         }
-        
+
         try:
-            # US4: Zero-Latency Telemetry.
-            # Atomic non-blocking push. Never block the execution hot-path.
             self._queue.put_nowait(update)
         except asyncio.QueueFull:
-            # If full, drop the current update to prevent blocking or OOM.
-            # Telemetry is a luxury; execution is life and death.
-            pass
+            # Telemetry is best-effort; never block the execution hot path.
+            self.dropped_updates += 1
+            if self.dropped_updates == 1 or self.dropped_updates % 100 == 0:
+                logger.warning(
+                    "Telemetry queue full — dropped %s updates (fail-open)",
+                    self.dropped_updates,
+                )
         except Exception as e:
-            logger.error(f"Error putting to telemetry queue: {e}")
+            logger.error("Error putting to telemetry queue: %s", e)
 
     @agent_trace("TelemetryService.sync_outcomes")
-    async def sync_outcomes(self):
+    async def sync_outcomes(self) -> dict:
+        """External outcome sync is intentionally a no-op.
+
+        Historical placeholder POSTed to a fake host. Real export is OTel/Sentry
+        (issues #118/#119). Keep this method for call-site compatibility.
         """
-        Batches unsynced TelemetryRecords and POSTs them to a central endpoint.
-        Uses PostgreSQL SystemState for tracking or a dedicated table.
-        For MVP, we'll just log that syncing is occurring.
-        """
-        # Placeholder for real telemetry syncing logic using persistence_service
-        logger.info("Telemetry: Syncing records to central server (Stub).")
+        if not self.external_sync_enabled:
+            logger.debug(
+                "Telemetry sync_outcomes no-op (external sync disabled; use OTel/Sentry)."
+            )
+            return {
+                "synced": False,
+                "reason": "external_sync_disabled",
+                "dropped_updates": self.dropped_updates,
+            }
+        logger.info("Telemetry: external sync enabled but no exporter configured.")
+        return {
+            "synced": False,
+            "reason": "no_exporter_configured",
+            "dropped_updates": self.dropped_updates,
+        }
+
 
 telemetry_service = TelemetryService()
