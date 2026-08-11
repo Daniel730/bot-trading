@@ -90,7 +90,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | Dead code | Knip (frontend) | Missing | #125 |
 | Mutation testing | Stryker (frontend) | Missing | #126 |
 | Architecture tests | ArchUnit (Java) + Python arch-contract | Missing | #127 |
-| Coverage | Codecov | pytest/Vitest exist; no coverage upload | #129 |
+| Coverage | Codecov | `codecov.yml` + fail-soft uploads in `ci.yml`/`deploy.yml` | #129 |
 | E2E | Playwright | Missing (Vitest unit/component only) | #130 |
 | CI on PR | Dedicated `ci.yml` | `.github/workflows/ci.yml` on PR/push | #131 |
 | UI loading | Global skeletons | Text/spinner only | #132 |
