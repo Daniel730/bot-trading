@@ -78,7 +78,7 @@ All operational routes (except `/ping`) require both a valid dashboard token and
 
 ## Telemetry
 
-`src/services/telemetry_service.py` is an **internal** in-process queue that broadcasts to dashboard WebSocket clients. Remote `sync_outcomes()` is a stub (logs only). Vendor APM (OpenTelemetry / Sentry / Datadog) is **not** live — see `docs/AGENT_WORKFLOW.md` and issues #118–#122.
+`src/services/telemetry_service.py` is an **internal** in-process queue that broadcasts to dashboard WebSocket clients. Remote `sync_outcomes()` is a no-op. Vendor tracing is opt-in via `src/services/otel_service.py` (`OTEL_ENABLED` + OTLP endpoint; #118). Sentry remains #119.
 
 ## Tests
 

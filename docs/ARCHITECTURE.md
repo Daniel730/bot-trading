@@ -112,7 +112,7 @@ The React console provides:
 - TOTP/backup codes also protect sensitive config writes once 2FA is enabled.
 - CORS origins are controlled by `DASHBOARD_ALLOWED_ORIGINS`; wildcard origins are only accepted in `DEV_MODE=true`.
 - WebSocket telemetry requires either query/session auth or an initial auth message.
-- `src/services/telemetry_service.py` is the **dashboard fan-out bus** only (bounded queue → WebSocket). It is fail-open on overflow and does **not** POST to an external host. Vendor tracing/errors are tracked separately as OpenTelemetry (#118) and Sentry (#119).
+- `src/services/telemetry_service.py` is the **dashboard fan-out bus** only (bounded queue → WebSocket). It is fail-open on overflow and does **not** POST to an external host. Vendor tracing is opt-in OpenTelemetry (`src/services/otel_service.py`, #118); errors product is Sentry (#119).
 
 ## Deployment Shape
 

@@ -28,6 +28,7 @@ from src.services.risk_service import risk_service
 from src.services.market_regime_service import market_regime_service
 from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
+from src.services import otel_service
 from src.services.venue_metadata import estimate_round_trip_cost_pct
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service, dashboard_state
@@ -1887,6 +1888,11 @@ class ArbitrageMonitor:
     async def process_pair(self, pair: dict, latest_prices: dict, sizing_base: float = 0.0) -> dict:
         """Processes a single pair for signals and validation."""
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
+        pair_id = pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}"
+        _otel = otel_service.attach_span(
+            "monitor.process_pair",
+            {"pair.id": str(pair_id)},
+        )
         try:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
             decision_recorder.set_pair_id(pair.get("id") or f"{t_a}_{t_b}")
@@ -2640,7 +2646,18 @@ class ArbitrageMonitor:
                 reason="exception",
                 inputs={"error_type": type(e).__name__},
             )
+            otel_service.detach_span(_otel, error=e, attributes={"pair.reason": "exception"})
+            _otel = None
             return diagnostic
+        finally:
+            if _otel is not None:
+                otel_service.detach_span(
+                    _otel,
+                    attributes={
+                        "pair.reason": str(diagnostic.get("reason") or diagnostic.get("verdict") or ""),
+                        "pair.confidence": float(diagnostic.get("confidence") or 0.0),
+                    },
+                )
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id, entry_context: dict | None = None):
         """Executes a trade and logs to PostgreSQL."""
@@ -4650,6 +4667,9 @@ class ArbitrageMonitor:
         and sleeps between scan iterations. On cancellation or termination it disposes database and Redis connections for a graceful shutdown.
         """
         self.log_preflight()
+
+        # Opt-in OTLP tracing (#118); no-op when OTEL_ENABLED is false / endpoint empty.
+        otel_service.setup_otel()
 
         # Initial Setup
         logger.info("Initializing Databases...")

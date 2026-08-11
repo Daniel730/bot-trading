@@ -38,3 +38,7 @@ psutil
 rich>=13.0.0
 alpaca-trade-api>=3.0.0
 html5lib
+# OpenTelemetry (#118) — opt-in via OTEL_ENABLED + OTEL_EXPORTER_OTLP_ENDPOINT
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
