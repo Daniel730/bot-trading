@@ -133,4 +133,28 @@ docker logs trading-bot-bot-1 --since 30m 2>&1 | grep -E 'SCAN \[|SIGNAL |SPREAD
 echo "--- crash markers (2h) ---"
 docker logs trading-bot-bot-1 --since 2h 2>&1 | grep -iE 'Traceback|Startup blocked|CRITICAL|killed|OOM' | tail -20 || echo "(none)"
 
+echo "--- daily bot audit (read-only, best-effort) ---"
+# Runs the consolidated Daily Bot Audit (scripts/daily_bot_audit.py) on this host
+# where the bot actually runs. It never trades, never flips PAPER_TRADING, never
+# touches credentials. Writes reports/daily-audit/YYYY-MM-DD.md and prints a
+# verdict. Failures here do NOT fail the ops check (best-effort observability).
+AUDIT_DIR="${AUDIT_DIR:-/home/daniel/bot-trading}"
+if [ -x "$(command -v docker)" ] && docker inspect trading-bot-bot-1 >/dev/null 2>&1; then
+  if [ -f "${AUDIT_DIR}/scripts/daily_bot_audit.py" ]; then
+    # Run inside the bot container where the venv + httpx + logs are present.
+    # PYTHONPATH makes the scripts/ package importable; the container's own
+    # APP_ENV_FILE is already exported in the deploy, so check_env_safety picks
+    # up the real .env.trading automatically. Override AUDIT_LOG_PATH if the
+    # structured log lives elsewhere in the container.
+    docker exec -e PYTHONPATH="${AUDIT_DIR}:/app" -e AUDIT_LOG_PATH="${AUDIT_LOG_PATH:-/app/logs/structured_logs.jsonl}" \
+      trading-bot-bot-1 python3 "${AUDIT_DIR}/scripts/daily_bot_audit.py" \
+      --tests none --no-autofix \
+      --date "$(date -u +%Y-%m-%d)" || echo "AUDIT: non-zero exit (see report)"
+  else
+    echo "AUDIT: scripts/daily_bot_audit.py not found at ${AUDIT_DIR}; skipping"
+  fi
+else
+  echo "AUDIT: bot container not present; skipping"
+fi
+
 echo "OPS_CHECK_DONE"
