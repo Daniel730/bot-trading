@@ -918,6 +918,20 @@ def run_audit(date: str, tests_mode: str, no_github: bool, no_autofix: bool) -> 
     # Financial safety static verification
     report.sections["financial_safety"] = verify_financial_safety(report)
 
+    # Convert log incidents into report findings (so they affect the verdict).
+    incidents = report.sections.get("logs", {}).get("incidents", [])
+    if incidents:
+        short = "; ".join(i.get("msg","")[:140] for i in incidents[:3])
+        report.add(
+            Finding(
+                "HIGH",
+                f"{len(incidents)} real incident(s) detected in logs",
+                f"{len(incidents)} crash/OOM/duplicate/error patterns: {short}",
+                "Logs",
+                requires_review=True,
+            )
+        )
+
     # .env / mode safety configuration check
     report.sections["config"] = check_env_safety(report)
 
