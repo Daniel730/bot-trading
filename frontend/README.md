@@ -50,7 +50,7 @@ npm run preview      # preview built bundle
 
 ### Knip notes
 
-`frontend/knip.json` treats Vite entrypoints + Vitest specs as entries. CI runs `npm run knip` warn-first; the first cleanup of unused exports/deps should be a separate PR after the baseline is reviewed. `@vitest/coverage-v8` is intentionally ignored (CI installs it ad hoc).
+`frontend/knip.json` treats Vite entrypoints + Vitest specs as entries. CI runs `npm run knip` warn-first; the first cleanup of unused exports/deps should be a separate PR after the baseline is reviewed. `@vitest/coverage-v8` is intentionally ignored (CI installs it ad hoc). `@biomejs/biome` / `biome` are ignored temporarily because Knip does not yet map the bare `biome` CLI scripts to the package bin (Biome remains used via `npm run lint:biome` / `format` / `check`).
 
 ### Lint/format decision (ESLint + Biome)
 

@@ -5,10 +5,19 @@
     "src/main.tsx",
     "src/**/*.{test,spec}.{ts,tsx}"
   ],
-  "project": ["src/**/*.{ts,tsx}"],
-  "ignore": ["dist/**", "coverage/**"],
-  "ignoreDependencies": [
-    "@vitest/coverage-v8"
+  "project": [
+    "src/**/*.{ts,tsx}"
   ],
-  "vite": true
+  "ignore": [
+    "dist/**",
+    "coverage/**"
+  ],
+  "ignoreDependencies": [
+    "@vitest/coverage-v8",
+    "@biomejs/biome"
+  ],
+  "vite": true,
+  "ignoreBinaries": [
+    "biome"
+  ]
 }
