@@ -2,7 +2,7 @@
 
 Last refreshed: 2026-08-10
 
-This file orients Gemini-style assistant sessions. For the full current docs, start at `README.md` and `docs/README.md`. Required agent process: `docs/AGENT_WORKFLOW.md`.
+This file orients Gemini-style assistant sessions. For the full current docs, start at `README.md` and `docs/README.md`. Required agent process: `docs/AGENT_WORKFLOW.md`. Copilot custom agents: `.github/agents/` (see `.github/copilot-instructions.md`).
 
 ## Active Technologies
 

@@ -1,5 +1,7 @@
 # Agent Ensemble
 
+> **Naming:** This document describes the **runtime** signal-validation ensemble under `src/agents/` (bull/bear/orchestrator, etc.). It is **not** the GitHub Copilot custom-agent profiles in [`.github/agents/`](../.github/agents/README.md). Coding-agent process lives in [`AGENT_WORKFLOW.md`](AGENT_WORKFLOW.md) and [`AGENTS.md`](../AGENTS.md).
+
 The agent layer validates statistical signals before the monitor asks for approval or execution. It is intentionally async and fault-tolerant: individual agent failures should veto or degrade a signal, not stop the whole scan loop.
 
 ## Orchestrator

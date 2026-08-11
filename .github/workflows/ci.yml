@@ -18,6 +18,7 @@ jobs:
       python: ${{ steps.changes.outputs.python }}
       java: ${{ steps.changes.outputs.java }}
       frontend: ${{ steps.changes.outputs.frontend }}
+      infra: ${{ steps.changes.outputs.infra }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -33,12 +34,16 @@ jobs:
               - 'tests/**'
               - 'requirements.txt'
               - 'requirements.lock'
+              - 'pyproject.toml'
               - '.github/workflows/ci.yml'
               - '.github/workflows/deploy.yml'
             java:
               - 'execution-engine/**'
             frontend:
               - 'frontend/**'
+            infra:
+              - 'infra/**'
+              - 'scripts/validate_deploy_env.py'
 
   quality_python:
     needs: detect_changes
@@ -103,6 +108,12 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
           uv pip install --system -r requirements.lock
+
+      - name: Ruff baseline (undefined names / syntax)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --system ruff
+          ruff check src scripts tests
 
       - name: Initialize Postgres schema
         run: python scripts/init_db.py
@@ -212,3 +223,36 @@ jobs:
           flags: frontend
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+  quality_infra:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.infra == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      DASHBOARD_TOKEN: ci_dashboard_token_not_for_production
+      PAPER_TRADING: "true"
+      DRY_RUN: "true"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal test deps
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --system pytest pyyaml
+
+      - name: Validate compose + deploy env contracts
+        run: |
+          python -m pytest -q \
+            tests/unit/test_validate_deploy_env.py \
+            tests/unit/test_backend_compose_secrets.py \
+            tests/unit/test_compose_restart_lifecycle.py \
+            --asyncio-mode=auto
+

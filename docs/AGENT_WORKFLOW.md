@@ -74,6 +74,12 @@ Skill: `~/.cursor/skills/cursor-orchestrator/SKILL.md`.
 - Preserve `signal_id` through reasoning, journal, ledger, and close paths.
 - Do not bypass dashboard session / 2FA for operator controls.
 
+## 5b. GitHub Copilot custom agents
+
+Minimal profiles in [`.github/agents/`](../.github/agents/README.md): **Trading Safety**, **Code Reviewer**, **Test Engineer**, **Ops / SRE**. Shared instructions: [`.github/copilot-instructions.md`](../.github/copilot-instructions.md).
+
+Do not add agents that restate this workflow or Speckit skills. Prefer consolidating responsibilities. Runtime trading ensemble docs remain in [`docs/agents.md`](agents.md) (different domain).
+
 ## 6. Target platform standards (gaps → issues)
 
 These are the **target** stack. Implement via linked issues; do not invent parallel tools without updating this table.
@@ -85,7 +91,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | APM / ops | Datadog | **Not planned** — use OTel + Sentry (see #120 close rationale) | #120 |
 | APM (optional) | New Relic | **Not planned** — duplicate APM vs OTel + Sentry | #121 |
 | Frontend lint | Biome (+ current ESLint until migrated) | ESLint exists; Biome missing | #123 |
-| Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `deploy.yml` quality_python | #128 |
+| Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `ci.yml` + `deploy.yml` quality_python | #128 |
 | Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
 | Dead code | Knip (frontend) | Missing | #125 |
 | Mutation testing | Stryker (frontend) | Missing | #126 |

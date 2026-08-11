@@ -235,6 +235,7 @@ Start with [docs/README.md](docs/README.md), then use:
 
 - [docs/AGENT_WORKFLOW.md](docs/AGENT_WORKFLOW.md) for **agent process** (issues → PRs → Hermes) and the target observability/quality/test/motion stack (what exists vs backlog).
 - [AGENTS.md](AGENTS.md) for Cursor Cloud / local VM gotchas (auth bootstrap, ports, Alpaca paper).
+- [`.github/agents/`](.github/agents/README.md) for Copilot custom agents (trading safety, review, test, ops) and [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for shared safety rules.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for system design.
 - [docs/OPERATIONS.md](docs/OPERATIONS.md) for day-to-day running.
 - [docs/STRATEGY.md](docs/STRATEGY.md) for signal and risk logic.
