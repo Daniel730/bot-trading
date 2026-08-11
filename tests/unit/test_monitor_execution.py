@@ -9,15 +9,29 @@ from src.services.persistence_service import OrderStatus
 def _crypto_execute_freshness_patch(tickers=("ETH-USD", "BTC-USD"), age_seconds: float = 5.0):
     """Ensure execute_trade crypto freshness gate sees Alpaca sources + fresh timestamps."""
 
-    async def _refresh(symbols, *args, **kwargs):
-        from src.services import data_service as ds_mod
+    async def _refresh(*args, **kwargs):
+        from src.services.data_service import data_service as svc
+        import src.monitor as monitor_mod
 
-        svc = ds_mod.data_service
-        # Stamp at refresh-call time so full-suite wall clock cannot age a closure ts.
-        ts = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
-        keys = [str(t) for t in (symbols or tickers)]
-        svc.last_price_sources = {t: "alpaca_crypto_snapshot" for t in keys}
-        svc.last_price_timestamps = {t: ts for t in keys}
+        # First positional may be the ticker list (bound method already bound on instance).
+        symbols = args[0] if args else kwargs.get("tickers") or kwargs.get("symbols")
+        if isinstance(symbols, str):
+            keys = [symbols]
+        else:
+            keys = [str(t) for t in (symbols or tickers)]
+        # Also always include the fixture tickers so gate keys cannot miss.
+        for t in tickers:
+            if str(t) not in keys:
+                keys.append(str(t))
+
+        ts = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+        sources = {t: "alpaca_crypto_snapshot" for t in keys}
+        stamps = {t: ts for t in keys}
+        svc.last_price_sources = dict(sources)
+        svc.last_price_timestamps = dict(stamps)
+        # Keep monitor's imported singleton in sync if it ever diverges in tests.
+        monitor_mod.data_service.last_price_sources = dict(sources)
+        monitor_mod.data_service.last_price_timestamps = dict(stamps)
         return {t: 100.0 for t in keys}
 
     return patch(

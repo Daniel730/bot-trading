@@ -54,21 +54,21 @@ def _service_with_token(token: str) -> NotificationService:
         return NotificationService()
 
 
-def test_empty_token_stays_console_only(capsys):
-    service = _service_with_token("")
+def test_empty_token_stays_console_only(caplog):
+    with caplog.at_level(logging.INFO, logger="src.services.notification_service"):
+        service = _service_with_token("")
     assert service._telegram_enabled is False
     assert service.app is None
-    out = capsys.readouterr().out
-    assert "Telegram notifications disabled" in out
+    assert "Telegram notifications disabled" in caplog.text
 
 
-def test_template_your_bot_token_stays_console_only(capsys):
+def test_template_your_bot_token_stays_console_only(caplog):
     """Regression: .env.template uses your_bot_token — must not enable Telegram."""
-    service = _service_with_token("your_bot_token")
+    with caplog.at_level(logging.INFO, logger="src.services.notification_service"):
+        service = _service_with_token("your_bot_token")
     assert service._telegram_enabled is False
     assert service.app is None
-    out = capsys.readouterr().out
-    assert "Telegram notifications disabled" in out
+    assert "Telegram notifications disabled" in caplog.text
 
 
 def test_malformed_token_never_builds_application():
@@ -79,11 +79,11 @@ def test_malformed_token_never_builds_application():
 
 
 @pytest.mark.asyncio
-async def test_start_listening_empty_token_is_noop(capsys):
+async def test_start_listening_empty_token_is_noop(caplog):
     service = _service_with_token("")
-    await service.start_listening()
-    out = capsys.readouterr().out
-    assert "console-only" in out
+    with caplog.at_level(logging.INFO, logger="src.services.notification_service"):
+        await service.start_listening()
+    assert "console-only" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -107,15 +107,15 @@ async def test_start_listening_invalid_token_disables_without_raising():
 
 
 @pytest.mark.asyncio
-async def test_send_message_console_fallback_when_disabled(capsys):
+async def test_send_message_console_fallback_when_disabled(caplog):
     service = _service_with_token("")
     with patch(
         "src.services.dashboard_service.dashboard_state.add_message",
         new=AsyncMock(),
-    ) as dash:
+    ) as dash, caplog.at_level(logging.INFO, logger="src.services.notification_service"):
         await service.send_message("hello console", force=True)
 
-    assert "[BOT MSG] hello console" in capsys.readouterr().out
+    assert "[BOT MSG] hello console" in caplog.text
     dash.assert_awaited_once_with("BOT", "hello console")
 
 
@@ -136,7 +136,7 @@ async def test_send_message_dedupes_identical_alerts():
 
 
 @pytest.mark.asyncio
-async def test_send_message_invalid_token_disables_telegram(capsys):
+async def test_send_message_invalid_token_disables_telegram(caplog):
     from telegram.error import InvalidToken
 
     service = _service_with_token("7123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw")
@@ -151,11 +151,11 @@ async def test_send_message_invalid_token_disables_telegram(capsys):
     with patch(
         "src.services.dashboard_service.dashboard_state.add_message",
         new=AsyncMock(),
-    ) as dash:
+    ) as dash, caplog.at_level(logging.INFO, logger="src.services.notification_service"):
         await service.send_message("alert after bad token", force=True)
 
     assert service._telegram_enabled is False
-    assert "[BOT MSG] alert after bad token" in capsys.readouterr().out
+    assert "[BOT MSG] alert after bad token" in caplog.text
     dash.assert_awaited()
 
 
@@ -234,7 +234,7 @@ async def test_callback_unauthorized_rejected():
 
 
 @pytest.mark.asyncio
-async def test_paper_notify_dedupes_external_spam(capsys):
+async def test_paper_notify_dedupes_external_spam(caplog):
     service = _service_with_token("")
     service._telegram_enabled = False
     service._alert_dedupe_seconds = 60.0
@@ -242,10 +242,9 @@ async def test_paper_notify_dedupes_external_spam(capsys):
     with patch(
         "src.services.dashboard_service.dashboard_state.add_message",
         new=AsyncMock(),
-    ) as dash:
+    ) as dash, caplog.at_level(logging.INFO, logger="src.services.notification_service"):
         await service._paper_notify("same summary")
         await service._paper_notify("same summary")
 
-    out = capsys.readouterr().out
-    assert out.count("[PAPER TRADE]") == 1
+    assert caplog.text.count("[PAPER TRADE]") == 1
     assert dash.await_count == 2
