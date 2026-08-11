@@ -247,6 +247,12 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           uv pip install --system -r requirements.lock
 
+      - name: Ruff lint (baseline)
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --system ruff
+          ruff check src scripts tests
+
       - name: Initialize Postgres schema
         run: python scripts/init_db.py
 

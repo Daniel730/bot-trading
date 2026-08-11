@@ -1,0 +1,14 @@
+[project]
+name = "bot-trading"
+version = "0.0.0"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["src", "tests", "scripts"]
+
+[tool.ruff.lint]
+# Baseline gate (Fixes #128): undefined names + syntax. Expand E4/E7/F gradually.
+select = ["E9", "F821", "F822"]
+ignore = []
