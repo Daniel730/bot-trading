@@ -24,8 +24,20 @@ Foundation backlog for observability / quality / tests / motion starts at issues
 
 - Do **not** push feature work straight to `master` (default branch).
 - Branch from an up-to-date `master`: `fix/<issue>-short-slug` or `feat/<issue>-short-slug`.
-- Open a PR for review and for deploy gating (quality jobs in `.github/workflows/deploy.yml`; dedicated CI workflow tracked in #131).
+- Open a PR for review and for deploy gating (`.github/workflows/ci.yml` on PR/push; deploy quality + GHCR via `.github/workflows/deploy.yml`).
 - Production images deploy from **GitHub Releases** / controlled workflow dispatch — not from random local pushes.
+
+### Local commitlint (Windows / PowerShell)
+
+Repo-root tooling (does **not** replace `frontend/` deps):
+
+```powershell
+npm install
+# husky install via prepare; commit-msg runs commitlint
+git commit -m "fix: describe the change"
+```
+
+CI remains the source of truth — local hooks are optional quality; remote merges are not blocked solely because a developer skipped husky.
 
 ## 3. Always link the issue in the PR
 
@@ -70,17 +82,17 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 |---|---|---|---|
 | Tracing / metrics | OpenTelemetry (OTLP) | Missing SDK (transitive `opentelemetry-api` only); internal `telemetry_service` stub | #118, #122 |
 | Errors | Sentry | Missing | #119 |
-| APM / ops | Datadog | Missing | #120 |
-| APM (optional) | New Relic | Missing — evaluate vs Sentry/Datadog | #121 |
+| APM / ops | Datadog | **Not planned** — use OTel + Sentry (see #120 close rationale) | #120 |
+| APM (optional) | New Relic | **Not planned** — duplicate APM vs OTel + Sentry | #121 |
 | Frontend lint | Biome (+ current ESLint until migrated) | ESLint exists; Biome missing | #123 |
-| Python lint | Ruff via `pyproject.toml` | Missing | #128 |
-| Commit messages | commitlint + local hooks | Missing | #124 |
+| Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `deploy.yml` quality_python | #128 |
+| Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
 | Dead code | Knip (frontend) | Missing | #125 |
 | Mutation testing | Stryker (frontend) | Missing | #126 |
 | Architecture tests | ArchUnit (Java) + Python arch-contract | Missing | #127 |
 | Coverage | Codecov | pytest/Vitest exist; no coverage upload | #129 |
 | E2E | Playwright | Missing (Vitest unit/component only) | #130 |
-| CI on PR | Dedicated `ci.yml` | Quality today only inside `deploy.yml` | #131 |
+| CI on PR | Dedicated `ci.yml` | `.github/workflows/ci.yml` on PR/push | #131 |
 | UI loading | Global skeletons | Text/spinner only | #132 |
 | Code split | `React.lazy` + `Suspense` | Missing | #133 |
 | Motion | framer-motion + [design-motion-principles](https://github.com/kylezantos/design-motion-principles) | Partial (`PairsPanel`, `IntelligenceHub`) | #134 |
