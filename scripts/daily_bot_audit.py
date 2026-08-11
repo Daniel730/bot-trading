@@ -955,6 +955,11 @@ def run_audit(date: str, tests_mode: str, no_github: bool, no_autofix: bool) -> 
 
     # Historical observability (brief §11) — persist machine-readable metrics
     # and surface worsening / recurring problems as findings.
+    if not no_github:
+        # In GitHub Actions, pull prior days' metrics from CI artifacts so the
+        # trend accumulates across scheduled runs (metrics/ is gitignored and
+        # absent on a fresh checkout). Local runs skip this.
+        restore_metrics_from_artifacts()
     metrics_path = write_metrics(report)
     hist = compute_historical_trend()
     if hist.get("available"):
@@ -1054,6 +1059,57 @@ def open_critical_issue(report: Report) -> dict:
 def _gh_available() -> bool:
     rc, _, _ = _run(["gh", "auth", "status"], timeout=20)
     return rc == 0
+
+
+def restore_metrics_from_artifacts(workflow: str = "Daily Bot Audit",
+                                   limit: int = 30) -> int:
+    """Pull prior days' per-day metrics from CI artifacts so the historical
+    trend (brief §11) accumulates across scheduled runs.
+
+    The audit uploads reports/daily-audit/ (incl. metrics/*.json) as an
+    artifact. We download recent runs' artifacts and merge any missing
+    YYYY-MM-DD.json into METRICS_DIR. Never overwrites an existing local file
+    (local run wins). Returns the number of metric files restored. Safe no-op
+    if gh is unavailable or artifacts can't be fetched.
+    """
+    if not _gh_available():
+        return 0
+    rc, out, _ = _run(
+        ["gh", "run", "list", "--workflow", workflow, "--limit", str(limit),
+         "--json", "databaseId,conclusion", "--jq",
+         ".[].databaseId"],
+        timeout=40,
+    )
+    if rc != 0 or not out.strip():
+        return 0
+    run_ids = [r for r in out.splitlines() if r.strip().isdigit()]
+    restored = 0
+    import tempfile
+    for rid in run_ids:
+        with tempfile.TemporaryDirectory() as td:
+            rc, _, _ = _run(
+                ["gh", "run", "download", rid, "--name",
+                 f"daily-audit-{rid}", "--dir", td],
+                timeout=60,
+            )
+            if rc != 0:
+                continue
+            src = Path(td) / "reports" / "daily-audit" / "metrics"
+            if not src.is_dir():
+                src = Path(td) / "metrics"
+            if not src.is_dir():
+                continue
+            for f in src.glob("*.json"):
+                dest = METRICS_DIR / f.name
+                if not dest.exists():
+                    try:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        dest.write_text(f.read_text(encoding="utf-8"),
+                                        encoding="utf-8")
+                        restored += 1
+                    except OSError:
+                        continue
+    return restored
 
 
 def _env_label() -> str:

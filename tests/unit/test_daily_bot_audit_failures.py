@@ -326,3 +326,45 @@ def test_open_critical_issue_degraded_is_noop():
     res = dba.open_critical_issue(rep)  # no gh monkeypatch; must no-op safely
     assert res["opened"] is False
     assert res["reason"] == "not-critical-or-no-gh"
+
+
+# --- §11 cross-run metric accumulation (CI artifact restore) ---------------- #
+def test_restore_metrics_from_artifacts_merges_missing(tmp_path, monkeypatch):
+    metrics_dir = tmp_path / "metrics"
+    metrics_dir.mkdir()
+    # today's metric already local (valid: has date + verdict)
+    (metrics_dir / "2026-08-11.json").write_text(
+        '{"date":"2026-08-11","errors":5,"verdict":"DEGRADED"}')
+
+    def fake_run(cmd, *a, **k):
+        if cmd[1:3] == ["auth", "status"]:
+            return (0, "", "")
+        if cmd[1:3] == ["run", "list"]:
+            return (0, "555\n", "")  # one prior run id
+        if cmd[1:3] == ["run", "download"]:
+            td = cmd[cmd.index("--dir") + 1]
+            from pathlib import Path as _P
+            src = _P(td) / "reports" / "daily-audit" / "metrics"
+            src.mkdir(parents=True)
+            (src / "2026-08-10.json").write_text(
+                '{"date":"2026-08-10","errors":3,"verdict":"DEGRADED"}')
+            (src / "2026-08-09.json").write_text(
+                '{"date":"2026-08-09","errors":1,"verdict":"DEGRADED"}')
+            return (0, "", "")
+        return (0, "", "")
+
+    monkeypatch.setattr(dba, "METRICS_DIR", metrics_dir)
+    monkeypatch.setattr(dba, "_run", fake_run)
+    restored = dba.restore_metrics_from_artifacts()
+    assert restored == 2  # two prior days merged, today kept
+    assert (metrics_dir / "2026-08-10.json").exists()
+    assert (metrics_dir / "2026-08-09.json").exists()
+    # compute trend now sees 3 days
+    hist = dba.compute_historical_trend(7)
+    assert hist["available"] is True
+    assert len(hist["verdict_trajectory"]) == 3
+
+
+def test_restore_metrics_skips_when_gh_unavailable(monkeypatch):
+    monkeypatch.setattr(dba, "_gh_available", lambda: False)
+    assert dba.restore_metrics_from_artifacts() == 0
