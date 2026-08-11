@@ -368,3 +368,18 @@ def test_restore_metrics_from_artifacts_merges_missing(tmp_path, monkeypatch):
 def test_restore_metrics_skips_when_gh_unavailable(monkeypatch):
     monkeypatch.setattr(dba, "_gh_available", lambda: False)
     assert dba.restore_metrics_from_artifacts() == 0
+
+
+def test_run_audit_skips_artifact_restore_locally(monkeypatch, tmp_path):
+    # A local run (no GITHUB_ACTIONS env) must NOT touch restore_metrics even
+    # when gh is available — avoids hammering the GitHub API on every dev run.
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(dba, "LOG_PATH", tmp_path / "nope.jsonl")
+    called = {"restore": False}
+    monkeypatch.setattr(
+        dba, "restore_metrics_from_artifacts",
+        lambda *a, **k: called.__setitem__("restore", True) or 0,
+    )
+    rep = dba.run_audit("2026-08-11", "none", no_github=False, no_autofix=True)
+    assert called["restore"] is False
+    assert rep.verdict in ("HEALTHY", "DEGRADED", "CRITICAL")

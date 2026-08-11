@@ -955,10 +955,10 @@ def run_audit(date: str, tests_mode: str, no_github: bool, no_autofix: bool) -> 
 
     # Historical observability (brief §11) — persist machine-readable metrics
     # and surface worsening / recurring problems as findings.
-    if not no_github:
-        # In GitHub Actions, pull prior days' metrics from CI artifacts so the
-        # trend accumulates across scheduled runs (metrics/ is gitignored and
-        # absent on a fresh checkout). Local runs skip this.
+    if os.environ.get("GITHUB_ACTIONS") == "true" and not no_github:
+        # Only in CI: pull prior days' metrics from CI artifacts so the trend
+        # accumulates across scheduled runs (metrics/ is gitignored and absent
+        # on a fresh checkout). Local dev runs never hit the GitHub API here.
         restore_metrics_from_artifacts()
     metrics_path = write_metrics(report)
     hist = compute_historical_trend()
