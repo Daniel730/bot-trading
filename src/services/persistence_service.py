@@ -779,6 +779,15 @@ class PersistenceService:
                         "is_shadow": leg_is_shadow,
                         "execution_lane": leg_lane,
                     }
+                filled_qty_meta = meta.get("filled_qty")
+                try:
+                    filled_qty = (
+                        float(filled_qty_meta)
+                        if filled_qty_meta is not None
+                        else float(t.quantity)
+                    )
+                except (TypeError, ValueError):
+                    filled_qty = float(t.quantity)
                 signals[sig]["legs"].append({
                     "ticker": t.ticker,
                     "side": t.side.value,
@@ -790,6 +799,8 @@ class PersistenceService:
                     "metadata": meta,
                     "is_shadow": leg_is_shadow,
                     "execution_lane": leg_lane,
+                    "order_id": getattr(t, "order_id", None),
+                    "filled_qty": filled_qty,
                     "remaining_qty": float(meta.get("remaining_qty") or 0.0) or None,
                     "expected_qty": float(meta.get("expected_qty") or 0.0) or None,
                     "filled_avg_price": (

@@ -18,8 +18,8 @@ async def test_close_position_success(monitor):
         "paper_trade": False,
         "signal_id": str(uuid.uuid4()),
         "legs": [
-            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
-            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0}
+            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0, "order_id": "leg-a"},
+            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0, "order_id": "leg-b"},
         ]
     }
 
@@ -30,6 +30,7 @@ async def test_close_position_success(monitor):
         mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
         mock_persistence.close_trade = AsyncMock()
         mock_persistence.update_signal_status = AsyncMock()
+        mock_persistence.update_trade_fill = AsyncMock()
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
             {"status": "success", "order_id": "close-a"},
             {"status": "success", "order_id": "close-b"},
@@ -45,6 +46,10 @@ async def test_close_position_success(monitor):
         assert monitor.brokerage.place_value_order.await_count == 2
         assert mock_await_fill.await_count == 2
         mock_persistence.close_trade.assert_awaited_once()
+        assert mock_persistence.update_trade_fill.await_count == 2
+        for call in mock_persistence.update_trade_fill.await_args_list:
+            assert call.kwargs["metadata_updates"]["remaining_qty"] == 0.0
+            assert call.kwargs["metadata_updates"]["close_remaining_qty"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -101,8 +106,22 @@ async def test_close_position_does_not_close_ledger_on_short_close_fill_quantity
         "paper_trade": False,
         "signal_id": signal_id,
         "legs": [
-            {"ticker": "AAPL", "quantity": 10, "side": "BUY", "price": 150.0},
-            {"ticker": "MSFT", "quantity": 5, "side": "SELL", "price": 300.0},
+            {
+                "ticker": "AAPL",
+                "quantity": 10,
+                "side": "BUY",
+                "price": 150.0,
+                "order_id": "leg-a",
+                "filled_qty": 10.0,
+            },
+            {
+                "ticker": "MSFT",
+                "quantity": 5,
+                "side": "SELL",
+                "price": 300.0,
+                "order_id": "leg-b",
+                "filled_qty": 5.0,
+            },
         ],
         "total_cost_basis": 3000.0,
     }
@@ -116,6 +135,7 @@ async def test_close_position_does_not_close_ledger_on_short_close_fill_quantity
         mock_persistence.mark_signal_closing_if_open = AsyncMock(return_value=True)
         mock_persistence.close_trade = AsyncMock()
         mock_persistence.update_signal_status = AsyncMock()
+        mock_persistence.update_trade_fill = AsyncMock()
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
             {"status": "success", "order_id": "close-a"},
             {"status": "success", "order_id": "close-b"},
@@ -135,6 +155,13 @@ async def test_close_position_does_not_close_ledger_on_short_close_fill_quantity
             OrderStatus.NEEDS_MANUAL_RECONCILIATION,
         )
         mock_notify.assert_awaited_once()
+        assert mock_persistence.update_trade_fill.await_count >= 2
+        shortfall_call = mock_persistence.update_trade_fill.await_args_list[-1]
+        assert shortfall_call.args[1] == "leg-b"
+        assert shortfall_call.kwargs["status"] == OrderStatus.NEEDS_MANUAL_RECONCILIATION
+        assert shortfall_call.kwargs["metadata_updates"]["close_filled_qty"] == pytest.approx(2.5)
+        assert shortfall_call.kwargs["metadata_updates"]["close_remaining_qty"] == pytest.approx(2.5)
+        assert shortfall_call.kwargs["metadata_updates"]["remaining_qty"] == pytest.approx(2.5)
 
 
 @pytest.mark.asyncio

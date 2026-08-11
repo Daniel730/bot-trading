@@ -197,6 +197,30 @@ def summarize_scan_funnel(
     }
 
 
+def resolve_leg_filled_qty(leg: dict) -> float:
+    """Prefer durable filled_qty (leg or metadata) over submitted quantity."""
+    meta = leg.get("metadata") if isinstance(leg.get("metadata"), dict) else {}
+    for source in (leg.get("filled_qty"), meta.get("filled_qty"), leg.get("quantity")):
+        if source is None:
+            continue
+        try:
+            qty = float(source)
+        except (TypeError, ValueError):
+            continue
+        if qty > 0:
+            return qty
+    return 0.0
+
+
+def resolve_leg_order_id(leg: dict) -> str | None:
+    """Open-leg broker/client order id for ledger fill updates."""
+    meta = leg.get("metadata") if isinstance(leg.get("metadata"), dict) else {}
+    for source in (leg.get("order_id"), meta.get("broker_order_id"), meta.get("client_order_id")):
+        if source:
+            return str(source)
+    return None
+
+
 def build_close_orders(
     signal: dict,
     *,
@@ -216,7 +240,7 @@ def build_close_orders(
         }
     for leg in signal["legs"]:
         ticker = leg["ticker"]
-        quantity = float(leg["quantity"])
+        quantity = resolve_leg_filled_qty(leg)
         side = "SELL" if leg["side"] == "BUY" else "BUY"
         execution_ticker = dev_execution_tickers.get(ticker, ticker) if dev_mode else ticker
         if ticker not in prices_by_ticker:
@@ -229,6 +253,7 @@ def build_close_orders(
                 "side": side,
                 "quantity": quantity,
                 "price": float(leg_price),
+                "open_order_id": resolve_leg_order_id(leg),
             }
         )
     return close_orders
@@ -263,7 +288,7 @@ def calculate_realized_pnl(
     exit_prices = {k: float(v) for k, v in prices_by_ticker.items()}
     pnl = 0.0
     for leg in signal["legs"]:
-        quantity = float(leg["quantity"])
+        quantity = resolve_leg_filled_qty(leg)
         entry = float(leg["price"])
         exit_price = exit_prices[leg["ticker"]]
         if leg["side"] == "BUY":
