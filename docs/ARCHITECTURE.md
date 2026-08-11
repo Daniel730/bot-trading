@@ -112,7 +112,7 @@ The React console provides:
 - TOTP/backup codes also protect sensitive config writes once 2FA is enabled.
 - CORS origins are controlled by `DASHBOARD_ALLOWED_ORIGINS`; wildcard origins are only accepted in `DEV_MODE=true`.
 - WebSocket telemetry requires either query/session auth or an initial auth message.
-- Trade approvals: shadow paper and Alpaca paper auto-approve via `settings.should_auto_approve_trades`. Real-money live requires human Telegram/dashboard approval and **fail-closes** if Telegram is unavailable. `ALLOW_LIVE_APPROVAL_WITHOUT_TELEGRAM` is retained in settings/env but is **intentionally not honored** for real capital (see `notification_service`).
+- `src/services/telemetry_service.py` is the **dashboard fan-out bus** only (bounded queue → WebSocket). It is fail-open on overflow and does **not** POST to an external host. Vendor tracing/errors are tracked separately as OpenTelemetry (#118) and Sentry (#119).
 
 ## Deployment Shape
 

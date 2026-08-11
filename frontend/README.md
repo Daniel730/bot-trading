@@ -45,12 +45,23 @@ npm run format:check # Biome format check
 npm run check        # Biome check (lint+format; CI warn-first)
 npm run knip         # Dead code/deps scan (CI warn-first; cleanup in a follow-up PR)
 npm run test         # Vitest
+npm run test:mutate  # Stryker mutation testing (focused files; slow — see below)
 npm run preview      # preview built bundle
 ```
 
 ### Knip notes
 
 `frontend/knip.json` treats Vite entrypoints + Vitest specs as entries. CI runs `npm run knip` warn-first; the first cleanup of unused exports/deps should be a separate PR after the baseline is reviewed. `@vitest/coverage-v8` is intentionally ignored (CI installs it ad hoc). `@biomejs/biome` / `biome` are ignored temporarily because Knip does not yet map the bare `biome` CLI scripts to the package bin (Biome remains used via `npm run lint:biome` / `format` / `check`).
+
+### Stryker (mutation testing)
+
+Config: `frontend/stryker.config.json` — initial mutate set is critical shared modules (`api.ts`, config metadata, navigation). Thresholds are informational (`break: null`); record a baseline score locally before tightening CI.
+
+```bash
+npm run test:mutate
+```
+
+Reports land under `frontend/reports/mutation/`. CI: `.github/workflows/mutation-frontend.yml` (`workflow_dispatch` only), not on every PR.
 
 ### Lint/format decision (ESLint + Biome)
 
