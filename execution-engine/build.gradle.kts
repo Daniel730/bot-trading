@@ -14,9 +14,9 @@ repositories {
 
 dependencies {
     // gRPC
-    implementation("io.grpc:grpc-netty-shaded:1.62.2")
-    implementation("io.grpc:grpc-protobuf:1.62.2")
-    implementation("io.grpc:grpc-stub:1.62.2")
+    implementation("io.grpc:grpc-netty-shaded:1.83.1")
+    implementation("io.grpc:grpc-protobuf:1.83.1")
+    implementation("io.grpc:grpc-stub:1.83.1")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
 
     // R2DBC (Async PostgreSQL)
@@ -47,7 +47,7 @@ protobuf {
     }
     plugins {
         create("grpc") {
-            artifact = "io.grpc:protoc-gen-grpc-java:1.62.2"
+            artifact = "io.grpc:protoc-gen-grpc-java:1.83.1"
         }
     }
     generateProtoTasks {
