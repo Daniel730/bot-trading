@@ -34,6 +34,10 @@ Optional but useful:
   Also `OTEL_SERVICE_NAME` (default `alpha-arbitrage`) and `OTEL_TRACES_SAMPLER_ARG` (0–1).
   Empty endpoint keeps tracing as a no-op even if enabled. Dashboard WS telemetry remains
   separate (`telemetry_service` / `/ws/telemetry`).
+- Sentry (optional, off by default): set `SENTRY_ENABLED=true` and a real `SENTRY_DSN`.
+  Empty DSN never initializes the SDK (fail-closed). Prefer `SENTRY_TRACES_SAMPLE_RATE=0`
+  so OpenTelemetry keeps owning traces; use `IMAGE_TAG` / `SENTRY_RELEASE` for release tags.
+  Frontend: `VITE_SENTRY_DSN` (empty = no browser SDK).
 
 ## Paper Startup Check
 
