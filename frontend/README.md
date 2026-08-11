@@ -51,9 +51,26 @@ npm run format:check # Biome format check
 npm run check        # Biome check (lint+format; CI warn-first)
 npm run knip         # Dead code/deps scan (CI warn-first; cleanup in a follow-up PR)
 npm run test         # Vitest
+npm run test:e2e     # Playwright smoke (mocked API; paper-safe)
 npm run test:mutate  # Stryker mutation testing (focused files; slow — see below)
 npm run preview      # preview built bundle
 ```
+
+### Playwright e2e (#130)
+
+Paper-safe smoke tests live under `frontend/e2e/`. Default CI/local runs use **API mocks** (no Redis/Postgres/broker). `prefers-reduced-motion` is forced in config.
+
+```bash
+# Windows / Linux
+npm install --legacy-peer-deps
+npm run build
+npx playwright install chromium   # once per machine
+npm run test:e2e
+```
+
+Optional real paper-stack login (still no live capital): start the monitor with `PAPER_TRADING=true`, seed 2FA via `PYTHONPATH=. python scripts/seed_dashboard_2fa_for_e2e.py`, then point Playwright at the Vite/dev URL with mocks disabled (custom project — not the default smoke).
+
+CI workflow: `.github/workflows/e2e-playwright.yml` (path-filtered on `frontend/**`).
 
 ### Knip notes
 

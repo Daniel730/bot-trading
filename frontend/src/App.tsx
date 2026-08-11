@@ -623,7 +623,7 @@ function App() {
   }
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" data-testid="dashboard-shell">
       <SidebarNav
         isConnected={isConnected}
         currentStage={currentStage}

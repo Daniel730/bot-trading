@@ -35,8 +35,8 @@ export default function LoginView(props: LoginViewProps) {
     Boolean(loginOtp) || Boolean(loginError && OTP_ERROR_RE.test(loginError)) || otpManual;
 
   return (
-    <div className="login-screen">
-      <form className="login-panel" onSubmit={onSubmit}>
+    <div className="login-screen" data-testid="login-screen">
+      <form className="login-panel" onSubmit={onSubmit} data-testid="login-form">
         <div className="login-mark">
           <Shield size={24} />
         </div>
@@ -55,6 +55,7 @@ export default function LoginView(props: LoginViewProps) {
             autoComplete="current-password"
             required
             disabled={Boolean(loginChallengeId)}
+            data-testid="login-token"
           />
         </label>
         {showOtpField ? (
@@ -66,6 +67,7 @@ export default function LoginView(props: LoginViewProps) {
               autoComplete="one-time-code"
               disabled={Boolean(loginChallengeId)}
               placeholder="Required when Telegram approval is unavailable"
+              data-testid="login-otp"
             />
           </label>
         ) : (
@@ -82,7 +84,7 @@ export default function LoginView(props: LoginViewProps) {
           </p>
         )}
         <div className="inline-actions">
-          <button className="primary-btn" disabled={isBusy || Boolean(loginChallengeId)} type="submit">
+          <button className="primary-btn" disabled={isBusy || Boolean(loginChallengeId)} type="submit" data-testid="login-submit">
             <Shield size={14} />
             {loginChallengeId ? 'Waiting Approval' : 'Login'}
           </button>

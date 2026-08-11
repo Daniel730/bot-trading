@@ -13,6 +13,8 @@
     "check": "biome check .",
     "knip": "knip",
     "test": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "test:mutate": "stryker run",
     "preview": "vite preview"
   },
@@ -26,6 +28,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.2.4",
     "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.62.1",
     "@stryker-mutator/core": "^9.0.1",
     "@stryker-mutator/typescript-checker": "^9.0.1",
     "@stryker-mutator/vitest-runner": "^9.0.1",
