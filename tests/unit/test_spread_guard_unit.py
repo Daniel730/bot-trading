@@ -145,6 +145,8 @@ async def test_spread_guard_rejects_crossed_quotes(monitor):
 @pytest.mark.asyncio
 async def test_spread_guard_accepts_tight_alpaca_crypto_quotes(monitor):
     """Realistic Alpaca-tight crypto spreads (~2 bps combined) must not false-reject."""
+    from tests.unit.test_monitor_execution import _crypto_execute_freshness_patch
+
     pair = {"ticker_a": "BTC-USD", "ticker_b": "ETH-USD", "id": "BTC-USD_ETH-USD"}
     signal_id = str(uuid.uuid4())
 
@@ -161,6 +163,7 @@ async def test_spread_guard_accepts_tight_alpaca_crypto_quotes(monitor):
              return_value={"is_acceptable": False, "status": "REJECT", "rejection_reason": "test_stop"},
          ) as mock_validate, \
          patch("src.monitor.notification_service.send_message", new_callable=AsyncMock), \
+         _crypto_execute_freshness_patch(("BTC-USD", "ETH-USD")), \
          patch.object(monitor.brokerage, "get_account_cash", return_value=2000.0), \
          patch.object(monitor.brokerage, "get_account_equity", return_value=2000.0), \
          patch.object(monitor.brokerage, "get_account_buying_power", return_value=2000.0), \

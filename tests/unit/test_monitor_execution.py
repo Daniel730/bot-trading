@@ -8,15 +8,17 @@ from src.services.persistence_service import OrderStatus
 
 def _crypto_execute_freshness_patch(tickers=("ETH-USD", "BTC-USD"), age_seconds: float = 5.0):
     """Ensure execute_trade crypto freshness gate sees Alpaca sources + fresh timestamps."""
-    ts = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
 
     async def _refresh(symbols, *args, **kwargs):
         from src.services import data_service as ds_mod
 
         svc = ds_mod.data_service
-        svc.last_price_sources = {str(t): "alpaca_crypto_snapshot" for t in symbols}
-        svc.last_price_timestamps = {str(t): ts for t in symbols}
-        return {str(t): 100.0 for t in symbols}
+        # Stamp at refresh-call time so full-suite wall clock cannot age a closure ts.
+        ts = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
+        keys = [str(t) for t in (symbols or tickers)]
+        svc.last_price_sources = {t: "alpaca_crypto_snapshot" for t in keys}
+        svc.last_price_timestamps = {t: ts for t in keys}
+        return {t: 100.0 for t in keys}
 
     return patch(
         "src.monitor.data_service.get_latest_price_async",
@@ -1058,8 +1060,9 @@ async def test_execute_trade_paper_logs_entry_journal_before_shadow(monitor):
     assert metrics["regime_confidence"] == 0.85
     assert metrics["features"] == {"volatility": 0.12}
     assert metrics["gross_notional"] == pytest.approx(299.98)
-    assert metrics["leg_a_notional"] == pytest.approx(99.99)
-    assert metrics["leg_b_notional"] == pytest.approx(199.99)
+    # hedge_ratio=1.0 with equal mid prices → equal leg notionals (build_pair_legs).
+    assert metrics["leg_a_notional"] == pytest.approx(149.99)
+    assert metrics["leg_b_notional"] == pytest.approx(149.99)
     assert metrics["hedge_ratio"] == 1.0
     assert metrics["kelly_fraction"] == 0.1
     assert metrics["sizing_base"] == 10_000.0
