@@ -799,7 +799,7 @@ class PersistenceService:
                     "metadata": meta,
                     "is_shadow": leg_is_shadow,
                     "execution_lane": leg_lane,
-                    "order_id": t.order_id,
+                    "order_id": getattr(t, "order_id", None),
                     "filled_qty": filled_qty,
                     "remaining_qty": float(meta.get("remaining_qty") or 0.0) or None,
                     "expected_qty": float(meta.get("expected_qty") or 0.0) or None,
