@@ -39,7 +39,7 @@ jobs:
       # Do NOT set LIVE_CAPITAL_DANGER / real credentials. This job never trades.
     steps:
       - name: Checkout
-        uses: checkout@v4
+        uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
