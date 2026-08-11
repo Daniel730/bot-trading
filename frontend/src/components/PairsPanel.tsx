@@ -28,6 +28,7 @@ import {
   type ScoutCandidate,
 } from '../services/api';
 import { useAutoDismiss } from '../hooks/useAutoDismiss';
+import { ContentReveal, PanelSkeleton } from './Skeleton';
 
 interface PairsPanelProps {
   token: string;
@@ -656,10 +657,14 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
           )}
 
           <div className="pairs-section-label">Active trading pairs</div>
+          <ContentReveal
+            loading={loading && filteredActive.length === 0}
+            skeleton={<PanelSkeleton rows={4} label="Loading pairs" />}
+          >
           {filteredActive.length === 0 ? (
             <div className="empty-state">
               <Layers size={28} style={{ opacity: 0.3 }} />
-              <span>{loading ? 'Loading pairs…' : 'No active pairs in this view'}</span>
+              <span>No active pairs in this view</span>
             </div>
           ) : (
             <div className="pair-table">
@@ -674,6 +679,7 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
               ))}
             </div>
           )}
+          </ContentReveal>
           {filteredActive.length > ACTIVE_PAIRS_PAGE_SIZE && (
             <div className="list-pagination">
               <button
@@ -704,7 +710,11 @@ const PairsPanel: React.FC<PairsPanelProps> = ({ token, sessionToken, paperTradi
           </div>
           {waitingCandidates.length === 0 ? (
             <div className="empty-state empty-state-compact">
-              <span>{loading ? 'Loading candidates…' : 'No scout candidates waiting for promotion'}</span>
+              {loading ? (
+                <PanelSkeleton rows={2} label="Loading candidates" />
+              ) : (
+                <span>No scout candidates waiting for promotion</span>
+              )}
             </div>
           ) : (
             <div className="pair-table candidate-table">

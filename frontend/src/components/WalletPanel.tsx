@@ -17,6 +17,7 @@ import {
   type WalletRecommendationBuyResponse,
 } from '../services/api';
 import { useAutoDismiss } from '../hooks/useAutoDismiss';
+import { ContentReveal, PanelSkeleton } from './Skeleton';
 
 interface WalletPanelProps {
   token: string;
@@ -366,10 +367,12 @@ const WalletPanel: React.FC<WalletPanelProps> = ({ token, sessionToken, paperTra
         </div>
 
         {!plan || loading ? (
-          <div className="empty-state">
-            <RefreshCw size={28} className={loading ? 'spin' : ''} style={{ opacity: 0.35 }} />
-            <span>{loading ? 'Calculating recommendations...' : 'No wallet plan loaded'}</span>
-          </div>
+          <ContentReveal
+            loading
+            skeleton={<PanelSkeleton rows={4} label="Calculating recommendations" />}
+          >
+            <div />
+          </ContentReveal>
         ) : plan.recommendations.length === 0 ? (
           <div className="empty-state">
             <Wallet size={28} style={{ opacity: 0.35 }} />
