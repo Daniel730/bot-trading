@@ -45,8 +45,9 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
       <div className="panel-content content-reveal-layer" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '15px' }}>
         <motion.div
           className="metric-card"
-          initial={{ opacity: 0, x: -20 }}
-          animate={{ opacity: 1, x: 0 }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
           style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.05)' }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
@@ -65,8 +66,9 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
 
         <motion.div
           className="metric-card"
-          initial={{ opacity: 0, x: 20 }}
-          animate={{ opacity: 1, x: 0 }}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
           style={{ background: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.05)' }}
         >
           <div className="metric-label" style={{ marginBottom: '10px' }}>
@@ -74,10 +76,10 @@ const IntelligenceHub: React.FC<IntelligenceHubProps> = ({ regime, confidence, a
           </div>
           <div style={{ position: 'relative', height: '12px', background: 'rgba(255,255,255,0.05)', borderRadius: '6px', overflow: 'hidden' }}>
             <motion.div
-              style={{ position: 'absolute', top: 0, left: 0, height: '100%', background: accuracyColor, boxShadow: `0 0 10px ${accuracyColor}` }}
+              style={{ position: 'absolute', top: 0, left: 0, height: '100%', background: accuracyColor }}
               initial={{ width: 0 }}
               animate={{ width: `${accuracyValue * 100}%` }}
-              transition={{ duration: 1.5, ease: "easeOut" }}
+              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             />
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontSize: '0.9rem', fontWeight: 'bold' }}>

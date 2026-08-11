@@ -100,7 +100,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | CI on PR | Dedicated `ci.yml` | `.github/workflows/ci.yml` on PR/push | #131 |
 | UI loading | Global skeletons | `Skeleton` / `PanelSkeleton` / `ContentReveal` + panel wiring | #132 |
 | Code split | `React.lazy` + `Suspense` | Heavy panels/pages lazy-loaded; skeleton Suspense fallback | #133 |
-| Motion | framer-motion + [design-motion-principles](https://github.com/kylezantos/design-motion-principles) | Partial (`PairsPanel`, `IntelligenceHub`) | #134 |
+| Motion | framer-motion + [design-motion-principles](https://github.com/kylezantos/design-motion-principles) | Shared `motion/principles` + PanelMount/ModalShell; reduced-motion; no telemetry tick anim | #134 |
 
 ### What already exists
 

@@ -50,6 +50,7 @@ import { NAV_ITEMS, isPage, type Page } from './constants/navigation';
 import LoginView from './components/dashboard/LoginView';
 import SidebarNav from './components/dashboard/SidebarNav';
 import { PanelSkeleton } from './components/Skeleton';
+import { ModalShell, PanelMount } from './components/Motion';
 
 // Heavy panels/pages — code-split (#133); Suspense fallback uses skeleton system (#132).
 const PairsPanel = lazy(() => import('./components/PairsPanel'));
@@ -680,6 +681,7 @@ function App() {
         ) : null}
 
         <Suspense fallback={<PageFallback label={`Loading ${page} panel`} />}>
+        <PanelMount id={page}>
         {page === 'overview' && (
           <OverviewPage
             summary={summary}
@@ -779,9 +781,14 @@ function App() {
             logs={logs}
           />
         )}
+        </PanelMount>
         </Suspense>
-        {saveOtpModalOpen ? (
-          <div className="overlay" onClick={(event) => event.target === event.currentTarget && !isBusy && setSaveOtpModalOpen(false)}>
+        <ModalShell
+          open={saveOtpModalOpen}
+          onBackdrop={() => {
+            if (!isBusy) setSaveOtpModalOpen(false)
+          }}
+        >
             <div className="confirm-window">
               <div className="terminal-header">
                 <div className="terminal-dots">
@@ -836,8 +843,7 @@ function App() {
                 </div>
               </div>
             </div>
-          </div>
-        ) : null}
+        </ModalShell>
       </main>
     </div>
   );
