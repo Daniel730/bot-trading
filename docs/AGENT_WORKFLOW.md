@@ -93,7 +93,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | Frontend lint | Biome (+ current ESLint until migrated) | ESLint CI gate + Biome warn-first (`frontend/biome.json`) | #123 |
 | Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `ci.yml` + `deploy.yml` quality_python | #128 |
 | Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
-| Dead code | Knip (frontend) | Missing | #125 |
+| Dead code | Knip (frontend) | Warn-first `npm run knip` + `frontend/knip.json` (cleanup PR later) | #125 |
 | Mutation testing | Stryker (frontend) | Missing | #126 |
 | Architecture tests | ArchUnit (Java) + Python arch-contract | Missing | #127 |
 | Coverage | Codecov | `codecov.yml` + fail-soft uploads in `ci.yml`/`deploy.yml` | #129 |
