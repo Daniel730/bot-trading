@@ -95,7 +95,7 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 | Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
 | Dead code | Knip (frontend) | Warn-first `npm run knip` + `frontend/knip.json` (cleanup PR later) | #125 |
 | Mutation testing | Stryker (frontend) | Missing | #126 |
-| Architecture tests | ArchUnit (Java) + Python arch-contract | Missing | #127 |
+| Architecture tests | ArchUnit (Java) + Python arch-contract | Python `tests/unit/test_arch_contracts.py` + Java ArchUnit smoke | #127 |
 | Coverage | Codecov | `codecov.yml` + fail-soft uploads in `ci.yml`/`deploy.yml` | #129 |
 | E2E | Playwright | Missing (Vitest unit/component only) | #130 |
 | CI on PR | Dedicated `ci.yml` | `.github/workflows/ci.yml` on PR/push | #131 |
