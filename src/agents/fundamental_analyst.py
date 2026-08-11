@@ -8,6 +8,8 @@ from src.models.arbitrage_models import FundamentalSignal
 from src.services.notification_service import notification_service
 from src.utils import extract_json
 
+logger = logging.getLogger(__name__)
+
 class StructuralIntegrityResult(BaseModel):
     score: int = Field(ge=0, le=100)
     prosecutor_argument: str
@@ -101,12 +103,15 @@ class FundamentalAnalyst:
         """
         Performs an adversarial RAG analysis on a ticker's SEC filings.
         """
-        print(f"[FundamentalAnalyst] Starting SEC analysis for ticker {ticker}...")
+        logger.info("[FundamentalAnalyst] Starting SEC analysis for ticker %s...", ticker)
         
         # 1. Fetch SEC Content
         sec_result = await self.sec_service.get_analyzed_sections(ticker)
         if not sec_result.get("sections"):
-            print(f"[FundamentalAnalyst] No filings found for {ticker}, falling back to News Analysis logic (placeholder)...")
+            logger.info(
+                "[FundamentalAnalyst] No filings found for %s, falling back to News Analysis logic (placeholder)...",
+                ticker,
+            )
             return self._generate_fallback_signal(signal_id, ticker)
             
         sec_sections = sec_result["sections"]
@@ -186,7 +191,7 @@ class FundamentalAnalyst:
             data = extract_json(response.text)
             return StructuralIntegrityResult(**data)
         except Exception as e:
-            print(f"[FundamentalAnalyst] LLM Debate failed: {e}")
+            logger.warning("[FundamentalAnalyst] LLM Debate failed: %s", e)
             return StructuralIntegrityResult(
                 score=50,
                 prosecutor_argument="Analysis failed due to LLM error.",

@@ -120,8 +120,10 @@ class NotificationService:
         # Guard: skip Telegram setup if token is absent, placeholder, or malformed.
         # Empty / template tokens stay console-only — never call Telegram APIs.
         if not _is_usable_telegram_token(self.token):
-            print("TELEGRAM: Token not configured — Telegram notifications disabled. "
-                  "Paper trading and console logging will still work.")
+            logger.info(
+                "TELEGRAM: Token not configured — Telegram notifications disabled. "
+                "Paper trading and console logging will still work."
+            )
             return
 
         try:
@@ -155,9 +157,9 @@ class NotificationService:
                 "TELEGRAM: Disabled (%s). Continuing in console-only mode.",
                 self._redact_sensitive_text(reason),
             )
-            print(
-                f"TELEGRAM: Disabled ({self._redact_sensitive_text(reason)}); "
-                "console-only / dashboard notifications remain available."
+            logger.warning(
+                "TELEGRAM: Disabled (%s); console-only / dashboard notifications remain available.",
+                self._redact_sensitive_text(reason),
             )
 
     def _should_emit_alert(self, message: str, *, force: bool = False) -> bool:
@@ -515,14 +517,16 @@ class NotificationService:
         This allows the user to interact with the bot via commands like /status or /exposure.
         """
         if not self._telegram_enabled:
-            print("TELEGRAM: Listener not started (Telegram disabled). Bot is running in console-only mode.")
+            logger.info(
+                "TELEGRAM: Listener not started (Telegram disabled). Bot is running in console-only mode."
+            )
             return
         try:
             await self.app.initialize()
             await self.app.start()
             # drop_pending_updates=True is CRITICAL to avoid processing old clicks after restart
             await self.app.updater.start_polling(drop_pending_updates=True)
-            print("TELEGRAM: Listener active (cleared pending updates).")
+            logger.info("TELEGRAM: Listener active (cleared pending updates).")
 
             # Sprint J: Heartbeat Startup Message
             await self.send_message(
@@ -535,7 +539,6 @@ class NotificationService:
                 "TELEGRAM: Listener failed to start (%s). Continuing with dashboard approvals only.",
                 self._redact_sensitive_text(exc),
             )
-            print(f"TELEGRAM: Listener failed ({exc}); dashboard/API approvals remain available.")
             self._disable_telegram(exc)
             # Best-effort shutdown of a half-started Application so we do not leak tasks.
             try:
@@ -559,8 +562,8 @@ class NotificationService:
             return
 
         if not self._telegram_enabled:
-            # Fallback: echo to console so operator still sees bot activity
-            print(f"[BOT MSG] {message}")
+            # Fallback: structured log so operator still sees bot activity
+            logger.info("[BOT MSG] %s", message)
             try:
                 from src.services.dashboard_service import dashboard_state
                 await dashboard_state.add_message("BOT", message)
@@ -593,7 +596,7 @@ class NotificationService:
             logger.warning("TELEGRAM ERROR (send_message): %s", self._redact_sensitive_text(e))
             # Keep dashboard / console informed even when Telegram delivery fails.
             try:
-                print(f"[BOT MSG] {message}")
+                logger.info("[BOT MSG] %s", message)
                 from src.services.dashboard_service import dashboard_state
                 await dashboard_state.add_message("BOT", message)
             except Exception as dash_exc:
@@ -616,7 +619,11 @@ class NotificationService:
             logger.warning("DASHBOARD ERROR (login approval): %s", self._redact_sensitive_text(e))
 
         if not self._telegram_enabled:
-            print(f"[LOGIN APPROVAL] Telegram not configured. Challenge {correlation_id}: {summary}")
+            logger.info(
+                "[LOGIN APPROVAL] Telegram not configured. Challenge %s: %s",
+                correlation_id,
+                summary,
+            )
             return False
 
         keyboard = [
@@ -657,13 +664,13 @@ class NotificationService:
                 except Exception as e:
                     if _is_fatal_telegram_auth_error(e):
                         self._disable_telegram(e)
-                        print(f"[PAPER TRADE] {text}")
+                        logger.info("[PAPER TRADE] %s", text)
                     logger.warning(
                         "TELEGRAM (paper-notify): send failed, non-fatal: %s",
                         self._redact_sensitive_text(e),
                     )
         elif emit_external:
-            print(f"[PAPER TRADE] {text}")
+            logger.info("[PAPER TRADE] %s", text)
         try:
             from src.services.dashboard_service import dashboard_state
             await dashboard_state.add_message(
@@ -827,7 +834,7 @@ class NotificationService:
         from src.services.dashboard_service import dashboard_state
         from src.services.dashboard_service import dashboard_service
         
-        print(f"TERMINAL: Received command '{command}' with metadata {metadata}")
+        logger.info("TERMINAL: Received command %r with metadata %s", command, metadata)
         
         # Log the user message to the terminal first
         await dashboard_state.add_message("USER", command)
@@ -844,7 +851,11 @@ class NotificationService:
             if result.get("status") == "success":
                 await self.send_message(f"✅ Dashboard Approval received for {cid}")
             else:
-                print(f"TERMINAL: Approval failed. CID '{cid}' not found in {list(self.pending_approvals.keys())}")
+                logger.warning(
+                    "TERMINAL: Approval failed. CID %r not found in %s",
+                    cid,
+                    list(self.pending_approvals.keys()),
+                )
             return result
         if command.startswith("/reject"):
             parts = command.split()

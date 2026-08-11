@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import re
 import warnings
 from typing import Optional, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from src.models.persistence import PersistenceManager
 from src.config import settings
+
+logger = logging.getLogger(__name__)
 
 with warnings.catch_warnings():
     warnings.filterwarnings(
@@ -93,7 +96,10 @@ class SECService:
         if not missing:
             return
 
-        print(f"SEC_SERVICE: Pre-warming CIK cache for {len(missing)} missing tickers...")
+        logger.info(
+            "SEC_SERVICE: Pre-warming CIK cache for %s missing tickers...",
+            len(missing),
+        )
         
         # 2. Fetch missing. We use a semaphore to avoid slamming the SEC too hard
         semaphore = asyncio.Semaphore(5)
@@ -108,7 +114,7 @@ class SECService:
 
         tasks = [fetch_and_cache(t) for t in missing]
         await asyncio.gather(*tasks)
-        print(f"SEC_SERVICE: CIK cache pre-warming complete.")
+        logger.info("SEC_SERVICE: CIK cache pre-warming complete.")
 
     @retry(
         stop=stop_after_attempt(5),
@@ -143,7 +149,7 @@ class SECService:
                 if "429" in str(e):
                     raise SECRateLimitException(f"SEC Rate Limit for {ticker}") from e
                 raise SECUnreachableException(f"SEC unreachable while resolving CIK for {ticker}: {e}") from e
-            print(f"Error fetching CIK for {ticker}: {e}")
+            logger.warning("Error fetching CIK for %s: %s", ticker, e)
         
         return None
 
@@ -179,7 +185,7 @@ class SECService:
                 raise SECUnreachableException(
                     f"SEC unreachable while fetching {form_type} for {ticker}: {e}"
                 ) from e
-            print(f"Error fetching latest filing for {ticker}: {e}")
+            logger.warning("Error fetching latest filing for %s: %s", ticker, e)
             return None
 
     async def get_section_content(self, ticker: str, form_type: str, section: str) -> Optional[str]:
@@ -209,7 +215,13 @@ class SECService:
                 return None
             return content.text if hasattr(content, 'text') else str(content)
         except Exception as e:
-            print(f"Error extracting section {section} from {ticker} {form_type}: {e}")
+            logger.warning(
+                "Error extracting section %s from %s %s: %s",
+                section,
+                ticker,
+                form_type,
+                e,
+            )
             return None
 
     async def get_analyzed_sections(self, ticker: str) -> Dict:
@@ -259,7 +271,7 @@ class SECService:
                     raise SECUnreachableException(
                         f"SEC unreachable while parsing {form} for {ticker}: {e}"
                     ) from e
-                print(f"Error parsing filing for {ticker} {form}: {e}")
+                logger.warning("Error parsing filing for %s %s: %s", ticker, form, e)
                 
         return result
 
