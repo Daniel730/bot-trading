@@ -62,6 +62,11 @@ def monitor(monkeypatch):
 
     with patch("src.monitor.BrokerageService") as mock_broker_class:
         monkeypatch.setattr(persistence_service, "get_open_signals", AsyncMock(return_value=[]))
+        monkeypatch.setattr(
+            persistence_service,
+            "get_unresolved_exposure_tickers",
+            AsyncMock(return_value=[]),
+        )
         # F-002 capital halt is covered by dedicated unit tests; keep execute_trade
         # fixtures focused on order/ledger behaviour.
         monkeypatch.setattr(

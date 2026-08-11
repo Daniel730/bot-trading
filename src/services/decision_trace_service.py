@@ -48,6 +48,7 @@ _ANOMALY_REASONS = frozenset(
         "kalman_unavailable",
         "price_sanity_invalid",
         "stale_price_snapshot",
+        "price_freshness_unknown",
         "execution_blocked",
         "sizing_below_minimum",
     }
