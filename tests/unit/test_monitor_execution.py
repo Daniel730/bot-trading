@@ -1,9 +1,28 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 import uuid
+from datetime import datetime, timezone, timedelta
 from src.config import settings
 from src.services.persistence_service import OrderStatus
 
+
+def _crypto_execute_freshness_patch(tickers=("ETH-USD", "BTC-USD"), age_seconds: float = 5.0):
+    """Ensure execute_trade crypto freshness gate sees Alpaca sources + fresh timestamps."""
+    ts = (datetime.now(timezone.utc) - timedelta(seconds=age_seconds)).isoformat()
+
+    async def _refresh(symbols, *args, **kwargs):
+        from src.services import data_service as ds_mod
+
+        svc = ds_mod.data_service
+        svc.last_price_sources = {str(t): "alpaca_crypto_snapshot" for t in symbols}
+        svc.last_price_timestamps = {str(t): ts for t in symbols}
+        return {str(t): 100.0 for t in symbols}
+
+    return patch(
+        "src.monitor.data_service.get_latest_price_async",
+        new_callable=AsyncMock,
+        side_effect=_refresh,
+    )
 @pytest.mark.asyncio
 async def test_execute_trade_success(monitor):
     """
@@ -1065,9 +1084,15 @@ async def test_execute_trade_crypto_live_uses_broker(monitor):
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 250.0, "used": 0.0, "remaining": 250.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         _crypto_execute_freshness_patch(), \
          patch.object(settings, "PAPER_TRADING", False):
 
-        mock_bid_ask.return_value = (100.0, 100.05)
+        async def bid_ask_for(ticker, *args, **kwargs):
+            if "ETH" in str(ticker).upper():
+                return (2000.0, 2000.1)
+            return (50000.0, 50000.1)
+
+        mock_bid_ask.side_effect = bid_ask_for
         mock_shadow_portfolio.return_value = []
         mock_validate_trade.return_value = {
             "is_acceptable": True,
@@ -1078,8 +1103,8 @@ async def test_execute_trade_crypto_live_uses_broker(monitor):
         mock_regime.return_value = {"regime": "Normal", "confidence": 0.9, "features": {}}
         # Match planned crypto sizes under $100 gross (ETH~$3.84 / BTC~$96.15).
         mock_await_fill.side_effect = [
-            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 2000.0},
-            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 50000.0},
+            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 2000.05},
+            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 50000.05},
         ]
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
             {"status": "success", "order_id": "crypto-leg-a"},
@@ -1111,10 +1136,16 @@ async def test_execute_trade_crypto_budget_cap_applied(monitor):
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         _crypto_execute_freshness_patch(), \
          patch.object(settings, "PAPER_TRADING", False), \
          patch.object(settings, "ALPACA_BUDGET_USD", 250.0):
 
-        mock_bid_ask.return_value = (100.0, 100.05)
+        async def bid_ask_for(ticker, *args, **kwargs):
+            if "ETH" in str(ticker).upper():
+                return (2000.0, 2000.1)
+            return (50000.0, 50000.1)
+
+        mock_bid_ask.side_effect = bid_ask_for
         mock_validate_trade.return_value = {
             "is_acceptable": True,
             "final_amount": 100.0,
@@ -1126,8 +1157,8 @@ async def test_execute_trade_crypto_budget_cap_applied(monitor):
         monitor.brokerage.get_account_equity.return_value = 1200.0
         monitor.brokerage.get_account_buying_power.return_value = 1200.0
         mock_await_fill.side_effect = [
-            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 2000.0},
-            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 50000.0},
+            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 2000.05},
+            {"status": "filled", "filled_qty": 0.001923, "filled_avg_price": 50000.05},
         ]
         monitor.brokerage.place_value_order = AsyncMock(side_effect=[
             {"status": "success", "order_id": "crypto-leg-a"},
@@ -1164,6 +1195,7 @@ async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch.object(monitor, "_await_order_fill", new_callable=AsyncMock) as mock_await_fill, \
          patch("src.monitor.asyncio.sleep", new_callable=AsyncMock), \
+         _crypto_execute_freshness_patch(("BTC-USD", "ETH-USD")), \
          patch.object(settings, "PAPER_TRADING", False), \
          patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
 
@@ -1183,13 +1215,27 @@ async def test_execute_trade_accepts_filled_qty_under_plan(monitor):
             {"status": "success", "order_id": "leg-a"},
             {"status": "success", "order_id": "leg-b"},
         ])
-        monitor.brokerage.get_positions = AsyncMock(return_value=[{
-            "ticker": "ETH-USD",
-            "symbol": "ETH-USD",
-            "quantity": 1.0,
-            "quantityAvailableForTrading": 1.0,
-            "marketValue": 50_000.0,
-        }])
+        # Equity includes sell-side ETH inventory. Unmanaged entry block scans
+        # get_positions() with no ticker; sell-inventory probe passes the ticker.
+        # Keep portfolio scan empty so Part A unmanaged overlap does not fire,
+        # while ETH remains available for the short leg qty check.
+        monitor.brokerage.get_account_cash.return_value = 10_000.0
+        monitor.brokerage.get_account_equity.return_value = 10_000.0
+        monitor.brokerage.get_account_buying_power.return_value = 10_000.0
+
+        async def positions_for(*args, **kwargs):
+            ticker = args[0] if args else kwargs.get("ticker")
+            if ticker and "ETH" in str(ticker).upper():
+                return [{
+                    "ticker": "ETH-USD",
+                    "symbol": "ETH-USD",
+                    "quantity": 1.0,
+                    "quantityAvailableForTrading": 1.0,
+                    "marketValue": 3200.0,
+                }]
+            return []
+
+        monitor.brokerage.get_positions = AsyncMock(side_effect=positions_for)
 
         result = await monitor.execute_trade(pair, "Long-Short", 65000.0, 3200.0, signal_id)
 
@@ -1209,6 +1255,7 @@ async def test_execute_trade_rejects_crypto_sell_without_inventory(monitor):
          patch("src.services.budget_service.budget_service.get_effective_cash", return_value=1000.0), \
          patch("src.services.budget_service.budget_service.get_venue_budget_info", return_value={"total": 1000.0, "used": 0.0, "remaining": 1000.0}), \
          patch("src.services.shadow_service.shadow_service.get_active_portfolio_with_sectors", new_callable=AsyncMock, return_value=[]), \
+         _crypto_execute_freshness_patch(("BTC-USD", "ETH-USD")), \
          patch.object(settings, "PAPER_TRADING", False), \
          patch.object(settings, "MAX_PAIR_GROSS_NOTIONAL_USD", 100.0):
 

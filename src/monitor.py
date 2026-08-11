@@ -1643,6 +1643,62 @@ class ArbitrageMonitor:
                 )
         return rebuilt_any or bool(quarantined)
 
+    async def _unmanaged_market_value(self) -> float:
+        """Abs market value of broker positions not on open ledger legs.
+
+        Used when ``IGNORE_UNMANAGED_POSITIONS`` so foreign inventory cannot inflate
+        Kelly / allocation / sector denominators. Positions without a resolvable
+        symbol are skipped (not treated as unmanaged).
+        """
+        if settings.PAPER_TRADING:
+            return 0.0
+        maybe_positions = self.brokerage.get_positions()
+        broker_positions = (
+            await maybe_positions if inspect.isawaitable(maybe_positions) else maybe_positions
+        )
+        open_signals = await persistence_service.get_open_signals()
+        ledger_symbols: set[str] = set()
+        for signal in open_signals or []:
+            for leg in signal.get("legs", []) or []:
+                sym = self._canonical_position_symbol(leg.get("ticker"))
+                if sym:
+                    ledger_symbols.add(sym)
+
+        total = 0.0
+        for pos in broker_positions or []:
+            raw_symbol = (
+                pos.get("ticker")
+                or pos.get("symbol")
+                or pos.get("instrumentTicker")
+                or pos.get("instrument")
+            )
+            canonical = self._canonical_position_symbol(raw_symbol)
+            if not canonical or canonical in ledger_symbols:
+                continue
+            qty = float(
+                pos.get("quantityAvailableForTrading")
+                if pos.get("quantityAvailableForTrading") is not None
+                else pos.get("quantity")
+                or 0.0
+            )
+            if abs(qty) <= 1e-12:
+                continue
+            mv = pos.get("marketValue")
+            if mv is None:
+                mv = pos.get("market_value")
+            if mv is None:
+                px = (
+                    pos.get("currentPrice")
+                    or pos.get("current_price")
+                    or pos.get("averagePrice")
+                    or pos.get("avg_entry_price")
+                )
+                if px is None:
+                    continue
+                mv = abs(qty) * float(px)
+            total += abs(float(mv))
+        return total
+
     async def _get_sizing_base(self) -> float:
         """Helper to fetch the current account equity/cash for sizing calculations."""
         if settings.PAPER_TRADING:
@@ -1652,7 +1708,18 @@ class ArbitrageMonitor:
         try:
             maybe_equity = self.brokerage.get_account_equity()
             equity = await maybe_equity if inspect.isawaitable(maybe_equity) else maybe_equity
-            return float(equity or 0.0)
+            base = float(equity or 0.0)
+            if getattr(settings, "IGNORE_UNMANAGED_POSITIONS", False) and base > 0:
+                try:
+                    unmanaged_mv = await self._unmanaged_market_value()
+                    base = max(0.0, base - float(unmanaged_mv or 0.0))
+                except Exception as um_exc:
+                    logger.warning(
+                        "Unmanaged MV probe failed during sizing_base (%s); "
+                        "using full equity (execute path fail-closes separately).",
+                        um_exc,
+                    )
+            return base
         except Exception as e:
             logger.warning(f"Failed to fetch sizing base from brokerage: {e}. Falling back to default.")
             return settings.PAPER_TRADING_STARTING_CASH
@@ -2757,8 +2824,85 @@ class ArbitrageMonitor:
                 max_spread_pct=settings.SPREAD_GUARD_MAX_PCT * 100.0,
             )
 
+        # Approval / queue lag can leave scan-time mids stale. Size and submit from
+        # the same executable quotes that just passed the spread guard.
+        price_a = (bid_a + ask_a) / 2.0
+        price_b = (bid_b + ask_b) / 2.0
+
         venue = self.brokerage.get_venue(t_a)
         crypto_pair = is_crypto_pair(t_a, t_b)
+
+        # Crypto: re-check Alpaca source + quote age at execute (process_pair guard
+        # may be minutes old after Telegram/dashboard approval).
+        if crypto_pair:
+            alpaca_crypto_sources = {"alpaca_crypto_snapshot", "alpaca_crypto_quote_mid"}
+            try:
+                await data_service.get_latest_price_async([t_a, t_b])
+            except Exception as refresh_exc:
+                logger.warning(
+                    "EXECUTE PRICE REFRESH failed for %s/%s: %s",
+                    t_a,
+                    t_b,
+                    refresh_exc,
+                )
+                return execution_result(False, "execute_price_refresh_failed")
+            price_sources = getattr(data_service, "last_price_sources", {}) or {}
+            source_a = price_sources.get(t_a)
+            source_b = price_sources.get(t_b)
+            if source_a not in alpaca_crypto_sources or source_b not in alpaca_crypto_sources:
+                logger.warning(
+                    "EXECUTE FRESHNESS [%s/%s]: crypto sources not both Alpaca "
+                    "(%s=%s, %s=%s). Blocking submit.",
+                    t_a,
+                    t_b,
+                    t_a,
+                    source_a,
+                    t_b,
+                    source_b,
+                )
+                return execution_result(
+                    False,
+                    "execute_price_freshness_unknown",
+                    source_a=source_a,
+                    source_b=source_b,
+                )
+            price_timestamps = getattr(data_service, "last_price_timestamps", {}) or {}
+            now_utc = datetime.now(timezone.utc)
+            max_age = crypto_price_max_age_seconds(settings.SCAN_INTERVAL_SECONDS)
+            for ticker, source in ((t_a, source_a), (t_b, source_b)):
+                parsed_ts = parse_price_timestamp(price_timestamps.get(ticker))
+                if parsed_ts is None:
+                    logger.warning(
+                        "EXECUTE FRESHNESS [%s/%s]: missing timestamp for %s (%s).",
+                        t_a,
+                        t_b,
+                        ticker,
+                        source,
+                    )
+                    return execution_result(
+                        False,
+                        "execute_price_timestamp_missing",
+                        ticker=ticker,
+                        source=source,
+                    )
+                age_seconds = (now_utc - parsed_ts).total_seconds()
+                if age_seconds > max_age:
+                    logger.warning(
+                        "EXECUTE STALENESS [%s/%s]: %s %s age %.1fs > max %.1fs.",
+                        t_a,
+                        t_b,
+                        ticker,
+                        source,
+                        age_seconds,
+                        max_age,
+                    )
+                    return execution_result(
+                        False,
+                        "stale_execute_price",
+                        ticker=ticker,
+                        age_seconds=age_seconds,
+                        max_age_seconds=max_age,
+                    )
         venue_budget_cap = settings.ALPACA_BUDGET_USD
 
         total_cash = None
@@ -2817,6 +2961,20 @@ class ArbitrageMonitor:
 
             # Use equity as the basis for sizing calculations if available
             sizing_base = total_equity if total_equity and total_equity > 0 else total_cash
+            # Foreign inventory must not inflate Kelly / allocation / sector bases
+            # when IGNORE_UNMANAGED_POSITIONS keeps scanning despite broker-only MV.
+            if getattr(settings, "IGNORE_UNMANAGED_POSITIONS", False):
+                try:
+                    unmanaged_mv = await self._unmanaged_market_value()
+                    sizing_base = max(0.0, float(sizing_base or 0.0) - float(unmanaged_mv or 0.0))
+                except Exception as um_exc:
+                    message = (
+                        f"{venue} unmanaged market-value probe failed for {t_a}/{t_b}: {um_exc}. "
+                        "Execution blocked because managed sizing base is unknown."
+                    )
+                    logger.critical(message)
+                    await notification_service.send_message(message)
+                    return execution_result(False, "unmanaged_mv_unknown")
             # Use buying power as the hard limit for execution
             available_for_exec = buying_power if buying_power is not None else total_cash
 
