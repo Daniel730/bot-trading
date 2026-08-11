@@ -24,7 +24,7 @@ dependencies {
     implementation("io.r2dbc:r2dbc-pool:1.0.1.RELEASE")
 
     // Redis (Lettuce)
-    implementation("io.lettuce:lettuce-core:6.3.2.RELEASE")
+    implementation("io.lettuce:lettuce-core:7.6.0.RELEASE")
 
     // Utilities
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
