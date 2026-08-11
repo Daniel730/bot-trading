@@ -1,0 +1,188 @@
+name: CI quality
+
+# PR/push quality gates — separate from self-hosted deploy (Fixes #131).
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect_changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      python: ${{ steps.changes.outputs.python }}
+      java: ${{ steps.changes.outputs.java }}
+      frontend: ${{ steps.changes.outputs.frontend }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Detect changed paths
+        uses: dorny/paths-filter@v3
+        id: changes
+        with:
+          filters: |
+            python:
+              - 'src/**'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'requirements.txt'
+              - 'requirements.lock'
+              - '.github/workflows/ci.yml'
+              - '.github/workflows/deploy.yml'
+            java:
+              - 'execution-engine/**'
+            frontend:
+              - 'frontend/**'
+
+  quality_python:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.python == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: bot_admin
+          POSTGRES_PASSWORD: ci_postgres_password
+          POSTGRES_DB: trading_bot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bot_admin -d trading_bot"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: bot_admin
+      POSTGRES_PASSWORD: ci_postgres_password
+      POSTGRES_DB: trading_bot
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      DASHBOARD_TOKEN: ci_dashboard_token_not_for_production
+      PAPER_TRADING: "true"
+      DEV_MODE: "false"
+      DRY_RUN: "true"
+      T212_API_KEY: ""
+      T212_API_SECRET: ""
+      POLYGON_API_KEY: ""
+      GEMINI_API_KEY: ""
+      TELEGRAM_BOT_TOKEN: ""
+      TELEGRAM_CHAT_ID: ""
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run dependency-free bug-hunt audit
+        run: python scripts/bug_hunt_audit.py
+
+      - name: Install Python dependencies
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --system -r requirements.lock
+
+      - name: Initialize Postgres schema
+        run: python scripts/init_db.py
+
+      - name: Run broker/execution safety contract tests
+        run: |
+          python -m pytest -q \
+            tests/unit/test_alpaca_provider.py \
+            tests/unit/test_monitor_execution.py::test_execute_trade_blocks_when_pending_orders_budget_read_fails \
+            tests/unit/test_monitor_execution.py::test_execute_trade_marks_manual_reconciliation_when_leg_a_submission_ambiguous \
+            tests/unit/test_monitor_execution.py::test_execute_trade_blocks_leg_b_without_confirmed_leg_a_fill \
+            tests/unit/test_monitor_execution.py::test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short \
+            tests/unit/test_monitor_execution.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_ambiguous \
+            tests/unit/test_monitor_execution.py::test_execute_trade_marks_manual_reconciliation_when_emergency_close_partial_fill \
+            tests/unit/test_monitor_closing.py::test_close_position_does_not_close_ledger_until_all_close_orders_fill \
+            tests/unit/test_startup_unresolved_execution_state.py::test_startup_blocks_when_unresolved_execution_state_exists \
+            tests/unit/test_dashboard_wallet_sync.py \
+            tests/unit/test_production_soak_gate.py \
+            tests/unit/test_runtime_alert_rules.py \
+            tests/unit/test_config_broker_routes.py \
+            --asyncio-mode=auto
+
+      - name: Run Python unit tests
+        run: python -m pytest tests/unit -v --asyncio-mode=auto
+
+      - name: Run Python integration tests
+        run: python -m pytest tests/integration -v --asyncio-mode=auto
+
+  quality_java:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.java == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+
+      - name: Run Java tests and build execution engine
+        working-directory: execution-engine
+        run: gradle test shadowJar --no-daemon
+
+  quality_frontend:
+    needs: detect_changes
+    if: ${{ needs.detect_changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Lint frontend
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Test frontend
+        working-directory: frontend
+        run: npm run test -- --run
