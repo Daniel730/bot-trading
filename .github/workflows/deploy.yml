@@ -249,7 +249,6 @@ jobs:
 
       - name: Ruff lint (baseline)
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
           export PATH="$HOME/.local/bin:$PATH"
           uv pip install --system ruff
           ruff check src scripts tests
