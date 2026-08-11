@@ -44,3 +44,7 @@ out/
 logs/
 AGENT_ERROR.md
 dump.rdb
+
+# Daily Bot Audit — keep dated reports, ignore the moving pointer + run state
+reports/daily-audit/latest.md
+data/audit/remediation_state.json
