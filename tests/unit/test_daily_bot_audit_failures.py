@@ -171,3 +171,48 @@ def test_discover_safe_fixes_never_returns_financial_action():
     assert "credential" not in titles
     # every candidate is a non-financial hygiene action
     assert all(f.reversible for f in fixes)
+
+
+# --- incident DETECTION (brief §13): the engine must ESCALATE real incidents,
+#     not only downgrade historical ones to INFO. ---------------------------- #
+def test_real_incident_in_window_is_escalated(tmp_path, monkeypatch):
+    log = tmp_path / "structured_logs.jsonl"
+    # A genuine crash marker dated inside the 24h audit window (2026-08-11).
+    log.write_text(
+        '{"level":"ERROR","message":"Traceback (most recent call last): File \\"monitor.py\\", line 1, in <module>\\nZeroDivisionError: division by zero","timestamp":"2026-08-11T14:32:00+00:00"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dba, "LOG_PATH", log)
+    rep = _report()
+    res = dba.analyze_logs(rep)
+    # The incident is detected as a real (non-expected-fail-closed) marker.
+    assert len(res["incidents"]) == 1
+    # And it produces a HIGH/CRITICAL finding — NOT silently ignored.
+    assert any(f.severity in ("HIGH", "CRITICAL") for f in rep.findings)
+
+
+def test_duplicate_fill_detected_as_incident(tmp_path, monkeypatch):
+    log = tmp_path / "structured_logs.jsonl"
+    log.write_text(
+        '{"level":"ERROR","message":"duplicate fill detected for order ABC123 — position opened twice","timestamp":"2026-08-11T09:00:00+00:00"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dba, "LOG_PATH", log)
+    rep = _report()
+    res = dba.analyze_logs(rep)
+    assert len(res["incidents"]) == 1
+    assert any(f.severity in ("HIGH", "CRITICAL") for f in rep.findings)
+
+
+def test_expected_fail_closed_not_flagged_as_incident(tmp_path, monkeypatch):
+    log = tmp_path / "structured_logs.jsonl"
+    log.write_text(
+        '{"level":"CRITICAL","message":"EMERGENCY CLOSE — account read down, broker submit blocked (safe fail-closed)","timestamp":"2026-08-11T09:00:00+00:00"}\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dba, "LOG_PATH", log)
+    rep = _report()
+    res = dba.analyze_logs(rep)
+    # fail-closed safety line is NOT an incident
+    assert res["incidents"] == []
+    assert res["expected_fail_closed"] >= 1
