@@ -1647,57 +1647,19 @@ class ArbitrageMonitor:
         """Abs market value of broker positions not on open ledger legs.
 
         Used when ``IGNORE_UNMANAGED_POSITIONS`` so foreign inventory cannot inflate
-        Kelly / allocation / sector denominators. Positions without a resolvable
-        symbol are skipped (not treated as unmanaged).
+        Kelly / allocation / sector denominators (and capital-halt HWM via the same
+        helper). Positions without a resolvable symbol are skipped.
         """
         if settings.PAPER_TRADING:
             return 0.0
+        from src.services.unmanaged_positions_service import unmanaged_market_value
+
         maybe_positions = self.brokerage.get_positions()
         broker_positions = (
             await maybe_positions if inspect.isawaitable(maybe_positions) else maybe_positions
         )
         open_signals = await persistence_service.get_open_signals()
-        ledger_symbols: set[str] = set()
-        for signal in open_signals or []:
-            for leg in signal.get("legs", []) or []:
-                sym = self._canonical_position_symbol(leg.get("ticker"))
-                if sym:
-                    ledger_symbols.add(sym)
-
-        total = 0.0
-        for pos in broker_positions or []:
-            raw_symbol = (
-                pos.get("ticker")
-                or pos.get("symbol")
-                or pos.get("instrumentTicker")
-                or pos.get("instrument")
-            )
-            canonical = self._canonical_position_symbol(raw_symbol)
-            if not canonical or canonical in ledger_symbols:
-                continue
-            qty = float(
-                pos.get("quantityAvailableForTrading")
-                if pos.get("quantityAvailableForTrading") is not None
-                else pos.get("quantity")
-                or 0.0
-            )
-            if abs(qty) <= 1e-12:
-                continue
-            mv = pos.get("marketValue")
-            if mv is None:
-                mv = pos.get("market_value")
-            if mv is None:
-                px = (
-                    pos.get("currentPrice")
-                    or pos.get("current_price")
-                    or pos.get("averagePrice")
-                    or pos.get("avg_entry_price")
-                )
-                if px is None:
-                    continue
-                mv = abs(qty) * float(px)
-            total += abs(float(mv))
-        return total
+        return float(unmanaged_market_value(broker_positions or [], open_signals or []) or 0.0)
 
     async def _get_sizing_base(self) -> float:
         """Helper to fetch the current account equity/cash for sizing calculations."""

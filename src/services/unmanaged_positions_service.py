@@ -144,6 +144,63 @@ def ledger_managed_symbols(open_signals: Iterable[dict]) -> set[str]:
     return managed
 
 
+def position_abs_market_value(position: dict) -> Optional[float]:
+    """Absolute market value for one broker position row, or None if unresolvable."""
+    qty = float(
+        position.get("quantityAvailableForTrading")
+        if position.get("quantityAvailableForTrading") is not None
+        else position.get("quantity")
+        or position.get("qty")
+        or 0.0
+    )
+    if abs(qty) <= 1e-12:
+        return 0.0
+    mv = position.get("marketValue")
+    if mv is None:
+        mv = position.get("market_value")
+    if mv is None:
+        px = (
+            position.get("currentPrice")
+            or position.get("current_price")
+            or position.get("averagePrice")
+            or position.get("avg_entry_price")
+        )
+        if px is None:
+            return None
+        mv = abs(qty) * float(px)
+    return abs(float(mv))
+
+
+def unmanaged_market_value(
+    broker_positions: Iterable[dict],
+    open_signals: Iterable[dict],
+) -> float:
+    """Abs market value of broker positions not on open ledger legs.
+
+    Shared by managed ``sizing_base`` (#149) and capital-halt HWM (#150).
+    Operator acknowledgements do **not** exclude MV — acked foreign inventory
+    still must not inflate Kelly / equity-drawdown denominators.
+    Positions without a resolvable symbol are skipped.
+    """
+    ledger_symbols = ledger_managed_symbols(open_signals)
+    total = 0.0
+    for pos in broker_positions or []:
+        raw_symbol = (
+            pos.get("ticker")
+            or pos.get("symbol")
+            or pos.get("instrumentTicker")
+            or pos.get("instrument")
+        )
+        canonical = _canonical(str(raw_symbol or ""))
+        if not canonical or canonical in ledger_symbols:
+            continue
+        mv = position_abs_market_value(pos)
+        if mv is None:
+            continue
+        total += float(mv)
+    return total
+
+
 def classify_broker_positions(
     broker_positions: Iterable[dict],
     open_signals: Iterable[dict],
