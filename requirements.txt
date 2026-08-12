@@ -43,4 +43,4 @@ opentelemetry-sdk>=1.27.0
 opentelemetry-exporter-otlp-proto-http>=1.27.0
 opentelemetry-instrumentation-fastapi>=0.48b0
 # Sentry (#119) — fail-closed when SENTRY_DSN empty
-sentry-sdk[fastapi]>=2.0.0
+sentry-sdk[fastapi]>=2.66.1
