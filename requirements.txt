@@ -17,7 +17,7 @@ pydantic-settings
 numpy>=1.26.0
 quantstats
 langgraph
-scipy>=1.12.0
+scipy>=1.17.1
 google-generativeai
 sse-starlette
 fastapi
