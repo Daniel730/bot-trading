@@ -232,7 +232,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           # Dependencies are installed with uv, not pip, so pip caching is unused
