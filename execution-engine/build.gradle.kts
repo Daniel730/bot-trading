@@ -25,8 +25,6 @@ dependencies {
 
     // Redis (Lettuce)
     implementation("io.lettuce:lettuce-core:7.6.0.RELEASE")
-    implementation("io.projectreactor:reactor-core:3.5.10")
-    implementation("io.projectreactor.netty:reactor-netty:1.1.12")
 
     // Utilities
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
