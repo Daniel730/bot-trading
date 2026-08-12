@@ -54,6 +54,7 @@ def test_run_audit_degraded_with_real_incident(tmp_path, monkeypatch):
     (CRITICAL requires 6+ real incidents or a missing financial guard.)"""
     log = _degraded_log(tmp_path)
     monkeypatch.setattr(dba, "LOG_PATH", log)
+    monkeypatch.setattr("scripts.daily_bot_audit.METRICS_DIR", tmp_path / "metrics")
     rep = dba.run_audit("2026-08-11", "none", no_github=True, no_autofix=True)
     assert rep.verdict == "DEGRADED"
     assert any(f.severity == "HIGH" for f in rep.findings)
@@ -65,6 +66,7 @@ def test_run_audit_critical_with_many_incidents(tmp_path, monkeypatch):
     """6+ real incidents -> CRITICAL verdict (one CRITICAL finding in Logs section)."""
     log = _critical_log(tmp_path)
     monkeypatch.setattr(dba, "LOG_PATH", log)
+    monkeypatch.setattr("scripts.daily_bot_audit.METRICS_DIR", tmp_path / "metrics")
     rep = dba.run_audit("2026-08-11", "none", no_github=True, no_autofix=True)
     assert rep.verdict == "CRITICAL"
     assert any(f.severity == "CRITICAL" and f.section == "Logs" for f in rep.findings)
@@ -77,10 +79,21 @@ def test_run_audit_clean_log_is_healthy(tmp_path, monkeypatch):
         encoding="utf-8",
     )
     monkeypatch.setattr(dba, "LOG_PATH", log)
+    # Isolate from the real .env (PAPER_TRADING=false pode ser flagged pelo
+    # check_env_safety). Usar .env seguro para o teste verificar apenas a
+    # análise de logs, não a configuração do ambiente.
+    safe_env = tmp_path / ".env"
+    safe_env.write_text(
+        "PAPER_TRADING=true\n"
+        "LIVE_CAPITAL_DANGER=true\n"
+        "BROKERAGE_PROVIDER=ALPACA\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dba, "ENV_PATH", safe_env)
+    monkeypatch.setattr(dba, "LATEST_REPORT", tmp_path / "does_not_exist.md")
+    monkeypatch.setattr(dba, "METRICS_DIR", tmp_path / "metrics")
     rep = dba.run_audit("2026-08-11", "none", no_github=True, no_autofix=True)
     assert rep.verdict == "HEALTHY"
-    # run_audit always emits at least one INFO finding (financial-safety guard
-    # rails present), so HEALTHY means no HIGH/CRITICAL/MEDIUM findings.
     assert not any(f.severity in ("HIGH", "CRITICAL", "MEDIUM") for f in rep.findings)
 
 
