@@ -133,18 +133,17 @@ jobs:
             tests/unit/test_dashboard_wallet_sync.py \
             tests/unit/test_production_soak_gate.py \
             tests/unit/test_runtime_alert_rules.py \
-            tests/unit/test_config_broker_routes.py \
-            --asyncio-mode=auto
+            tests/unit/test_config_broker_routes.py
 
       - name: Run Python unit tests
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           uv pip install --system pytest-cov
-          python -m pytest tests/unit -v --asyncio-mode=auto \
+          python -m pytest tests/unit -v \
             --cov=src --cov-report=xml --cov-report=term-missing
 
       - name: Run Python integration tests
-        run: python -m pytest tests/integration -v --asyncio-mode=auto
+        run: python -m pytest tests/integration -v
 
       - name: Upload Python coverage (Codecov)
         if: always()
@@ -263,6 +262,5 @@ jobs:
           python -m pytest -q \
             tests/unit/test_validate_deploy_env.py \
             tests/unit/test_backend_compose_secrets.py \
-            tests/unit/test_compose_restart_lifecycle.py \
-            --asyncio-mode=auto
+            tests/unit/test_compose_restart_lifecycle.py
 
