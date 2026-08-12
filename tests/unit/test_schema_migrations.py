@@ -194,6 +194,7 @@ async def test_get_open_signals_prefers_first_class_lane_columns(monkeypatch):
         metadata_json={"is_shadow": False, "execution_lane": "LIVE"},  # stale meta
         is_shadow=True,
         execution_lane="SHADOW",
+        order_id="ord-test",
     )
 
     class _Result:

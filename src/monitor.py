@@ -28,6 +28,7 @@ from src.services.risk_service import risk_service
 from src.services.market_regime_service import market_regime_service
 from src.services.brokerage_service import BrokerageService
 from src.services.pair_eligibility_service import filter_pair_universe
+from src.services import otel_service
 from src.services.venue_metadata import estimate_round_trip_cost_pct
 from src.services.persistence_service import ExitReason
 from src.services.dashboard_service import dashboard_service, dashboard_state
@@ -69,6 +70,7 @@ from src.monitor_scan_helpers import (
     summarize_scan_iteration,
     build_close_orders,
     calculate_realized_pnl,
+    resolve_leg_order_id,
 )
 from src.services.execution_lane import (
     LANE_SHADOW,
@@ -1886,6 +1888,11 @@ class ArbitrageMonitor:
     async def process_pair(self, pair: dict, latest_prices: dict, sizing_base: float = 0.0) -> dict:
         """Processes a single pair for signals and validation."""
         diagnostic = {"confidence": 0.0, "verdict": "IGNORED"}
+        pair_id = pair.get("id") or f"{pair.get('ticker_a')}_{pair.get('ticker_b')}"
+        _otel = otel_service.attach_span(
+            "monitor.process_pair",
+            {"pair.id": str(pair_id)},
+        )
         try:
             t_a, t_b = pair['ticker_a'], pair['ticker_b']
             decision_recorder.set_pair_id(pair.get("id") or f"{t_a}_{t_b}")
@@ -2639,7 +2646,18 @@ class ArbitrageMonitor:
                 reason="exception",
                 inputs={"error_type": type(e).__name__},
             )
+            otel_service.detach_span(_otel, error=e, attributes={"pair.reason": "exception"})
+            _otel = None
             return diagnostic
+        finally:
+            if _otel is not None:
+                otel_service.detach_span(
+                    _otel,
+                    attributes={
+                        "pair.reason": str(diagnostic.get("reason") or diagnostic.get("verdict") or ""),
+                        "pair.confidence": float(diagnostic.get("confidence") or 0.0),
+                    },
+                )
 
     async def execute_trade(self, pair, direction, price_a, price_b, signal_id, entry_context: dict | None = None):
         """Executes a trade and logs to PostgreSQL."""
@@ -4650,6 +4668,12 @@ class ArbitrageMonitor:
         """
         self.log_preflight()
 
+        # Opt-in OTLP tracing (#118); no-op when OTEL_ENABLED is false / endpoint empty.
+        otel_service.setup_otel()
+        from src.services import sentry_service
+
+        sentry_service.setup_sentry()
+
         # Initial Setup
         logger.info("Initializing Databases...")
         try:
@@ -5129,6 +5153,71 @@ class ArbitrageMonitor:
             logger.warning(f"STATISTICAL STOP LOSS triggered for {t_a}/{t_b} (Z-Score: {z_score:.2f}). Cointegration likely lost.")
             await self._close_position(signal, p_a, p_b, reason=ExitReason.STOP_LOSS, prices_by_ticker=prices_by_ticker)
 
+
+    async def _persist_close_fill_snapshot(
+        self,
+        *,
+        signal: dict,
+        sig_uuid: uuid.UUID,
+        order: dict,
+        close_fill: dict | None,
+        status: OrderStatus,
+    ) -> None:
+        """Write close fill qty/avg/remaining onto the open-leg ledger row."""
+        display_ticker = order.get("display_ticker") or order.get("ticker")
+        leg = next(
+            (
+                candidate
+                for candidate in signal.get("legs", [])
+                if candidate.get("ticker") == display_ticker
+            ),
+            None,
+        )
+        open_order_id = (
+            order.get("open_order_id")
+            or (resolve_leg_order_id(leg) if leg else None)
+        )
+        if not open_order_id:
+            logger.warning(
+                "Cannot persist close fill snapshot for %s — missing open order_id",
+                display_ticker,
+            )
+            return
+
+        close_filled_qty = float((close_fill or {}).get("filled_qty") or 0.0)
+        close_avg = float(
+            (close_fill or {}).get("filled_avg_price") or order.get("price") or 0.0
+        )
+        expected_close_qty = float(order.get("quantity") or 0.0)
+        close_remaining = max(0.0, expected_close_qty - close_filled_qty)
+        open_filled_qty = float(
+            (leg or {}).get("filled_qty")
+            or (leg or {}).get("quantity")
+            or expected_close_qty
+        )
+        open_avg = float(
+            (leg or {}).get("filled_avg_price")
+            or (leg or {}).get("price")
+            or 0.0
+        ) or None
+
+        await persistence_service.update_trade_fill(
+            sig_uuid,
+            str(open_order_id),
+            filled_quantity=open_filled_qty,
+            fill_price=open_avg,
+            status=status,
+            expected_quantity=expected_close_qty,
+            metadata_updates={
+                "close_filled_qty": close_filled_qty,
+                "close_filled_avg_price": close_avg if close_avg > 0 else None,
+                "close_remaining_qty": close_remaining,
+                "close_status": str((close_fill or {}).get("status") or ""),
+                "remaining_qty": close_remaining,
+                "pair_status": status.value if hasattr(status, "value") else str(status),
+            },
+        )
+
     async def _close_position(
         self,
         signal: dict,
@@ -5282,12 +5371,26 @@ class ArbitrageMonitor:
                         )
                         logger.critical(msg)
                         await notification_service.send_message(msg)
+                        await self._persist_close_fill_snapshot(
+                            signal=signal,
+                            sig_uuid=sig_uuid,
+                            order=order,
+                            close_fill=close_fill,
+                            status=OrderStatus.NEEDS_MANUAL_RECONCILIATION,
+                        )
                         await persistence_service.update_signal_status(
                             sig_uuid,
                             OrderStatus.NEEDS_MANUAL_RECONCILIATION,
                         )
                         return
 
+                    await self._persist_close_fill_snapshot(
+                        signal=signal,
+                        sig_uuid=sig_uuid,
+                        order=order,
+                        close_fill=close_fill,
+                        status=OrderStatus.CLOSING,
+                    )
                     confirmed_close_fills.append(close_fill)
 
                 for order in close_orders:

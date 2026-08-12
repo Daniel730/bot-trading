@@ -86,22 +86,21 @@ These are the **target** stack. Implement via linked issues; do not invent paral
 
 | Area | Target | Status (foundation audit) | Tracking |
 |---|---|---|---|
-| Tracing / metrics | OpenTelemetry (OTLP) | Missing SDK (transitive `opentelemetry-api` only); internal `telemetry_service` stub | #118, #122 |
-| Errors | Sentry | Missing | #119 |
+| Tracing / metrics | OpenTelemetry (OTLP) | Opt-in Python SDK + OTLP/HTTP (`otel_service`); dashboard WS telemetry is real (#122) | #118, #122 |
+| Errors | Sentry | Opt-in Python + React SDKs; fail-closed when DSN empty | #119 |
 | APM / ops | Datadog | **Not planned** — use OTel + Sentry (see #120 close rationale) | #120 |
 | APM (optional) | New Relic | **Not planned** — duplicate APM vs OTel + Sentry | #121 |
-| Frontend lint | Biome (+ current ESLint until migrated) | ESLint exists; Biome missing | #123 |
+| Frontend lint | Biome (+ current ESLint until migrated) | ESLint CI gate + Biome warn-first (`frontend/biome.json`) | #123 |
 | Python lint | Ruff via `pyproject.toml` | Baseline E9/F821/F822 in `ci.yml` + `deploy.yml` quality_python | #128 |
 | Commit messages | commitlint + husky (local) | Root `package.json` + `.husky/commit-msg` (CI remains source of truth) | #124 |
-| Dead code | Knip (frontend) | Missing | #125 |
-| Mutation testing | Stryker (frontend) | Missing | #126 |
-| Architecture tests | ArchUnit (Java) + Python arch-contract | Missing | #127 |
-| Coverage | Codecov | `codecov.yml` + fail-soft uploads in `ci.yml`/`deploy.yml` | #129 |
-| E2E | Playwright | Missing (Vitest unit/component only) | #130 |
+| Dead code | Knip (frontend) | Warn-first `npm run knip` + `frontend/knip.json` (cleanup PR later) | #125 |
+| Mutation testing | Stryker (frontend) | Scaffolded (`stryker.config.json` + optional workflow_dispatch) | #126 |
+| Architecture tests | ArchUnit (Java) + Python arch-contract | Python `tests/unit/test_arch_contracts.py` + Java ArchUnit smoke | #127 || Coverage | Codecov | `codecov.yml` + fail-soft uploads in `ci.yml`/`deploy.yml` | #129 |
+| E2E | Playwright | Scaffolded smoke + mocked API workflow (`frontend/e2e`, `e2e-playwright.yml`) | #130 |
 | CI on PR | Dedicated `ci.yml` | `.github/workflows/ci.yml` on PR/push | #131 |
-| UI loading | Global skeletons | Text/spinner only | #132 |
-| Code split | `React.lazy` + `Suspense` | Missing | #133 |
-| Motion | framer-motion + [design-motion-principles](https://github.com/kylezantos/design-motion-principles) | Partial (`PairsPanel`, `IntelligenceHub`) | #134 |
+| UI loading | Global skeletons | `Skeleton` / `PanelSkeleton` / `ContentReveal` + panel wiring | #132 |
+| Code split | `React.lazy` + `Suspense` | Heavy panels/pages lazy-loaded; skeleton Suspense fallback | #133 |
+| Motion | framer-motion + [design-motion-principles](https://github.com/kylezantos/design-motion-principles) | Shared `motion/principles` + PanelMount/ModalShell; reduced-motion; no telemetry tick anim | #134 |
 
 ### What already exists
 

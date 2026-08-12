@@ -9,7 +9,7 @@ React 19 + TypeScript operations console for the trading bot. The first screen i
 - TypeScript 5
 - lucide-react icons
 - framer-motion (partial: e.g. `PairsPanel`, `IntelligenceHub` — broader motion tracked in #134)
-- ESLint 9 (`npm run lint`; Biome not installed yet — #123)
+- ESLint 9 (`npm run lint`) + Biome 2 (`npm run lint:biome` / `format` / `check`) — coexistence: ESLint remains the CI lint gate; Biome is warn-first until a dedicated format PR
 - Vitest + Testing Library
 - nginx static serving in Docker
 
@@ -31,6 +31,12 @@ Optional environment variables:
 ```bash
 VITE_API_URL=http://localhost:8080
 VITE_API_TIMEOUT_MS=15000
+# Optional Sentry (#119) — empty DSN = no browser SDK
+# VITE_SENTRY_ENABLED=false
+# VITE_SENTRY_DSN=
+# VITE_SENTRY_TRACES_SAMPLE_RATE=0
+# VITE_SENTRY_ENVIRONMENT=
+# VITE_SENTRY_RELEASE=
 ```
 
 ## Commands
@@ -38,10 +44,51 @@ VITE_API_TIMEOUT_MS=15000
 ```bash
 npm run dev      # Vite dev server
 npm run build    # TypeScript build + Vite bundle
-npm run lint     # ESLint 9
-npm run test     # Vitest
-npm run preview  # preview built bundle
+npm run lint         # ESLint 9 (CI gate)
+npm run lint:biome   # Biome lint
+npm run format       # Biome format --write
+npm run format:check # Biome format check
+npm run check        # Biome check (lint+format; CI warn-first)
+npm run knip         # Dead code/deps scan (CI warn-first; cleanup in a follow-up PR)
+npm run test         # Vitest
+npm run test:e2e     # Playwright smoke (mocked API; paper-safe)
+npm run test:mutate  # Stryker mutation testing (focused files; slow — see below)
+npm run preview      # preview built bundle
 ```
+
+### Playwright e2e (#130)
+
+Paper-safe smoke tests live under `frontend/e2e/`. Default CI/local runs use **API mocks** (no Redis/Postgres/broker). `prefers-reduced-motion` is forced in config.
+
+```bash
+# Windows / Linux
+npm install --legacy-peer-deps
+npm run build
+npx playwright install chromium   # once per machine
+npm run test:e2e
+```
+
+Optional real paper-stack login (still no live capital): start the monitor with `PAPER_TRADING=true`, seed 2FA via `PYTHONPATH=. python scripts/seed_dashboard_2fa_for_e2e.py`, then point Playwright at the Vite/dev URL with mocks disabled (custom project — not the default smoke).
+
+CI workflow: `.github/workflows/e2e-playwright.yml` (path-filtered on `frontend/**`).
+
+### Knip notes
+
+`frontend/knip.json` treats Vite entrypoints + Vitest specs as entries. CI runs `npm run knip` warn-first; the first cleanup of unused exports/deps should be a separate PR after the baseline is reviewed. `@vitest/coverage-v8` is intentionally ignored (CI installs it ad hoc). `@biomejs/biome` / `biome` are ignored temporarily because Knip does not yet map the bare `biome` CLI scripts to the package bin (Biome remains used via `npm run lint:biome` / `format` / `check`).
+
+### Stryker (mutation testing)
+
+Config: `frontend/stryker.config.json` — initial mutate set is critical shared modules (`api.ts`, config metadata, navigation). Thresholds are informational (`break: null`); record a baseline score locally before tightening CI.
+
+```bash
+npm run test:mutate
+```
+
+Reports land under `frontend/reports/mutation/`. CI: `.github/workflows/mutation-frontend.yml` (`workflow_dispatch` only), not on every PR.
+
+### Lint/format decision (ESLint + Biome)
+
+Keep **ESLint** as the authoritative React/hooks gate (`npm run lint`). Use **Biome** for fast format/lint feedback locally and as a non-blocking CI signal (`continue-on-error`). Avoid enabling overlapping style rules that fight ESLint; migrate formatting-only responsibility to Biome in a later incremental PR (no mass rewrite here).
 
 ## Authentication Flow
 

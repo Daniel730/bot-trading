@@ -27,7 +27,7 @@ export default function SidebarNav({
   positionsCount,
 }: SidebarNavProps) {
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" data-testid="dashboard-sidebar">
       <div className="brand">
         <div className="brand-mark">
           <Activity size={16} />
@@ -55,6 +55,7 @@ export default function SidebarNav({
                 key={item.key}
                 className={`nav-item ${page === item.key ? 'active' : ''}`}
                 onClick={() => onPageChange(item.key)}
+                data-testid={`nav-${item.key}`}
               >
                 {item.icon}
                 {item.label}

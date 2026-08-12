@@ -1,13 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   LogOut,
   RefreshCw,
 } from 'lucide-react';
 import './App.css';
-import PairsPanel from './components/PairsPanel';
-import WalletPanel from './components/WalletPanel';
-import PositionsPanel from './components/PositionsPanel';
-import BrokerPositionsPanel from './components/BrokerPositionsPanel';
 import {
   ApiError,
   type Signal,
@@ -53,15 +49,29 @@ import { useStartupProgress } from './hooks/useStartupProgress';
 import { NAV_ITEMS, isPage, type Page } from './constants/navigation';
 import LoginView from './components/dashboard/LoginView';
 import SidebarNav from './components/dashboard/SidebarNav';
+import { PanelSkeleton } from './components/Skeleton';
+import { ModalShell, PanelMount } from './components/Motion';
 
-// New page imports
-import OverviewPage from './pages/OverviewPage';
-import AnalyticsPage from './pages/AnalyticsPage';
-import TradeHistoryPage from './pages/TradeHistoryPage';
-import BotControlPage from './pages/BotControlPage';
-import SettingsPage from './pages/SettingsPage';
-import SystemHealthPage from './pages/SystemHealthPage';
-import SignalsPage from './pages/SignalsPage';
+// Heavy panels/pages — code-split (#133); Suspense fallback uses skeleton system (#132).
+const PairsPanel = lazy(() => import('./components/PairsPanel'));
+const WalletPanel = lazy(() => import('./components/WalletPanel'));
+const PositionsPanel = lazy(() => import('./components/PositionsPanel'));
+const BrokerPositionsPanel = lazy(() => import('./components/BrokerPositionsPanel'));
+const OverviewPage = lazy(() => import('./pages/OverviewPage'));
+const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage'));
+const TradeHistoryPage = lazy(() => import('./pages/TradeHistoryPage'));
+const BotControlPage = lazy(() => import('./pages/BotControlPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const SystemHealthPage = lazy(() => import('./pages/SystemHealthPage'));
+const SignalsPage = lazy(() => import('./pages/SignalsPage'));
+
+function PageFallback({ label }: { label: string }) {
+  return (
+    <div className="panel" style={{ padding: 16 }}>
+      <PanelSkeleton rows={5} label={label} />
+    </div>
+  );
+}
 
 /**
  * Root React component that provides the authenticated Alpha Arbitrage dashboard and its login flow.
@@ -613,7 +623,7 @@ function App() {
   }
 
   return (
-    <div className="dashboard-shell">
+    <div className="dashboard-shell" data-testid="dashboard-shell">
       <SidebarNav
         isConnected={isConnected}
         currentStage={currentStage}
@@ -670,6 +680,8 @@ function App() {
           </div>
         ) : null}
 
+        <Suspense fallback={<PageFallback label={`Loading ${page} panel`} />}>
+        <PanelMount id={page}>
         {page === 'overview' && (
           <OverviewPage
             summary={summary}
@@ -769,8 +781,14 @@ function App() {
             logs={logs}
           />
         )}
-        {saveOtpModalOpen ? (
-          <div className="overlay" onClick={(event) => event.target === event.currentTarget && !isBusy && setSaveOtpModalOpen(false)}>
+        </PanelMount>
+        </Suspense>
+        <ModalShell
+          open={saveOtpModalOpen}
+          onBackdrop={() => {
+            if (!isBusy) setSaveOtpModalOpen(false)
+          }}
+        >
             <div className="confirm-window">
               <div className="terminal-header">
                 <div className="terminal-dots">
@@ -825,8 +843,7 @@ function App() {
                 </div>
               </div>
             </div>
-          </div>
-        ) : null}
+        </ModalShell>
       </main>
     </div>
   );

@@ -364,6 +364,33 @@ class TestBuildCloseOrders:
         orders = build_close_orders(sig, price_a=160.0, price_b=310.0, dev_mode=False, dev_execution_tickers={})
         assert len(orders) == 2
 
+    def test_prefers_metadata_filled_qty_over_submitted_quantity(self):
+        sig = _signal([
+            {
+                "ticker": "AAPL",
+                "side": "BUY",
+                "quantity": 10.0,
+                "price": 150.0,
+                "order_id": "ord-a",
+                "metadata": {"filled_qty": 4.0, "remaining_qty": 6.0},
+            },
+            {
+                "ticker": "MSFT",
+                "side": "SELL",
+                "quantity": 5.0,
+                "price": 300.0,
+                "filled_qty": 2.0,
+                "order_id": "ord-b",
+            },
+        ])
+        orders = build_close_orders(
+            sig, price_a=160.0, price_b=310.0, dev_mode=False, dev_execution_tickers={}
+        )
+        assert orders[0]["quantity"] == 4.0
+        assert orders[0]["open_order_id"] == "ord-a"
+        assert orders[1]["quantity"] == 2.0
+        assert orders[1]["open_order_id"] == "ord-b"
+
 
 # ---------------------------------------------------------------------------
 # calculate_realized_pnl

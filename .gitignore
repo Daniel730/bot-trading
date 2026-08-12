@@ -44,3 +44,11 @@ out/
 logs/
 AGENT_ERROR.md
 dump.rdb
+
+# Daily Bot Audit — keep dated reports, ignore the moving pointer + run state
+reports/daily-audit/latest.md
+reports/daily-audit/metrics/
+data/audit/remediation_state.json
+# Daily audit reports are generated artifacts; ignore all of them so the repo
+# stays clean. A report already tracked (e.g. 2026-08-11.md) is unaffected.
+reports/daily-audit/*.md

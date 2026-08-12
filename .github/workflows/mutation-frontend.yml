@@ -1,0 +1,41 @@
+name: Frontend mutation (Stryker)
+
+# Optional / on-demand — full mutation runs are too slow for PR CI (Fixes #126).
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: mutation-frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stryker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci --legacy-peer-deps
+
+      - name: Run Stryker (focused mutate set)
+        working-directory: frontend
+        run: npm run test:mutate
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stryker-report
+          path: |
+            frontend/reports/mutation/
+          if-no-files-found: ignore

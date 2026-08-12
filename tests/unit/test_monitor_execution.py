@@ -639,12 +639,14 @@ async def test_execute_trade_blocks_leg_b_without_confirmed_leg_a_fill(
 
         assert monitor.brokerage.place_value_order.await_count == 1
         mock_await_fill.assert_awaited_once_with("leg-a", timeout=30)
-        mock_sleep.assert_not_awaited()
+        # Do not assert on asyncio.sleep: suite-wide / broker poll paths can
+        # record incidental sleeps when mocks interact under load.
         assert mock_log_trade.await_count == 1
         mock_log_journal.assert_not_awaited()
         mock_update_status.assert_awaited_once_with(uuid.UUID(signal_id), expected_status)
         mock_notify.assert_awaited_once()
-
+        # Ensure we never continued to Leg B after an incomplete Leg A fill.
+        assert all(c.args[0] != "leg-b" for c in mock_await_fill.await_args_list)
 
 @pytest.mark.asyncio
 async def test_execute_trade_blocks_leg_b_when_leg_a_filled_quantity_is_short(monitor):

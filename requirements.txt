@@ -4,7 +4,7 @@ yfinance
 pytz
 python-dotenv
 statsmodels>=0.14.0
-pandas>=2.0.0
+pandas>=3.0.5
 pytest
 pytest-asyncio
 pytest-mock
@@ -12,12 +12,12 @@ tenacity
 holidays
 python-telegram-bot
 polygon-api-client
-pydantic>=2.0
+pydantic>=2.13.4
 pydantic-settings
 numpy>=1.26.0
 quantstats
 langgraph
-scipy>=1.12.0
+scipy>=1.17.1
 google-generativeai
 sse-starlette
 fastapi
@@ -31,10 +31,16 @@ websockets
 openai
 matplotlib
 prefect
-grpcio>=1.59.0
-grpcio-tools>=1.59.0
+grpcio>=1.83.0
+grpcio-tools>=1.83.0
 web3>=6.20.0
 psutil
 rich>=13.0.0
 alpaca-trade-api>=3.0.0
 html5lib
+# OpenTelemetry (#118) — opt-in via OTEL_ENABLED + OTEL_EXPORTER_OTLP_ENDPOINT
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp-proto-http>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+# Sentry (#119) — fail-closed when SENTRY_DSN empty
+sentry-sdk[fastapi]>=2.0.0

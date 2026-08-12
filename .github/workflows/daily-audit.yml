@@ -1,0 +1,92 @@
+name: Daily Bot Audit
+
+on:
+  schedule:
+    # 06:17 UTC daily — off-peak, avoids :00 storms. Change freely.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: "Test scope"
+        required: false
+        default: "fast"
+        type: choice
+        options:
+          - fast
+          - full
+          - none
+      autofix:
+        description: "Allow safe, guarded auto-remediation (hygiene only)"
+        required: false
+        default: false
+        type: boolean
+      issue_on_critical:
+        description: "Auto-open a GitHub issue when verdict is CRITICAL (idempotent by date)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+concurrency:
+  group: daily-audit
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PAPER_TRADING: "true"
+      # Do NOT set LIVE_CAPITAL_DANGER / real credentials. This job never trades.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps (matches CI lockfile + audit extras)
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --system -r requirements.lock
+          uv pip install --system ruff pytest pytest-asyncio
+
+      - name: Run Daily Bot Audit
+        id: audit
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/daily_bot_audit.py \
+            --tests "${{ github.event.inputs.tests || 'fast' }}" \
+            ${{ github.event.inputs.autofix == 'true' && '--autofix' || '' }} \
+            ${{ github.event.inputs.issue_on_critical == 'true' && '--issue-on-critical' || '' }} || true
+          # Note: auto-remediation is OFF by default (safe/opt-in). Pass
+          # --autofix only for an explicit, reviewed remediation run.
+          # The verdict is surfaced (not failed) by the step below so the
+          # report artifact is always uploaded.
+
+      - name: Show historical trend (brief §11)
+        if: always()
+        run: python scripts/audit_trend.py --days 7 || true
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-audit-${{ github.run_id }}
+          path: reports/daily-audit/
+          if-no-files-found: warn
+
+      - name: Surface CRITICAL/DEGRADED verdict
+        if: always()
+        run: |
+          latest=reports/daily-audit/latest.md
+          if grep -q "^CRITICAL$" "$latest"; then echo "::error::Audit verdict CRITICAL"; fi
+          if grep -q "^DEGRADED$" "$latest"; then echo "::warning::Audit verdict DEGRADED"; fi

@@ -14,9 +14,9 @@ repositories {
 
 dependencies {
     // gRPC
-    implementation("io.grpc:grpc-netty-shaded:1.62.2")
-    implementation("io.grpc:grpc-protobuf:1.62.2")
-    implementation("io.grpc:grpc-stub:1.62.2")
+    implementation("io.grpc:grpc-netty-shaded:1.83.1")
+    implementation("io.grpc:grpc-protobuf:1.83.1")
+    implementation("io.grpc:grpc-stub:1.83.1")
     compileOnly("org.apache.tomcat:annotations-api:6.0.53")
 
     // R2DBC (Async PostgreSQL)
@@ -28,7 +28,7 @@ dependencies {
 
     // Utilities
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.0")
-    implementation("io.micrometer:micrometer-core:1.12.4")
+    implementation("io.micrometer:micrometer-core:1.17.0")
     implementation("org.slf4j:slf4j-api:2.0.12")
     implementation("ch.qos.logback:logback-classic:1.5.3")
 
@@ -38,6 +38,7 @@ dependencies {
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.mockito:mockito-core:5.11.0")
+    testImplementation("com.tngtech.archunit:archunit-junit5:1.3.0")
     testImplementation("org.postgresql:postgresql:42.7.3") // JDBC driver required by Testcontainers PostgreSQLContainer
 }
 
@@ -47,7 +48,7 @@ protobuf {
     }
     plugins {
         create("grpc") {
-            artifact = "io.grpc:protoc-gen-grpc-java:1.62.2"
+            artifact = "io.grpc:protoc-gen-grpc-java:1.83.1"
         }
     }
     generateProtoTasks {
