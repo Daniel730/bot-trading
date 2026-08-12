@@ -33,7 +33,7 @@ matplotlib
 prefect
 grpcio>=1.83.0
 grpcio-tools>=1.83.0
-web3>=6.20.0
+web3>=7.16.0
 psutil
 rich>=13.0.0
 alpaca-trade-api>=3.0.0
