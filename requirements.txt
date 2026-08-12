@@ -36,7 +36,7 @@ grpcio-tools>=1.83.0
 web3>=6.20.0
 psutil
 rich>=13.0.0
-alpaca-trade-api>=3.0.0
+alpaca-trade-api>=3.2.0
 html5lib
 # OpenTelemetry (#118) — opt-in via OTEL_ENABLED + OTEL_EXPORTER_OTLP_ENDPOINT
 opentelemetry-sdk>=1.27.0
