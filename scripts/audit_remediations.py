@@ -132,7 +132,13 @@ def discover_safe_fixes(repo_root: Path = ROOT) -> list[Fix]:
         repo_root / "reports" / "daily-audit",
         repo_root / "data" / "audit" / "logs",
     ]
-    missing = [d for d in audit_dirs if not d.exists()]
+    missing = []
+    for d in audit_dirs:
+        try:
+            if not d.exists():
+                missing.append(d)
+        except OSError:
+            missing.append(d)
     if missing:
         fixes.append(
             Fix(
