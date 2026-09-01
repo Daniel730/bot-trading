@@ -34,7 +34,7 @@ dependencies {
 
     // Test
     testImplementation(platform("org.testcontainers:testcontainers-bom:1.19.7"))
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.3")
     testImplementation("org.testcontainers:postgresql")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.mockito:mockito-core:5.11.0")
